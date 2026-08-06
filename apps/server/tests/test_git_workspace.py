@@ -62,7 +62,8 @@ def test_naming_helpers() -> None:
 def test_mirror_clone(ws: GitWorkspace, remote: str) -> None:
     mirror = ws.ensure_mirror(FULL_NAME, remote)
     assert mirror.exists()
-    assert "main" in _git(["-C", str(mirror), "branch", "--format=%(refname:short)"]).splitlines()
+    refs = _git(["-C", str(mirror), "show-ref"]).splitlines()
+    assert any("refs/remotes/origin/main" in line for line in refs)
 
 
 def test_mirror_incremental_fetch(ws: GitWorkspace, remote: str, tmp_path) -> None:
@@ -72,22 +73,24 @@ def test_mirror_incremental_fetch(ws: GitWorkspace, remote: str, tmp_path) -> No
     _add_commit(src, "second")
     _git(["-C", str(src), "push", "origin", "main"])
     ws.ensure_mirror(FULL_NAME, remote)
-    log = _git(["-C", str(ws.mirror_path(ws.config.data_dir, FULL_NAME)), "log", "--format=%s"])
+    mirror = ws.mirror_path(ws.config.data_dir, FULL_NAME)
+    log = _git(["-C", str(mirror), "log", "origin/main", "--format=%s"])
     assert "second" in log
 
 
 def test_mirror_clone_auth_env(ws: GitWorkspace, monkeypatch) -> None:
-    captured: dict = {}
+    calls: list[tuple[list[str], dict | None]] = []
 
     def fake_run(args, cwd=None, auth_env=None):
-        captured["args"] = args
-        captured["auth_env"] = auth_env
+        calls.append((list(args), auth_env))
         return ""
 
     monkeypatch.setattr("jalebi.git_workspace._run_git", fake_run)
     ws.ensure_mirror(FULL_NAME, "https://x", token="ghp_secret")
-    assert captured["auth_env"]["GIT_CONFIG_VALUE_0"] == _basic_auth_header("ghp_secret")
-    assert "ghp_secret" not in " ".join(captured["args"])
+    clone_call = next(c for c in calls if "clone" in c[0])
+    assert clone_call[1] is not None
+    assert clone_call[1]["GIT_CONFIG_VALUE_0"] == _basic_auth_header("ghp_secret")
+    assert "ghp_secret" not in " ".join(clone_call[0])
 
 
 def test_worktree_create_and_resume(ws: GitWorkspace, remote: str) -> None:

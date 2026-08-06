@@ -14,6 +14,7 @@ from jalebi.adapters import get_adapter
 from jalebi.adapters.types import AgentEvent
 from jalebi.config import Config
 from jalebi.db import Repo, Run, Session, Task, utcnow
+from jalebi.events import TaskEvents
 from jalebi.git_workspace import GitWorkspace
 from jalebi.github import GitHubClient
 
@@ -50,6 +51,7 @@ def _kill_proc(proc) -> None:
 class TaskQueue:
     def __init__(self, config: Config):
         self.config = config
+        self.events = TaskEvents()
         self._queue: queue.Queue[int | None] = queue.Queue()
         self._running: dict[int, _RunState] = {}
         self._running_lock = threading.Lock()
@@ -159,9 +161,12 @@ class TaskQueue:
             steps: list[dict[str, object]] = []
             last_event_type: str | None = None
             for event in handle.events():
-                if event.type in ("step", "message", "done", "error"):
-                    steps.append(self._step_from_event(event, masker))
-                    last_event_type = event.type
+                if event.type in ("step", "message", "tool_call", "done", "error"):
+                    entry = self._step_from_event(event, masker)
+                    self.events.publish(task.id, entry)
+                    if event.type in ("step", "message", "done", "error"):
+                        steps.append(entry)
+                        last_event_type = event.type
                 if event.type in ("done", "error"):
                     break
 
@@ -186,20 +191,21 @@ class TaskQueue:
             task.updated_at = utcnow()
 
             if run.status == "done" and settings.get_setting(session, "auto_publish"):
-                try:
-                    task.pr_number = self._publish(task, repo, token, git)
-                except Exception as exc:
-                    task.status = "needs_approval"
-                    logger.warning("auto-publish failed for task %s: %s", task.id, exc)
-                    steps.append(
-                        {
-                            "type": "error",
-                            "phase": None,
-                            "text": f"publish failed: {exc}",
-                            "ts": utcnow().isoformat(),
-                        }
-                    )
-                    run.steps_json = json.dumps(steps[-MAX_STEPS:])
+                if self._branch_ahead(task, git):
+                    try:
+                        task.pr_number = self._publish(task, repo, token, git)
+                    except Exception as exc:
+                        task.status = "needs_approval"
+                        logger.warning("auto-publish failed for task %s: %s", task.id, exc)
+                        steps.append(
+                            {
+                                "type": "error",
+                                "phase": None,
+                                "text": f"publish failed: {exc}",
+                                "ts": utcnow().isoformat(),
+                            }
+                        )
+                        run.steps_json = json.dumps(steps[-MAX_STEPS:])
 
             session.commit()
         except Exception:
@@ -214,6 +220,7 @@ class TaskQueue:
             session.commit()
         finally:
             session.close()
+            self.events.close(task_id)
 
     def publish_task(self, task_id: int) -> int:
         """Manually publish a task's branch (push + open PR). Returns the PR number."""
@@ -271,6 +278,13 @@ class TaskQueue:
             "text": masked[:MAX_STEP_TEXT] if masked else None,
             "ts": utcnow().isoformat(),
         }
+
+    def _branch_ahead(self, task: Task, git: GitWorkspace) -> bool:
+        worktree = GitWorkspace.worktree_path(self.config.data_dir, task.id)
+        try:
+            return git.commits_ahead(worktree, task.target_branch) > 0
+        except Exception:
+            return False
 
     def _publish(self, task: Task, repo: Repo, token: str, git: GitWorkspace) -> int:
         git.push_branch(task.id, repo.full_name, token)

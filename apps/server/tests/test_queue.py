@@ -7,6 +7,7 @@ import pytest
 
 from jalebi import repos, settings, tasks
 from jalebi.adapters.types import AgentEvent
+from jalebi.git_workspace import GitWorkspace
 
 FULL_NAME = "owner/repo"
 
@@ -125,6 +126,18 @@ def _install_adapter(monkeypatch, handle) -> None:
 
 def _no_publish(session) -> None:
     settings.set_setting(session, "auto_publish", False)
+
+
+def _seed_commit(q, task_id: int, repo_row) -> None:
+    """Create the worktree and add a commit so the branch is ahead of main."""
+    git = GitWorkspace(q.config)
+    git.ensure_mirror(FULL_NAME, repo_row.clone_url)
+    wt = git.create_worktree(task_id, FULL_NAME, "main")
+    (wt / "f.txt").write_text("changed\n")
+    _git(["-C", str(wt), "config", "user.email", "t@example.com"])
+    _git(["-C", str(wt), "config", "user.name", "Test"])
+    _git(["-C", str(wt), "add", "f.txt"])
+    _git(["-C", str(wt), "commit", "-m", "change"])
 
 
 def _fresh_task(session, task_id):
@@ -248,6 +261,7 @@ def test_publish_opens_pr_and_sets_number(q, session, repo_row, monkeypatch) -> 
     task = tasks.create_task(
         session, type_="issue_fix", repo_id=repo_row.id, prompt="fix issue #12"
     )
+    _seed_commit(q, task.id, repo_row)
     _install_adapter(monkeypatch, FakeHandle([AgentEvent(type="done")]))
     monkeypatch.setattr("jalebi.queue.GitHubClient", FakeGitHubClient)
 
@@ -260,9 +274,33 @@ def test_publish_opens_pr_and_sets_number(q, session, repo_row, monkeypatch) -> 
     assert any(f"refs/heads/jalebi/{task.id}" in line for line in refs)
 
 
+def test_no_changes_skips_publish(q, session, repo_row, monkeypatch) -> None:
+    settings.set_setting(session, "auto_publish", True)
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
+
+    class MustNotPublish:
+        def __init__(self, token: str):
+            self.token = token
+
+        def create_pr(self, *args, **kwargs) -> int:
+            raise AssertionError("publish must be skipped when nothing changed")
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr("jalebi.queue.GitHubClient", MustNotPublish)
+    _install_adapter(monkeypatch, FakeHandle([AgentEvent(type="done")]))
+    q._run_task(task.id)
+
+    fresh = _fresh_task(session, task.id)
+    assert fresh.status == "done"
+    assert fresh.pr_number is None
+
+
 def test_publish_failure_sets_needs_approval(q, session, repo_row, monkeypatch) -> None:
     settings.set_setting(session, "auto_publish", True)
     task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
+    _seed_commit(q, task.id, repo_row)
     _install_adapter(monkeypatch, FakeHandle([AgentEvent(type="done")]))
     monkeypatch.setattr("jalebi.queue.GitHubClient", FailingGitHubClient)
 

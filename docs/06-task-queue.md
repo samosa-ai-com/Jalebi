@@ -30,9 +30,9 @@ Jalebi runs a **task queue** with a **worker pool** (threading). Tasks are persi
 1. Worker dequeues `task_id`, re-fetches the task; skips if `cancelled` (cancelled-while-queued).
 2. Marks task `running`; creates a `runs` row (`seq+1`).
 3. `GitWorkspace.ensure_mirror` → `create_worktree` (source branch) → `adapter.start(cwd=worktree, prompt, model)`.
-4. Streams `handle.events()`; `step`/`message`/`done`/`error` events are **masked at ingest** (PRD F17: PAT + `secret_patterns`) and stored in `runs.steps_json` (bounded: 500 steps, 2000-char texts).
+4. Streams `handle.events()`; `step`/`message`/`tool_call`/`done`/`error` events are **masked at ingest** (PRD F17: PAT + `secret_patterns`), broadcast live over the per-task SSE channel, and stored in `runs.steps_json` (bounded: 500 steps, 2000-char texts).
 5. Terminal status from event stream **or** watchdog/cancel reason.
-6. If `done` and `settings.auto_publish`: `push_branch` + `GitHubClient.create_pr` (`head=jalebi/<taskId>`, `base=target_branch`, title `[Jalebi] <first prompt line>`, body includes prompt + `Closes #N` for `issue_fix`). On publish failure → task `needs_approval` (manual publish available).
+6. If `done` and `settings.auto_publish`: **only if the branch is ahead of `origin/<target>`** (`commits_ahead > 0` — nothing to PR otherwise) → `push_branch` + `GitHubClient.create_pr` (`head=jalebi/<taskId>`, `base=target_branch`, title `[Jalebi] <first prompt line>`, body includes prompt + `Closes #N` for `issue_fix`). On publish failure → task `needs_approval` (manual publish available).
 7. Exceptions during the run mark the task **and** the current run `failed`.
 
 ## 5. Timeouts (PRD F16)
@@ -54,12 +54,15 @@ Jalebi runs a **task queue** with a **worker pool** (threading). Tasks are persi
 - Manual path: `POST /api/tasks/:id/publish`.
 - Follow-ups/PR-update semantics arrive with the follow-up feature.
 
-## 9. Known limitations (flagged)
+## 9. Live events (SSE)
+
+- `GET /api/tasks/:id/events` streams the run's masked events (`connected` → live `step`/`message`/`tool_call`/`done`/`error` → `stream_end`), via the in-process `TaskEvents` bus (`src/jalebi/events.py`). The stream closes when the run ends (or immediately for already-terminal runs).
+
+## 10. Known limitations (flagged)
 
 - Worker pool size is fixed at **startup** from `settings.concurrency`; changing the setting requires a restart.
-- `steps_json` is written at run completion (no live streaming yet — SSE lands with the UI step).
-- No artifact capture yet (PRD F18); no restart-recovery/`interrupted` handling yet.
+- No artifact capture yet (PRD F18); no restart-recovery/`interrupted` handling yet; no per-task `auto_publish` override (global setting only).
 
-## 10. Reference
+## 11. Reference
 
 - PRD §F3 (queue & concurrency), §F9 (publish), §F16 (timeouts & retries), §F17 (masking).

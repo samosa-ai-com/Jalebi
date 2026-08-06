@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 
@@ -7,24 +8,17 @@ describe("App", () => {
     vi.restoreAllMocks();
   });
 
-  it("renders the app title and shows the server status", async () => {
+  it("renders the nav shell", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({ status: "ok" }),
-      })
+      vi.fn(async () => ({ ok: true, json: async () => [] }))
     );
-
-    render(<App />);
+    render(
+      <MemoryRouter>
+        <App />
+      </MemoryRouter>
+    );
     expect(screen.getByText("Jalebi")).toBeInTheDocument();
-    expect(await screen.findByText("Server: ok")).toBeInTheDocument();
-  });
-
-  it("shows an error when the server is unreachable", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("Network error")));
-
-    render(<App />);
-    expect(await screen.findByText("Server unreachable: Network error")).toBeInTheDocument();
+    expect(await screen.findByText("Tasks")).toBeInTheDocument();
   });
 });

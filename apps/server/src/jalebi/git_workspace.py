@@ -86,22 +86,72 @@ class GitWorkspace:
                 self._locks[full_name] = threading.Lock()
             return self._locks[full_name]
 
+    def _list_local_heads(self, mirror: Path) -> list[str]:
+        out = _run_git(
+            ["-C", str(mirror), "for-each-ref", "--format=%(refname:short)", "refs/heads"]
+        )
+        return out.splitlines()
+
     def ensure_mirror(self, full_name: str, clone_url: str, token: str | None = None) -> Path:
-        """Clone (or fetch) the bare mirror for ``full_name``. Returns the mirror path."""
+        """Clone (or fetch) the bare mirror for ``full_name``. Returns the mirror path.
+
+        Uses ``git clone --bare`` with remote branches tracked under
+        ``refs/remotes/origin/*`` (normalized after clone so local-path sources behave
+        like network sources), so fetching never touches the local ``jalebi/<taskId>``
+        worktree branches. A local ``refs/heads/<default>`` is kept in sync with
+        ``origin/<default>`` purely so the mirror HEAD is valid (``git worktree add``
+        requires HEAD under ``refs/heads``).
+        """
         mirror = self.mirror_path(self.config.data_dir, full_name)
         auth = _auth_env(token)
         with self._lock_for(full_name):
             if not mirror.exists():
                 mirror.parent.mkdir(parents=True, exist_ok=True)
-                _run_git(["clone", "--mirror", clone_url, str(mirror)], auth_env=auth)
-            else:
-                _run_git(["-C", str(mirror), "fetch", "--prune"], auth_env=auth)
+                _run_git(["clone", "--bare", clone_url, str(mirror)], auth_env=auth)
+            _run_git(
+                [
+                    "-C",
+                    str(mirror),
+                    "config",
+                    "remote.origin.fetch",
+                    "+refs/heads/*:refs/remotes/origin/*",
+                ],
+                auth_env=auth,
+            )
+            _run_git(
+                ["-C", str(mirror), "config", "remote.origin.mirror", "false"],
+                auth_env=auth,
+            )
+            _run_git(["-C", str(mirror), "fetch", "origin", "--prune"], auth_env=auth)
+            _run_git(["-C", str(mirror), "remote", "set-head", "origin", "-a"], auth_env=auth)
+            try:
+                origin_head = _run_git(
+                    ["-C", str(mirror), "symbolic-ref", "--short", "refs/remotes/origin/HEAD"]
+                )
+                if "/" in origin_head:
+                    default = origin_head.split("/", 1)[1]
+                    _run_git(
+                        [
+                            "-C",
+                            str(mirror),
+                            "update-ref",
+                            f"refs/heads/{default}",
+                            f"refs/remotes/origin/{default}",
+                        ],
+                        auth_env=auth,
+                    )
+                    _run_git(
+                        ["-C", str(mirror), "symbolic-ref", "HEAD", f"refs/heads/{default}"],
+                        auth_env=auth,
+                    )
+            except GitWorkspaceError:
+                pass
         return mirror
 
     def create_worktree(
         self, task_id: int, full_name: str, base_branch: str = "main", token: str | None = None
     ) -> Path:
-        """Create a worktree on ``jalebi/<taskId>`` based on ``base_branch``.
+        """Create a worktree on ``jalebi/<taskId>`` based on ``origin/<base_branch>``.
 
         Reuses an existing worktree for the task (resume path).
         """
@@ -116,14 +166,23 @@ class GitWorkspace:
         with self._lock_for(full_name):
             if not mirror.exists():
                 raise GitWorkspaceError(f"mirror missing for {full_name}; call ensure_mirror first")
-            _run_git(["-C", str(mirror), "fetch", "--prune"], auth_env=auth)
-            branches = _run_git(
-                ["-C", str(mirror), "branch", "--format=%(refname:short)"]
-            ).splitlines()
+            _run_git(["-C", str(mirror), "fetch", "origin", "--prune"], auth_env=auth)
+            branches = self._list_local_heads(mirror)
             if branch in branches:
                 _run_git(["-C", str(mirror), "worktree", "add", str(ws), branch])
             else:
-                _run_git(["-C", str(mirror), "worktree", "add", "-b", branch, str(ws), base_branch])
+                _run_git(
+                    [
+                        "-C",
+                        str(mirror),
+                        "worktree",
+                        "add",
+                        "-b",
+                        branch,
+                        str(ws),
+                        f"origin/{base_branch}",
+                    ]
+                )
         return ws
 
     def remove_worktree(self, task_id: int, full_name: str) -> None:
@@ -142,15 +201,15 @@ class GitWorkspace:
             if branch in branches:
                 _run_git(["-C", str(mirror), "branch", "-D", branch])
 
-    def push_branch(self, task_id: int, full_name: str, token: str | None = None) -> None:
-        """Push ``jalebi/<taskId>`` to the mirror's origin with token auth.
+    def commits_ahead(self, worktree: Path, base_branch: str) -> int:
+        """Number of commits on the worktree's HEAD beyond ``origin/<base_branch>``."""
+        out = _run_git(
+            ["-C", str(worktree), "rev-list", "--count", f"origin/{base_branch}..HEAD"]
+        )
+        return int(out or "0")
 
-        The mirror uses ``--mirror``, so the per-invocation ``mirror=false``
-        override lets us push an explicit refspec.
-        """
+    def push_branch(self, task_id: int, full_name: str, token: str | None = None) -> None:
+        """Push ``jalebi/<taskId>`` to the mirror's origin with token auth."""
         ws = self.worktree_path(self.config.data_dir, task_id)
         branch = self.task_branch(task_id)
-        _run_git(
-            ["-C", str(ws), "-c", "remote.origin.mirror=false", "push", "origin", branch],
-            auth_env=_auth_env(token),
-        )
+        _run_git(["-C", str(ws), "push", "origin", branch], auth_env=_auth_env(token))

@@ -17,16 +17,18 @@ Jalebi uses the **git CLI** (not libgit2) for all repo operations. Each task/age
 
 ## 3. Bare mirror
 
-- One bare mirror per repo, kept up to date by fetching refs (`git clone --mirror` on first use, then `git fetch --prune`).
-- `ensure_mirror(full_name, clone_url, token=None)` — clone or fetch, authenticated with the token (§6).
+- One bare mirror per repo, kept up to date by fetching refs.
+- **`git clone --bare`** (not `--mirror`), normalized after clone: remote branches are tracked under `refs/remotes/origin/*` (`remote.origin.fetch = +refs/heads/*:refs/remotes/origin/*`, `remote.origin.mirror = false`), and a local `refs/heads/<default>` is kept in sync with `origin/<default>` purely so the mirror HEAD is valid (`git worktree add` requires HEAD under `refs/heads`).
+- **Why not `--mirror`:** a mirror fetches `refs/*:refs/*` directly, which (a) refuses to fetch into a `jalebi/<taskId>` branch checked out in an active worktree, and (b) blocks pushes with an explicit refspec. With `origin/*` tracking, `fetch --prune` only touches remote-tracking refs — local task branches are safe, and plain `git push origin <branch>` works.
+- `ensure_mirror(full_name, clone_url, token=None)` — clone + normalize, or `fetch origin --prune`, authenticated with the token (§6).
 - **Concurrency lock:** a per-repo `threading.Lock` in `GitWorkspace` serializes all `clone`/`fetch`/`worktree` operations on the shared mirror, preventing concurrent workers from racing or producing `.git/config.lock` errors.
 
 ## 4. Worktree lifecycle
 
-`create_worktree(task_id, full_name, base_branch="main", token=None)`, `remove_worktree(task_id, full_name)`, `push_branch(task_id, full_name, token)`.
+`create_worktree(task_id, full_name, base_branch="main", token=None)`, `remove_worktree(task_id, full_name)`, `push_branch(task_id, full_name, token)`, `commits_ahead(worktree, base_branch)`.
 
 1. **Create / Resume:**
-   - **New task:** `git worktree add -b jalebi/<taskId> <ws/task-<id>> <source-branch>` — the worktree starts from the task's **source branch**.
+   - **New task:** `git worktree add -b jalebi/<taskId> <ws/task-<id>> origin/<source-branch>` — the worktree starts from the task's **source branch**.
    - **Resume / Follow-up:** if `jalebi/<taskId>` already exists in the mirror, `git worktree add <ws/task-<id>> jalebi/<taskId>` (without `-b`); if the worktree dir already exists it is reused as-is.
 2. **Run:** the agent CLI is spawned with `cwd = <ws/task-<id>>` so it discovers `AGENTS.md`/skills.
 3. **Discard:** `remove_worktree` runs `git worktree remove --force` and deletes the `jalebi/<taskId>` branch. `git worktree prune` on restart is a future cleanup step.

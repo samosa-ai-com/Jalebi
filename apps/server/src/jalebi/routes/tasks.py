@@ -1,6 +1,9 @@
-"""Task routes: create, list, detail, cancel, rerun, publish."""
+"""Task routes: create, list, detail, cancel, rerun, publish, live events."""
 
-from flask import Blueprint, current_app, jsonify, request
+import json
+import queue as _queue_module
+
+from flask import Blueprint, Response, current_app, jsonify, request
 from flask.typing import ResponseReturnValue
 
 from jalebi import db, masking, secrets, tasks
@@ -9,6 +12,8 @@ from jalebi.db import utcnow
 from jalebi.queue import TaskQueue
 
 bp = Blueprint("tasks", __name__, url_prefix="/api/tasks")
+
+TERMINAL_STATUSES = {"done", "failed", "timed_out", "cancelled", "needs_approval", "interrupted"}
 
 
 def _queue() -> TaskQueue:
@@ -112,3 +117,42 @@ def publish_task(task_id: int) -> ResponseReturnValue:
     except Exception as exc:
         return jsonify({"error": str(exc)}), 502
     return jsonify({"pr_number": pr_number, "status": "done"})
+
+
+@bp.get("/<int:task_id>/events")
+def task_events(task_id: int) -> ResponseReturnValue:
+    """SSE stream of live (masked) events for a task's current run."""
+    session = db.get_session()
+    task = tasks.get_task(session, task_id)
+    if task is None:
+        return jsonify({"error": "task not found"}), 404
+
+    run = tasks.latest_run(session, task_id)
+    terminal = run is not None and run.status in TERMINAL_STATUSES
+    events = _queue().events
+    q = events.subscribe(task_id)
+
+    def generate():
+        try:
+            yield f"data: {json.dumps({'type': 'connected'})}\n\n"
+            if terminal:
+                yield f"data: {json.dumps({'type': 'stream_end'})}\n\n"
+                return
+            while True:
+                try:
+                    item = q.get(timeout=15)
+                except _queue_module.Empty:
+                    yield ": keepalive\n\n"
+                    continue
+                if item is None:
+                    yield f"data: {json.dumps({'type': 'stream_end'})}\n\n"
+                    return
+                yield f"data: {json.dumps(item)}\n\n"
+        finally:
+            events.unsubscribe(task_id, q)
+
+    return Response(
+        generate(),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
