@@ -139,4 +139,35 @@ describe("TaskDetail", () => {
       expect(JSON.parse(postCall![1]!.body as string)).toEqual({ prompt: "do more" });
     });
   });
+
+  it("shows captured artifacts with download links", async () => {
+    const withArtifacts = {
+      ...TASK,
+      status: "done",
+      run: {
+        ...TASK.run!,
+        status: "done",
+        artifacts: [
+          { id: 1, path: "logs/build.log", size: 2048, created_at: "2026-08-06T10:01:00" },
+          { id: 2, path: "out/shot.png", size: 51200, created_at: "2026-08-06T10:01:00" },
+        ],
+      },
+    };
+    const fetchMock = vi.fn(async (url: string) => ({
+      ok: true,
+      json: async () => (url.includes("/api/tasks") ? withArtifacts : REPOS),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderDetail();
+    expect(await screen.findByText("Artifacts")).toBeInTheDocument();
+
+    const link = screen.getByText("logs/build.log");
+    expect(link.closest("a")).toHaveAttribute(
+      "href",
+      "/api/tasks/7/artifacts/1/download"
+    );
+    expect(screen.getByText("2.0 KB")).toBeInTheDocument();
+    expect(screen.getByText("out/shot.png")).toBeInTheDocument();
+  });
 });

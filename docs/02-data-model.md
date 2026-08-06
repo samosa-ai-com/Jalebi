@@ -97,6 +97,8 @@ Index: `task_id`.
 
 Index: `run_id`.
 
+**Store:** artifact files live at `<data-dir>/artifacts/<run_id>/<relative path>` (copied from the worktree at run completion). `runs.artifacts_json` caches `[{path, size}]` refs. Pruned per `artifact_ttl_days` at startup.
+
 ### `settings`
 
 | Column | Type | Notes |

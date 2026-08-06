@@ -6,7 +6,7 @@ from collections.abc import Callable
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from jalebi.db import TASK_TYPES, Followup, Repo, Run, Task
+from jalebi.db import TASK_TYPES, Artifact, Followup, Repo, Run, Task
 
 
 def create_task(
@@ -97,7 +97,15 @@ def list_followups(session: Session, task_id: int) -> list[Followup]:
     )
 
 
-def run_to_dict(run: Run) -> dict[str, object]:
+def list_artifacts(session: Session, run_id: int) -> list[Artifact]:
+    return list(
+        session.execute(
+            select(Artifact).where(Artifact.run_id == run_id).order_by(Artifact.id.asc())
+        ).scalars()
+    )
+
+
+def run_to_dict(run: Run, artifacts: list[Artifact] | None = None) -> dict[str, object]:
     return {
         "id": run.id,
         "seq": run.seq,
@@ -108,11 +116,23 @@ def run_to_dict(run: Run) -> dict[str, object]:
         "started_at": run.started_at.isoformat() if run.started_at else None,
         "finished_at": run.finished_at.isoformat() if run.finished_at else None,
         "steps": json.loads(run.steps_json) if run.steps_json else [],
+        "artifacts": [
+            {
+                "id": a.id,
+                "path": a.path,
+                "size": a.size,
+                "created_at": a.created_at.isoformat(),
+            }
+            for a in (artifacts or [])
+        ],
     }
 
 
 def task_to_dict(
-    task: Task, run: Run | None = None, followups: list[Followup] | None = None
+    task: Task,
+    run: Run | None = None,
+    followups: list[Followup] | None = None,
+    artifacts: list[Artifact] | None = None,
 ) -> dict[str, object]:
     data: dict[str, object] = {
         "id": task.id,
@@ -129,7 +149,7 @@ def task_to_dict(
         "pr_number": task.pr_number,
         "created_at": task.created_at.isoformat(),
         "updated_at": task.updated_at.isoformat(),
-        "run": run_to_dict(run) if run is not None else None,
+        "run": run_to_dict(run, artifacts=artifacts) if run is not None else None,
         "followups": [
             {
                 "id": f.id,

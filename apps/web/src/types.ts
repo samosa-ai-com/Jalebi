@@ -5,6 +5,13 @@ export interface Step {
   ts: string;
 }
 
+export interface Artifact {
+  id: number;
+  path: string;
+  size: number;
+  created_at: string;
+}
+
 export interface Run {
   id: number;
   seq: number;
@@ -15,6 +22,7 @@ export interface Run {
   started_at: string | null;
   finished_at: string | null;
   steps: Step[];
+  artifacts?: Artifact[];
 }
 
 export interface Followup {

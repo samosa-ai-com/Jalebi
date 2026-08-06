@@ -1,16 +1,19 @@
 """Flask application factory and CLI entrypoint."""
 
+import logging
 from pathlib import Path
 
 from flask import Flask, Response, g, jsonify, request, send_from_directory
 from flask.typing import ResponseReturnValue
 
-from jalebi import db, secrets, settings
+from jalebi import artifacts, db, secrets, settings
 from jalebi.config import Config, load_config, repo_root
 from jalebi.queue import TaskQueue
 from jalebi.routes.github import bp as github_bp
 from jalebi.routes.repos import bp as repos_bp
 from jalebi.routes.tasks import bp as tasks_bp
+
+logger = logging.getLogger(__name__)
 
 WEB_DIST = repo_root() / "apps" / "web" / "dist"
 
@@ -93,6 +96,11 @@ def main() -> None:
         try:
             raw_concurrency = settings.get_setting(session, "concurrency") or 0
             concurrency = raw_concurrency if isinstance(raw_concurrency, int) else 0
+            raw_ttl = settings.get_setting(session, "artifact_ttl_days") or 7
+            ttl = raw_ttl if isinstance(raw_ttl, int) and raw_ttl > 0 else 7
+            pruned = artifacts.prune_artifacts(session, config.data_dir, ttl)
+            if pruned:
+                logger.info("pruned %s expired artifact(s)", pruned)
         finally:
             session.close()
     app.config["JALEBI_QUEUE"].start(concurrency)

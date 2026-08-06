@@ -146,6 +146,13 @@ function TimelineItem({
   );
 }
 
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${kb.toFixed(1)} KB`;
+  return `${(kb / 1024).toFixed(1)} MB`;
+}
+
 export default function TaskDetail() {
   const { id } = useParams();
   const taskId = Number(id);
@@ -267,6 +274,28 @@ export default function TaskDetail() {
           followups={task.followups ?? []}
           onSent={load}
         />
+      )}
+
+      {task.run?.artifacts && task.run.artifacts.length > 0 && (
+        <section className="surface p-5 animate-fade-up">
+          <h2 className="panel-title mb-3">Artifacts</h2>
+          <ul className="divide-y divide-ink-800/70">
+            {task.run.artifacts.map((a) => (
+              <li key={a.id} className="flex items-center gap-3 py-2">
+                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-chai-400" />
+                <a
+                  href={api.artifactUrl(task.id, a.id)}
+                  className="min-w-0 flex-1 truncate font-mono text-sm text-ink-200 transition-colors hover:text-syrup-300"
+                >
+                  {a.path}
+                </a>
+                <span className="shrink-0 font-mono text-[11px] text-ink-500">
+                  {formatBytes(a.size)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">

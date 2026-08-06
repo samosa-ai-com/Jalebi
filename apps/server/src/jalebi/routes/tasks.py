@@ -2,13 +2,14 @@
 
 import json
 import queue as _queue_module
+from pathlib import Path
 
-from flask import Blueprint, Response, current_app, jsonify, request
+from flask import Blueprint, Response, current_app, jsonify, request, send_file
 from flask.typing import ResponseReturnValue
 
-from jalebi import db, masking, secrets, tasks
+from jalebi import artifacts, db, masking, secrets, tasks
 from jalebi.config import Config
-from jalebi.db import utcnow
+from jalebi.db import Artifact, Run, utcnow
 from jalebi.queue import TaskQueue
 
 bp = Blueprint("tasks", __name__, url_prefix="/api/tasks")
@@ -59,14 +60,17 @@ def create_task() -> ResponseReturnValue:
 @bp.get("")
 def list_tasks() -> ResponseReturnValue:
     session = db.get_session()
-    items = [
-        tasks.task_to_dict(
-            task,
-            run=tasks.latest_run(session, task.id),
-            followups=tasks.list_followups(session, task.id),
+    items = []
+    for task in tasks.list_tasks(session):
+        run = tasks.latest_run(session, task.id)
+        items.append(
+            tasks.task_to_dict(
+                task,
+                run=run,
+                followups=tasks.list_followups(session, task.id),
+                artifacts=tasks.list_artifacts(session, run.id) if run is not None else None,
+            )
         )
-        for task in tasks.list_tasks(session)
-    ]
     return jsonify(items)
 
 
@@ -76,11 +80,13 @@ def get_task(task_id: int) -> ResponseReturnValue:
     task = tasks.get_task(session, task_id)
     if task is None:
         return jsonify({"error": "task not found"}), 404
+    run = tasks.latest_run(session, task_id)
     return jsonify(
         tasks.task_to_dict(
             task,
-            run=tasks.latest_run(session, task_id),
+            run=run,
             followups=tasks.list_followups(session, task_id),
+            artifacts=tasks.list_artifacts(session, run.id) if run is not None else None,
         )
     )
 
@@ -154,7 +160,36 @@ def followup_task(task_id: int) -> ResponseReturnValue:
     # The Followup row is recorded by the worker when the resume actually runs
     # (see TaskQueue._run_followup) — not here, to avoid duplicates.
     _queue().enqueue_followup(task_id, masked)
-    return jsonify(tasks.task_to_dict(task, followups=tasks.list_followups(session, task_id))), 202
+    run = tasks.latest_run(session, task_id)
+    return jsonify(
+        tasks.task_to_dict(
+            task,
+            run=run,
+            followups=tasks.list_followups(session, task_id),
+            artifacts=tasks.list_artifacts(session, run.id) if run is not None else None,
+        )
+    ), 202
+
+
+@bp.get("/<int:task_id>/artifacts/<int:artifact_id>/download")
+def download_artifact(task_id: int, artifact_id: int) -> ResponseReturnValue:
+    """Download a captured artifact for a task (PRD F18)."""
+    session = db.get_session()
+    artifact = session.get(Artifact, artifact_id)
+    if artifact is None:
+        return jsonify({"error": "artifact not found"}), 404
+    run = session.get(Run, artifact.run_id)
+    if run is None or run.task_id != task_id:
+        return jsonify({"error": "artifact not found"}), 404
+
+    config: Config = current_app.config["JALEBI_CONFIG"]
+    try:
+        path = artifacts.artifact_file(config.data_dir, run.id, artifact.path)
+    except ValueError:
+        return jsonify({"error": "artifact not found"}), 404
+    if not path.is_file():
+        return jsonify({"error": "artifact file missing"}), 404
+    return send_file(path, as_attachment=True, download_name=Path(artifact.path).name)
 
 
 @bp.get("/<int:task_id>/events")

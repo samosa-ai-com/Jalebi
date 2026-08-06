@@ -64,6 +64,8 @@ export const api = {
   getRepos: () => request<Repo[]>("/api/repos"),
   connectRepo: (fullName: string) =>
     request<Repo>("/api/repos", { method: "POST", body: JSON.stringify({ full_name: fullName }) }),
+  artifactUrl: (taskId: number, artifactId: number) =>
+    `/api/tasks/${taskId}/artifacts/${artifactId}/download`,
 };
 
 /** Subscribe to a task's live SSE stream. Returns an unsubscribe function. */

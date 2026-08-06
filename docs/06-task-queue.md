@@ -71,8 +71,15 @@ Queue items are tagged tuples: `("task", task_id)` or `("followup", task_id, bod
 ## 10. Known limitations (flagged)
 
 - Worker pool size is fixed at **startup** from `settings.concurrency`; changing the setting requires a restart.
-- No artifact capture yet (PRD F18); no restart-recovery/`interrupted` handling yet; no per-task `auto_publish` override (global setting only). A cancelled/killed agent session may become unresumable (opencode-side session state).
+- No restart-recovery/`interrupted` handling yet; no per-task `auto_publish` override (global setting only). A cancelled/killed agent session may become unresumable (opencode-side session state).
 
-## 11. Reference
+## 11. Artifacts (PRD F18)
 
-- PRD §F3 (queue & concurrency), §F9 (publish), §F16 (timeouts & retries), §F17 (masking).
+- After a run reaches a terminal state, the **untracked, non-ignored** files in its worktree are copied to `<data-dir>/artifacts/<run_id>/` (store) and recorded as `artifacts` rows + `runs.artifacts_json` (cache of refs). Committed code and git-ignored files (e.g. `node_modules`) are skipped.
+- Retention: `settings.artifact_ttl_days` (default 7). `artifacts.prune_artifacts` deletes expired rows + stored files and runs once at server startup.
+- Download: `GET /api/tasks/<task_id>/artifacts/<artifact_id>/download` (path-traversal-safe).
+- Captures run for every terminal outcome (`done`/`failed`/`timed_out`/…) and for follow-up runs too.
+
+## 12. Reference
+
+- PRD §F3 (queue & concurrency), §F9 (publish), §F16 (timeouts & retries), §F17 (masking), §F18 (artifacts).

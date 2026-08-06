@@ -9,7 +9,7 @@ import time
 
 from sqlalchemy import select
 
-from jalebi import masking, secrets, settings, tasks
+from jalebi import artifacts, masking, secrets, settings, tasks
 from jalebi.adapters import get_adapter
 from jalebi.adapters.types import AgentEvent
 from jalebi.config import Config
@@ -195,6 +195,13 @@ class TaskQueue:
                         }
                     )
                     run.steps_json = json.dumps(steps[-MAX_STEPS:])
+
+        # Capture agent-produced (untracked) files from the worktree (PRD F18).
+        worktree = GitWorkspace.worktree_path(self.config.data_dir, task.id)
+        captured = artifacts.capture_run_artifacts(
+            session, run, worktree, self.config.data_dir
+        )
+        run.artifacts_json = json.dumps(captured) if captured else None
 
     def _run_task(self, task_id: int) -> None:
         session = Session()
