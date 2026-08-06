@@ -10,6 +10,8 @@ Jalebi is a **private, self-hosted, localhost-only web application** that behave
 
 The authoritative behavioral spec is **`JALEBI_PRD.md`** at the repo root. This doc set is a navigable, per-topic companion to the PRD — it never overrides it.
 
+**Stack (as implemented):** Python 3.13 + Flask + SQLAlchemy 2 (SQLite) + Alembic + httpx (GitHub client) on the server, managed with `uv`; React + Vite + Tailwind on the web. The built UI is served by Flask on the **same port as the API (3456)** — a single origin. Git CLI (not libgit2) for repo ops.
+
 ## 2. Core principles
 
 1. **Jules-like experience, self-hosted** — dedicated web UI with a task queue, per-task timeline, live logs, incremental diff, and follow-up panel. Owner-only.
@@ -60,7 +62,7 @@ The authoritative behavioral spec is **`JALEBI_PRD.md`** at the repo root. This 
 | `02-data-model.md` | Full SQLite schema + relationships. |
 | `03-adapters.md` | `AgentAdapter` interface, CLI refs, parsing, quirks. |
 | `04-git-workspace.md` | Bare mirrors, worktrees, branch naming, push w/ token. |
-| `05-github-integration.md` | Octokit client, PAT scopes, webhooks, check runs. |
+| `05-github-integration.md` | GitHub client (httpx), PAT scopes, webhooks, check runs. |
 | `06-task-queue.md` | Queue, worker pool, run lifecycle, timeouts, retries, publish. |
 | `07-screening.md` | Screening engine, cron, baseline dedup, findings, ntfy. |
 | `08-ui.md` | React app structure, pages, components, SSE consumption. |
@@ -69,7 +71,7 @@ The authoritative behavioral spec is **`JALEBI_PRD.md`** at the repo root. This 
 
 ## 6. Roadmap (phases)
 
-- **Phase 0 — Foundation (v1, opencode only):** scaffolding, config, SQLite schema, PAT settings + validation, git workspace manager, `AgentAdapter` + opencode adapter, task queue (concurrency 4), run lifecycle (cancel/timeout/retry), publish (auto/manual, `Closes #N`), secret masking, artifacts, minimal Jules-like UI, follow-up via `opencode run --session`.
+- **Phase 0 — Foundation (v1, opencode only):** scaffolding, config, SQLite schema, PAT settings + validation, git workspace manager, `AgentAdapter` + opencode adapter, task queue (concurrency 4), run lifecycle (cancel/timeout/retry), publish (auto/manual, `Closes #N`), secret masking, minimal Jules-like UI (queue + task detail + live console), follow-up via `opencode run --session`. **Status: mostly implemented** — remaining: follow-ups (PRD F11) and artifacts (PRD F18).
 - **Phase 1 — Catalog & reviewers + event-driven triggers:** catalog agents, reviewer workflow, "address reviewers" follow-up, webhook listener + dedup + trigger rules + registration/polling fallback.
 - **Phase 2 — Branch control + screening + merge gating:** source/target branch selectors, screening engine, check runs for branch protection.
 - **Phase 3 — Backend parity:** Codex adapter, Claude Code adapter, per-task model dropdown from `listModels()`.

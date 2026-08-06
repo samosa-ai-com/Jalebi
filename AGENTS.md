@@ -11,10 +11,10 @@ Jalebi is a **private, self-hosted, localhost-only web application** that behave
 Key architectural facts:
 
 - **Backend-agnostic agent adapters** — v1 ships the `opencode` CLI; Codex and Claude Code come later. Switching backend = one-line config (`agent.cli`).
-- **GitHub PAT** (the owner's own token) drives all GitHub interaction via Octokit. **The `gh` CLI is forbidden.**
+- **GitHub PAT** (the owner's own token) drives all GitHub interaction via a thin httpx client. **The `gh` CLI is forbidden.**
 - Agents run as **local child processes** in per-task **git worktrees**.
-- Stack: Node ≥ 22 + TypeScript + Hono + better-sqlite3 + Drizzle ORM + Octokit + node-cron + React + Vite + Tailwind. SSE for live events. Git CLI (not libgit2).
-- Single owner, no multi-user, no cloud, localhost only.
+- Stack: Python 3.13 + Flask + SQLAlchemy 2 (SQLite) + Alembic + httpx + React + Vite + Tailwind. SSE for events. Git CLI (not libgit2).
+- Single owner, no multi-user, no cloud, localhost only. **One port (3456): Flask serves both the API and the built UI.**
 
 **The authoritative behavioral spec is `JALEBI_PRD.md`.** If anything here or in `docs/` conflicts with the PRD, the PRD wins — flag the conflict, never silently resolve it.
 
@@ -62,7 +62,7 @@ This is critical and repeated: **there is exactly ONE credential for all GitHub 
 
 - **`JALEBI_GITHUB_TOKEN`** — the owner's GitHub personal access token, stored **locally**:
   - While developing: in the git-ignored **`.env`** file at the repo root (see `.env.example` for the key name and required scopes).
-  - At runtime: Jalebi moves it into `<data-dir>/secrets.json` with `0600` permissions (PRD §F1) and all GitHub calls go through Octokit using it.
+  - At runtime: Jalebi moves it into `<data-dir>/secrets.json` with `0600` permissions (PRD §F1) and all GitHub calls go through the thin httpx GitHub client using it.
 
 ### 3.2 How agents must use it
 
@@ -71,7 +71,7 @@ This is critical and repeated: **there is exactly ONE credential for all GitHub 
 
 ### 3.3 Absolute prohibitions
 
-- **NEVER use the `gh` CLI for testing or verification against the testing repo/account.** All GitHub interaction for testing (repo list, issues, PRs, reviews, comments, refs, clone/push, webhook registration, check runs, PAT-scope validation) goes through **Octokit / `curl -H "Authorization: Bearer $JALEBI_GITHUB_TOKEN"` / git with a credential helper** using `JALEBI_GITHUB_TOKEN` — never `gh` (PRD §17.2).
+- **NEVER use the `gh` CLI for testing or verification against the testing repo/account.** All GitHub interaction for testing (repo list, issues, PRs, reviews, comments, refs, clone/push, webhook registration, check runs, PAT-scope validation) goes through **the httpx GitHub client / `curl -H "Authorization: Bearer $JALEBI_GITHUB_TOKEN"` / git with a credential helper** using `JALEBI_GITHUB_TOKEN` — never `gh` (PRD §17.2).
 - **Owner-authorized exception (commits only):** the owner has explicitly authorized using the `gh` CLI **only** for local git operations on the Jalebi repo itself (staging, committing, pushing to `Rishabh-Bajpai/Jalebi`). This exception does **not** extend to any testing/verification against the testing account/repo — those always use `JALEBI_GITHUB_TOKEN`.
 - **NEVER create, generate, or fall back to any other token or credential** (no `gh auth login`, no new PATs, no OAuth, no alternate tokens). If the token in `.env` is missing/invalid, stop and ask the user — do not improvise.
 - **NEVER commit, print, log, or paste the token** — not in code, not in docs, not in AGENTS.md, not in HANDOFF.md, not in any file that could be committed. Token values only ever live in git-ignored files (`.env`, `~/.jalebi/secrets.json`).
@@ -96,7 +96,7 @@ This is critical and repeated: **there is exactly ONE credential for all GitHub 
 | `docs/02-data-model.md` | Full SQLite schema + relationships. | Schema/migrations change. |
 | `docs/03-adapters.md` | `AgentAdapter` interface, CLI command refs, parsing, quirks. | Adapter work (opencode/codex/claude). |
 | `docs/04-git-workspace.md` | Bare mirrors, worktrees, branch naming, push w/ token. | Git workspace manager changes. |
-| `docs/05-github-integration.md` | Octokit client, PAT scopes, webhooks, check runs. | GitHub client/webhook/check-run work. |
+| `docs/05-github-integration.md` | GitHub client (httpx), PAT scopes, webhooks, check runs. | GitHub client/webhook/check-run work. |
 | `docs/06-task-queue.md` | Queue, worker pool, run lifecycle, timeouts, retries, publish. | Queue/runner/publish changes. |
 | `docs/07-screening.md` | Screening engine, cron, baseline dedup, findings, ntfy. | Screening work. |
 | `docs/08-ui.md` | React app structure, pages, components, SSE consumption. | UI changes. |
@@ -107,7 +107,7 @@ This is critical and repeated: **there is exactly ONE credential for all GitHub 
 
 ---
 
-## 5. Project map (target structure)
+## 5. Project map (current structure)
 
 ```
 Jalebi/
@@ -117,6 +117,9 @@ Jalebi/
 ├── .env.example                   ← committed placeholder for env keys
 ├── .env                           ← git-ignored; holds JALEBI_GITHUB_TOKEN
 ├── .gitignore
+├── package.json                   ← npm workspace (apps/web) + convenience scripts
+├── tsconfig.base.json / eslint.config.mjs / .prettierrc.json   ← web tooling
+├── start.sh / stop.sh             ← manage the server daemon (PID + log under data dir)
 ├── docs/                          ← one doc per topic (see §4)
 │   ├── 00-overview.md
 │   ├── 01-architecture.md
@@ -130,38 +133,42 @@ Jalebi/
 │   ├── 09-testing.md
 │   └── 10-security.md
 ├── apps/
-│   ├── server/                    # Hono orchestrator (Node 22+, TypeScript)
-│   │   ├── src/
-│   │   │   ├── index.ts           # server bootstrap
-│   │   │   ├── config.ts          # env/config loading
-│   │   │   ├── db/                # Drizzle schema + migrations
-│   │   │   ├── routes/            # REST: tasks, repos, agents, screenings, triggers, settings, webhook
-│   │   │   ├── services/          # queue, runner, publish, followup, reviewer, screening, checkrun, masking, artifacts
-│   │   │   ├── adapters/          # types.ts, opencode.ts (codex.ts/claude.ts later)
-│   │   │   ├── git/               # workspace manager (mirror + worktree + push)
-│   │   │   ├── github/            # Octokit client
-│   │   │   └── sse/               # event hub
-│   │   └── tests/
-│   └── web/                       # React + Vite + Tailwind UI
+│   ├── server/                    # Flask orchestrator (Python 3.13, uv)
+│   │   ├── pyproject.toml         # uv project; `jalebi` console script → jalebi.app:main
+│   │   ├── alembic.ini
+│   │   ├── src/jalebi/
+│   │   │   ├── app.py             # create_app factory (+ SPA serving) + CLI entrypoint
+│   │   │   ├── config.py          # env → Config (host/port/data_dir/db_url)
+│   │   │   ├── db.py              # SQLAlchemy engine/session + Phase-0 models
+│   │   │   ├── migrations/        # Alembic env.py + versions/
+│   │   │   ├── secrets.py         # 0600 secrets.json (PAT; env precedence)
+│   │   │   ├── github.py          # thin httpx GitHub client (validate/PR/repos)
+│   │   │   ├── git_workspace.py   # bare mirrors + worktrees + token-authenticated push
+│   │   │   ├── adapters/          # types.py (AgentEvent/RunHandle) + opencode.py (codex/claude later)
+│   │   │   ├── events.py          # per-task SSE bus
+│   │   │   ├── masking.py         # PAT/pattern redaction at ingest
+│   │   │   ├── queue.py           # TaskQueue: workers, run lifecycle, timeout/cancel, publish
+│   │   │   ├── repos.py           # connected-repo registry service
+│   │   │   ├── tasks.py           # task service (create/list/detail)
+│   │   │   └── routes/            # github.py, repos.py, tasks.py (Flask blueprints)
+│   │   └── tests/                 # pytest (+ conftest)
+│   └── web/                       # React + Vite + Tailwind (built → served by Flask)
 │       └── src/
-│           ├── pages/             # Tasks, TaskDetail, Repos, Agents, Screenings, Triggers, Settings
-│           ├── components/        # Timeline, Console, DiffViewer, FollowUpComposer, PRCard, …
-│           └── api/               # REST + SSE client
-└── packages/
-    └── shared/                    # shared types + AgentEvent vocabulary
+│           ├── pages/             # Tasks, TaskDetail
+│           ├── api/               # REST + SSE client
+│           └── types.ts
 ```
-
----
 
 ## 6. Development workflow
 
-1. Install: `npm install` (npm workspaces at the repo root).
+1. Server deps: `uv sync` (run inside `apps/server`). Web deps: `npm install` (repo root).
 2. Copy `.env.example` → `.env` and set `JALEBI_GITHUB_TOKEN` (git-ignored; never commit).
-3. Server dev: `npm run dev -w apps/server` (Hono on 127.0.0.1).
-4. UI dev: `npm run dev -w apps/web` (Vite).
-5. Tests: `npm test` (vitest).
-6. Lint/format: `npm run lint` / `npm run format`.
-7. Build: `npm run build`.
+3. Build the UI once: `npm run build` (output: `apps/web/dist`, served by Flask).
+4. Run the app (API + UI on `127.0.0.1:3456`, one port): `./start.sh` — stop with `./stop.sh`.
+   (Dev alternative: `uv run --project apps/server jalebi`; optional Vite hot-reload via `npm run dev:web`.)
+5. Tests: server `uv run pytest` (in `apps/server`); web `npm test -w @jalebi/web`; or `npm test` for both.
+6. Lint/format: `uv run ruff check` (server); `npm run lint` / `npm run format` (web).
+7. Build: `npm run build` (web) — the backend has no build step.
 
 When a task needs new tooling/dependencies, include that in the plan and get approval before installing.
 

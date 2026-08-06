@@ -2,6 +2,8 @@
 
 > **Scope:** Screening engine, cron, baseline dedup, findings, and ntfy notifications. Update this file for any screening work.
 
+> **Status: NOT IMPLEMENTED — Phase 2.** The content below is the PRD-derived design. No screening code exists yet. When implemented, the Python equivalent of `node-cron` is `APScheduler` (or a simple timer); the `screenings` / `screening_runs` / `findings` tables are not yet in the schema.
+
 ---
 
 ## 1. Design principle (PRD §F10)
@@ -22,9 +24,9 @@ v1 ships a starter catalog (user-editable):
 - *Performance hotspots* — obvious N+1 / heavy loops / unbounded growth.
 - *Code-quality consistency* — style inconsistencies across modules.
 
-## 3. Scheduler (node-cron)
+## 3. Scheduler (cron)
 
-- `node-cron` per screen.
+- A cron scheduler (planned: `APScheduler`; PRD listed `node-cron`).
 - **Baseline dedup:** store last audited `HEAD` per (repo × screen); skip if unchanged.
 - Run the screen at HEAD with a **read-only prompt** (no edits, no git writes) and an optional structured-output schema for findings.
 

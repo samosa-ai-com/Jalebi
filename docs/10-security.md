@@ -14,6 +14,7 @@
 
 - PAT stored with `0600` permissions in `<data-dir>/secrets.json`.
 - Never logged, never sent to the browser, never passed to agent prompts.
+- **Git auth transport:** the PAT is passed to git via the `GIT_CONFIG_*` environment variables (`http.extraHeader: Authorization: basic base64(x-access-token:<PAT>)`) — it never appears in argv, URLs, or logs (GitHub requires Basic auth for git-over-HTTPS; Bearer works for the REST API only).
 - The token is the **only** credential (see `AGENTS.md` §3). The `gh` CLI is forbidden for testing; it is authorized only for local git operations on the Jalebi repo itself.
 
 ## 3. Secret masking in logs (PRD §F17)

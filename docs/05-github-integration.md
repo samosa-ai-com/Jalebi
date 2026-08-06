@@ -81,7 +81,7 @@ Planned capabilities (later phases): issues, PRs (create/update/comment/review),
 
 ## 7. Publish (PRD §F9)
 
-- Push branch + open PR via Octokit: `base = target`, `head = jalebi/<taskId>`.
+- Push branch + open PR via the httpx GitHub client: `base = target`, `head = jalebi/<taskId>`.
 - Auto title = agent summary; body includes task instructions + `Closes #N` when an issue was referenced; footer with a link to the Jalebi task and `Co-authored-by` attribution for opencode.
 - Follow-ups update the same PR (never a second PR for the same task).
 
