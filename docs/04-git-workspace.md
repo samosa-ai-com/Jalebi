@@ -8,25 +8,28 @@
 
 Jalebi uses the **git CLI** (not libgit2) for all repo operations. Each task/agent runs in an isolated **git worktree** created from a **bare mirror** of the repo. This keeps agents isolated from each other and from the user's working copy.
 
+**Implementation:** `src/jalebi/git_workspace.py` — `GitWorkspace(config)` wrapping git via `subprocess`, with a per-repo `threading.Lock` around all shared-mirror mutations.
+
 ## 2. Directory layout (under data dir, default `~/.jalebi/`)
 
 - `repos/<owner>__<repo>.git` — bare mirror of each repo.
-- `ws/<taskId>/` — per-task worktree.
+- `ws/task-<taskId>/` — per-task worktree.
 
 ## 3. Bare mirror
 
-- One bare mirror per repo, kept up to date by fetching refs.
-- Used as the source for creating worktrees and for ref-prefetch during screenings.
-- Fetch with the token credential helper (see §6).
-- **Concurrency lock:** all `git fetch` operations on the shared bare mirror must acquire an async per-repo mutex lock to prevent concurrent workers from racing or producing `.git/config.lock` errors.
+- One bare mirror per repo, kept up to date by fetching refs (`git clone --mirror` on first use, then `git fetch --prune`).
+- `ensure_mirror(full_name, clone_url, token=None)` — clone or fetch, authenticated with the token (§6).
+- **Concurrency lock:** a per-repo `threading.Lock` in `GitWorkspace` serializes all `clone`/`fetch`/`worktree` operations on the shared mirror, preventing concurrent workers from racing or producing `.git/config.lock` errors.
 
 ## 4. Worktree lifecycle
 
+`create_worktree(task_id, full_name, base_branch="main", token=None)`, `remove_worktree(task_id, full_name)`, `push_branch(task_id, full_name, token)`.
+
 1. **Create / Resume:**
-   - **New task:** `git worktree add <ws/<taskId>> -b jalebi/<taskId> <source-branch>` — the worktree starts from the task's **source branch**.
-   - **Resume / Follow-up:** if branch `jalebi/<taskId>` already exists, run `git worktree add <ws/<taskId>> jalebi/<taskId>` (without `-b`).
-2. **Run:** the agent CLI is spawned with `cwd = <ws/<taskId>>` so it discovers `AGENTS.md`/skills.
-3. **Discard:** on task completion/cleanup, `git worktree remove <ws/<taskId>>` (with `--force` if dirty), then `git worktree prune` to recover orphaned worktrees on restart.
+   - **New task:** `git worktree add -b jalebi/<taskId> <ws/task-<id>> <source-branch>` — the worktree starts from the task's **source branch**.
+   - **Resume / Follow-up:** if `jalebi/<taskId>` already exists in the mirror, `git worktree add <ws/task-<id>> jalebi/<taskId>` (without `-b`); if the worktree dir already exists it is reused as-is.
+2. **Run:** the agent CLI is spawned with `cwd = <ws/task-<id>>` so it discovers `AGENTS.md`/skills.
+3. **Discard:** `remove_worktree` runs `git worktree remove --force` and deletes the `jalebi/<taskId>` branch. `git worktree prune` on restart is a future cleanup step.
 
 ## 5. Branch naming
 
@@ -35,12 +38,13 @@ Jalebi uses the **git CLI** (not libgit2) for all repo operations. Each task/age
 
 ## 6. Push with token (never embed token in URL/logs)
 
-- Use a **credential helper** or `Authorization: Bearer $JALEBI_GITHUB_TOKEN` — never embed the token in a URL or command that gets logged.
-- Example (credential helper approach):
+- Auth is injected via the **`GIT_CONFIG_*` environment variables** so the PAT never appears in argv, URLs, or logs:
   ```
-  git -c http.extraheader="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$JALEBI_GITHUB_TOKEN" | base64)" push origin jalebi/<taskId>
+  GIT_CONFIG_COUNT=1
+  GIT_CONFIG_KEY_0=http.extraHeader
+  GIT_CONFIG_VALUE_0="Authorization: Bearer $JALEBI_GITHUB_TOKEN"
   ```
-  (or a one-shot credential helper that reads the token from the secrets file).
+- `push_branch` uses the worktree and `-c remote.origin.mirror=false` to push an explicit refspec (`jalebi/<taskId>`) against the `--mirror` clone.
 - The token is the **only** credential (see `AGENTS.md` §3). The `gh` CLI is forbidden.
 
 ## 7. Source/target branch control (PRD §F8)
@@ -63,4 +67,4 @@ Jalebi uses the **git CLI** (not libgit2) for all repo operations. Each task/age
 ## 10. Reference
 
 - PRD §F8 (branch selection), §F9 (publish), §F12 (storage/prune), §17.2 (no `gh` CLI).
-- Recommended lightweight wrapper: `simple-git` (steveukx/simple-git) — but keep it simple; hand-rolled `child_process.exec` with careful arg handling is acceptable.
+- Implementation: `src/jalebi/git_workspace.py` (+ tests in `tests/test_git_workspace.py`). Publish/PR creation is handled by the task-queue step (uses `push_branch` + the GitHub client).
