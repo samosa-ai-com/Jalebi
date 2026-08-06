@@ -1,0 +1,7 @@
+dist/
+node_modules/
+.venv/
+uv.lock
+.pytest_cache/
+.ruff_cache/
+*.py

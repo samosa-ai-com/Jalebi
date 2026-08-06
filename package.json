@@ -1,0 +1,25 @@
+{
+  "name": "jalebi",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/web"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,web -c blue,green \"npm run dev:server\" \"npm run dev:web\"",
+    "dev:server": "uv run --project apps/server jalebi",
+    "dev:web": "npm run dev -w @jalebi/web",
+    "start": "./start.sh",
+    "stop": "./stop.sh",
+    "test": "npm run test:server && npm run test:web",
+    "test:server": "uv run --project apps/server pytest",
+    "test:web": "npm run test -w @jalebi/web",
+    "build": "npm run build -w @jalebi/web",
+    "typecheck": "npm run typecheck -w @jalebi/web",
+    "lint": "npm run lint -w @jalebi/web",
+    "format": "npm run format -w @jalebi/web"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.4"
+  }
+}
