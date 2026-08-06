@@ -51,11 +51,11 @@ interface RunHandle {
 
 ## 6. Known adapter quirks (document in code + README)
 
-- **opencode:** resuming keeps the session's original model unless `--model` is passed on resume (supported). `--fork` can fork instead of continuing if the user prefers a clean follow-up.
+- **opencode:** resuming keeps the session's original model unless `--model` is passed on resume (supported). `--fork` can fork instead of continuing if the user prefers a clean follow-up. Lifecycle status `session.idle` maps to the terminal state `done`.
 - **codex:** **on resume, the model/reasoning-effort cannot be changed** — the resumed session retains the original run's settings. Model changes on follow-ups must start a fresh run or be surfaced in the UI.
 - **claude:** `--resume <id>` requires the session id captured from the first run (`init.session_id`). `--continue` resumes the last session only (do not rely on it).
 - Processes must be spawned with a **working directory = the task worktree** so the CLI discovers `AGENTS.md`/skills.
-- Parsing must be **defensive**: unknown/non-parseable lines are shown verbatim in the console rather than crashing.
+- Stream output parsing must be **defensive & line-buffered**: consume child `stdout` through a line-buffer interface (e.g. Node `readline`) to reassemble JSON lines split across OS buffer chunks before invoking `parse(line)`. Unknown/non-parseable lines are shown verbatim in the console rather than crashing.
 
 ## 7. Personality & skills injection (PRD §F6)
 

@@ -18,10 +18,13 @@ Jalebi uses the **git CLI** (not libgit2) for all repo operations. Each task/age
 - One bare mirror per repo, kept up to date by fetching refs.
 - Used as the source for creating worktrees and for ref-prefetch during screenings.
 - Fetch with the token credential helper (see §6).
+- **Concurrency lock:** all `git fetch` operations on the shared bare mirror must acquire an async per-repo mutex lock to prevent concurrent workers from racing or producing `.git/config.lock` errors.
 
 ## 4. Worktree lifecycle
 
-1. **Create:** `git worktree add <ws/<taskId>> -b jalebi/<taskId> <source-branch>` — the worktree starts from the task's **source branch**.
+1. **Create / Resume:**
+   - **New task:** `git worktree add <ws/<taskId>> -b jalebi/<taskId> <source-branch>` — the worktree starts from the task's **source branch**.
+   - **Resume / Follow-up:** if branch `jalebi/<taskId>` already exists, run `git worktree add <ws/<taskId>> jalebi/<taskId>` (without `-b`).
 2. **Run:** the agent CLI is spawned with `cwd = <ws/<taskId>>` so it discovers `AGENTS.md`/skills.
 3. **Discard:** on task completion/cleanup, `git worktree remove <ws/<taskId>>` (with `--force` if dirty), then `git worktree prune` to recover orphaned worktrees on restart.
 

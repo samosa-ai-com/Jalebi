@@ -31,7 +31,7 @@ Validation at startup must confirm the token and enumerate granted scopes; the S
 
 - Jalebi registers repo webhooks via the API targeting its local listener (URL + optional secret for signature verification).
 - For a localhost-only install, GitHub cannot reach the machine — the listener must be exposed via a **tunnel (e.g. `cloudflared`/`ngrok`)** or the webhook URL points at a small reverse proxy.
-- The app detects an unreachable webhook and warns, offering the **polling fallback**.
+- The app detects an unreachable webhook via a diagnostic status endpoint (`GET /api/webhook/status`) and warns in the UI, offering the **polling fallback**.
 - **Idempotency:** deliveries are deduped on `X-GitHub-Delivery` / `X-GitHub-Event` headers, so re-deliveries never double-run a task.
 - **Replay:** the UI offers "replay last delivery" for any event.
 
@@ -46,7 +46,7 @@ Validation at startup must confirm the token and enumerate granted scopes; the S
 ## 5. Check runs & merge gating (PRD §F15)
 
 - Jalebi creates **check runs** (commit statuses) on the head SHA of the branch it's working on, via the PAT (`POST /repos/{owner}/{repo}/check-runs`).
-- Lifecycle mirrors a run: `queued` → `in_progress` (friendly name like `Jalebi / review (security-auditor)`) → `completed` with `conclusion` (`success`/`failure`/`neutral`/`cancelled`).
+- Lifecycle mirrors a run: `queued` → `in_progress` (friendly name like `Jalebi / review (security-auditor)`) → `completed` with `conclusion` (`success`/`failure`/`neutral`/`cancelled`). Status updates are posted against the latest pushed HEAD SHA on `jalebi/<taskId>`.
 - Because these are real check runs, **branch protection** can require them — merging is blocked until the agent's review/fix check is green. Opt-in per repo.
 - Failure/success of the underlying task drives the conclusion; a follow-up updates the existing check rather than creating duplicates (matched by name + head SHA).
 

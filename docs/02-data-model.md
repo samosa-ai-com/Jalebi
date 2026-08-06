@@ -82,7 +82,7 @@
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `id` | int PK | |
+| `id` | text PK | slug, e.g. `security-auditor` |
 | `name` | text | |
 | `kind` | text | `general` \| `reviewer` |
 | `cli` | text | optional backend override |
@@ -99,7 +99,7 @@
 |--------|------|-------|
 | `id` | int PK | |
 | `task_id` | int FK → tasks | |
-| `agent_id` | int FK → catalog_agents | |
+| `agent_id` | text FK → catalog_agents | slug reference |
 | `run_id` | int FK → runs | |
 | `pr_number` | int | |
 | `status` | text | `queued` \| `running` \| `posted` \| `failed` |
@@ -141,7 +141,7 @@
 | `task_id` | int FK → tasks | |
 | `run_id` | int FK → runs | |
 | `repo_id` | int FK → repos | |
-| `head_sha` | text | |
+| `head_sha` | text | active SHA on `jalebi/<taskId>` |
 | `name` | text | e.g. `Jalebi / review (security-auditor)` |
 | `status` | text | `queued` \| `in_progress` \| `completed` |
 | `conclusion` | text | `success` \| `failure` \| `neutral` \| `cancelled` |
@@ -177,7 +177,7 @@
 |--------|------|-------|
 | `id` | int PK | |
 | `run_id` | int FK → runs | |
-| `path` | text | |
+| `path` | text | primary record |
 | `size` | int | |
 | `created_at` | datetime | |
 
