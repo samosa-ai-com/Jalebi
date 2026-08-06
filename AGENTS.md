@@ -103,6 +103,7 @@ This is critical and repeated: **there is exactly ONE credential for all GitHub 
 | `docs/09-testing.md` | Test strategy per layer, how to run tests, fixtures. | Test infra changes. |
 | `docs/10-security.md` | Localhost binding, secrets, masking, sandboxing, threat notes. | Security-related changes. |
 | `docs/11-reliability.md` | Restart recovery, live concurrency, settings live-vs-startup, hardening. | Reliability/ops changes. |
+| `docs/12-ui-validation.md` | Manual UI QA checklist for every implemented feature. | Feature/UI behavior changes. |
 
 **If you add a doc file, add it to this table.**
 
@@ -133,7 +134,8 @@ Jalebi/
 │   ├── 08-ui.md
 │   ├── 09-testing.md
 │   ├── 10-security.md
-│   └── 11-reliability.md
+│   ├── 11-reliability.md
+│   └── 12-ui-validation.md
 ├── apps/
 │   ├── server/                    # Flask orchestrator (Python 3.13, uv)
 │   │   ├── pyproject.toml         # uv project; `jalebi` console script → jalebi.app:main
