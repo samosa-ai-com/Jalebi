@@ -1,19 +1,81 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, taskEvents } from "../api/client";
+import { StatusBadge } from "../components/StatusBadge";
 import type { Repo, SseEvent, Task } from "../types";
-import { StatusBadge } from "./Tasks";
 
-const TERMINAL = new Set(["done", "failed", "timed_out", "cancelled", "needs_approval"]);
+const TERMINAL = new Set(["done", "failed", "timed_out", "cancelled", "needs_approval", "interrupted"]);
+
+const PHASE_ORDER = [
+  "scanning",
+  "planning",
+  "implementing",
+  "testing",
+  "reviewing",
+  "creating_pr",
+];
+
+const PHASE_STYLE: Record<string, string> = {
+  scanning: "bg-ink-700/40 text-ink-300",
+  planning: "bg-sky-500/10 text-sky-300",
+  implementing: "bg-syrup-500/10 text-syrup-300",
+  testing: "bg-chai-500/10 text-chai-300",
+  reviewing: "bg-purple-500/10 text-purple-300",
+  creating_pr: "bg-green-500/10 text-green-300",
+};
+
+const STEP_DOT: Record<string, string> = {
+  step: "bg-syrup-400",
+  tool_call: "bg-chai-400",
+  message: "bg-ink-500",
+  diff: "bg-green-400",
+  done: "bg-green-400",
+  error: "bg-red-400",
+};
 
 function Action({ onClick, children }: { onClick: () => void; children: string }) {
   return (
-    <button
-      onClick={onClick}
-      className="rounded border border-neutral-700 bg-neutral-900 px-3 py-1 text-sm hover:bg-neutral-800"
-    >
+    <button onClick={onClick} className="btn-ghost">
       {children}
     </button>
+  );
+}
+
+function TimelineItem({
+  step,
+  index,
+}: {
+  step: SseEvent;
+  index: number;
+}) {
+  const dot = STEP_DOT[step.type] ?? "bg-ink-600";
+  return (
+    <li
+      className="relative flex gap-3 animate-fade-up"
+      style={{ animationDelay: `${Math.min(index * 0.02, 0.3)}s` }}
+    >
+      <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ring-2 ring-ink-950 ${dot}`} />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className="font-mono text-[11px] text-ink-600">
+            {step.ts?.slice(11, 19) ?? ""}
+          </span>
+          <span className="font-mono text-[11px] uppercase tracking-wide text-ink-500">
+            {step.type}
+          </span>
+          {step.phase && (
+            <span
+              className={`rounded px-1.5 py-0.5 font-mono text-[10px] ${
+                PHASE_STYLE[step.phase] ?? "bg-ink-700/40 text-ink-300"
+              }`}
+            >
+              {step.phase}
+            </span>
+          )}
+        </div>
+        {step.text && <p className="mt-0.5 text-sm leading-snug text-ink-300">{step.text}</p>}
+      </div>
+    </li>
   );
 }
 
@@ -50,42 +112,77 @@ export default function TaskDetail() {
   }, [taskId, task, load]);
 
   if (error) return <p className="text-red-400">{error}</p>;
-  if (!task) return <p className="text-neutral-500">Loading…</p>;
+  if (!task) return <p className="text-ink-500">Loading…</p>;
 
   const repoName = repos.find((r) => r.id === task.repo_id)?.full_name ?? `repo#${task.repo_id}`;
   const steps = task.run?.steps ?? [];
   const timeline = [...steps, ...live];
   const consoleLines = timeline.filter((s) => s.type === "message" || s.type === "tool_call");
 
+  const lastPhase = timeline.reduce<string | null>((acc, s) => s.phase ?? acc, null);
+  const phaseIndex = lastPhase ? PHASE_ORDER.indexOf(lastPhase) : -1;
+
   return (
-    <div className="space-y-4">
-      <div className="flex items-center gap-3">
-        <Link to="/" className="text-sm text-blue-400">
+    <div className="space-y-6 animate-fade-up">
+      <div className="flex flex-wrap items-center gap-3">
+        <Link to="/" className="text-sm text-ink-500 transition-colors hover:text-syrup-300">
           ← Tasks
         </Link>
-        <h1 className="text-xl font-semibold">Task #{task.id}</h1>
+        <h1 className="text-2xl font-bold tracking-tight text-ink-100">Task #{task.id}</h1>
         <StatusBadge status={task.status} />
+        <span className="mx-1 hidden h-4 w-px bg-ink-800 sm:block" />
+        <span className="font-mono text-xs text-ink-500">
+          {repoName}
+          <span className="mx-1.5 text-ink-700">·</span>
+          {task.model ?? "default model"}
+        </span>
         {task.pr_number && (
           <a
-            className="text-sm text-blue-400"
+            className="btn-ghost !px-3 !py-1 text-xs"
             href={`https://github.com/${repoName}/pull/${task.pr_number}`}
             target="_blank"
             rel="noreferrer"
           >
-            PR #{task.pr_number}
+            PR #{task.pr_number} ↗
           </a>
         )}
       </div>
 
-      <div className="space-y-1 rounded-lg border border-neutral-800 bg-neutral-900 p-4 text-sm">
-        <p className="text-neutral-400">
-          Repo: <span className="text-neutral-200">{repoName}</span>
-        </p>
-        <p className="text-neutral-400">Model: {task.model ?? "default"}</p>
-        <p className="whitespace-pre-wrap text-neutral-300">{task.prompt}</p>
-      </div>
+      <section className="surface p-6">
+        <div className="flex items-center justify-between gap-4">
+          <p className="whitespace-pre-wrap text-sm leading-relaxed text-ink-100">{task.prompt}</p>
+          {phaseIndex >= 0 && (
+            <div className="hidden shrink-0 flex-col items-center gap-1.5 md:flex">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full border border-syrup-500/40 bg-syrup-500/10 font-mono text-sm text-syrup-300">
+                {phaseIndex + 1}/{PHASE_ORDER.length}
+              </div>
+              <span className="font-mono text-[11px] text-ink-500">{PHASE_ORDER[phaseIndex]}</span>
+            </div>
+          )}
+        </div>
+        <dl className="mt-4 grid grid-cols-2 gap-x-6 gap-y-2 border-t border-ink-800 pt-4 text-xs sm:grid-cols-4">
+          <div>
+            <dt className="text-ink-600">Type</dt>
+            <dd className="mt-0.5 font-mono text-ink-300">{task.type}</dd>
+          </div>
+          <div>
+            <dt className="text-ink-600">Branch</dt>
+            <dd className="mt-0.5 font-mono text-ink-300">
+              {task.target_branch || "—"} ← {task.source_branch || "default"}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-ink-600">Timeout</dt>
+            <dd className="mt-0.5 font-mono text-ink-300">{task.timeout_minutes}m</dd>
+          </div>
+          <div>
+            <dt className="text-ink-600">Retries</dt>
+            <dd className="mt-0.5 font-mono text-ink-300">{task.retry_count}</dd>
+          </div>
+        </dl>
+      </section>
 
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         {task.status === "running" && (
           <Action onClick={() => api.cancelTask(task.id).then(load)}>Cancel</Action>
         )}
@@ -97,32 +194,41 @@ export default function TaskDetail() {
         )}
       </div>
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-        <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-4">
-          <h2 className="mb-2 text-sm font-semibold text-neutral-300">Timeline</h2>
-          <ol className="max-h-96 space-y-1 overflow-y-auto text-sm">
-            {timeline.length === 0 && <li className="text-neutral-600">No steps yet.</li>}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <section className="surface flex min-h-[24rem] flex-col p-5">
+          <h2 className="panel-title mb-3">Timeline</h2>
+          <ol className="space-y-3 overflow-y-auto pr-2 text-sm">
+            {timeline.length === 0 && <li className="text-ink-600">No steps yet.</li>}
             {timeline.map((step, i) => (
-              <li key={i} className="flex gap-2 text-neutral-400">
-                <span className="shrink-0 text-neutral-600">{step.ts?.slice(11, 19)}</span>
-                <span className="text-neutral-300">{step.type}</span>
-                <span className="truncate">{step.text}</span>
-              </li>
+              <TimelineItem key={i} step={step} index={i} />
             ))}
           </ol>
-        </div>
-        <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-4">
-          <h2 className="mb-2 text-sm font-semibold text-neutral-300">Console</h2>
-          <pre className="max-h-96 overflow-y-auto whitespace-pre-wrap font-mono text-xs text-neutral-400">
+        </section>
+        <section className="surface flex min-h-[24rem] flex-col p-5">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="panel-title">Console</h2>
+            <span className="font-mono text-[11px] text-ink-600">
+              {consoleLines.length} {consoleLines.length === 1 ? "line" : "lines"}
+            </span>
+          </div>
+          <pre className="flex-1 overflow-y-auto whitespace-pre-wrap pr-2 font-mono text-xs leading-relaxed text-ink-300">
             {consoleLines.length === 0 ? "No output yet." : ""}
             {consoleLines.map((line, i) => (
-              <div key={i}>
-                {line.text}
-                {line.type === "tool_call" && line.text ? "" : ""}
+              <div key={i} className="flex gap-2">
+                <span
+                  className={`shrink-0 select-none ${
+                    line.type === "tool_call" ? "text-chai-500" : "text-ink-700"
+                  }`}
+                >
+                  {line.type === "tool_call" ? "⚙" : "›"}
+                </span>
+                <span className={line.type === "tool_call" ? "text-chai-300" : "text-ink-300"}>
+                  {line.text}
+                </span>
               </div>
             ))}
           </pre>
-        </div>
+        </section>
       </div>
     </div>
   );

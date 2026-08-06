@@ -75,4 +75,29 @@ describe("Tasks", () => {
       expect(body).toMatchObject({ repo_id: 1, type: "freeform", prompt: "implement feature" });
     });
   });
+
+  it("filters the queue by status", async () => {
+    const mixed = [
+      { ...TASKS[0], id: 1, status: "running", prompt: "running one" },
+      { ...TASKS[0], id: 2, status: "done", prompt: "done one" },
+    ];
+    const fetchMock = vi.fn(async (url: string) => ({
+      ok: true,
+      json: async () => (url.includes("/api/tasks") ? mixed : REPOS),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    expect(await screen.findByText("running one")).toBeInTheDocument();
+    expect(screen.getByText("done one")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Running" }));
+
+    expect(screen.getByText("running one")).toBeInTheDocument();
+    expect(screen.queryByText("done one")).not.toBeInTheDocument();
+  });
 });

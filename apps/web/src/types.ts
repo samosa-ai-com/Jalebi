@@ -48,3 +48,36 @@ export interface SseEvent {
   text?: string | null;
   ts?: string;
 }
+
+export interface Health {
+  status: string;
+}
+
+export interface TokenInfo {
+  valid: boolean;
+  login: string | null;
+  token_type: string | null;
+  granted_scopes: string[];
+  missing_scopes: string[];
+  note: string | null;
+  error: string | null;
+}
+
+export interface GithubRepo {
+  full_name: string;
+  private: boolean;
+  default_branch: string | null;
+  clone_url: string;
+  html_url: string;
+}
+
+export interface SettingsMap {
+  concurrency: number;
+  auto_publish: boolean;
+  ntfy_topic: string;
+  default_timeout_minutes: number;
+  retry_policy: { auto_retry: boolean };
+  secret_patterns: string[];
+  artifact_ttl_days: number;
+  agent_cli: string;
+}

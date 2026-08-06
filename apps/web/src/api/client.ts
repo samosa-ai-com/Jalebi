@@ -1,4 +1,12 @@
-import type { Repo, SseEvent, Task } from "../types";
+import type {
+  GithubRepo,
+  Health,
+  Repo,
+  SettingsMap,
+  SseEvent,
+  Task,
+  TokenInfo,
+} from "../types";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
@@ -28,6 +36,17 @@ export interface CreateTaskInput {
 }
 
 export const api = {
+  getHealth: () => request<Health>("/api/health"),
+  getSettings: () => request<SettingsMap>("/api/settings"),
+  updateSetting: (key: string, value: unknown) =>
+    request<SettingsMap>(`/api/settings`, { method: "POST", body: JSON.stringify({ key, value }) }),
+  getGithubStatus: () => request<TokenInfo>("/api/github/status"),
+  putGithubToken: (token: string) =>
+    request<{ stored: boolean; detail: TokenInfo }>("/api/github/token", {
+      method: "PUT",
+      body: JSON.stringify({ token }),
+    }),
+  getGithubRepos: () => request<GithubRepo[]>("/api/github/repos"),
   getTasks: () => request<Task[]>("/api/tasks"),
   getTask: (id: number) => request<Task>(`/api/tasks/${id}`),
   createTask: (input: CreateTaskInput) =>
@@ -38,6 +57,8 @@ export const api = {
   publishTask: (id: number) =>
     request<{ pr_number: number }>(`/api/tasks/${id}/publish`, { method: "POST" }),
   getRepos: () => request<Repo[]>("/api/repos"),
+  connectRepo: (fullName: string) =>
+    request<Repo>("/api/repos", { method: "POST", body: JSON.stringify({ full_name: fullName }) }),
 };
 
 /** Subscribe to a task's live SSE stream. Returns an unsubscribe function. */
