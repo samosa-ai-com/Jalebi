@@ -1,0 +1,30 @@
+# ── Jalebi ────────────────────────────────────────────────────────────────
+
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+build/
+*.tsbuildinfo
+
+# Env & secrets  (NEVER commit these — see AGENTS.md security rules)
+.env
+.env.*
+!.env.example
+.jalebi/
+secrets.json
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
