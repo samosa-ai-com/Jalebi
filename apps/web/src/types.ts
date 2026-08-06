@@ -17,6 +17,12 @@ export interface Run {
   steps: Step[];
 }
 
+export interface Followup {
+  id: number;
+  body: string;
+  created_at: string;
+}
+
 export interface Task {
   id: number;
   type: string;
@@ -33,6 +39,7 @@ export interface Task {
   created_at: string;
   updated_at: string;
   run: Run | null;
+  followups?: Followup[];
 }
 
 export interface Repo {

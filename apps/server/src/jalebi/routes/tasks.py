@@ -60,7 +60,11 @@ def create_task() -> ResponseReturnValue:
 def list_tasks() -> ResponseReturnValue:
     session = db.get_session()
     items = [
-        tasks.task_to_dict(task, run=tasks.latest_run(session, task.id))
+        tasks.task_to_dict(
+            task,
+            run=tasks.latest_run(session, task.id),
+            followups=tasks.list_followups(session, task.id),
+        )
         for task in tasks.list_tasks(session)
     ]
     return jsonify(items)
@@ -72,7 +76,13 @@ def get_task(task_id: int) -> ResponseReturnValue:
     task = tasks.get_task(session, task_id)
     if task is None:
         return jsonify({"error": "task not found"}), 404
-    return jsonify(tasks.task_to_dict(task, run=tasks.latest_run(session, task_id)))
+    return jsonify(
+        tasks.task_to_dict(
+            task,
+            run=tasks.latest_run(session, task_id),
+            followups=tasks.list_followups(session, task_id),
+        )
+    )
 
 
 @bp.post("/<int:task_id>/cancel")
@@ -117,6 +127,34 @@ def publish_task(task_id: int) -> ResponseReturnValue:
     except Exception as exc:
         return jsonify({"error": str(exc)}), 502
     return jsonify({"pr_number": pr_number, "status": "done"})
+
+
+@bp.post("/<int:task_id>/followup")
+def followup_task(task_id: int) -> ResponseReturnValue:
+    """Post a follow-up that resumes the task's last session (PRD F11)."""
+    config: Config = current_app.config["JALEBI_CONFIG"]
+    payload = request.get_json(silent=True)
+    body = payload.get("prompt") if isinstance(payload, dict) else None
+    if not isinstance(body, str) or not body.strip():
+        return jsonify({"error": 'expected JSON body {"prompt": "<follow-up text>"}'}), 400
+
+    session = db.get_session()
+    task = tasks.get_task(session, task_id)
+    if task is None:
+        return jsonify({"error": "task not found"}), 404
+    if task.status in ("queued", "running"):
+        return jsonify({"error": f"cannot follow up on a task in state {task.status}"}), 409
+    prev = tasks.latest_resumable_run(session, task_id)
+    if prev is None:
+        return jsonify({"error": "no resumable session for this task"}), 409
+
+    token = secrets.load_github_token(config)
+    masker = masking.build_masker(token, [])
+    masked = masker(body.strip())
+    # The Followup row is recorded by the worker when the resume actually runs
+    # (see TaskQueue._run_followup) — not here, to avoid duplicates.
+    _queue().enqueue_followup(task_id, masked)
+    return jsonify(tasks.task_to_dict(task, followups=tasks.list_followups(session, task_id))), 202
 
 
 @bp.get("/<int:task_id>/events")

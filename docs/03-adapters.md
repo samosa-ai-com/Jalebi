@@ -71,6 +71,7 @@ Real `--format json` top-level `type` values and the adapter mapping (field is *
 ## 6. Known adapter quirks (document in code + README)
 
 - **opencode:** resuming keeps the session's original model unless `--model` is passed on resume (supported). `--fork` can fork instead of continuing. `OPENCODE_DISABLE_AUTOUPDATE=1` is set on spawn.
+- **opencode (spawn quirk, observed):** `opencode run --session <id>` **stalls with an empty stream when exec'd directly** by `subprocess.Popen` (the agent loop exits immediately after step 1), but runs correctly when spawned through a shell. The adapter therefore wraps every command in `/bin/bash -c 'cd <worktree> && exec opencode …'` (arguments are `shlex`-quoted). `--dir` starts are unaffected by the direct-spawn bug but use the same wrapper for consistency.
 - **codex:** **on resume, the model/reasoning-effort cannot be changed** — the resumed session retains the original run's settings. Model changes on follow-ups must start a fresh run or be surfaced in the UI.
 - **claude:** `--resume <id>` requires the session id captured from the first run (`init.session_id`). `--continue` resumes the last session only (do not rely on it).
 - Processes must be spawned with a **working directory = the task worktree** so the CLI discovers `AGENTS.md`/skills.

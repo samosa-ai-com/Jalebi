@@ -56,6 +56,11 @@ export const api = {
   rerunTask: (id: number) => request<Task>(`/api/tasks/${id}/rerun`, { method: "POST" }),
   publishTask: (id: number) =>
     request<{ pr_number: number }>(`/api/tasks/${id}/publish`, { method: "POST" }),
+  postFollowup: (id: number, prompt: string) =>
+    request<Task>(`/api/tasks/${id}/followup`, {
+      method: "POST",
+      body: JSON.stringify({ prompt }),
+    }),
   getRepos: () => request<Repo[]>("/api/repos"),
   connectRepo: (fullName: string) =>
     request<Repo>("/api/repos", { method: "POST", body: JSON.stringify({ full_name: fullName }) }),

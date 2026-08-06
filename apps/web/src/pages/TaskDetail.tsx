@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, taskEvents } from "../api/client";
 import { StatusBadge } from "../components/StatusBadge";
-import type { Repo, SseEvent, Task } from "../types";
+import type { Followup, Repo, SseEvent, Task } from "../types";
 
 const TERMINAL = new Set(["done", "failed", "timed_out", "cancelled", "needs_approval", "interrupted"]);
 
@@ -38,6 +38,73 @@ function Action({ onClick, children }: { onClick: () => void; children: string }
     <button onClick={onClick} className="btn-ghost">
       {children}
     </button>
+  );
+}
+
+function FollowUpComposer({
+  task,
+  followups,
+  onSent,
+}: {
+  task: Task;
+  followups: Followup[];
+  onSent: () => void;
+}) {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!text.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.postFollowup(task.id, text.trim());
+      setText("");
+      onSent();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "failed to send follow-up");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="surface p-5 animate-fade-up">
+      <h2 className="panel-title mb-3">Follow-up</h2>
+      <p className="mb-3 text-xs leading-relaxed text-ink-500">
+        Send a follow-up to resume this task&apos;s session in the same worktree and branch —
+        the agent picks up where it left off.
+      </p>
+      <form onSubmit={submit} className="space-y-3">
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          rows={3}
+          placeholder="e.g. Address the reviewer comments, then update the README…"
+          className="field resize-y"
+        />
+        {error && <p className="text-xs text-red-400">{error}</p>}
+        <div className="flex justify-end">
+          <button type="submit" disabled={busy || !text.trim()} className="btn-primary">
+            {busy ? "Sending…" : "Send follow-up"}
+          </button>
+        </div>
+      </form>
+      {followups.length > 0 && (
+        <ol className="mt-4 space-y-2 border-t border-ink-800 pt-3">
+          {followups.map((f) => (
+            <li key={f.id} className="flex gap-2 text-sm">
+              <span className="shrink-0 font-mono text-[11px] leading-6 text-ink-600">
+                {f.created_at.slice(11, 19)}
+              </span>
+              <span className="text-ink-300">{f.body}</span>
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
   );
 }
 
@@ -193,6 +260,14 @@ export default function TaskDetail() {
           <Action onClick={() => api.publishTask(task.id).then(load)}>Publish</Action>
         )}
       </div>
+
+      {task.run?.session_id && TERMINAL.has(task.status) && (
+        <FollowUpComposer
+          task={task}
+          followups={task.followups ?? []}
+          onSent={load}
+        />
+      )}
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <section className="surface flex min-h-[24rem] flex-col p-5">

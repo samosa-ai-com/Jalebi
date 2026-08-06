@@ -7,6 +7,7 @@ Unknown/non-JSON lines are surfaced verbatim as messages (defensive parsing).
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -28,8 +29,11 @@ def _spawn(
     full_env.setdefault("OPENCODE_DISABLE_AUTOUPDATE", "1")
     if env:
         full_env.update(env)
+    # Spawn through a shell: `opencode run --session` stalls when exec'd directly
+    # (empty stream, agent loop exits immediately), but works via `sh -c`.
+    cmd = "cd " + shlex.quote(str(cwd)) + " && exec " + " ".join(shlex.quote(a) for a in args)
     return subprocess.Popen(
-        args,
+        ["/bin/bash", "-c", cmd],
         cwd=str(cwd),
         env=full_env,
         stdout=subprocess.PIPE,

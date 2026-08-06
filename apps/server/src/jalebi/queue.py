@@ -9,7 +9,7 @@ import time
 
 from sqlalchemy import select
 
-from jalebi import masking, secrets, settings
+from jalebi import masking, secrets, settings, tasks
 from jalebi.adapters import get_adapter
 from jalebi.adapters.types import AgentEvent
 from jalebi.config import Config
@@ -52,7 +52,8 @@ class TaskQueue:
     def __init__(self, config: Config):
         self.config = config
         self.events = TaskEvents()
-        self._queue: queue.Queue[int | None] = queue.Queue()
+        # Items: ("task", task_id) | ("followup", task_id, body) | None (stop).
+        self._queue: queue.Queue[tuple | None] = queue.Queue()
         self._running: dict[int, _RunState] = {}
         self._running_lock = threading.Lock()
         self._workers: list[threading.Thread] = []
@@ -78,19 +79,25 @@ class TaskQueue:
             thread.join(timeout=5)
 
     def enqueue(self, task_id: int) -> None:
-        self._queue.put(task_id)
+        self._queue.put(("task", task_id))
+
+    def enqueue_followup(self, task_id: int, body: str) -> None:
+        self._queue.put(("followup", task_id, body))
 
     # -- worker loop -------------------------------------------------------
 
     def _worker_loop(self) -> None:
         while True:
-            task_id = self._queue.get()
-            if task_id is None:
+            item = self._queue.get()
+            if item is None:
                 return
             try:
-                self._run_task(task_id)
+                if item[0] == "followup":
+                    self._run_followup(item[1], item[2])
+                else:
+                    self._run_task(item[1])
             except Exception:
-                logger.exception("task %s crashed in worker", task_id)
+                logger.exception("worker crashed on %s", item)
 
     # -- cancellation ------------------------------------------------------
 
@@ -105,6 +112,89 @@ class TaskQueue:
         return True
 
     # -- run lifecycle -----------------------------------------------------
+
+    def _prepare_run(self, session, task: Task, cli: str) -> Run:
+        """Open a fresh run row and flip the task to ``running``."""
+        seq = (
+            len(session.execute(select(Run).where(Run.task_id == task.id)).scalars().all())
+            + 1
+        )
+        run = Run(
+            task_id=task.id,
+            seq=seq,
+            cli=cli,
+            model=task.model,
+            started_at=utcnow(),
+            status="running",
+        )
+        session.add(run)
+        task.status = "running"
+        task.updated_at = utcnow()
+        session.commit()
+        session.refresh(run)
+        return run
+
+    def _stream_and_finish(
+        self,
+        session,
+        task: Task,
+        repo: Repo,
+        run: Run,
+        git: GitWorkspace,
+        token: str,
+        masker,
+        handle,
+        state: _RunState,
+    ) -> None:
+        """Stream a handle's events to the SSE bus, then finalize run + task."""
+        steps: list[dict[str, object]] = []
+        last_event_type: str | None = None
+        for event in handle.events():
+            if event.type in ("step", "message", "tool_call", "done", "error"):
+                entry = self._step_from_event(event, masker)
+                self.events.publish(task.id, entry)
+                if event.type in ("step", "message", "done", "error"):
+                    steps.append(entry)
+                    last_event_type = event.type
+            if event.type in ("done", "error"):
+                break
+
+        with self._running_lock:
+            self._running.pop(task.id, None)
+
+        run.session_id = handle.session_id
+        run.finished_at = utcnow()
+        run.steps_json = json.dumps(steps[-MAX_STEPS:])
+
+        final_status: str = (
+            "timed_out"
+            if state.reason == "timeout"
+            else "cancelled"
+            if state.reason == "cancelled"
+            else "done"
+            if last_event_type == "done"
+            else "failed"
+        )
+        run.status = final_status
+        task.status = final_status
+        task.updated_at = utcnow()
+
+        if run.status == "done" and settings.get_setting(session, "auto_publish"):
+            if self._branch_ahead(task, git):
+                try:
+                    task.pr_number = self._publish(task, repo, token, git)
+                except Exception as exc:
+                    task.status = "needs_approval"
+                    logger.warning("auto-publish failed for task %s: %s", task.id, exc)
+                    steps.append(
+                        {
+                            "type": "error",
+                            "phase": None,
+                            "text": f"publish failed: {exc}",
+                            "ts": utcnow().isoformat(),
+                        }
+                    )
+                    run.steps_json = json.dumps(steps[-MAX_STEPS:])
 
     def _run_task(self, task_id: int) -> None:
         session = Session()
@@ -129,23 +219,7 @@ class TaskQueue:
             masker = masking.build_masker(token, patterns)
             cli = str(task.cli or settings.get_setting(session, "agent_cli") or "opencode")
 
-            seq = (
-                len(session.execute(select(Run).where(Run.task_id == task.id)).scalars().all())
-                + 1
-            )
-            run = Run(
-                task_id=task.id,
-                seq=seq,
-                cli=cli,
-                model=task.model,
-                started_at=utcnow(),
-                status="running",
-            )
-            session.add(run)
-            task.status = "running"
-            task.updated_at = utcnow()
-            session.commit()
-            session.refresh(run)
+            run = self._prepare_run(session, task, cli)
 
             git = GitWorkspace(self.config)
             git.ensure_mirror(repo.full_name, repo.clone_url, token)
@@ -158,60 +232,70 @@ class TaskQueue:
                 self._running[task.id] = state
             self._start_watchdog(task, state)
 
-            steps: list[dict[str, object]] = []
-            last_event_type: str | None = None
-            for event in handle.events():
-                if event.type in ("step", "message", "tool_call", "done", "error"):
-                    entry = self._step_from_event(event, masker)
-                    self.events.publish(task.id, entry)
-                    if event.type in ("step", "message", "done", "error"):
-                        steps.append(entry)
-                        last_event_type = event.type
-                if event.type in ("done", "error"):
-                    break
-
-            with self._running_lock:
-                self._running.pop(task.id, None)
-
-            run.session_id = handle.session_id
-            run.finished_at = utcnow()
-            run.steps_json = json.dumps(steps[-MAX_STEPS:])
-
-            final_status: str = (
-                "timed_out"
-                if state.reason == "timeout"
-                else "cancelled"
-                if state.reason == "cancelled"
-                else "done"
-                if last_event_type == "done"
-                else "failed"
-            )
-            run.status = final_status
-            task.status = final_status
-            task.updated_at = utcnow()
-
-            if run.status == "done" and settings.get_setting(session, "auto_publish"):
-                if self._branch_ahead(task, git):
-                    try:
-                        task.pr_number = self._publish(task, repo, token, git)
-                    except Exception as exc:
-                        task.status = "needs_approval"
-                        logger.warning("auto-publish failed for task %s: %s", task.id, exc)
-                        steps.append(
-                            {
-                                "type": "error",
-                                "phase": None,
-                                "text": f"publish failed: {exc}",
-                                "ts": utcnow().isoformat(),
-                            }
-                        )
-                        run.steps_json = json.dumps(steps[-MAX_STEPS:])
-
+            self._stream_and_finish(session, task, repo, run, git, token, masker, handle, state)
             session.commit()
         except Exception:
             logger.exception("task %s run failed", task_id)
             task = session.get(Task, task_id)
             if task is not None and task.status != "cancelled":
+                task.status = "failed"
+                task.updated_at = utcnow()
+            if run is not None:
+                run.status = "failed"
+                run.finished_at = utcnow()
+            session.commit()
+        finally:
+            session.close()
+            self.events.close(task_id)
+
+    def _run_followup(self, task_id: int, body: str) -> None:
+        """Resume a completed task's session in its own worktree (PRD F11)."""
+        session = Session()
+        run: Run | None = None
+        try:
+            task = session.get(Task, task_id)
+            if task is None:
+                return
+            repo = session.get(Repo, task.repo_id)
+            if repo is None:
+                task.status = "failed"
+                session.commit()
+                return
+            prev = tasks.latest_resumable_run(session, task_id)
+            if prev is None or not prev.session_id:
+                raise RuntimeError(f"task {task_id} has no resumable session")
+            prev_session_id = prev.session_id
+
+            token = secrets.load_github_token(self.config)
+            if token is None:
+                raise RuntimeError("no GitHub token configured")
+            raw_patterns = settings.get_setting(session, "secret_patterns") or []
+            patterns = [str(p) for p in raw_patterns] if isinstance(raw_patterns, list) else []
+            masker = masking.build_masker(token, patterns)
+            cli = str(
+                task.cli or prev.cli or settings.get_setting(session, "agent_cli") or "opencode"
+            )
+
+            run = self._prepare_run(session, task, cli)
+
+            git = GitWorkspace(self.config)
+            git.ensure_mirror(repo.full_name, repo.clone_url, token)
+            wt = git.create_worktree(task.id, repo.full_name, task.source_branch, token)
+
+            adapter = get_adapter(cli)
+            handle = adapter.resume(str(wt), prev_session_id, body)
+            state = _RunState(handle)
+            with self._running_lock:
+                self._running[task.id] = state
+            self._start_watchdog(task, state)
+
+            self._stream_and_finish(session, task, repo, run, git, token, masker, handle, state)
+            tasks.add_followup(session, task.id, prev.id, body)
+            session.commit()
+        except Exception:
+            logger.exception("follow-up for task %s failed", task_id)
+            task = session.get(Task, task_id)
+            if task is not None and task.status not in ("cancelled", "done"):
                 task.status = "failed"
                 task.updated_at = utcnow()
             if run is not None:
@@ -288,6 +372,9 @@ class TaskQueue:
 
     def _publish(self, task: Task, repo: Repo, token: str, git: GitWorkspace) -> int:
         git.push_branch(task.id, repo.full_name, token)
+        if task.pr_number:
+            # A PR already exists for jalebi/<taskId>; the push just updated it.
+            return task.pr_number
         client = GitHubClient(token)
         try:
             return client.create_pr(

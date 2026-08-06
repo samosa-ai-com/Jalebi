@@ -20,6 +20,7 @@ Jalebi runs a **task queue** with a **worker pool** (threading). Tasks are persi
 | `POST /api/tasks/:id/cancel` | Queued → `cancelled` immediately; running → kill child → `cancelled`; terminal → 409. |
 | `POST /api/tasks/:id/rerun` | Terminal task → back to `queued`, `retry_count+1`, enqueue. 409 if queued/running. |
 | `POST /api/tasks/:id/publish` | Manual publish (push + open PR). |
+| `POST /api/tasks/:id/followup` | Resume the task's last session (PRD F11). |
 
 ## 3. Statuses
 
@@ -27,13 +28,22 @@ Jalebi runs a **task queue** with a **worker pool** (threading). Tasks are persi
 
 ## 4. Run lifecycle (`TaskQueue._run_task`)
 
-1. Worker dequeues `task_id`, re-fetches the task; skips if `cancelled` (cancelled-while-queued).
+Queue items are tagged tuples: `("task", task_id)` or `("followup", task_id, body)`; workers dispatch to `_run_task` / `_run_followup`. The shared execution core is `_prepare_run` (open a `runs` row, flip task `running`) + `_stream_and_finish` (stream masked events → SSE + steps, resolve terminal status, auto-publish).
+
+1. Worker dequeues, re-fetches the task; skips if `cancelled` (cancelled-while-queued).
 2. Marks task `running`; creates a `runs` row (`seq+1`).
 3. `GitWorkspace.ensure_mirror` → `create_worktree` (source branch) → `adapter.start(cwd=worktree, prompt, model)`.
 4. Streams `handle.events()`; `step`/`message`/`tool_call`/`done`/`error` events are **masked at ingest** (PRD F17: PAT + `secret_patterns`), broadcast live over the per-task SSE channel, and stored in `runs.steps_json` (bounded: 500 steps, 2000-char texts).
 5. Terminal status from event stream **or** watchdog/cancel reason.
 6. If `done` and `settings.auto_publish`: **only if the branch is ahead of `origin/<target>`** (`commits_ahead > 0` — nothing to PR otherwise) → `push_branch` + `GitHubClient.create_pr` (`head=jalebi/<taskId>`, `base=target_branch`, title `[Jalebi] <first prompt line>`, body includes prompt + `Closes #N` for `issue_fix`). On publish failure → task `needs_approval` (manual publish available).
 7. Exceptions during the run mark the task **and** the current run `failed`.
+
+## 4b. Follow-ups (`TaskQueue._run_followup`, PRD F11)
+
+- `POST /api/tasks/:id/followup` (JSON `{"prompt": ...}`) requires the task to be **terminal** and a resumable session — the latest run **with a `session_id`** (`tasks.latest_resumable_run`, so a cancelled follow-up run that captured no session falls back to the last good one). The body is masked at ingest; a `followups` row is recorded against the resumed run.
+- The worker resumes with `adapter.resume(cwd=worktree, session_id, prompt)` — **same worktree, same branch** — creating a fresh `runs` row (`seq+1`) and streaming live via SSE (watchdog/cancel apply, same as a normal run).
+- On `done` + `auto_publish`: if the branch is ahead it publishes — reusing the task's existing `pr_number` if a PR is already open (the push updated it; `create_pr` would 409), else opening a new PR.
+- Cancelling a resumed run kills the child; because a cancelled run may capture no `session_id`, follow-ups fall back to the latest run that has one.
 
 ## 5. Timeouts (PRD F16)
 
@@ -52,7 +62,7 @@ Jalebi runs a **task queue** with a **worker pool** (threading). Tasks are persi
 
 - **Default auto-publish** (`settings.auto_publish`), global setting (per-task override not yet implemented).
 - Manual path: `POST /api/tasks/:id/publish`.
-- Follow-ups/PR-update semantics arrive with the follow-up feature.
+- Publish is **idempotent per branch**: if the task already has a `pr_number` (an open PR for `jalebi/<taskId>`), publish pushes and reuses that PR number instead of calling `create_pr` again.
 
 ## 9. Live events (SSE)
 
@@ -61,7 +71,7 @@ Jalebi runs a **task queue** with a **worker pool** (threading). Tasks are persi
 ## 10. Known limitations (flagged)
 
 - Worker pool size is fixed at **startup** from `settings.concurrency`; changing the setting requires a restart.
-- No artifact capture yet (PRD F18); no restart-recovery/`interrupted` handling yet; no per-task `auto_publish` override (global setting only).
+- No artifact capture yet (PRD F18); no restart-recovery/`interrupted` handling yet; no per-task `auto_publish` override (global setting only). A cancelled/killed agent session may become unresumable (opencode-side session state).
 
 ## 11. Reference
 

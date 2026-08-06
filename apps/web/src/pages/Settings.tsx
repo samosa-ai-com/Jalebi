@@ -20,13 +20,13 @@ function Toggle({
       aria-label={ariaLabel}
       aria-checked={checked}
       onClick={() => onChange(!checked)}
-      className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
-        checked ? "bg-syrup-500" : "bg-ink-700"
+      className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors duration-200 ${
+        checked ? "bg-syrup-500" : "bg-ink-800 ring-1 ring-inset ring-ink-600"
       }`}
     >
       <span
-        className={`absolute top-0.5 h-5 w-5 rounded-full bg-ink-100 transition-transform ${
-          checked ? "translate-x-[22px]" : "translate-x-0.5"
+        className={`inline-block h-[18px] w-[18px] rounded-full shadow-sm transition-transform duration-200 ${
+          checked ? "translate-x-[23px] bg-ink-950" : "translate-x-[3px] bg-ink-300"
         }`}
       />
     </button>

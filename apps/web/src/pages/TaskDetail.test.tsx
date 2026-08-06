@@ -1,4 +1,5 @@
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import TaskDetail from "./TaskDetail";
@@ -104,5 +105,38 @@ describe("TaskDetail", () => {
 
     expect((await screen.findAllByText("editing files…")).length).toBeGreaterThan(0);
     source.emit({ type: "stream_end" });
+  });
+
+  it("shows the follow-up composer for a terminal task and posts it", async () => {
+    const doneTask = {
+      ...TASK,
+      status: "done",
+      run: { ...TASK.run!, status: "done" },
+      followups: [],
+    };
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.includes("/api/tasks") && init?.method === "POST") {
+        return { ok: true, json: async () => doneTask };
+      }
+      return { ok: true, json: async () => (url.includes("/api/tasks") ? doneTask : REPOS) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderDetail();
+    expect(await screen.findByText("Follow-up")).toBeInTheDocument();
+
+    await userEvent.type(
+      screen.getByPlaceholderText(/Address the reviewer comments/),
+      "do more"
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Send follow-up" }));
+
+    await waitFor(() => {
+      const postCall = fetchMock.mock.calls.find(
+        (call) => call[0] === "/api/tasks/7/followup" && call[1]?.method === "POST"
+      );
+      expect(postCall).toBeTruthy();
+      expect(JSON.parse(postCall![1]!.body as string)).toEqual({ prompt: "do more" });
+    });
   });
 });
