@@ -1,26 +1,69 @@
 """Flask application factory and CLI entrypoint."""
 
-import os
 
-from flask import Flask, Response, jsonify
+from flask import Flask, Response, g, jsonify, request
+from flask.typing import ResponseReturnValue
+
+from jalebi import db, settings
+from jalebi.config import Config, load_config
 
 
-def create_app() -> Flask:
+def get_session():
+    """Return the request-scoped database session (bound to the Flask app context)."""
+    session = getattr(g, "_db_session", None)
+    if session is None:
+        session = db.Session()
+        g._db_session = session
+    return session
+
+
+def create_app(config: Config | None = None) -> Flask:
     """Create and configure the Jalebi Flask application."""
+    if config is None:
+        config = load_config()
+    config.ensure_dirs()
+
     app = Flask(__name__)
+    app.config["JALEBI_CONFIG"] = config
+
+    db.init_db(config.db_url)
+    db.run_migrations(config.db_url)
+
+    @app.teardown_appcontext
+    def close_session(_exc) -> None:
+        session = g.pop("_db_session", None)
+        if session is not None:
+            session.close()
 
     @app.get("/api/health")
     def health() -> Response:
         return jsonify({"status": "ok"})
+
+    @app.get("/api/settings")
+    def get_settings() -> Response:
+        session = get_session()
+        return jsonify({key: settings.get_setting(session, key) for key in settings.SETTING_KEYS})
+
+    @app.post("/api/settings")
+    def update_settings() -> ResponseReturnValue:
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify({"error": "expected a JSON object"}), 400
+        key = payload.get("key")
+        if key not in settings.SETTING_KEYS:
+            return jsonify({"error": f"unknown setting key: {key}"}), 400
+        session = get_session()
+        settings.set_setting(session, key, payload.get("value"))
+        return jsonify({key: settings.get_setting(session, key)}), 200
 
     return app
 
 
 def main() -> None:
     """Run the development server, bound to localhost only."""
-    host = os.environ.get("JALEBI_HOST", "127.0.0.1")
-    port = int(os.environ.get("JALEBI_PORT", "3456"))
-    create_app().run(host=host, port=port, threaded=True)
+    config = load_config()
+    app = create_app(config)
+    app.run(host=config.host, port=config.port, threaded=True)
 
 
 if __name__ == "__main__":

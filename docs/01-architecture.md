@@ -107,7 +107,9 @@
 
 ## 5. Recommended stack
 
-Node ≥ 22 + TypeScript + Hono + better-sqlite3 + Drizzle ORM + Octokit + node-cron + React + Vite + Tailwind. SSE for events. Git CLI (not libgit2) for repo ops.
+Python 3.13 + Flask + SQLAlchemy 2 (SQLite) + Alembic migrations + PyGithub-equivalent Octokit-style client + APScheduler-equivalent cron + React + Vite + Tailwind. SSE for events. Git CLI (not libgit2) for repo ops.
+
+> **Note (2026-08-06):** the backend was switched from the originally planned Node/Hono/Drizzle stack to **Python + Flask + SQLAlchemy + Alembic** (owner decision). This doc's architecture diagram and component table still reference the Node-based layout; they are **reference-only** and will be rewritten in a future doc-sync pass.
 
 ## 6. Key design constraints
 

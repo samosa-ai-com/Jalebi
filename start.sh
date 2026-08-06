@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RUN_DIR="$ROOT/.jalebi"
+RUN_DIR="${JALEBI_DATA_DIR:-$HOME/.jalebi}"
 PID_FILE="$RUN_DIR/server.pid"
 LOG_FILE="$RUN_DIR/server.log"
 VENV_PYTHON="$ROOT/apps/server/.venv/bin/python"

@@ -1,56 +1,59 @@
 # 02 — Data Model
 
-> **Scope:** Full SQLite schema + relationships. Update this file when the schema or migrations change.
+> **Scope:** SQLite schema + relationships as implemented. Update this file when the schema or migrations change.
 
 ---
 
 ## 1. Storage layout
 
-- **SQLite** via better-sqlite3 + Drizzle ORM.
-- Data dir (default `~/.jalebi/`):
+- **SQLite** via SQLAlchemy 2.0 (`jalebi.db`), migrations via **Alembic** (`jalebi/migrations/`).
+- Data dir (default `~/.jalebi/`, override `JALEBI_DATA_DIR`):
   - `data.db` — the SQLite database.
-  - `secrets.json` — PAT + secrets, `0600` permissions.
+  - `secrets.json` — PAT + secrets, `0600` permissions (added with the GitHub client).
   - `repos/` — bare mirrors.
   - `ws/` — worktrees.
   - `agents/` — catalog agent files (personality + skills).
   - `logs/` — run logs.
+- **Schema evolution:** one Alembic migration per change. Tables are added incrementally by phase — Phase 0 ships only the tables below; catalog/triggers/screening/check-run tables arrive with their phases (see PRD §10).
 
-## 2. Tables
+## 2. Phase-0 tables
 
 ### `repos`
 
 | Column | Type | Notes |
 |--------|------|-------|
 | `id` | int PK | |
-| `full_name` | text | `owner/repo` |
-| `default_branch` | text | |
+| `full_name` | text UNIQUE | `owner/repo` |
+| `default_branch` | text, default `'main'` | |
 | `clone_url` | text | |
-| `pat_scope` | text | granted scopes snapshot |
-| `webhook_registered` | bool | |
-| `poll_fallback` | bool | |
-| `check_runs_enabled` | bool | |
-| `last_checked_at` | datetime | |
+| `pat_scope` | text null | granted scopes snapshot |
+| `webhook_registered` | bool, default 0 | |
+| `poll_fallback` | bool, default 0 | |
+| `check_runs_enabled` | bool, default 0 | |
+| `last_checked_at` | datetime null | |
 
 ### `tasks`
 
 | Column | Type | Notes |
 |--------|------|-------|
 | `id` | int PK | |
-| `type` | text | `issue_fix` \| `pr_review` \| `freeform` \| `screen_finding` \| `triggered` |
+| `type` | text CHECK | `issue_fix` \| `pr_review` \| `freeform` \| `screen_finding` \| `triggered` |
 | `repo_id` | int FK → repos | |
-| `source_branch` | text | base to branch off |
-| `target_branch` | text | PR base |
-| `agent_id` | int FK → catalog_agents | nullable (default build agent) |
-| `model` | text | nullable |
-| `cli` | text | backend override |
+| `source_branch` | text, default `'main'` | base to branch off |
+| `target_branch` | text, default `'main'` | PR base |
+| `agent_id` | text null | catalog agent slug — **no FK yet**; FK added in Phase 1 |
+| `model` | text null | |
+| `cli` | text null | backend override |
 | `prompt` | text | instructions |
-| `status` | text | `queued` \| `running` \| `waiting_review` \| `needs_approval` \| `done` \| `failed` \| `timed_out` \| `interrupted` |
-| `timeout_minutes` | int | default 30 |
-| `retry_count` | int | |
-| `pr_number` | int | nullable |
-| `check_run_id` | int | nullable |
-| `created_at` | datetime | |
-| `updated_at` | datetime | |
+| `status` | text CHECK, default `'queued'` | `queued` \| `running` \| `waiting_review` \| `needs_approval` \| `done` \| `failed` \| `timed_out` \| `interrupted` \| `cancelled` |
+| `timeout_minutes` | int, default 30 | |
+| `retry_count` | int, default 0 | |
+| `pr_number` | int null | |
+| `check_run_id` | int null | **no FK yet**; check_runs table arrives in Phase 2 |
+| `created_at` | datetime | naive UTC |
+| `updated_at` | datetime | naive UTC |
+
+Indexes: `repo_id`, `status`.
 
 ### `runs`
 
@@ -58,15 +61,17 @@
 |--------|------|-------|
 | `id` | int PK | |
 | `task_id` | int FK → tasks | |
-| `seq` | int | run sequence within task |
-| `session_id` | text | CLI session id (for resume) |
-| `cli` | text | |
-| `model` | text | |
-| `started_at` | datetime | |
-| `finished_at` | datetime | |
-| `status` | text | |
-| `steps_json` | text | timeline steps |
-| `artifacts_json` | text | artifact refs |
+| `seq` | int, default 1 | run sequence within task |
+| `session_id` | text null | CLI session id (for resume) |
+| `cli` | text null | |
+| `model` | text null | |
+| `started_at` | datetime null | |
+| `finished_at` | datetime null | |
+| `status` | text null | |
+| `steps_json` | text null | timeline steps (cache) |
+| `artifacts_json` | text null | artifact refs (cache; relational `artifacts` is the primary record) |
+
+Index: `task_id`.
 
 ### `followups`
 
@@ -74,102 +79,11 @@
 |--------|------|-------|
 | `id` | int PK | |
 | `task_id` | int FK → tasks | |
-| `run_id` | int FK → runs | |
+| `run_id` | int null FK → runs | |
 | `body` | text | |
 | `created_at` | datetime | |
 
-### `catalog_agents`
-
-| Column | Type | Notes |
-|--------|------|-------|
-| `id` | text PK | slug, e.g. `security-auditor` |
-| `name` | text | |
-| `kind` | text | `general` \| `reviewer` |
-| `cli` | text | optional backend override |
-| `model` | text | optional pin |
-| `personality_md` | text | markdown → `AGENTS.md` |
-| `skills_json` | text | skill file refs |
-| `custom_instructions` | text | appended to task prompt |
-| `enabled` | bool | |
-| `created_at` | datetime | |
-
-### `review_assignments`
-
-| Column | Type | Notes |
-|--------|------|-------|
-| `id` | int PK | |
-| `task_id` | int FK → tasks | |
-| `agent_id` | text FK → catalog_agents | slug reference |
-| `run_id` | int FK → runs | |
-| `pr_number` | int | |
-| `status` | text | `queued` \| `running` \| `posted` \| `failed` |
-
-### `trigger_rules`
-
-| Column | Type | Notes |
-|--------|------|-------|
-| `id` | int PK | |
-| `repo_id` | int FK → repos | |
-| `event` | text | e.g. `pull_request.opened` |
-| `action` | text | `start_review` \| `triage_issue` \| `create_task` \| `rerun_review` |
-| `branch_filter` | text | optional |
-| `label_filter` | text | optional |
-| `author_filter` | text | optional |
-| `agent_ids_json` | text | target agents/reviewers |
-| `custom_instructions` | text | |
-| `enabled` | bool | |
-
-### `event_deliveries`
-
-| Column | Type | Notes |
-|--------|------|-------|
-| `id` | int PK | |
-| `github_delivery_id` | text UNIQUE | idempotency key |
-| `event` | text | |
-| `repo_id` | int FK → repos | |
-| `payload_json` | text | |
-| `received_at` | datetime | |
-| `matched_rule_id` | int | nullable |
-| `status` | text | |
-| `result` | text | |
-
-### `check_runs`
-
-| Column | Type | Notes |
-|--------|------|-------|
-| `id` | int PK | |
-| `task_id` | int FK → tasks | |
-| `run_id` | int FK → runs | |
-| `repo_id` | int FK → repos | |
-| `head_sha` | text | active SHA on `jalebi/<taskId>` |
-| `name` | text | e.g. `Jalebi / review (security-auditor)` |
-| `status` | text | `queued` \| `in_progress` \| `completed` |
-| `conclusion` | text | `success` \| `failure` \| `neutral` \| `cancelled` |
-
-### `screenings`
-
-| Column | Type | Notes |
-|--------|------|-------|
-| `id` | int PK | |
-| `repo_id` | int FK → repos | |
-| `name` | text | |
-| `system_prompt` | text | |
-| `cadence_cron` | text | |
-| `scope_branch` | text | |
-| `enabled` | bool | |
-| `notify_ntfy` | bool | |
-
-### `screening_runs`
-
-| Column | Type | Notes |
-|--------|------|-------|
-| `id` | int PK | |
-| `screening_id` | int FK → screenings | |
-| `head_sha` | text | baseline dedup |
-| `status` | text | |
-| `started_at` | datetime | |
-| `finished_at` | datetime | |
-| `findings_json` | text | |
+Index: `task_id`.
 
 ### `artifacts`
 
@@ -178,40 +92,39 @@
 | `id` | int PK | |
 | `run_id` | int FK → runs | |
 | `path` | text | primary record |
-| `size` | int | |
+| `size` | int, default 0 | |
 | `created_at` | datetime | |
+
+Index: `run_id`.
 
 ### `settings`
 
 | Column | Type | Notes |
 |--------|------|-------|
 | `key` | text PK | |
-| `value` | text | |
+| `value` | text | JSON-encoded |
 
-Settings keys: `concurrency`, `auto_publish`, `ntfy_topic`, `default_timeout_minutes`, `retry_policy`, `secret_patterns_json`, `artifact_ttl_days`, etc.
+Settings keys (defaults in `jalebi/settings.py`): `concurrency` (4), `auto_publish` (true), `ntfy_topic` (""), `default_timeout_minutes` (30), `retry_policy` (`{"auto_retry": false}`), `secret_patterns` (`[]`), `artifact_ttl_days` (7). Missing keys fall back to the code defaults; stored values override.
 
-## 3. Relationships
+## 3. Relationships (Phase 0)
 
 ```
 repos 1───* tasks
 tasks 1───* runs
 tasks 1───* followups
-runs 1───* followups
-tasks *───1 catalog_agents   (agent_id)
-tasks 1───* review_assignments
-catalog_agents 1───* review_assignments
-repos 1───* trigger_rules
-repos 1───* event_deliveries
-tasks 1───* check_runs
-runs 1───* check_runs
-repos 1───* screenings
-screenings 1───* screening_runs
-runs 1───* artifacts
+runs  1───* followups  (run_id nullable)
+runs  1───* artifacts
 ```
 
 ## 4. Key invariants
 
-- `event_deliveries.github_delivery_id` is **UNIQUE** — this is the idempotency guarantee for webhook re-delivery (PRD §F14).
+- `repos.full_name` is **UNIQUE** (upsert-safe repo tracking).
+- `tasks.type` / `tasks.status` are CHECK-constrained to the PRD enums; `status` includes `cancelled` (abort/cancel is a terminal task state, PRD §F3).
+- `tasks.agent_id` and `tasks.check_run_id` are plain nullable columns until their target tables exist (Phase 1 / Phase 2 respectively).
 - `runs.session_id` is persisted so follow-ups survive restarts (PRD §F11).
-- `screening_runs.head_sha` enables baseline dedup — skip a screen if HEAD is unchanged (PRD §F10).
-- `check_runs` are matched by name + head SHA so follow-ups update the existing check rather than duplicating (PRD §F15).
+- Static column defaults are declared at the **DB level** (`server_default`) as well as the model level, so raw SQL inserts behave like ORM inserts.
+- `alembic_version` tracks the applied revision; `jalebi.db.run_migrations()` upgrades to `head` on app startup and via the `alembic` CLI.
+
+## 5. Not yet implemented (later phases)
+
+`catalog_agents`, `review_assignments`, `trigger_rules`, `event_deliveries`, `check_runs`, `screenings`, `screening_runs`, `findings` — created by future migrations per PRD §10.
