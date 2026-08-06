@@ -1,0 +1,90 @@
+import pytest
+
+from jalebi.github import GitHubClient, GitHubError
+
+
+def make_client(token: str = "ghp_test") -> GitHubClient:
+    return GitHubClient(token)
+
+
+def test_validate_classic_full_scopes(monkeypatch) -> None:
+    client = make_client()
+    monkeypatch.setattr(
+        client,
+        "_request",
+        lambda method, path, **kw: (
+            200,
+            {"login": "octocat"},
+            {"x-oauth-scopes": "repo, workflow"},
+        ),
+    )
+    info = client.validate_token()
+    assert info.valid is True
+    assert info.login == "octocat"
+    assert info.token_type == "classic"
+    assert info.granted_scopes == ["repo", "workflow"]
+    assert info.missing_scopes == []
+
+
+def test_validate_classic_missing_repo(monkeypatch) -> None:
+    client = make_client()
+    monkeypatch.setattr(
+        client,
+        "_request",
+        lambda method, path, **kw: (200, {"login": "octocat"}, {"x-oauth-scopes": "public_repo"}),
+    )
+    info = client.validate_token()
+    assert info.valid is False
+    assert info.token_type == "classic"
+    assert info.granted_scopes == ["public_repo"]
+    assert info.missing_scopes == ["repo"]
+
+
+def test_validate_fine_grained_no_scope_header(monkeypatch) -> None:
+    client = make_client()
+    monkeypatch.setattr(
+        client,
+        "_request",
+        lambda method, path, **kw: (200, {"login": "octocat"}, {}),
+    )
+    info = client.validate_token()
+    assert info.valid is True
+    assert info.token_type == "fine-grained"
+    assert info.granted_scopes == []
+    assert "fine-grained" in (info.note or "")
+
+
+def test_validate_auth_failure(monkeypatch) -> None:
+    client = make_client()
+    monkeypatch.setattr(
+        client,
+        "_request",
+        lambda method, path, **kw: (401, {"message": "Bad credentials"}, {}),
+    )
+    info = client.validate_token()
+    assert info.valid is False
+    assert info.error == "Bad credentials"
+
+
+def test_list_repos(monkeypatch) -> None:
+    client = make_client()
+    payload = [
+        {
+            "full_name": "octocat/hello",
+            "private": False,
+            "default_branch": "main",
+            "clone_url": "https://github.com/octocat/hello.git",
+            "html_url": "https://github.com/octocat/hello",
+        }
+    ]
+    monkeypatch.setattr(client, "_request", lambda method, path, **kw: (200, payload, {}))
+    repos = client.list_repos()
+    assert repos[0]["full_name"] == "octocat/hello"
+    assert repos[0]["clone_url"] == "https://github.com/octocat/hello.git"
+
+
+def test_list_repos_error(monkeypatch) -> None:
+    client = make_client()
+    monkeypatch.setattr(client, "_request", lambda method, path, **kw: (403, None, {}))
+    with pytest.raises(GitHubError):
+        client.list_repos()

@@ -1,31 +1,45 @@
 # 05 — GitHub Integration
 
-> **Scope:** Octokit client, PAT scopes, webhooks, and check runs. Update this file for any GitHub client/webhook/check-run work.
+> **Scope:** GitHub client, PAT scopes + validation, webhooks, and check runs. Update this file for any GitHub client/webhook/check-run work.
 
 ---
 
 ## 1. The only credential
 
 - **`JALEBI_GITHUB_TOKEN`** — the owner's GitHub personal access token, stored locally in the git-ignored `.env` (dev) or `<data-dir>/secrets.json` with `0600` permissions (runtime).
-- All GitHub calls go through **Octokit** using this token.
-- **The `gh` CLI is forbidden** (PRD §17.2). No other token/credential is ever used (see `AGENTS.md` §3).
+- **Python client (httpx):** `jalebi/github.py` — a thin REST wrapper (no PyGithub). The only component that talks to GitHub.
+- **Secrets flow (`jalebi/secrets.py`):** at app startup, if `JALEBI_GITHUB_TOKEN` is set in the environment it is mirrored into `secrets.json` (`0600`, written atomically via a temp file). At runtime, `load_github_token()` prefers the env var, else the stored file. The `PUT /api/github/token` endpoint stores a token set from the Settings UI.
+- **The `gh` CLI is forbidden** (PRD §17.2). No other token/credential is ever used (see `AGENTS.md` §3). No endpoint ever returns or logs the token.
 
-## 2. Required scopes (PRD §F1)
+## 2. Required scopes & validation (PRD §F1)
 
 - **Classic PAT:** `repo`.
 - **Fine-grained:** Contents read/write, Pull requests read/write, Issues read/write, Metadata read, **Commit statuses read/write** (for check runs).
 
-Validation at startup must confirm the token and enumerate granted scopes; the Settings UI shows exactly which scope is missing.
+`GitHubClient.validate_token()` calls `GET /user` and classifies the result:
 
-## 3. Capabilities used (via Octokit)
+- **Classic:** granted scopes are read from the `X-OAuth-Scopes` response header; `missing_scopes` lists exactly which required scopes are absent (`repo`).
+- **Fine-grained:** GitHub exposes **no enumerable scope list**, so validation reports `valid=true` with a note to verify the per-resource permissions in the GitHub UI.
+- Auth failure (401) → `valid=false` with GitHub's error message.
 
-- Repo list & default branch.
-- Issues (read, create).
-- PRs (create/update/comment/review).
-- Refs (fetch).
-- Clone/push via authenticated git (see `docs/04-git-workspace.md`).
-- **Repo webhook registration/management** (`POST /repos/{owner}/{repo}/hooks`).
-- **Commit statuses / check runs** (`POST /repos/{owner}/{repo}/check-runs`).
+Validation is explicit (endpoints below), **not** run at startup — the server boots offline-friendly.
+
+## 3. Client & endpoints (implemented)
+
+`GitHubClient` (`jalebi/github.py`, httpx, `base_url=https://api.github.com`, `_request` seam for tests):
+
+- `validate_token() -> TokenInfo` (`valid`, `login`, `token_type`, `granted_scopes`, `missing_scopes`, `note`, `error`).
+- `list_repos()` → `[{full_name, private, default_branch, clone_url, html_url}]`.
+
+Blueprint `jalebi/routes/github.py` (`/api/github`):
+
+| Endpoint | Behavior |
+|---|---|
+| `GET /api/github/status` | Validates the configured token; 409 if none configured; returns `TokenInfo`. |
+| `PUT /api/github/token` | Validates a submitted PAT; if valid, stores it in `secrets.json` (0600); never echoes it. 400 on invalid. |
+| `GET /api/github/repos` | Lists the authenticated user's repos. 409 if no token. |
+
+Planned capabilities (later phases): issues, PRs (create/update/comment/review), refs, webhook registration/management, commit statuses/check runs — all via the same client.
 
 ## 4. Webhooks (PRD §F14)
 

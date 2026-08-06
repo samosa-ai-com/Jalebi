@@ -4,8 +4,9 @@
 from flask import Flask, Response, g, jsonify, request
 from flask.typing import ResponseReturnValue
 
-from jalebi import db, settings
+from jalebi import db, secrets, settings
 from jalebi.config import Config, load_config
+from jalebi.routes.github import bp as github_bp
 
 
 def get_session():
@@ -22,12 +23,15 @@ def create_app(config: Config | None = None) -> Flask:
     if config is None:
         config = load_config()
     config.ensure_dirs()
+    secrets.persist_env_github_token(config)
 
     app = Flask(__name__)
     app.config["JALEBI_CONFIG"] = config
 
     db.init_db(config.db_url)
     db.run_migrations(config.db_url)
+
+    app.register_blueprint(github_bp)
 
     @app.teardown_appcontext
     def close_session(_exc) -> None:
