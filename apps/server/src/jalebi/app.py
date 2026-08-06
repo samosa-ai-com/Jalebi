@@ -1,14 +1,27 @@
 """Flask application factory and CLI entrypoint."""
 
-from flask import Flask, Response, g, jsonify, request
+from pathlib import Path
+
+from flask import Flask, Response, g, jsonify, request, send_from_directory
 from flask.typing import ResponseReturnValue
 
 from jalebi import db, secrets, settings
-from jalebi.config import Config, load_config
+from jalebi.config import Config, load_config, repo_root
 from jalebi.queue import TaskQueue
 from jalebi.routes.github import bp as github_bp
 from jalebi.routes.repos import bp as repos_bp
 from jalebi.routes.tasks import bp as tasks_bp
+
+WEB_DIST = repo_root() / "apps" / "web" / "dist"
+
+
+def _serve_spa(web_dist: Path, filename: str) -> ResponseReturnValue:
+    """Serve a built SPA file, falling back to index.html (client-side routing)."""
+    if not (web_dist / "index.html").is_file():
+        return jsonify({"error": "web build missing; run: npm run build"}), 503
+    if (web_dist / filename).is_file():
+        return send_from_directory(web_dist, filename)
+    return send_from_directory(web_dist, "index.html")
 
 
 def create_app(config: Config | None = None) -> Flask:
@@ -56,6 +69,17 @@ def create_app(config: Config | None = None) -> Flask:
         session = db.get_session()
         settings.set_setting(session, key, payload.get("value"))
         return jsonify({key: settings.get_setting(session, key)}), 200
+
+    # SPA: serve the built React app (index.html + assets) so the UI lives on the
+    # same origin as the API. Werkzeug prioritizes the literal /api routes above
+    # this catch-all.
+    @app.get("/")
+    def spa_index() -> ResponseReturnValue:
+        return _serve_spa(WEB_DIST, "index.html")
+
+    @app.get("/<path:filename>")
+    def spa_files(filename: str) -> ResponseReturnValue:
+        return _serve_spa(WEB_DIST, filename)
 
     return app
 
