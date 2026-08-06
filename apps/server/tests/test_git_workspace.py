@@ -1,3 +1,4 @@
+import base64
 import subprocess
 from pathlib import Path
 
@@ -7,6 +8,11 @@ from jalebi.config import Config
 from jalebi.git_workspace import GitWorkspace, GitWorkspaceError
 
 FULL_NAME = "owner/repo"
+
+
+def _basic_auth_header(token: str) -> str:
+    encoded = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+    return f"Authorization: basic {encoded}"
 
 
 def _git(args: list[str]) -> str:
@@ -80,7 +86,7 @@ def test_mirror_clone_auth_env(ws: GitWorkspace, monkeypatch) -> None:
 
     monkeypatch.setattr("jalebi.git_workspace._run_git", fake_run)
     ws.ensure_mirror(FULL_NAME, "https://x", token="ghp_secret")
-    assert captured["auth_env"]["GIT_CONFIG_VALUE_0"] == "Authorization: Bearer ghp_secret"
+    assert captured["auth_env"]["GIT_CONFIG_VALUE_0"] == _basic_auth_header("ghp_secret")
     assert "ghp_secret" not in " ".join(captured["args"])
 
 
@@ -128,7 +134,7 @@ def test_push_auth_env(ws: GitWorkspace, monkeypatch) -> None:
 
     monkeypatch.setattr("jalebi.git_workspace._run_git", fake_run)
     ws.push_branch(1, FULL_NAME, token="ghp_secret")
-    assert captured["auth_env"]["GIT_CONFIG_VALUE_0"] == "Authorization: Bearer ghp_secret"
+    assert captured["auth_env"]["GIT_CONFIG_VALUE_0"] == _basic_auth_header("ghp_secret")
     assert "ghp_secret" not in " ".join(captured["args"])
 
 

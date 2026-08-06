@@ -30,6 +30,7 @@ Validation is explicit (endpoints below), **not** run at startup — the server 
 
 - `validate_token() -> TokenInfo` (`valid`, `login`, `token_type`, `granted_scopes`, `missing_scopes`, `note`, `error`).
 - `get_repo(full_name)` → `{full_name, default_branch, clone_url, private}`; raises `GitHubNotFound` on 404.
+- `create_pr(full_name, *, title, body, head, base) -> int` — opens a pull request and returns its number.
 - `list_repos()` → `[{full_name, private, default_branch, clone_url, html_url}]`.
 
 Blueprint `jalebi/routes/github.py` (`/api/github`):

@@ -113,3 +113,27 @@ def test_get_repo_not_found(monkeypatch) -> None:
     )
     with pytest.raises(GitHubNotFound):
         client.get_repo("octocat/nope")
+
+
+def test_create_pr(monkeypatch) -> None:
+    client = make_client()
+
+    def fake_request(method, path, **kwargs):
+        assert method == "POST"
+        assert path == "/repos/octocat/hello/pulls"
+        assert kwargs["json"]["head"] == "jalebi/7"
+        assert kwargs["json"]["base"] == "main"
+        return (201, {"number": 42}, {})
+
+    monkeypatch.setattr(client, "_request", fake_request)
+    number = client.create_pr(
+        "octocat/hello", title="t", body="b", head="jalebi/7", base="main"
+    )
+    assert number == 42
+
+
+def test_create_pr_error(monkeypatch) -> None:
+    client = make_client()
+    monkeypatch.setattr(client, "_request", lambda method, path, **kw: (422, None, {}))
+    with pytest.raises(GitHubError):
+        client.create_pr("octocat/hello", title="t", body="b", head="h", base="main")

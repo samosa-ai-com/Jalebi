@@ -5,8 +5,10 @@ from flask.typing import ResponseReturnValue
 
 from jalebi import db, secrets, settings
 from jalebi.config import Config, load_config
+from jalebi.queue import TaskQueue
 from jalebi.routes.github import bp as github_bp
 from jalebi.routes.repos import bp as repos_bp
+from jalebi.routes.tasks import bp as tasks_bp
 
 
 def create_app(config: Config | None = None) -> Flask:
@@ -22,8 +24,11 @@ def create_app(config: Config | None = None) -> Flask:
     db.init_db(config.db_url)
     db.run_migrations(config.db_url)
 
+    app.config["JALEBI_QUEUE"] = TaskQueue(config)
+
     app.register_blueprint(github_bp)
     app.register_blueprint(repos_bp)
+    app.register_blueprint(tasks_bp)
 
     @app.teardown_appcontext
     def close_session(_exc) -> None:
@@ -59,6 +64,14 @@ def main() -> None:
     """Run the development server, bound to localhost only."""
     config = load_config()
     app = create_app(config)
+    with app.app_context():
+        session = db.Session()
+        try:
+            raw_concurrency = settings.get_setting(session, "concurrency") or 0
+            concurrency = raw_concurrency if isinstance(raw_concurrency, int) else 0
+        finally:
+            session.close()
+    app.config["JALEBI_QUEUE"].start(concurrency)
     app.run(host=config.host, port=config.port, threaded=True)
 
 

@@ -101,6 +101,25 @@ class GitHubClient:
             "private": body.get("private"),
         }
 
+    def create_pr(
+        self,
+        full_name: str,
+        *,
+        title: str,
+        body: str,
+        head: str,
+        base: str,
+    ) -> int:
+        """Open a pull request and return its number."""
+        status, payload, _ = self._request(
+            "POST",
+            f"/repos/{full_name}/pulls",
+            json={"title": title, "body": body, "head": head, "base": base},
+        )
+        if status not in (200, 201) or not isinstance(payload, dict) or "number" not in payload:
+            raise GitHubError(f"failed to create PR: HTTP {status}")
+        return payload["number"]
+
     def list_repos(self, per_page: int = 100) -> list[dict[str, Any]]:
         """List the authenticated user's repositories (name, default branch, clone URL)."""
         status, body, _ = self._request(

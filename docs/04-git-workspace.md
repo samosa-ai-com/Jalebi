@@ -38,11 +38,11 @@ Jalebi uses the **git CLI** (not libgit2) for all repo operations. Each task/age
 
 ## 6. Push with token (never embed token in URL/logs)
 
-- Auth is injected via the **`GIT_CONFIG_*` environment variables** so the PAT never appears in argv, URLs, or logs:
+- Auth is injected via the **`GIT_CONFIG_*` environment variables** so the PAT never appears in argv, URLs, or logs. GitHub requires **Basic** auth for git-over-HTTPS (Bearer works for the REST API but not for git), using `x-access-token:<PAT>`:
   ```
   GIT_CONFIG_COUNT=1
   GIT_CONFIG_KEY_0=http.extraHeader
-  GIT_CONFIG_VALUE_0="Authorization: Bearer $JALEBI_GITHUB_TOKEN"
+  GIT_CONFIG_VALUE_0="Authorization: basic $(printf 'x-access-token:%s' "$JALEBI_GITHUB_TOKEN" | base64)"
   ```
 - `push_branch` uses the worktree and `-c remote.origin.mirror=false` to push an explicit refspec (`jalebi/<taskId>`) against the `--mirror` clone.
 - The token is the **only** credential (see `AGENTS.md` §3). The `gh` CLI is forbidden.

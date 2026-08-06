@@ -2,66 +2,64 @@
 
 > **Scope:** Queue, worker pool, run lifecycle, timeouts, retries, and publish. Update this file for any queue/runner/publish changes.
 
+**Implementation:** `src/jalebi/queue.py` (`TaskQueue`), `src/jalebi/tasks.py` (service), `src/jalebi/routes/tasks.py` (API). Tests in `tests/test_queue.py`, `tests/test_api_tasks.py`.
+
 ---
 
 ## 1. Overview
 
-Jalebi runs a **task queue** with a **worker pool**. Tasks are persisted in SQLite and survive restarts. The default concurrency is **4** parallel tasks, configurable from the UI (0 = paused queue).
+Jalebi runs a **task queue** with a **worker pool** (threading). Tasks are persisted in SQLite and survive restarts. The default concurrency is **4** (`settings.concurrency`), read at startup; **0 = paused queue** (no workers spawned).
 
-## 2. Concurrency & worker pool (PRD §F3)
+## 2. Tasks API (`/api/tasks`)
 
-- Worker pool executes the configured max number of tasks concurrently; the rest wait in queue.
-- Default concurrency: **4**, configurable from the UI (0 = paused queue).
-- Cap on concurrent children == configured concurrency (resource safety, PRD §13).
+| Endpoint | Behavior |
+|---|---|
+| `POST /api/tasks` | `{repo_id, type, prompt, source_branch, target_branch, model, cli, timeout_minutes}` → validate (repo exists, prompt non-empty, type in enum) → mask prompt → create `queued` → enqueue → 201. 400 on invalid. |
+| `GET /api/tasks` | List tasks (newest first) with latest run summary. |
+| `GET /api/tasks/:id` | Task detail incl. latest run + steps. |
+| `POST /api/tasks/:id/cancel` | Queued → `cancelled` immediately; running → kill child → `cancelled`; terminal → 409. |
+| `POST /api/tasks/:id/rerun` | Terminal task → back to `queued`, `retry_count+1`, enqueue. 409 if queued/running. |
+| `POST /api/tasks/:id/publish` | Manual publish (push + open PR). |
 
-## 3. Task statuses
+## 3. Statuses
 
-`queued` → `running` → `waiting_review` / `needs_approval` / `done` / `failed` / `timed_out` / `interrupted`
+`queued → running → done | failed | timed_out | cancelled | needs_approval` (plus `interrupted` reserved for future restart recovery).
 
-- **Cancel/abort** a running task: kill child process (for opencode use `POST /session/:id/abort` if attached to a server, else terminate the process).
-- Tasks survive restarts (persisted in SQLite); interrupted runs are marked `interrupted` and resumable.
+## 4. Run lifecycle (`TaskQueue._run_task`)
 
-## 4. Run lifecycle
+1. Worker dequeues `task_id`, re-fetches the task; skips if `cancelled` (cancelled-while-queued).
+2. Marks task `running`; creates a `runs` row (`seq+1`).
+3. `GitWorkspace.ensure_mirror` → `create_worktree` (source branch) → `adapter.start(cwd=worktree, prompt, model)`.
+4. Streams `handle.events()`; `step`/`message`/`done`/`error` events are **masked at ingest** (PRD F17: PAT + `secret_patterns`) and stored in `runs.steps_json` (bounded: 500 steps, 2000-char texts).
+5. Terminal status from event stream **or** watchdog/cancel reason.
+6. If `done` and `settings.auto_publish`: `push_branch` + `GitHubClient.create_pr` (`head=jalebi/<taskId>`, `base=target_branch`, title `[Jalebi] <first prompt line>`, body includes prompt + `Closes #N` for `issue_fix`). On publish failure → task `needs_approval` (manual publish available).
+7. Exceptions during the run mark the task **and** the current run `failed`.
 
-1. Task is created and enqueued (`queued`).
-2. A worker picks it up (`running`).
-3. Orchestrator creates a worktree, writes personality/skills files, and runs the agent via the adapter (`start`).
-4. Adapter spawns the CLI child process; emits normalized `AgentEvent`s over SSE.
-5. On completion, orchestrator **publishes** per the publish policy (default auto-open PR).
-6. Task reaches a terminal state (`done`/`failed`/`timed_out`/`interrupted`).
+## 5. Timeouts (PRD F16)
 
-## 5. Timeouts (PRD §F16)
+- Per-task `timeout_minutes` (default 30). A daemon **watchdog thread** enforces it: on expiry it kills the child (SIGTERM → 5s grace → SIGKILL) and the run resolves to `timed_out`. A timeout of `0` fires immediately (used in tests).
 
-- **Per-task timeout (enforced):** default **30 minutes**, configurable per task and per repo.
-- On expiry: kill the child process (SIGTERM → SIGKILL), mark the task `failed`/`timed-out`, and complete the check run (if any) with `failure`.
+## 6. Cancellation (PRD F3)
 
-## 6. Retries (PRD §F16)
+- `cancel()` sets a reason and kills the child process (SIGTERM → SIGKILL); the event stream ends and the run resolves to `cancelled`.
 
-- A failed/timed-out task can be **re-run** (UI action) — a fresh `run` reusing the same worktree/session where sensible, or a new run when the CLI requires it.
-- Retry count is tracked.
-- Auto-retry on transient failures (e.g. network) is configurable (default off for publishing tasks, on for pure-review tasks).
-- Interrupted runs remain resumable via follow-up.
+## 7. Retries (PRD F16)
 
-## 7. Publish (PRD §F9)
+- `rerun` reuses the same task row + worktree (`create_worktree` resumes an existing worktree); a fresh agent session runs (new `runs` row, new `seq`). `retry_count` is tracked.
+- Auto-retry on transient failures is not yet implemented.
 
-- **Default: auto-publish** — on task completion, push the branch and open a PR (auto title = agent summary; body includes task instructions + `Closes #N` when an issue was referenced; footer with a link to the Jalebi task and `Co-authored-by` attribution for opencode).
-- **Configurable:** per-task or global `auto_publish: true|false`; when `false`, the UI shows a **"Publish"** button (push + open PR) and a "push-only" option.
-- **PR updates on follow-ups:** follow-ups amend the same branch; existing PR is force-updated (new commit pushed) — never a second PR for the same task.
+## 8. Publish (PRD F9)
 
-## 8. Follow-ups (PRD §F11)
+- **Default auto-publish** (`settings.auto_publish`), global setting (per-task override not yet implemented).
+- Manual path: `POST /api/tasks/:id/publish`.
+- Follow-ups/PR-update semantics arrive with the follow-up feature.
 
-- Any task with a completed run shows a **follow-up composer**.
-- Posting a follow-up → orchestrator calls `adapter.resume({ sessionId, prompt: followup + context })` in the **same worktree**, same branch.
-- For a reviewer follow-up or "address the reviewers" request, the prompt includes the current GitHub PR review comments (fetched via API).
-- Follow-ups must be **backend-agnostic**.
-- Session ids are persisted per run (`runs.session_id`) so follow-ups survive restarts.
+## 9. Known limitations (flagged)
 
-## 9. Reviewer orchestration (PRD §F7)
-
-- Each reviewer gets its **own worktree** (isolated clone), checks out the PR's head branch, and runs a review session with its own personality/skills/model/CLI (via the same adapter interface — `start`, not `resume`).
-- On completion, the orchestrator posts the reviewer's output as a **PR review comment** on GitHub.
-- **Approval is manual** — Jalebi never approves/merges.
+- Worker pool size is fixed at **startup** from `settings.concurrency`; changing the setting requires a restart.
+- `steps_json` is written at run completion (no live streaming yet — SSE lands with the UI step).
+- No artifact capture yet (PRD F18); no restart-recovery/`interrupted` handling yet.
 
 ## 10. Reference
 
-- PRD §F3 (queue & concurrency), §F7 (reviewers), §F9 (publish), §F11 (follow-ups), §F16 (timeouts & retries).
+- PRD §F3 (queue & concurrency), §F9 (publish), §F16 (timeouts & retries), §F17 (masking).

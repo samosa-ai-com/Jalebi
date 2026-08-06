@@ -5,6 +5,7 @@ GIT_CONFIG_* environment variables (``http.extraHeader``) so it never appears in
 argv, URLs, or logs.
 """
 
+import base64
 import os
 import subprocess
 import threading
@@ -44,13 +45,19 @@ def _run_git(
 
 
 def _auth_env(token: str | None) -> dict[str, str]:
-    """Build the env vars that authenticate git over HTTPS with a Bearer PAT."""
+    """Build the env vars that authenticate git over HTTPS with a PAT.
+
+    GitHub requires Basic auth for git-over-HTTPS; the token is used as the
+    ``x-access-token`` username. Set via GIT_CONFIG_* env so it never appears
+    in argv, URLs, or logs.
+    """
     if not token:
         return {}
+    encoded = base64.b64encode(f"x-access-token:{token}".encode()).decode()
     return {
         "GIT_CONFIG_COUNT": "1",
         "GIT_CONFIG_KEY_0": "http.extraHeader",
-        "GIT_CONFIG_VALUE_0": f"Authorization: Bearer {token}",
+        "GIT_CONFIG_VALUE_0": f"Authorization: basic {encoded}",
     }
 
 
