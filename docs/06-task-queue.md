@@ -8,15 +8,15 @@
 
 ## 1. Overview
 
-Jalebi runs a **task queue** with a **worker pool** (threading). Tasks are persisted in SQLite and survive restarts. The default concurrency is **4** (`settings.concurrency`), read at startup; **0 = paused queue** (no workers spawned).
+Jalebi runs a **task queue** with a **worker pool** (threading). Tasks are persisted in SQLite and survive restarts. The default concurrency is **4** (`settings.concurrency`), read at startup; **0 = paused queue**. Concurrency is **live-resizable** (`TaskQueue.set_concurrency`); changing the setting updates the pool without a restart.
 
 ## 2. Tasks API (`/api/tasks`)
 
 | Endpoint | Behavior |
 |---|---|
-| `POST /api/tasks` | `{repo_id, type, prompt, source_branch, target_branch, model, cli, timeout_minutes}` → validate (repo exists, prompt non-empty, type in enum) → mask prompt → create `queued` → enqueue → 201. 400 on invalid. |
+| `POST /api/tasks` | `{repo_id, type, prompt, source_branch, target_branch, model, cli, timeout_minutes}` → validate (repo exists, prompt non-empty, type in enum, `cli` supported) → mask prompt (PAT + `secret_patterns`) → create `queued` → enqueue → 201. 400 on invalid. `timeout_minutes` defaults to `settings.default_timeout_minutes`. |
 | `GET /api/tasks` | List tasks (newest first) with latest run summary. |
-| `GET /api/tasks/:id` | Task detail incl. latest run + steps. |
+| `GET /api/tasks/:id` | Task detail incl. latest run + steps + followups + artifacts. |
 | `POST /api/tasks/:id/cancel` | Queued → `cancelled` immediately; running → kill child → `cancelled`; terminal → 409. |
 | `POST /api/tasks/:id/rerun` | Terminal task → back to `queued`, `retry_count+1`, enqueue. 409 if queued/running. |
 | `POST /api/tasks/:id/publish` | Manual publish (push + open PR). |
@@ -24,19 +24,20 @@ Jalebi runs a **task queue** with a **worker pool** (threading). Tasks are persi
 
 ## 3. Statuses
 
-`queued → running → done | failed | timed_out | cancelled | needs_approval` (plus `interrupted` reserved for future restart recovery).
+`queued → running → done | failed | timed_out | cancelled | needs_approval | interrupted`. `interrupted` is written by **restart recovery** (tasks that were `running` when the process died).
 
 ## 4. Run lifecycle (`TaskQueue._run_task`)
 
 Queue items are tagged tuples: `("task", task_id)` or `("followup", task_id, body)`; workers dispatch to `_run_task` / `_run_followup`. The shared execution core is `_prepare_run` (open a `runs` row, flip task `running`) + `_stream_and_finish` (stream masked events → SSE + steps, resolve terminal status, auto-publish).
 
 1. Worker dequeues, re-fetches the task; skips if `cancelled` (cancelled-while-queued).
-2. Marks task `running`; creates a `runs` row (`seq+1`).
-3. `GitWorkspace.ensure_mirror` → `create_worktree` (source branch) → `adapter.start(cwd=worktree, prompt, model)`.
-4. Streams `handle.events()`; `step`/`message`/`tool_call`/`done`/`error` events are **masked at ingest** (PRD F17: PAT + `secret_patterns`), broadcast live over the per-task SSE channel, and stored in `runs.steps_json` (bounded: 500 steps, 2000-char texts).
-5. Terminal status from event stream **or** watchdog/cancel reason.
-6. If `done` and `settings.auto_publish`: **only if the branch is ahead of `origin/<target>`** (`commits_ahead > 0` — nothing to PR otherwise) → `push_branch` + `GitHubClient.create_pr` (`head=jalebi/<taskId>`, `base=target_branch`, title `[Jalebi] <first prompt line>`, body includes prompt + `Closes #N` for `issue_fix`). On publish failure → task `needs_approval` (manual publish available).
-7. Exceptions during the run mark the task **and** the current run `failed`.
+2. **Cancellation state is registered before the `running` commit** so a cancel racing the status flip is never lost.
+3. Marks task `running`; creates a `runs` row (`seq` = `max(seq)+1`).
+4. `GitWorkspace.ensure_mirror` → `create_worktree` (source branch) → `adapter.start(cwd=worktree, prompt, model)`; the child `pid` is recorded on the run row (for orphan cleanup after a crash).
+5. Streams `handle.events()`; `step`/`message`/`tool_call`/`done`/`error` events are **masked at ingest** (PRD F17: PAT + `secret_patterns`), broadcast live over the per-task SSE channel, and stored in `runs.steps_json` (bounded: 500 steps, 2000-char texts). **`tool_call` is persisted too**, so a reload doesn't lose console lines.
+6. Terminal status from event stream **or** watchdog/cancel reason.
+7. If `done` and `settings.auto_publish`: **only if the branch is ahead of `origin/<target>`** (`commits_ahead > 0` — nothing to PR otherwise) → `push_branch` + `GitHubClient.create_pr` (`head=jalebi/<taskId>`, `base=target_branch`, title `[Jalebi] <first prompt line>`, body includes prompt + `Closes #N` for `issue_fix` + a Jalebi-task footer + `Co-authored-by`). On publish failure → task `needs_approval` (manual publish available).
+8. Exceptions during the run: the child is killed, `_running` is cleared, the session is rolled back, and the task **and** run are marked `failed` (never left stuck `running`).
 
 ## 4b. Follow-ups (`TaskQueue._run_followup`, PRD F11)
 
@@ -47,31 +48,29 @@ Queue items are tagged tuples: `("task", task_id)` or `("followup", task_id, bod
 
 ## 5. Timeouts (PRD F16)
 
-- Per-task `timeout_minutes` (default 30). A daemon **watchdog thread** enforces it: on expiry it kills the child (SIGTERM → 5s grace → SIGKILL) and the run resolves to `timed_out`. A timeout of `0` fires immediately (used in tests).
+- Per-task `timeout_minutes`, defaulting to `settings.default_timeout_minutes` (default 30). A daemon **watchdog thread** enforces it: on expiry it kills the child (SIGTERM → 5s grace → SIGKILL) and the run resolves to `timed_out`. A timeout of `0` fires immediately (used in tests).
 
 ## 6. Cancellation (PRD F3)
 
-- `cancel()` sets a reason and kills the child process (SIGTERM → SIGKILL); the event stream ends and the run resolves to `cancelled`.
+- `cancel()` sets a reason and kills the child process (SIGTERM → SIGKILL); the event stream ends and the run resolves to `cancelled`. Cancellation works for a task that is `queued` (status flip only) or `running` (child killed).
 
 ## 7. Retries (PRD F16)
 
 - `rerun` reuses the same task row + worktree (`create_worktree` resumes an existing worktree); a fresh agent session runs (new `runs` row, new `seq`). `retry_count` is tracked.
-- Auto-retry on transient failures is not yet implemented.
+- **Auto-retry:** if `settings.retry_policy.auto_retry` is set, a run that ends `failed` is re-enqueued once (`retry_count` capped at 1) as a fresh run.
 
-## 8. Publish (PRD F9)
+## 8. Restart recovery (PRD F3/F13)
 
-- **Default auto-publish** (`settings.auto_publish`), global setting (per-task override not yet implemented).
-- Manual path: `POST /api/tasks/:id/publish`.
-- Publish is **idempotent per branch**: if the task already has a `pr_number` (an open PR for `jalebi/<taskId>`), publish pushes and reuses that PR number instead of calling `create_pr` again.
+- On startup, `TaskQueue.recover()` (called from `main()`) marks every `running` run **and** task `interrupted`, kills orphaned agent processes using the recorded `runs.pid`, and re-enqueues tasks that were still `queued`. `queued` tasks therefore survive a restart; `running` tasks are resumable via `rerun`.
 
 ## 9. Live events (SSE)
 
-- `GET /api/tasks/:id/events` streams the run's masked events (`connected` → live `step`/`message`/`tool_call`/`done`/`error` → `stream_end`), via the in-process `TaskEvents` bus (`src/jalebi/events.py`). The stream closes when the run ends (or immediately for already-terminal runs).
+- `GET /api/tasks/:id/events` streams the run's masked events (`connected` → live `step`/`message`/`tool_call`/`done`/`error` → `stream_end`), via the in-process `TaskEvents` bus (`src/jalebi/events.py`). The stream closes when the run ends (or immediately for already-terminal runs). The UI leaves the `EventSource` open on transient errors so the browser auto-reconnects.
 
 ## 10. Known limitations (flagged)
 
-- Worker pool size is fixed at **startup** from `settings.concurrency`; changing the setting requires a restart.
-- No restart-recovery/`interrupted` handling yet; no per-task `auto_publish` override (global setting only). A cancelled/killed agent session may become unresumable (opencode-side session state).
+- No per-task `auto_publish` override (global setting only). A cancelled/killed agent session may become unresumable (opencode-side session state).
+- Worktree TTL cleanup (deleting `done` task worktrees after N days) is not yet implemented (only artifacts are pruned).
 
 ## 11. Artifacts (PRD F18)
 

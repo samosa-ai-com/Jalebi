@@ -7,7 +7,7 @@ from pathlib import Path
 from flask import Blueprint, Response, current_app, jsonify, request, send_file
 from flask.typing import ResponseReturnValue
 
-from jalebi import artifacts, db, masking, secrets, tasks
+from jalebi import artifacts, db, masking, secrets, settings, tasks
 from jalebi.config import Config
 from jalebi.db import Artifact, Run, utcnow
 from jalebi.queue import TaskQueue
@@ -34,9 +34,22 @@ def create_task() -> ResponseReturnValue:
 
     session = db.get_session()
     token = secrets.load_github_token(config)
-    masker = masking.build_masker(token, [])
+    raw_patterns = settings.get_setting(session, "secret_patterns") or []
+    patterns = [str(p) for p in raw_patterns] if isinstance(raw_patterns, list) else []
+    masker = masking.build_masker(token, patterns)
+
+    cli = payload.get("cli")
+    if cli is not None and cli not in ("opencode",):
+        return jsonify({"error": f"unsupported agent cli: {cli}"}), 400
+
     raw_timeout = payload.get("timeout_minutes")
-    timeout_minutes = raw_timeout if isinstance(raw_timeout, int) and raw_timeout > 0 else 30
+    if isinstance(raw_timeout, int) and raw_timeout > 0:
+        timeout_minutes = raw_timeout
+    else:
+        raw_default = settings.get_setting(session, "default_timeout_minutes") or 30
+        timeout_minutes = (
+            raw_default if isinstance(raw_default, int) and raw_default > 0 else 30
+        )
     try:
         task = tasks.create_task(
             session,
@@ -46,7 +59,7 @@ def create_task() -> ResponseReturnValue:
             source_branch=payload.get("source_branch", "main"),
             target_branch=payload.get("target_branch", "main"),
             model=payload.get("model"),
-            cli=payload.get("cli"),
+            cli=cli,
             timeout_minutes=timeout_minutes,
             masker=masker,
         )
@@ -155,7 +168,9 @@ def followup_task(task_id: int) -> ResponseReturnValue:
         return jsonify({"error": "no resumable session for this task"}), 409
 
     token = secrets.load_github_token(config)
-    masker = masking.build_masker(token, [])
+    raw_patterns = settings.get_setting(session, "secret_patterns") or []
+    patterns = [str(p) for p in raw_patterns] if isinstance(raw_patterns, list) else []
+    masker = masking.build_masker(token, patterns)
     masked = masker(body.strip())
     # The Followup row is recorded by the worker when the resume actually runs
     # (see TaskQueue._run_followup) — not here, to avoid duplicates.

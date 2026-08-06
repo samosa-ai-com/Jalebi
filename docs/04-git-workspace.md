@@ -57,14 +57,14 @@ Jalebi uses the **git CLI** (not libgit2) for all repo operations. Each task/age
 
 ## 8. Publish (PRD §F9)
 
-- **Default: auto-publish** — on task completion, push the branch and open a PR (auto title = agent summary; body includes task instructions + `Closes #N` when an issue was referenced; footer with a link to the Jalebi task and `Co-authored-by` attribution for opencode).
-- **Configurable:** per-task or global `auto_publish: true|false`; when `false`, the UI shows a **"Publish"** button (push + open PR) and a "push-only" option.
-- **PR updates on follow-ups:** follow-ups amend the same branch; existing PR is force-updated (new commit pushed) — never a second PR for the same task.
+- **Default: auto-publish** — on task completion, push the branch and open a PR (title = `[Jalebi] <first prompt line>`; body includes task instructions + `Closes #N` when an issue was referenced; footer links the Jalebi task and adds `Co-authored-by`).
+- **Configurable:** global `auto_publish: true|false`; when `false` (or auto-publish fails), the UI shows a **"Publish"** button (push + open PR).
+- **PR updates on follow-ups:** follow-ups amend the same branch; the existing PR is updated by the push (publish reuses the existing PR number) — never a second PR for the same task.
 
 ## 9. Cleanup / prune policy (PRD §F12)
 
-- Delete task worktrees for `done` tasks after a configurable TTL (default 7 days) unless a PR is still open.
-- On app restart, run `git worktree prune` to recover orphaned worktrees.
+- **Implemented:** artifact retention (`artifact_ttl_days`, startup prune). 
+- **Planned (not implemented):** delete task worktrees for `done` tasks after a TTL (default 7 days) unless a PR is still open; `git worktree prune` on restart to recover orphaned worktrees.
 
 ## 10. Reference
 

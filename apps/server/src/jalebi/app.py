@@ -3,7 +3,7 @@
 import logging
 from pathlib import Path
 
-from flask import Flask, Response, g, jsonify, request, send_from_directory
+from flask import Flask, Response, current_app, g, jsonify, request, send_from_directory
 from flask.typing import ResponseReturnValue
 
 from jalebi import artifacts, db, secrets, settings
@@ -16,6 +16,19 @@ from jalebi.routes.tasks import bp as tasks_bp
 logger = logging.getLogger(__name__)
 
 WEB_DIST = repo_root() / "apps" / "web" / "dist"
+
+ALLOWED_AGENT_CLIS = ("opencode",)
+
+_SETTING_VALIDATORS = {
+    "concurrency": lambda v: isinstance(v, int) and 0 <= v <= 64,
+    "auto_publish": lambda v: isinstance(v, bool),
+    "default_timeout_minutes": lambda v: isinstance(v, int) and v >= 1,
+    "ntfy_topic": lambda v: isinstance(v, str),
+    "retry_policy": lambda v: isinstance(v, dict) and isinstance(v.get("auto_retry"), bool),
+    "secret_patterns": lambda v: isinstance(v, list) and all(isinstance(x, str) for x in v),
+    "artifact_ttl_days": lambda v: isinstance(v, int) and v >= 1,
+    "agent_cli": lambda v: v in ALLOWED_AGENT_CLIS,
+}
 
 
 def _serve_spa(web_dist: Path, filename: str) -> ResponseReturnValue:
@@ -69,8 +82,14 @@ def create_app(config: Config | None = None) -> Flask:
         key = payload.get("key")
         if key not in settings.SETTING_KEYS:
             return jsonify({"error": f"unknown setting key: {key}"}), 400
+        value = payload.get("value")
+        validator = _SETTING_VALIDATORS.get(key)
+        if validator is not None and not validator(value):
+            return jsonify({"error": f"invalid value for {key}"}), 400
         session = db.get_session()
-        settings.set_setting(session, key, payload.get("value"))
+        settings.set_setting(session, key, value)
+        if key == "concurrency" and isinstance(value, int):
+            current_app.config["JALEBI_QUEUE"].set_concurrency(value)
         return jsonify({key: settings.get_setting(session, key)}), 200
 
     # SPA: serve the built React app (index.html + assets) so the UI lives on the
@@ -79,6 +98,11 @@ def create_app(config: Config | None = None) -> Flask:
     @app.get("/")
     def spa_index() -> ResponseReturnValue:
         return _serve_spa(WEB_DIST, "index.html")
+
+    @app.get("/api/<path:rest>")
+    def api_not_found(rest: str) -> ResponseReturnValue:
+        # Unknown /api/* paths must 404 as JSON, not fall through to the SPA.
+        return jsonify({"error": f"no such route: /api/{rest}"}), 404
 
     @app.get("/<path:filename>")
     def spa_files(filename: str) -> ResponseReturnValue:
@@ -91,6 +115,7 @@ def main() -> None:
     """Run the development server, bound to localhost only."""
     config = load_config()
     app = create_app(config)
+    queue = app.config["JALEBI_QUEUE"]
     with app.app_context():
         session = db.Session()
         try:
@@ -103,7 +128,10 @@ def main() -> None:
                 logger.info("pruned %s expired artifact(s)", pruned)
         finally:
             session.close()
-    app.config["JALEBI_QUEUE"].start(concurrency)
+    recovered = queue.recover()
+    if recovered:
+        logger.info("queue recovery: %s interrupted/requeued item(s)", recovered)
+    queue.start(concurrency)
     app.run(host=config.host, port=config.port, threaded=True)
 
 

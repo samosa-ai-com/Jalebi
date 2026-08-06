@@ -221,6 +221,15 @@ def test_timeout_marks_timed_out(q, session, repo_row, monkeypatch) -> None:
     assert _latest_run(session, task.id).status == "timed_out"
 
 
+def _wait_until(cond, timeout: float = 5.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if cond():
+            return True
+        time.sleep(0.05)
+    return False
+
+
 def test_cancel_running_task(q, session, repo_row, monkeypatch) -> None:
     _no_publish(session)
     task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
@@ -228,7 +237,7 @@ def test_cancel_running_task(q, session, repo_row, monkeypatch) -> None:
 
     thread = threading.Thread(target=q._run_task, args=(task.id,))
     thread.start()
-    time.sleep(0.3)
+    assert _wait_until(lambda: _fresh_task(session, task.id).status == "running")
     assert q.cancel(task.id) is True
     thread.join(timeout=5)
 

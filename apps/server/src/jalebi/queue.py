@@ -2,12 +2,14 @@
 
 import json
 import logging
+import os
 import queue
 import re
+import signal
 import threading
 import time
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from jalebi import artifacts, masking, secrets, settings, tasks
 from jalebi.adapters import get_adapter
@@ -23,6 +25,8 @@ logger = logging.getLogger(__name__)
 MAX_STEPS = 500
 MAX_STEP_TEXT = 2000
 KILL_GRACE_SECONDS = 5
+MAX_AUTO_RETRIES = 1
+DEFAULT_TIMEOUT_MINUTES = 30
 
 
 class _RunState:
@@ -48,6 +52,26 @@ def _kill_proc(proc) -> None:
             pass
 
 
+def _kill_pid(pid: int) -> None:
+    """Terminate a process by pid (orphaned agent after a crash), then SIGKILL."""
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        return
+    except OSError:
+        return
+    for _ in range(KILL_GRACE_SECONDS * 5):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.2)
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except (ProcessLookupError, OSError):
+        pass
+
+
 class TaskQueue:
     def __init__(self, config: Config):
         self.config = config
@@ -57,23 +81,47 @@ class TaskQueue:
         self._running: dict[int, _RunState] = {}
         self._running_lock = threading.Lock()
         self._workers: list[threading.Thread] = []
+        self._pool_lock = threading.Lock()
+        self._target_concurrency = 0
 
     # -- pool lifecycle ----------------------------------------------------
 
     def start(self, concurrency: int) -> None:
         """Spawn ``concurrency`` workers (0 = paused queue)."""
-        if concurrency <= 0:
-            logger.info("queue paused (concurrency=%s)", concurrency)
-            return
-        for _ in range(concurrency):
-            thread = threading.Thread(
-                target=self._worker_loop, daemon=True, name="jalebi-worker"
-            )
-            thread.start()
-            self._workers.append(thread)
+        self.set_concurrency(concurrency)
+
+    def set_concurrency(self, n: int) -> int:
+        """Resize the pool live (0 = pause). Returns live worker count."""
+        if n < 0:
+            n = 0
+        self._target_concurrency = n
+        if n == 0:
+            return 0  # workers pause (checked each loop) but stay alive
+        active = self._live_workers()
+        if n > active:
+            for _ in range(n - active):
+                thread = threading.Thread(
+                    target=self._worker_loop, daemon=True, name="jalebi-worker"
+                )
+                thread.start()
+                with self._pool_lock:
+                    self._workers.append(thread)
+        elif n < active:
+            for _ in range(active - n):
+                self._queue.put(None)
+            deadline = time.monotonic() + 3
+            while self._live_workers() > n and time.monotonic() < deadline:
+                time.sleep(0.05)
+        return self._live_workers()
+
+    def _live_workers(self) -> int:
+        with self._pool_lock:
+            self._workers = [w for w in self._workers if w.is_alive()]
+            return len(self._workers)
 
     def stop(self) -> None:
-        for _ in self._workers:
+        active = self._live_workers()
+        for _ in range(active):
             self._queue.put(None)
         for thread in self._workers:
             thread.join(timeout=5)
@@ -87,17 +135,29 @@ class TaskQueue:
     # -- worker loop -------------------------------------------------------
 
     def _worker_loop(self) -> None:
-        while True:
-            item = self._queue.get()
-            if item is None:
-                return
-            try:
-                if item[0] == "followup":
-                    self._run_followup(item[1], item[2])
-                else:
-                    self._run_task(item[1])
-            except Exception:
-                logger.exception("worker crashed on %s", item)
+        current = threading.current_thread()
+        try:
+            while True:
+                try:
+                    item = self._queue.get(timeout=1)
+                except queue.Empty:
+                    continue
+                if item is None:
+                    return
+                if self._target_concurrency == 0:
+                    self._queue.put(item)
+                    time.sleep(0.5)
+                    continue
+                try:
+                    if item[0] == "followup":
+                        self._run_followup(item[1], item[2])
+                    else:
+                        self._run_task(item[1])
+                except Exception:
+                    logger.exception("worker crashed on %s", item)
+        finally:
+            with self._pool_lock:
+                self._workers = [w for w in self._workers if w is not current]
 
     # -- cancellation ------------------------------------------------------
 
@@ -108,17 +168,48 @@ class TaskQueue:
         if state is None:
             return False
         state.reason = "cancelled"
-        _kill_proc(state.handle.proc)
+        if state.handle is not None:
+            _kill_proc(state.handle.proc)
         return True
+
+    def recover(self) -> int:
+        """Recover from a crash: mark interrupted, kill orphans, requeue queued."""
+        session = Session()
+        try:
+            running_runs = list(
+                session.execute(select(Run).where(Run.status == "running")).scalars()
+            )
+            for run in running_runs:
+                if run.pid:
+                    _kill_pid(run.pid)
+                run.status = "interrupted"
+                run.finished_at = utcnow()
+            task_ids = {r.task_id for r in running_runs}
+            running_tasks = list(
+                session.execute(select(Task).where(Task.status == "running")).scalars()
+            )
+            for task in running_tasks:
+                task.status = "interrupted"
+                task.updated_at = utcnow()
+                task_ids.add(task.id)
+            queued = list(
+                session.execute(select(Task).where(Task.status == "queued")).scalars()
+            )
+            for task in queued:
+                self.enqueue(task.id)
+            session.commit()
+            return len(running_runs) + len(queued)
+        finally:
+            session.close()
 
     # -- run lifecycle -----------------------------------------------------
 
     def _prepare_run(self, session, task: Task, cli: str) -> Run:
         """Open a fresh run row and flip the task to ``running``."""
-        seq = (
-            len(session.execute(select(Run).where(Run.task_id == task.id)).scalars().all())
-            + 1
-        )
+        seq = session.execute(
+            select(func.max(Run.seq)).where(Run.task_id == task.id)
+        ).scalar()
+        seq = int(seq) + 1 if seq is not None else 1
         run = Run(
             task_id=task.id,
             seq=seq,
@@ -153,8 +244,9 @@ class TaskQueue:
             if event.type in ("step", "message", "tool_call", "done", "error"):
                 entry = self._step_from_event(event, masker)
                 self.events.publish(task.id, entry)
+                # Persist tool_call too so a reload doesn't lose console lines.
+                steps.append(entry)
                 if event.type in ("step", "message", "done", "error"):
-                    steps.append(entry)
                     last_event_type = event.type
             if event.type in ("done", "error"):
                 break
@@ -203,9 +295,16 @@ class TaskQueue:
         )
         run.artifacts_json = json.dumps(captured) if captured else None
 
+    def _resolve_timeout(self, session, task: Task) -> int:
+        if task.timeout_minutes is not None:
+            return task.timeout_minutes
+        raw = settings.get_setting(session, "default_timeout_minutes") or DEFAULT_TIMEOUT_MINUTES
+        return raw if isinstance(raw, int) and raw > 0 else DEFAULT_TIMEOUT_MINUTES
+
     def _run_task(self, task_id: int) -> None:
         session = Session()
         run: Run | None = None
+        state: _RunState | None = None
         try:
             task = session.get(Task, task_id)
             if task is None:
@@ -225,6 +324,13 @@ class TaskQueue:
             patterns = [str(p) for p in raw_patterns] if isinstance(raw_patterns, list) else []
             masker = masking.build_masker(token, patterns)
             cli = str(task.cli or settings.get_setting(session, "agent_cli") or "opencode")
+            timeout = self._resolve_timeout(session, task)
+
+            # Register cancellation state BEFORE committing "running" so a cancel
+            # racing the status flip is never lost.
+            state = _RunState(None)
+            with self._running_lock:
+                self._running[task.id] = state
 
             run = self._prepare_run(session, task, cli)
 
@@ -233,16 +339,26 @@ class TaskQueue:
             wt = git.create_worktree(task.id, repo.full_name, task.source_branch, token)
 
             adapter = get_adapter(cli)
-            handle = adapter.start(str(wt), task.prompt, model=task.model)
-            state = _RunState(handle)
-            with self._running_lock:
-                self._running[task.id] = state
-            self._start_watchdog(task, state)
-
-            self._stream_and_finish(session, task, repo, run, git, token, masker, handle, state)
+            state.handle = adapter.start(str(wt), task.prompt, model=task.model)
+            run.pid = getattr(state.handle.proc, "pid", None)
             session.commit()
+            self._start_watchdog(task, state, timeout)
+
+            if state.reason == "cancelled":
+                _kill_proc(state.handle.proc)
+
+            self._stream_and_finish(
+                session, task, repo, run, git, token, masker, state.handle, state
+            )
+            session.commit()
+            self._maybe_retry(session, task, run)
         except Exception:
             logger.exception("task %s run failed", task_id)
+            session.rollback()
+            if state is not None and state.handle is not None:
+                _kill_proc(state.handle.proc)
+            with self._running_lock:
+                self._running.pop(task_id, None)
             task = session.get(Task, task_id)
             if task is not None and task.status != "cancelled":
                 task.status = "failed"
@@ -259,6 +375,7 @@ class TaskQueue:
         """Resume a completed task's session in its own worktree (PRD F11)."""
         session = Session()
         run: Run | None = None
+        state: _RunState | None = None
         try:
             task = session.get(Task, task_id)
             if task is None:
@@ -282,6 +399,11 @@ class TaskQueue:
             cli = str(
                 task.cli or prev.cli or settings.get_setting(session, "agent_cli") or "opencode"
             )
+            timeout = self._resolve_timeout(session, task)
+
+            state = _RunState(None)
+            with self._running_lock:
+                self._running[task.id] = state
 
             run = self._prepare_run(session, task, cli)
 
@@ -290,17 +412,26 @@ class TaskQueue:
             wt = git.create_worktree(task.id, repo.full_name, task.source_branch, token)
 
             adapter = get_adapter(cli)
-            handle = adapter.resume(str(wt), prev_session_id, body)
-            state = _RunState(handle)
-            with self._running_lock:
-                self._running[task.id] = state
-            self._start_watchdog(task, state)
+            state.handle = adapter.resume(str(wt), prev_session_id, body)
+            run.pid = getattr(state.handle.proc, "pid", None)
+            session.commit()
+            self._start_watchdog(task, state, timeout)
 
-            self._stream_and_finish(session, task, repo, run, git, token, masker, handle, state)
+            if state.reason == "cancelled":
+                _kill_proc(state.handle.proc)
+
+            self._stream_and_finish(
+                session, task, repo, run, git, token, masker, state.handle, state
+            )
             tasks.add_followup(session, task.id, prev.id, body)
             session.commit()
         except Exception:
             logger.exception("follow-up for task %s failed", task_id)
+            session.rollback()
+            if state is not None and state.handle is not None:
+                _kill_proc(state.handle.proc)
+            with self._running_lock:
+                self._running.pop(task_id, None)
             task = session.get(Task, task_id)
             if task is not None and task.status not in ("cancelled", "done"):
                 task.status = "failed"
@@ -338,8 +469,8 @@ class TaskQueue:
 
     # -- helpers -----------------------------------------------------------
 
-    def _start_watchdog(self, task: Task, state: _RunState) -> None:
-        timeout = task.timeout_minutes if task.timeout_minutes is not None else 30
+    def _start_watchdog(self, task: Task, state: _RunState, default_timeout: int) -> None:
+        timeout = task.timeout_minutes if task.timeout_minutes is not None else default_timeout
         deadline = time.monotonic() + timeout * 60
         thread = threading.Thread(
             target=self._watchdog_loop,
@@ -348,6 +479,23 @@ class TaskQueue:
             name=f"watchdog-{task.id}",
         )
         thread.start()
+
+    def _maybe_retry(self, session, task: Task, run: Run) -> None:
+        """Auto-retry a failed run once if ``retry_policy.auto_retry`` is set."""
+        if run.status != "failed":
+            return
+        policy = settings.get_setting(session, "retry_policy") or {}
+        auto = bool(policy.get("auto_retry")) if isinstance(policy, dict) else False
+        if not auto:
+            return
+        if (task.retry_count or 0) >= MAX_AUTO_RETRIES:
+            return
+        task.retry_count = (task.retry_count or 0) + 1
+        task.status = "queued"
+        task.updated_at = utcnow()
+        session.commit()
+        self.enqueue(task.id)
+        logger.info("auto-retrying task %s (attempt %s)", task.id, task.retry_count)
 
     def _watchdog_loop(self, deadline: float, state: _RunState) -> None:
         while True:
@@ -406,5 +554,8 @@ class TaskQueue:
             numbers = re.findall(r"#(\d+)", task.prompt)
             if numbers:
                 parts.append("Closes " + " ".join(f"#{n}" for n in numbers))
-        parts.append("_Automated by Jalebi._")
+        parts.append(
+            f"_Automated by Jalebi — [task {task.id}](http://127.0.0.1:3456/tasks/{task.id})_\n"
+            "Co-authored-by: Jalebi <jalebi@localhost>"
+        )
         return "\n\n".join(parts)

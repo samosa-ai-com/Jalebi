@@ -38,3 +38,7 @@ Thumbs.db
 *.swp
 # Playwright MCP artifacts
 .playwright-mcp/
+
+# coverage
+.coverage
+apps/server/.coverage

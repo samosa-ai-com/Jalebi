@@ -133,6 +133,7 @@ class Run(Base):
     session_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     cli: Mapped[str | None] = mapped_column(Text, nullable=True)
     model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    pid: Mapped[int | None] = mapped_column(Integer, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     status: Mapped[str | None] = mapped_column(Text, nullable=True)
