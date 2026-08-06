@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import type { SettingsMap } from "../types";
 
-const AGENT_CLIS = ["opencode", "codex", "claude"];
+const AGENT_CLIS = ["opencode"];
 
 function Toggle({
   checked,
@@ -49,11 +49,9 @@ export default function Settings() {
     setStatus((s) => ({ ...s, [key]: "saving" }));
     try {
       await api.updateSetting(key, value);
+      setError(null);
       setSettings((prev) => (prev ? { ...prev, [key]: value } : prev));
       setStatus((s) => ({ ...s, [key]: "saved" }));
-      window.setTimeout(() => {
-        setStatus((s) => ({ ...s, [key]: "saved" }));
-      }, 0);
       window.setTimeout(() => {
         setStatus((s) => {
           const next = { ...s };
@@ -167,7 +165,7 @@ export default function Settings() {
     {
       key: "ntfy_topic",
       label: "ntfy topic",
-      desc: "Optional topic for push notifications (blank = no ntfy).",
+      desc: "Push-notification topic (Phase 2 screening notifications).",
       control: (
         <input
           defaultValue={settings.ntfy_topic}
@@ -203,7 +201,8 @@ export default function Settings() {
       <header className="animate-fade-up">
         <h1 className="text-3xl font-bold tracking-tight text-ink-100">Settings</h1>
         <p className="mt-1 text-sm text-ink-500">
-          Runtime behaviour of the queue and the agent. Changes apply immediately.
+          Runtime behaviour of the queue and the agent. Most changes apply immediately;
+          artifact retention applies on the next start.
         </p>
       </header>
 

@@ -18,6 +18,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     try {
       const body = await res.json();
       if (body?.error) detail = body.error;
+      else if (body?.detail?.error) detail = body.detail.error;
     } catch {
       // ignore non-JSON error bodies
     }
@@ -76,7 +77,12 @@ export function taskEvents(
 ): () => void {
   const source = new EventSource(`/api/tasks/${taskId}/events`);
   source.onmessage = (message) => {
-    const event = JSON.parse(message.data) as SseEvent;
+    let event: SseEvent;
+    try {
+      event = JSON.parse(message.data) as SseEvent;
+    } catch {
+      return; // ignore malformed/keepalive lines
+    }
     if (event.type === "connected") return;
     if (event.type === "stream_end") {
       source.close();
@@ -85,9 +91,7 @@ export function taskEvents(
     }
     onEvent(event);
   };
-  source.onerror = () => {
-    source.close();
-    onEnd();
-  };
+  // Transient errors: leave the EventSource open so the browser auto-reconnects
+  // instead of killing the stream and losing buffered events.
   return () => source.close();
 }

@@ -55,6 +55,10 @@ export interface Repo {
   full_name: string;
   default_branch: string;
   clone_url: string;
+  webhook_registered: boolean;
+  poll_fallback: boolean;
+  check_runs_enabled: boolean;
+  last_checked_at: string | null;
 }
 
 export interface SseEvent {

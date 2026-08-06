@@ -140,7 +140,7 @@ const FILTERS = [
   { id: "all", label: "All", test: () => true },
   { id: "running", label: "Running", test: (s: string) => s === "queued" || s === "running" },
   { id: "done", label: "Done", test: (s: string) => s === "done" },
-  { id: "failed", label: "Failed", test: (s: string) => s === "failed" || s === "timed_out" },
+  { id: "failed", label: "Failed", test: (s: string) => s === "failed" || s === "timed_out" || s === "interrupted" },
   { id: "review", label: "Review", test: (s: string) => s === "needs_approval" },
 ] as const;
 
@@ -264,14 +264,18 @@ export default function Tasks() {
                 <td className="max-w-xs truncate px-4 py-3 text-ink-300">{t.prompt}</td>
                 <td className="px-4 py-3">
                   {t.pr_number ? (
-                    <a
-                      className="font-mono text-xs text-syrup-400 hover:text-syrup-300"
-                      href={`https://github.com/${repoName(repos, t.repo_id)}/pull/${t.pr_number}`}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      #{t.pr_number}
-                    </a>
+                    repos.some((r) => r.id === t.repo_id) ? (
+                      <a
+                        className="font-mono text-xs text-syrup-400 hover:text-syrup-300"
+                        href={`https://github.com/${repoName(repos, t.repo_id)}/pull/${t.pr_number}`}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        #{t.pr_number}
+                      </a>
+                    ) : (
+                      <span className="font-mono text-xs text-ink-400">#{t.pr_number}</span>
+                    )
                   ) : (
                     <span className="text-ink-600">–</span>
                   )}

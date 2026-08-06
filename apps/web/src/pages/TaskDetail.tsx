@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, taskEvents } from "../api/client";
 import { StatusBadge } from "../components/StatusBadge";
@@ -160,13 +160,20 @@ export default function TaskDetail() {
   const [repos, setRepos] = useState<Repo[]>([]);
   const [live, setLive] = useState<SseEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [followUpPending, setFollowUpPending] = useState(false);
+  const lastRunRef = useRef<number | null>(null);
 
   const load = useCallback(() => {
     api
       .getTask(taskId)
       .then((t) => {
+        const runId = t.run?.id ?? null;
+        if (lastRunRef.current !== runId) {
+          // New run (or first load): drop stale live events.
+          setLive([]);
+          lastRunRef.current = runId;
+        }
         setTask(t);
-        setLive([]);
       })
       .catch((e) => setError(e.message));
     api
@@ -181,9 +188,44 @@ export default function TaskDetail() {
 
   useEffect(() => {
     if (!task || TERMINAL.has(task.status)) return;
-    const unsubscribe = taskEvents(taskId, (event) => setLive((l) => [...l, event]), load);
+    const unsubscribe = taskEvents(
+      taskId,
+      (event) => setLive((l) => [...l, event]),
+      () => {
+        // stream_end: persisted steps now own the data.
+        setLive([]);
+        load();
+      }
+    );
     return unsubscribe;
   }, [taskId, task, load]);
+
+  // After sending a follow-up, poll until a new run appears, then refresh so the
+  // live SSE stream reconnects (the task flips to running once the worker starts).
+  useEffect(() => {
+    if (!followUpPending) return;
+    let attempts = 0;
+    const timer = setInterval(() => {
+      attempts += 1;
+      if (attempts > 40) {
+        setFollowUpPending(false);
+        return;
+      }
+      api
+        .getTask(taskId)
+        .then((t) => {
+          const runId = t.run?.id ?? null;
+          if (runId !== lastRunRef.current) {
+            lastRunRef.current = runId;
+            setLive([]);
+            setTask(t);
+            setFollowUpPending(false);
+          }
+        })
+        .catch(() => {});
+    }, 1500);
+    return () => clearInterval(timer);
+  }, [followUpPending, taskId]);
 
   if (error) return <p className="text-red-400">{error}</p>;
   if (!task) return <p className="text-ink-500">Loading…</p>;
@@ -210,7 +252,7 @@ export default function TaskDetail() {
           <span className="mx-1.5 text-ink-700">·</span>
           {task.model ?? "default model"}
         </span>
-        {task.pr_number && (
+        {task.pr_number && repos.some((r) => r.id === task.repo_id) && (
           <a
             className="btn-ghost !px-3 !py-1 text-xs"
             href={`https://github.com/${repoName}/pull/${task.pr_number}`}
@@ -257,7 +299,7 @@ export default function TaskDetail() {
       </section>
 
       <div className="flex flex-wrap gap-2">
-        {task.status === "running" && (
+        {(task.status === "running" || task.status === "queued") && (
           <Action onClick={() => api.cancelTask(task.id).then(load)}>Cancel</Action>
         )}
         {TERMINAL.has(task.status) && task.status !== "cancelled" && (
@@ -272,7 +314,10 @@ export default function TaskDetail() {
         <FollowUpComposer
           task={task}
           followups={task.followups ?? []}
-          onSent={load}
+          onSent={() => {
+            load();
+            setFollowUpPending(true);
+          }}
         />
       )}
 

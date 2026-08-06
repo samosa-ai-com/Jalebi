@@ -170,4 +170,56 @@ describe("TaskDetail", () => {
     expect(screen.getByText("2.0 KB")).toBeInTheDocument();
     expect(screen.getByText("out/shot.png")).toBeInTheDocument();
   });
+
+  it("shows Cancel for a queued task", async () => {
+    const queuedTask = { ...TASK, status: "queued" };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => ({
+        ok: true,
+        json: async () => (url.includes("/api/tasks") ? queuedTask : REPOS),
+      }))
+    );
+    renderDetail();
+    expect(await screen.findByRole("button", { name: "Cancel" })).toBeInTheDocument();
+  });
+
+  it("polls after a follow-up until the new run starts", async () => {
+    const doneTask = {
+      ...TASK,
+      status: "done",
+      run: { ...TASK.run!, status: "done" },
+      followups: [],
+    };
+    const runningTask = {
+      ...TASK,
+      status: "running",
+      run: { ...TASK.run!, id: 99, status: "running" },
+      followups: [{ id: 1, body: "do more", created_at: "2026-08-06T10:02:00" }],
+    };
+    let getCount = 0;
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.includes("/api/tasks") && init?.method === "POST") {
+        return { ok: true, json: async () => doneTask };
+      }
+      getCount += 1;
+      const payload = getCount >= 2 ? runningTask : doneTask;
+      return { ok: true, json: async () => (url.includes("/api/tasks") ? payload : REPOS) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("EventSource", FakeEventSource);
+
+    renderDetail();
+    await screen.findByText("Follow-up");
+    await userEvent.type(
+      screen.getByPlaceholderText(/Address the reviewer comments/),
+      "do more"
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Send follow-up" }));
+
+    await waitFor(
+      () => expect(screen.getByText("running")).toBeInTheDocument(),
+      { timeout: 5000 }
+    );
+  });
 });

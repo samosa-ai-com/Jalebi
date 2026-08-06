@@ -124,7 +124,7 @@ export default function Github() {
         </p>
       </header>
 
-      {!hasToken && (
+      {(!hasToken || (info && !info.valid)) && (
         <div className="animate-fade-up" style={{ animationDelay: "0.05s" }}>
           <TokenForm
             onStored={() => {
