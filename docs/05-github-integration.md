@@ -29,6 +29,7 @@ Validation is explicit (endpoints below), **not** run at startup — the server 
 `GitHubClient` (`jalebi/github.py`, httpx, `base_url=https://api.github.com`, `_request` seam for tests):
 
 - `validate_token() -> TokenInfo` (`valid`, `login`, `token_type`, `granted_scopes`, `missing_scopes`, `note`, `error`).
+- `get_repo(full_name)` → `{full_name, default_branch, clone_url, private}`; raises `GitHubNotFound` on 404.
 - `list_repos()` → `[{full_name, private, default_branch, clone_url, html_url}]`.
 
 Blueprint `jalebi/routes/github.py` (`/api/github`):
@@ -38,6 +39,13 @@ Blueprint `jalebi/routes/github.py` (`/api/github`):
 | `GET /api/github/status` | Validates the configured token; 409 if none configured; returns `TokenInfo`. |
 | `PUT /api/github/token` | Validates a submitted PAT; if valid, stores it in `secrets.json` (0600); never echoes it. 400 on invalid. |
 | `GET /api/github/repos` | Lists the authenticated user's repos. 409 if no token. |
+
+Connected-repo registry (`jalebi/routes/repos.py`, `/api/repos`):
+
+| Endpoint | Behavior |
+|---|---|
+| `POST /api/repos` | `{"full_name": "<owner/repo>"}` → `GitHubClient.get_repo` → upsert into the `repos` table. 201 created / 200 updated; 409 no token; 404 not found; 400 bad body. |
+| `GET /api/repos` | Lists connected repos from the `repos` table (DB, not GitHub). |
 
 Planned capabilities (later phases): issues, PRs (create/update/comment/review), refs, webhook registration/management, commit statuses/check runs — all via the same client.
 

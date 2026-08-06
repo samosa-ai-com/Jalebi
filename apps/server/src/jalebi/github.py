@@ -23,6 +23,10 @@ class GitHubError(Exception):
     """Raised when the GitHub API returns a non-success response."""
 
 
+class GitHubNotFound(GitHubError):
+    """Raised when a requested resource does not exist (HTTP 404)."""
+
+
 @dataclass
 class TokenInfo:
     valid: bool
@@ -82,6 +86,20 @@ class GitHubClient:
             )
 
         return TokenInfo(valid=True, login=login, token_type="fine-grained", note=FINE_GRAINED_NOTE)
+
+    def get_repo(self, full_name: str) -> dict[str, Any]:
+        """Fetch a single repository's info by ``owner/repo``."""
+        status, body, _ = self._request("GET", f"/repos/{full_name}")
+        if status == 404:
+            raise GitHubNotFound(full_name)
+        if status != 200 or not isinstance(body, dict):
+            raise GitHubError(f"failed to fetch repo: HTTP {status}")
+        return {
+            "full_name": body.get("full_name"),
+            "default_branch": body.get("default_branch"),
+            "clone_url": body.get("clone_url"),
+            "private": body.get("private"),
+        }
 
     def list_repos(self, per_page: int = 100) -> list[dict[str, Any]]:
         """List the authenticated user's repositories (name, default branch, clone URL)."""

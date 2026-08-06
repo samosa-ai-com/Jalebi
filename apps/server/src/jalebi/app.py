@@ -1,21 +1,12 @@
 """Flask application factory and CLI entrypoint."""
 
-
 from flask import Flask, Response, g, jsonify, request
 from flask.typing import ResponseReturnValue
 
 from jalebi import db, secrets, settings
 from jalebi.config import Config, load_config
 from jalebi.routes.github import bp as github_bp
-
-
-def get_session():
-    """Return the request-scoped database session (bound to the Flask app context)."""
-    session = getattr(g, "_db_session", None)
-    if session is None:
-        session = db.Session()
-        g._db_session = session
-    return session
+from jalebi.routes.repos import bp as repos_bp
 
 
 def create_app(config: Config | None = None) -> Flask:
@@ -32,6 +23,7 @@ def create_app(config: Config | None = None) -> Flask:
     db.run_migrations(config.db_url)
 
     app.register_blueprint(github_bp)
+    app.register_blueprint(repos_bp)
 
     @app.teardown_appcontext
     def close_session(_exc) -> None:
@@ -45,7 +37,7 @@ def create_app(config: Config | None = None) -> Flask:
 
     @app.get("/api/settings")
     def get_settings() -> Response:
-        session = get_session()
+        session = db.get_session()
         return jsonify({key: settings.get_setting(session, key) for key in settings.SETTING_KEYS})
 
     @app.post("/api/settings")
@@ -56,7 +48,7 @@ def create_app(config: Config | None = None) -> Flask:
         key = payload.get("key")
         if key not in settings.SETTING_KEYS:
             return jsonify({"error": f"unknown setting key: {key}"}), 400
-        session = get_session()
+        session = db.get_session()
         settings.set_setting(session, key, payload.get("value"))
         return jsonify({key: settings.get_setting(session, key)}), 200
 

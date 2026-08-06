@@ -1,6 +1,6 @@
 import pytest
 
-from jalebi.github import GitHubClient, GitHubError
+from jalebi.github import GitHubClient, GitHubError, GitHubNotFound
 
 
 def make_client(token: str = "ghp_test") -> GitHubClient:
@@ -88,3 +88,28 @@ def test_list_repos_error(monkeypatch) -> None:
     monkeypatch.setattr(client, "_request", lambda method, path, **kw: (403, None, {}))
     with pytest.raises(GitHubError):
         client.list_repos()
+
+
+def test_get_repo(monkeypatch) -> None:
+    client = make_client()
+    payload = {
+        "full_name": "octocat/hello",
+        "default_branch": "main",
+        "clone_url": "https://github.com/octocat/hello.git",
+        "private": False,
+    }
+    monkeypatch.setattr(client, "_request", lambda method, path, **kw: (200, payload, {}))
+    info = client.get_repo("octocat/hello")
+    assert info["full_name"] == "octocat/hello"
+    assert info["clone_url"] == "https://github.com/octocat/hello.git"
+
+
+def test_get_repo_not_found(monkeypatch) -> None:
+    client = make_client()
+    monkeypatch.setattr(
+        client,
+        "_request",
+        lambda method, path, **kw: (404, {"message": "Not Found"}, {}),
+    )
+    with pytest.raises(GitHubNotFound):
+        client.get_repo("octocat/nope")

@@ -18,7 +18,15 @@ from sqlalchemy import (
     event,
 )
 from sqlalchemy.engine import Engine
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
+from sqlalchemy.orm import (
+    DeclarativeBase,
+    Mapped,
+    mapped_column,
+    sessionmaker,
+)
+from sqlalchemy.orm import (
+    Session as OrmSession,
+)
 
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 
@@ -187,6 +195,17 @@ def get_engine() -> Engine:
     if _engine is None:
         raise RuntimeError("Database not initialized; call init_db first")
     return _engine
+
+
+def get_session() -> OrmSession:
+    """Return the request-scoped SQLAlchemy session bound to the Flask app context."""
+    from flask import g  # lazy import keeps db.py framework-agnostic
+
+    session = getattr(g, "_db_session", None)
+    if session is None:
+        session = Session()
+        g._db_session = session
+    return session
 
 
 def close_db() -> None:
