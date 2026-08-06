@@ -10,22 +10,26 @@ The entire system depends on **one interface**. The only place that knows the CL
 
 ## 2. The `AgentAdapter` interface
 
-```ts
-interface AgentAdapter {
-  id: "opencode" | "codex" | "claude"
-  name: string
-  listModels(): Promise<string[]>                // models the CLI can use
-  start(opts: { cwd; prompt; model?; env? }): Promise<RunHandle>
-  resume(opts: { cwd; sessionId; prompt }): Promise<RunHandle>
-  parse(line: string): AgentEvent[]              // normalize CLI output → AgentEvent
-}
+Python equivalent (`src/jalebi/adapters/types.py`):
 
-interface RunHandle {
-  sessionId: string
-  child: ChildProcess
-  events: AsyncIterable<AgentEvent>
-}
+```python
+class AgentAdapter:
+    id: str          # "opencode" | "codex" | "claude"
+    name: str
+    def list_models(self) -> list[str]                          # models the CLI can use
+    def start(self, cwd, prompt, model=None, env=None) -> RunHandle
+    def resume(self, cwd, session_id, prompt) -> RunHandle
+    def parse(self, line: str) -> list[AgentEvent]              # normalize CLI output → AgentEvent
+
+@dataclass
+class RunHandle:
+    proc: Any                   # duck-typed: .stdout, .stderr, .wait()
+    parse: Callable[[str], list[AgentEvent]]
+    session_id: str | None      # captured from events
+    def events(self) -> Iterator[AgentEvent]   # streams parsed events; ends with done/error
 ```
+
+Registry (`src/jalebi/adapters/__init__.py`): `get_adapter(cli)`. `agent.cli` setting (default `"opencode"`) is the one-line switch.
 
 ## 3. `AgentEvent` normalized vocabulary
 
@@ -45,17 +49,32 @@ interface RunHandle {
 
 | CLI | Start a new task | Resume (follow-up) | Structured output | Model flag |
 |-----|------------------|--------------------|-------------------|------------|
-| **opencode** (v1) | `opencode run --dir <ws> --format json [--model <m>] <prompt>` | `opencode run --session <sessionId> --format json <prompt>` | `--format json` (event stream; contains `session.id`, `session.updated`, `message.updated`, `session.idle`) | `-m/--model provider/model`; env `MODEL` |
+| **opencode** (v1.18) | `opencode run --dir <ws> --format json [--model <m>] <prompt>` | `opencode run --session <sessionId> --format json <prompt>` | `--format json` — newline-delimited events (see mapping below) | `-m/--model provider/model` |
 | **codex** (later) | `codex exec --json [--model <m>] "<prompt>"` | `codex exec resume <session_id> "<prompt>"` | `--json`; `--output-schema` for structured findings | `-m/--model` (or `config.toml`) |
 | **claude** (later) | `claude -p "<prompt>" --output-format stream-json --verbose [--model <m>]` | `claude -p "<prompt>" --resume <session_id> --output-format stream-json` | `--output-format stream-json` (`init.session_id` + typed events) | `--model` |
 
+### opencode JSON event mapping (v1.18 — differs from older docs)
+
+Real `--format json` top-level `type` values and the adapter mapping (field is **`sessionID`**, capital D):
+
+| CLI event | → `AgentEvent` | Notes |
+|-----------|----------------|-------|
+| `step_start` | `step` (phase `"step"`) | per agent turn, not the PRD phase vocabulary |
+| `tool_use` | `tool_call` | `data`: tool, title, status, input, output |
+| `text` | `message` | `part.text` |
+| `step_finish` | — (silent) | reason `"stop"`/`"tool-calls"`; process exit is the terminal signal |
+| `error` | `error` | `error.data.message` |
+| non-JSON / unknown | `message` (verbatim) | defensive: never crash |
+
+> **CLI drift (PRD risk #1):** the PRD-documented events (`session.id`, `message.updated`, `session.idle`) no longer match opencode v1.18. `done` is emitted on process exit (code 0), `error` on non-zero (with stderr tail).
+
 ## 6. Known adapter quirks (document in code + README)
 
-- **opencode:** resuming keeps the session's original model unless `--model` is passed on resume (supported). `--fork` can fork instead of continuing if the user prefers a clean follow-up. Lifecycle status `session.idle` maps to the terminal state `done`.
+- **opencode:** resuming keeps the session's original model unless `--model` is passed on resume (supported). `--fork` can fork instead of continuing. `OPENCODE_DISABLE_AUTOUPDATE=1` is set on spawn.
 - **codex:** **on resume, the model/reasoning-effort cannot be changed** — the resumed session retains the original run's settings. Model changes on follow-ups must start a fresh run or be surfaced in the UI.
 - **claude:** `--resume <id>` requires the session id captured from the first run (`init.session_id`). `--continue` resumes the last session only (do not rely on it).
 - Processes must be spawned with a **working directory = the task worktree** so the CLI discovers `AGENTS.md`/skills.
-- Stream output parsing must be **defensive & line-buffered**: consume child `stdout` through a line-buffer interface (e.g. Node `readline`) to reassemble JSON lines split across OS buffer chunks before invoking `parse(line)`. Unknown/non-parseable lines are shown verbatim in the console rather than crashing.
+- Stream output parsing is **defensive & line-buffered**: iterate child `stdout` line-by-line (`text=True, bufsize=1`); unknown/non-parseable lines are shown verbatim in the console rather than crashing. `stderr` is drained in a background thread (bounded tail) to avoid pipe deadlock and to report exit failures.
 
 ## 7. Personality & skills injection (PRD §F6)
 

@@ -15,6 +15,7 @@ DEFAULTS: dict[str, object] = {
     "retry_policy": {"auto_retry": False},
     "secret_patterns": [],
     "artifact_ttl_days": 7,
+    "agent_cli": "opencode",
 }
 
 SETTING_KEYS = tuple(DEFAULTS)
