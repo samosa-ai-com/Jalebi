@@ -114,13 +114,18 @@ def get_named_token(config: Config, name: str) -> str | None:
 
 
 def load_github_token(config: Config) -> str | None:
-    """Return the primary GitHub PAT: env wins, then stored default, then first named."""
-    env_token = os.environ.get(ENV_GITHUB_TOKEN)
-    if env_token:
-        return env_token
+    """Return the primary GitHub PAT: stored default wins, env is a test/bootstrap fallback.
+
+    The token the owner sets in the UI (``github_token`` in the secrets file) is the
+    source of truth (PRD F1). ``JALEBI_GITHUB_TOKEN`` remains a fallback so CI/tests and
+    a fresh setup without a stored token still work, but it never overrides a stored one.
+    """
     stored = load_secret(config, GITHUB_TOKEN_KEY)
     if stored:
         return stored
+    env_token = os.environ.get(ENV_GITHUB_TOKEN)
+    if env_token:
+        return env_token
     tokens = list_github_tokens(config)
     return tokens[0]["token"] if tokens else None
 
@@ -145,10 +150,3 @@ def all_token_values(config: Config) -> list[str]:
         values.append(stored)
     values.extend(t["token"] for t in list_github_tokens(config))
     return list(dict.fromkeys(values))
-
-
-def persist_env_github_token(config: Config) -> None:
-    """If ``JALEBI_GITHUB_TOKEN`` is set, mirror it into the secrets file (PRD F1)."""
-    env_token = os.environ.get(ENV_GITHUB_TOKEN)
-    if env_token and env_token != load_secret(config, GITHUB_TOKEN_KEY):
-        store_secret(config, GITHUB_TOKEN_KEY, env_token)

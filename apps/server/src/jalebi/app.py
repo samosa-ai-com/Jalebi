@@ -1,12 +1,13 @@
 """Flask application factory and CLI entrypoint."""
 
 import logging
+import re
 from pathlib import Path
 
 from flask import Flask, Response, current_app, g, jsonify, request, send_from_directory
 from flask.typing import ResponseReturnValue
 
-from jalebi import artifacts, db, secrets, settings
+from jalebi import artifacts, db, settings
 from jalebi.adapters import get_adapter
 from jalebi.config import Config, load_config, repo_root
 from jalebi.queue import TaskQueue
@@ -20,14 +21,29 @@ WEB_DIST = repo_root() / "apps" / "web" / "dist"
 
 ALLOWED_AGENT_CLIS = ("opencode",)
 
+
+def _valid_secret_patterns(value: object) -> bool:
+    """Every entry must be a str and a compilable regex (surface errors to the user)."""
+    if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
+        return False
+    for pattern in value:
+        try:
+            re.compile(pattern)
+        except re.error:
+            return False
+    return True
+
+
 _SETTING_VALIDATORS = {
     "concurrency": lambda v: isinstance(v, int) and 0 <= v <= 64,
     "auto_publish": lambda v: isinstance(v, bool),
     "default_timeout_minutes": lambda v: isinstance(v, int) and v >= 1,
     "ntfy_topic": lambda v: isinstance(v, str),
-    "ntfy_url": lambda v: isinstance(v, str),
+    "ntfy_url": lambda v: isinstance(v, str) and (
+        v == "" or v.startswith(("http://", "https://"))
+    ),
     "retry_policy": lambda v: isinstance(v, dict) and isinstance(v.get("auto_retry"), bool),
-    "secret_patterns": lambda v: isinstance(v, list) and all(isinstance(x, str) for x in v),
+    "secret_patterns": _valid_secret_patterns,
     "artifact_ttl_days": lambda v: isinstance(v, int) and v >= 1,
     "agent_cli": lambda v: v in ALLOWED_AGENT_CLIS,
 }
@@ -47,7 +63,6 @@ def create_app(config: Config | None = None) -> Flask:
     if config is None:
         config = load_config()
     config.ensure_dirs()
-    secrets.persist_env_github_token(config)
 
     app = Flask(__name__)
     app.config["JALEBI_CONFIG"] = config

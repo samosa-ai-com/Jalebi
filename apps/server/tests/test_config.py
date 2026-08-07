@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from jalebi.config import Config, load_config, repo_root
 
 
@@ -9,6 +11,16 @@ def test_config_defaults() -> None:
     assert cfg.port == 3456
     assert cfg.data_dir == Path.home() / ".jalebi"
     assert cfg.db_url == f"sqlite:///{cfg.data_dir.as_posix()}/data.db"
+
+
+def test_config_port_junk_falls_back(monkeypatch) -> None:
+    monkeypatch.setenv("JALEBI_PORT", "not-a-number")
+    assert load_config().port == 3456
+
+
+def test_config_db_url_rejects_url_breaking_chars() -> None:
+    with pytest.raises(ValueError, match="JALEBI_DATA_DIR"):
+        _ = Config(data_dir=Path("/tmp/a?b")).db_url
 
 
 def test_config_env_overrides(monkeypatch) -> None:

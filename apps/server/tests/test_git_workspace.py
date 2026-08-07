@@ -154,3 +154,25 @@ def test_worktree_remove(ws: GitWorkspace, remote: str) -> None:
 
 def test_worktree_remove_noop(ws: GitWorkspace) -> None:
     ws.remove_worktree(99, FULL_NAME)
+
+
+def test_clean_git_env_strips_inherited_state(monkeypatch) -> None:
+    from jalebi.git_workspace import _clean_git_env
+
+    env = {
+        "PATH": "/usr/bin",
+        "GIT_CONFIG_COUNT": "3",
+        "GIT_CONFIG_KEY_2": "url.insteadOf",
+        "GIT_DIR": "/elsewhere",
+        "GIT_WORK_TREE": "/x",
+        "HOME": "/home/u",
+    }
+    cleaned = _clean_git_env(dict(env))
+    assert cleaned["PATH"] == "/usr/bin"
+    assert cleaned["HOME"] == "/home/u"
+    assert "GIT_CONFIG_COUNT" not in cleaned
+    assert "GIT_CONFIG_KEY_2" not in cleaned
+    assert "GIT_DIR" not in cleaned
+    assert "GIT_WORK_TREE" not in cleaned
+    assert cleaned["GIT_CONFIG_NOSYSTEM"] == "1"
+    assert cleaned["GIT_CONFIG_GLOBAL"]

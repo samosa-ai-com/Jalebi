@@ -21,13 +21,38 @@ class GitWorkspaceError(Exception):
     """Raised when a git command fails or a precondition is unmet."""
 
 
+def _clean_git_env(env: dict[str, str]) -> dict[str, str]:
+    """Make a git subprocess environment hermetic.
+
+    Inherited ``GIT_CONFIG_*`` vars could inject a credential helper, a
+    ``url.insteadOf`` rewrite, or stray config keys into a command Jalebi runs,
+    and an inherited ``GIT_DIR``/``GIT_WORK_TREE`` would redirect the operation
+    to an unrelated repository. Strip them all and pin system/global config to
+    nothing — Jalebi pins identity per worktree and authenticates exclusively via
+    the ``GIT_CONFIG_*`` ``http.extraHeader`` it sets itself.
+    """
+    for key in list(env):
+        if key.startswith("GIT_CONFIG") or key in (
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_COMMON_DIR",
+            "GIT_CEILING_DIRECTORIES",
+            "GIT_OBJECT_DIRECTORY",
+        ):
+            del env[key]
+    env["GIT_CONFIG_NOSYSTEM"] = "1"
+    env["GIT_CONFIG_GLOBAL"] = os.devnull
+    return env
+
+
 def _run_git(
     args: list[str],
     cwd: Path | str | None = None,
     auth_env: dict[str, str] | None = None,
 ) -> str:
     """Run a git command; raise ``GitWorkspaceError`` on non-zero exit."""
-    env = os.environ.copy()
+    env = _clean_git_env(os.environ.copy())
     if auth_env:
         env.update(auth_env)
     proc = subprocess.run(

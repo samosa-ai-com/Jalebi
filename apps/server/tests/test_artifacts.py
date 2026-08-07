@@ -120,7 +120,8 @@ def test_capture_untracked_files_only(session, repo_row, tmp_path) -> None:
     session.add(run)
     session.commit()
 
-    captured = artifacts.capture_run_artifacts(session, run, worktree, tmp_path)
+    captured, skipped = artifacts.capture_run_artifacts(session, run, worktree, tmp_path)
+    assert skipped == []
     assert sorted(str(c["path"]) for c in captured) == ["out/shot.png", "report.log"]
 
     session.expire_all()
@@ -273,8 +274,59 @@ def test_capture_excludes_jalebi_internal(tmp_path, session) -> None:
     session.add(run)
     session.flush()
 
-    captured = artifacts.capture_run_artifacts(session, run, repo, tmp_path)
+    captured, _skipped = artifacts.capture_run_artifacts(session, run, repo, tmp_path)
     paths = [str(c["path"]) for c in captured]
     assert "output.log" in paths
     assert not any(".jalebi" in p for p in paths)
     assert ".jalebi/pr.md" not in paths
+
+
+def test_capture_masks_text_files(session, repo_row, tmp_path) -> None:
+    from jalebi.masking import build_masker
+
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="p")
+    run = Run(task_id=task.id, seq=1, status="done", started_at=utcnow())
+    session.add(run)
+    session.commit()
+
+    worktree = tmp_path / "wt"
+    _git(["init", str(worktree)])
+    _git(["-C", str(worktree), "config", "user.email", "t@example.com"])
+    _git(["-C", str(worktree), "config", "user.name", "Test"])
+    (worktree / "base.txt").write_text("base\n")
+    _git(["-C", str(worktree), "add", "."])
+    _git(["-C", str(worktree), "commit", "-m", "init"])
+    (worktree / "note.txt").write_text("token ghp_leak here\n")
+    (worktree / "pkg.bin").write_bytes(b"\xff\xfeghp_leak\x00\x01")
+
+    masker = build_masker("ghp_leak", [])
+    captured, skipped = artifacts.capture_run_artifacts(
+        session, run, worktree, tmp_path, masker=masker, secret_values=["ghp_leak"]
+    )
+    assert [str(c["path"]) for c in captured] == ["note.txt"]
+    assert skipped == ["pkg.bin"]  # binary containing the token → dropped
+
+    store = artifacts.artifact_store_dir(tmp_path) / str(run.id)
+    assert (store / "note.txt").read_text() == "token *** here\n"
+    assert not (store / "pkg.bin").exists()
+
+
+def test_capture_skips_oversized_files(session, repo_row, tmp_path, monkeypatch) -> None:
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="p")
+    run = Run(task_id=task.id, seq=1, status="done", started_at=utcnow())
+    session.add(run)
+    session.commit()
+
+    worktree = tmp_path / "wt"
+    _git(["init", str(worktree)])
+    _git(["-C", str(worktree), "config", "user.email", "t@example.com"])
+    _git(["-C", str(worktree), "config", "user.name", "Test"])
+    (worktree / "base.txt").write_text("base\n")
+    _git(["-C", str(worktree), "add", "."])
+    _git(["-C", str(worktree), "commit", "-m", "init"])
+    (worktree / "big.bin").write_bytes(b"x" * (artifacts.ARTIFACT_MAX_BYTES + 1))
+    (worktree / "ok.txt").write_text("fine\n")
+
+    captured, skipped = artifacts.capture_run_artifacts(session, run, worktree, tmp_path)
+    assert [str(c["path"]) for c in captured] == ["ok.txt"]
+    assert skipped == ["big.bin"]

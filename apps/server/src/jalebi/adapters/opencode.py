@@ -44,6 +44,7 @@ def _spawn(
         stderr=subprocess.PIPE,
         text=True,
         bufsize=1,
+        start_new_session=True,  # own process group → cancel/timeout can killpg it
     )
 
 

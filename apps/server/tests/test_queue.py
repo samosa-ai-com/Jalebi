@@ -676,3 +676,62 @@ def test_exception_finalizes_run_failed(q, session, repo_row, monkeypatch) -> No
     run = _latest_run(session, task.id)
     assert run.status == "failed"
     assert run.finished_at is not None
+
+
+def test_step_from_event_truncates_before_masking(q) -> None:
+    from jalebi.adapters.types import AgentEvent
+    from jalebi.queue import MAX_STEP_TEXT
+
+    seen: list[str] = []
+
+    def masker(text: str) -> str:
+        seen.append(text)
+        return text.replace("TOKEN", "***")
+
+    long = "x" * (MAX_STEP_TEXT * 2) + " TOKEN"
+    entry = q._step_from_event(AgentEvent(type="message", text=long), masker)
+    # The masker must never receive more than MAX_STEP_TEXT characters, so a
+    # pathological user regex cannot backtrack over unbounded input (M2).
+    assert len(seen[0]) == MAX_STEP_TEXT
+    assert len(entry["text"]) <= MAX_STEP_TEXT
+
+
+def test_build_agent_env_strips_inherited_git_config(monkeypatch) -> None:
+    from jalebi.queue import _build_agent_env
+
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "3")
+    monkeypatch.setenv("GIT_CONFIG_KEY_1", "credential.helper")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_1", "store")
+    monkeypatch.setenv("GIT_DIR", "/somewhere/else")
+    monkeypatch.setenv("GIT_WORK_TREE", "/elsewhere")
+
+    env = _build_agent_env("ghp_x")
+    # inherited git state stripped
+    assert env.get("GIT_CONFIG_KEY_1") is None
+    assert env.get("GIT_CONFIG_VALUE_1") is None
+    assert env.get("GIT_DIR") is None
+    assert env.get("GIT_WORK_TREE") is None
+    # Jalebi's own config stays
+    assert env["GIT_CONFIG_NOSYSTEM"] == "1"
+    assert env["GIT_CONFIG_GLOBAL"]
+    assert env["GIT_CONFIG_COUNT"] == "1"
+    assert env["JALEBI_GITHUB_TOKEN"] == "ghp_x"
+
+
+def test_build_agent_env_keeps_own_git_auth(monkeypatch) -> None:
+    import base64
+
+    from jalebi.queue import _build_agent_env
+
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "3")
+    monkeypatch.setenv("GIT_CONFIG_KEY_1", "credential.helper")
+    monkeypatch.setenv("GIT_DIR", "/somewhere/else")
+    env = _build_agent_env("ghp_x")
+    # inherited git state dropped…
+    assert env.get("GIT_DIR") is None
+    assert env.get("GIT_CONFIG_KEY_1") is None
+    # …but Jalebi's own auth config is present and correct.
+    assert env["GIT_CONFIG_COUNT"] == "1"
+    assert env["GIT_CONFIG_KEY_0"] == "http.extraHeader"
+    expected = base64.b64encode(b"x-access-token:ghp_x").decode()
+    assert expected in env["GIT_CONFIG_VALUE_0"]

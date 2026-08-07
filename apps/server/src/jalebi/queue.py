@@ -28,10 +28,21 @@ MAX_STEP_TEXT = 2000
 KILL_GRACE_SECONDS = 5
 MAX_AUTO_RETRIES = 1
 DEFAULT_TIMEOUT_MINUTES = 30
-STALL_TIMEOUT_SECONDS = 120  # no agent output for this long ⇒ the process is hung
+STALL_TIMEOUT_SECONDS = 300  # no agent output for this long ⇒ the process is hung
 
 GIT_USER_NAME = "Jalebi"
 GIT_USER_EMAIL = "jalebi@localhost"
+
+
+_GIT_ENV_PREFIXES = ("GIT_CONFIG",)
+_GIT_ENV_KEYS = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_COMMON_DIR",
+    "GIT_CEILING_DIRECTORIES",
+    "GIT_OBJECT_DIRECTORY",
+)
 
 
 def _build_agent_env(token: str) -> dict[str, str | None]:
@@ -39,11 +50,21 @@ def _build_agent_env(token: str) -> dict[str, str | None]:
 
     ``gh`` is deliberately never authenticated: ``JALEBI_GITHUB_TOKEN`` is the
     only token exposed, and any inherited ``GH_TOKEN``/``GITHUB_TOKEN`` are
-    stripped so even a guard bypass cannot act as the owner via gh.
+    stripped so even a guard bypass cannot act as the owner via gh. Inherited
+    ``GIT_CONFIG_*``/``GIT_DIR`` state is also stripped so the agent's git
+    commands cannot be redirected by the parent shell's environment — then
+    Jalebi's own ``auth_env`` credentials are applied on top.
     """
-    env: dict[str, str | None] = dict(auth_env(token))
+    env: dict[str, str | None] = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith(_GIT_ENV_PREFIXES) and key not in _GIT_ENV_KEYS
+    }
+    env.update(auth_env(token))
     env.update(
         {
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": os.devnull,
             "GIT_AUTHOR_NAME": GIT_USER_NAME,
             "GIT_AUTHOR_EMAIL": GIT_USER_EMAIL,
             "GIT_COMMITTER_NAME": GIT_USER_NAME,
@@ -66,39 +87,61 @@ class _RunState:
         self.last_event = time.monotonic()  # updated as agent events stream in
 
 
+def _kill_group(pid: int, sig: int = signal.SIGTERM) -> None:
+    """Signal ``pid``; if it is its own process-group leader, signal the whole group.
+
+    Agent children are spawned with ``start_new_session=True`` so they become
+    group leaders; killing the group reaches MCP servers and other grandchildren
+    that would otherwise be orphaned by a single-process kill.
+    """
+    try:
+        if os.getpgid(pid) == pid:
+            os.killpg(pid, sig)
+            return
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+    try:
+        os.kill(pid, sig)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+
+
 def _kill_proc(proc) -> None:
     if proc is None or proc.poll() is not None:
         return
+    pid = getattr(proc, "pid", None)
+    if pid is None:
+        # Test double without a real pid — fall back to the duck-typed API.
+        try:
+            proc.terminate()
+            proc.wait(timeout=KILL_GRACE_SECONDS)
+        except Exception:
+            pass
+        if proc.poll() is None:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        return
+    _kill_group(pid, signal.SIGTERM)
     try:
-        proc.terminate()
         proc.wait(timeout=KILL_GRACE_SECONDS)
     except Exception:
         pass
     if proc.poll() is None:
-        try:
-            proc.kill()
-        except Exception:
-            pass
+        _kill_group(pid, signal.SIGKILL)
 
 
 def _kill_pid(pid: int) -> None:
-    """Terminate a process by pid (orphaned agent after a crash), then SIGKILL."""
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except (ProcessLookupError, PermissionError):
-        return
-    except OSError:
-        return
+    """Terminate a process (and its group) by pid (orphaned agent after a crash)."""
+    _kill_group(pid, signal.SIGTERM)
     for _ in range(KILL_GRACE_SECONDS * 5):
         try:
             os.kill(pid, 0)
         except ProcessLookupError:
             return
         time.sleep(0.2)
-    try:
-        os.kill(pid, signal.SIGKILL)
-    except (ProcessLookupError, OSError):
-        pass
+    _kill_group(pid, signal.SIGKILL)
 
 
 class TaskQueue:
@@ -233,7 +276,10 @@ class TaskQueue:
             for task in queued:
                 self.enqueue(task.id)
             session.commit()
-            return len(running_runs) + len(queued)
+            # Count interrupted *tasks* even when they had no running run row.
+            run_task_ids = {r.task_id for r in running_runs}
+            orphan_tasks = sum(1 for t in running_tasks if t.id not in run_task_ids)
+            return len(running_runs) + len(queued) + orphan_tasks
         finally:
             session.close()
 
@@ -350,12 +396,32 @@ class TaskQueue:
                     run.steps_json = json.dumps(steps[-MAX_STEPS:])
 
         # Capture agent-produced (untracked) files from the worktree (PRD F18).
+        # Text files are masked at ingest; files containing a known secret value
+        # or exceeding the size cap are dropped and surfaced as a note (PRD F17).
         if worktree is None:
             worktree = GitWorkspace.worktree_path(self.config.data_dir, task.id)
-        captured = artifacts.capture_run_artifacts(
-            session, run, worktree, self.config.data_dir
+        captured, skipped = artifacts.capture_run_artifacts(
+            session,
+            run,
+            worktree,
+            self.config.data_dir,
+            masker=masker,
+            secret_values=secrets.all_token_values(self.config) + [token],
         )
         run.artifacts_json = json.dumps(captured) if captured else None
+        if skipped:
+            steps.append(
+                {
+                    "type": "message",
+                    "phase": None,
+                    "text": (
+                        f"Skipped {len(skipped)} artifact(s) — too large or contained "
+                        "a secret value: " + ", ".join(skipped[:10])
+                    ),
+                    "ts": utcnow().isoformat(),
+                }
+            )
+            run.steps_json = json.dumps(steps[-MAX_STEPS:])
 
     def _resolve_timeout(self, session, task: Task) -> int:
         if task.timeout_minutes is not None:
@@ -779,11 +845,22 @@ class TaskQueue:
 
     def _step_from_event(self, event: AgentEvent, masker) -> dict[str, object]:
         text = event.text or (json.dumps(event.data) if event.data else None)
-        masked = masker(text) if text else None
+        if text is None:
+            return {
+                "type": event.type,
+                "phase": event.phase,
+                "text": None,
+                "ts": utcnow().isoformat(),
+            }
+        # Cap BEFORE masking: the masker applies user-supplied regexes to the full
+        # text, and an unbounded input on a pathological pattern could backtrack
+        # catastrophically. Truncating first bounds the work.
+        text = text[:MAX_STEP_TEXT]
+        masked = masker(text)
         return {
             "type": event.type,
             "phase": event.phase,
-            "text": masked[:MAX_STEP_TEXT] if masked else None,
+            "text": masked,
             "ts": utcnow().isoformat(),
         }
 

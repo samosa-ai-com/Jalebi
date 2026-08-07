@@ -46,6 +46,9 @@ def test_agent_md_issue_fix_embeds_issue(session) -> None:
     assert "#1 — Bug" in md
     assert "It is broken" in md
     assert "Closes" in md or "target branch" in md
+    assert "BEGIN UNTRUSTED DATA" in md
+    assert "END UNTRUSTED DATA" in md
+    assert "prompt-injection" in md
 
 
 def test_agent_md_pr_review_embeds_pr(session) -> None:
@@ -78,6 +81,8 @@ def test_agent_md_pr_review_embeds_pr(session) -> None:
     assert "PR #7" in md
     assert "review.md" in md
     assert "Do **not** modify files or push anything" in md
+    assert "BEGIN UNTRUSTED DATA" in md
+    assert "Adds x" in md
 
 
 def test_followup_prompt_includes_constraints(session) -> None:
