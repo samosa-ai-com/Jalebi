@@ -198,6 +198,8 @@ def add_token() -> ResponseReturnValue:
     if not token:
         return jsonify({"error": 'expected {"name": "<label>", "token": "<PAT>"}'}), 400
     name = name.strip()
+    if name == "default":
+        return jsonify({"error": '"default" is reserved for the primary account'}), 400
 
     info, error = _validate(token)
     if error is not None:

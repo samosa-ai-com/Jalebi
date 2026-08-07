@@ -315,7 +315,7 @@ class TaskQueue:
         if publish and run.status == "done" and settings.get_setting(session, "auto_publish"):
             if self._branch_ahead(task, git):
                 try:
-                    task.pr_number = self._publish(task, repo, token, git)
+                    task.pr_number = self._publish(task, repo, token, git, masker=masker)
                 except Exception as exc:
                     task.status = "needs_approval"
                     logger.warning("auto-publish failed for task %s: %s", task.id, exc)
@@ -487,6 +487,7 @@ class TaskQueue:
                 if not review_text:
                     review_text = self._last_message(session, task.id)
                 if review_text:
+                    review_text = masker(review_text)
                     try:
                         client = GitHubClient(token)
                         try:
@@ -655,11 +656,16 @@ class TaskQueue:
             repo = session.get(Repo, task.repo_id)
             if repo is None:
                 raise KeyError(f"repo for task {task_id} not found")
-            token = secrets.load_github_token(self.config)
+            # Resolve the task's own account (not the primary) so a manual publish
+            # matches the account the run used.
+            token = secrets.resolve_token(self.config, task.pat_name)
             if token is None:
                 raise RuntimeError("no GitHub token configured")
+            raw_patterns = settings.get_setting(session, "secret_patterns") or []
+            patterns = [str(p) for p in raw_patterns] if isinstance(raw_patterns, list) else []
+            masker = masking.build_masker(secrets.all_token_values(self.config) + [token], patterns)
             git = GitWorkspace(self.config)
-            pr_number = self._publish(task, repo, token, git)
+            pr_number = self._publish(task, repo, token, git, masker=masker)
             task.pr_number = pr_number
             task.status = "done"
             task.updated_at = utcnow()
@@ -726,7 +732,14 @@ class TaskQueue:
         except Exception:
             return False
 
-    def _publish(self, task: Task, repo: Repo, token: str, git: GitWorkspace) -> int:
+    def _publish(
+        self,
+        task: Task,
+        repo: Repo,
+        token: str,
+        git: GitWorkspace,
+        masker=None,
+    ) -> int:
         # Ensure the worktree exists (it may have been cleaned for old tasks);
         # create_worktree reuses the existing jalebi/<taskId> branch if present.
         git.create_worktree(task.id, repo.full_name, task.target_branch, token)
@@ -743,7 +756,7 @@ class TaskQueue:
                 # instead of opening a duplicate.
                 pr_number = existing
             else:
-                title, body = self._pr_title_and_body(task)
+                title, body = self._pr_title_and_body(task, masker=masker)
                 pr_number = client.create_pr(
                     repo.full_name,
                     title=title,
@@ -778,16 +791,18 @@ class TaskQueue:
             except Exception as exc:
                 logger.warning("commenting on issue #%s failed: %s", number, exc)
 
-    def _pr_title_and_body(self, task: Task) -> tuple[str, str]:
+    def _pr_title_and_body(self, task: Task, masker=None) -> tuple[str, str]:
         """PR title/body from the agent-written ``.jalebi/pr.md`` when present.
 
         Falls back to the prompt when the agent didn't write one. The Jalebi
         footer is always appended; ``Closes #N`` is added for referenced issues.
+        The agent-written content is masked before it can be posted to GitHub.
         """
         title, body = "", ""
         pr_md = GitWorkspace.worktree_path(self.config.data_dir, task.id) / ".jalebi" / "pr.md"
         if pr_md.is_file():
-            lines = (pr_md.read_text() or "").splitlines()
+            raw = pr_md.read_text() or ""
+            lines = raw.splitlines()
             if lines and lines[0].startswith("# "):
                 title = lines[0][2:].strip()[:80]
             body = "\n".join(lines[1:]).strip()
@@ -796,6 +811,9 @@ class TaskQueue:
             title = f"[Jalebi] {first}".strip() or "Jalebi task"
         if not body:
             body = task.prompt
+        if masker is not None:
+            title = masker(title)
+            body = masker(body)
 
         parts = [body]
         if task.type == "issue_fix":

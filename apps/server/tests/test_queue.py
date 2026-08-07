@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from jalebi import repos, settings, tasks
+from jalebi import repos, secrets, settings, tasks
 from jalebi.adapters.types import AgentEvent
 from jalebi.git_workspace import GitWorkspace
 
@@ -415,6 +415,172 @@ def test_review_task_posts_review_and_does_not_publish(
     run = _latest_run(session, task.id)
     assert run.status == "done"
     assert run.steps_json and "Review posted" in run.steps_json
+
+
+def test_manual_publish_uses_tasks_account(q, session, repo_row, monkeypatch) -> None:
+    """Manual publish must resolve the task's own account, not the primary."""
+    secrets.add_github_token(q.config, "acct-b", "ghp_b")
+    task = tasks.create_task(
+        session,
+        type_="freeform",
+        repo_id=repo_row.id,
+        prompt="do it",
+        pat_name="acct-b",
+    )
+    _seed_commit(q, task.id, repo_row)
+
+    seen: dict[str, str] = {}
+
+    class RecordingClient:
+        def __init__(self, token: str):
+            seen["token"] = token
+
+        def find_pr_by_head(self, *a, **k):
+            return None
+
+        def create_pr(self, *a, **k):
+            return 7
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("jalebi.queue.GitHubClient", RecordingClient)
+    assert q.publish_task(task.id) == 7
+    assert seen["token"] == "ghp_b"
+
+
+def test_agent_env_carries_resolved_token_and_strips_gh(q, session, repo_row, monkeypatch) -> None:
+    """The agent env must use the resolved account token and never auth gh."""
+    secrets.add_github_token(q.config, "acct-b", "ghp_b")
+    task = tasks.create_task(
+        session,
+        type_="freeform",
+        repo_id=repo_row.id,
+        prompt="do it",
+        pat_name="acct-b",
+    )
+    captured: dict[str, dict[str, str | None] | None] = {}
+
+    class CapturingAdapter:
+        def start(self, cwd, prompt, model=None, env=None):
+            captured["env"] = env
+            return FakeHandle([AgentEvent(type="done")])
+
+        def resume(self, *a, **k):
+            raise NotImplementedError
+
+        def list_models(self):
+            return []
+
+    monkeypatch.setattr("jalebi.queue.get_adapter", lambda cli: CapturingAdapter())
+    _no_publish(session)
+    q._run_task(task.id)
+
+    env = captured["env"]
+    assert env is not None
+    assert env["JALEBI_GITHUB_TOKEN"] == "ghp_b"
+    assert env["GIT_AUTHOR_NAME"] == "Jalebi"
+    assert env["GH_CONFIG_DIR"]
+    assert env.get("GH_TOKEN") is None
+    assert env.get("GITHUB_TOKEN") is None
+    # the git credential header embeds the resolved token (base64), not the primary
+    assert "ghp_b" not in (env.get("GIT_CONFIG_VALUE_0") or "")
+
+
+def test_publish_masks_agent_written_pr_md(q, session, repo_row, monkeypatch) -> None:
+    settings.set_setting(session, "auto_publish", True)
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
+    _seed_commit(q, task.id, repo_row)
+    pr_md = GitWorkspace.worktree_path(q.config.data_dir, task.id) / ".jalebi" / "pr.md"
+    pr_md.parent.mkdir(parents=True, exist_ok=True)
+    pr_md.write_text("# Leaked token ghp_test here\n\ntoken: ghp_test must be masked\n")
+
+    posted: dict[str, str] = {}
+
+    class RecordingClient:
+        def __init__(self, token: str):
+            pass
+
+        def find_pr_by_head(self, *a, **k):
+            return None
+
+        def create_pr(self, full_name, *, title, body, head, base):
+            posted["title"] = title
+            posted["body"] = body
+            return 42
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("jalebi.queue.GitHubClient", RecordingClient)
+    _install_adapter(monkeypatch, FakeHandle([AgentEvent(type="done")]))
+    q._run_task(task.id)
+
+    assert "ghp_test" not in posted["title"]
+    assert "ghp_test" not in posted["body"]
+    assert "***" in posted["body"]
+
+
+def test_review_post_is_masked(q, session, repo_row, monkeypatch, tmp_path) -> None:
+    settings.set_setting(session, "auto_publish", True)
+    task = tasks.create_task(
+        session,
+        type_="pr_review",
+        repo_id=repo_row.id,
+        prompt="review it",
+        prs=[3],
+        context={
+            "prs": [
+                {
+                    "number": 3,
+                    "title": "t",
+                    "body": "b",
+                    "html_url": "u",
+                    "base": "main",
+                    "head": "h",
+                    "state": "open",
+                    "author": "a",
+                }
+            ]
+        },
+    )
+    wt = tmp_path / "review"
+    wt.mkdir(parents=True)
+    (wt / ".jalebi").mkdir(parents=True)
+    (wt / ".jalebi" / "review.md").write_text("saw token ghp_test in the diff\n")
+
+    class ReviewGit:
+        def __init__(self, config):
+            self.config = config
+
+        def ensure_mirror(self, *a, **k):
+            return None
+
+        def create_review_worktree(self, *a, **k):
+            return wt
+
+    monkeypatch.setattr("jalebi.queue.GitWorkspace", ReviewGit)
+    monkeypatch.setattr("jalebi.queue.worktree_bootstrap.bootstrap_worktree", lambda *a, **k: None)
+
+    posted: list[str] = []
+
+    class RecordingClient:
+        def __init__(self, token: str):
+            pass
+
+        def post_pr_review(self, full_name, pr_number, body):
+            posted.append(body)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("jalebi.queue.GitHubClient", RecordingClient)
+    _install_adapter(monkeypatch, FakeHandle([AgentEvent(type="done")]))
+    q._run_task(task.id)
+
+    assert posted
+    assert "ghp_test" not in posted[0]
+    assert "***" in posted[0]
 
 
 def test_no_changes_skips_publish(q, session, repo_row, monkeypatch) -> None:

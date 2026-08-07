@@ -233,3 +233,10 @@ def test_repos_tagged_by_account(client: FlaskClient, app, monkeypatch) -> None:
 
     only_work = client.get("/api/github/repos?account=work").get_json()
     assert [r["full_name"] for r in only_work] == ["acct2/other"]
+
+
+def test_add_token_default_name_rejected(client: FlaskClient, monkeypatch) -> None:
+    monkeypatch.setattr(routes_github, "GitHubClient", FakeClient)
+    resp = client.post("/api/github/tokens", json={"name": "default", "token": "ghp_x"})
+    assert resp.status_code == 400
+    assert "reserved" in resp.get_json()["error"]

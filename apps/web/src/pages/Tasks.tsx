@@ -310,13 +310,16 @@ function CreateTask({
           label="Credentials"
           value={patName}
           onChange={setPatName}
-          placeholder="Default"
+          placeholder="Inherit repo account"
         >
-          {accounts.map((a) => (
-            <option key={a.name} value={a.name}>
-              {a.login ?? a.name} ({a.masked})
-            </option>
-          ))}
+          <option value="default">Default account (primary)</option>
+          {accounts
+            .filter((a) => !a.is_default)
+            .map((a) => (
+              <option key={a.name} value={a.name}>
+                {a.login ?? a.name} ({a.masked})
+              </option>
+            ))}
         </Select>
       </div>
 

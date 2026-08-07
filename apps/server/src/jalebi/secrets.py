@@ -67,7 +67,12 @@ def list_github_tokens(config: Config) -> list[dict[str, str]]:
 def add_github_token(
     config: Config, name: str, token: str, meta: dict | None = None
 ) -> None:
-    """Add (or replace, by name) a named PAT, optionally with account metadata."""
+    """Add (or replace, by name) a named PAT, optionally with account metadata.
+
+    ``"default"`` is reserved for the primary account and cannot be used here.
+    """
+    if name == "default":
+        raise ValueError('"default" is reserved for the primary account')
     data = _load(config)
     tokens = data.get(GITHUB_TOKENS_KEY) or []
     if not isinstance(tokens, list):

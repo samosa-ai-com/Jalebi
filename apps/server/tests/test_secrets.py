@@ -96,3 +96,8 @@ def test_named_token_metadata(cfg: Config) -> None:
     entry = secrets.list_github_tokens(cfg)[0]
     assert entry["token"] == "ghp_work"
     assert entry["login"] == "octocat"
+
+
+def test_add_github_token_reserves_default_name(cfg: Config) -> None:
+    with pytest.raises(ValueError, match="reserved"):
+        secrets.add_github_token(cfg, "default", "ghp_x")

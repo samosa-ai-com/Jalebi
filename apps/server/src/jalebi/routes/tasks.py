@@ -30,8 +30,8 @@ def _repo_name(session, repo_id: int) -> str | None:
 
 
 def _valid_pat(config, name: str | None) -> bool:
-    """A PAT/account name is valid if it's the default account or a named one."""
-    return name is None or name == "default" or name in secrets.token_names(config)
+    """A PAT/account name is valid if it's empty, the default account, or a named one."""
+    return name in (None, "", "default") or name in secrets.token_names(config)
 
 
 def _masker(session) -> Callable[[str], str]:
