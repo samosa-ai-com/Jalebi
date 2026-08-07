@@ -28,6 +28,7 @@ MAX_STEP_TEXT = 2000
 KILL_GRACE_SECONDS = 5
 MAX_AUTO_RETRIES = 1
 DEFAULT_TIMEOUT_MINUTES = 30
+STALL_TIMEOUT_SECONDS = 120  # no agent output for this long ⇒ the process is hung
 
 GIT_USER_NAME = "Jalebi"
 GIT_USER_EMAIL = "jalebi@localhost"
@@ -61,7 +62,8 @@ class _RunState:
 
     def __init__(self, handle):
         self.handle = handle
-        self.reason: str | None = None  # "timeout" | "cancelled"
+        self.reason: str | None = None  # "timeout" | "cancelled" | "stalled"
+        self.last_event = time.monotonic()  # updated as agent events stream in
 
 
 def _kill_proc(proc) -> None:
@@ -277,6 +279,7 @@ class TaskQueue:
         steps: list[dict[str, object]] = []
         last_event_type: str | None = None
         for event in handle.events():
+            state.last_event = time.monotonic()
             if state.reason == "cancelled" and event.type == "error":
                 # A kill surfaces as "opencode exited with code -15"; replace it
                 # with a clean cancellation marker so the timeline never shows a
@@ -294,6 +297,23 @@ class TaskQueue:
 
         with self._running_lock:
             self._running.pop(task.id, None)
+
+        if state.reason == "stalled":
+            # The agent process produced nothing for STALL_TIMEOUT_SECONDS; the
+            # stall watchdog killed it. Surface a clear diagnostic instead of a
+            # run that looks like it is still "running".
+            steps.append(
+                {
+                    "type": "error",
+                    "phase": None,
+                    "text": (
+                        f"Agent produced no output for {STALL_TIMEOUT_SECONDS}s — "
+                        "the agent process hung and was terminated. Re-run the task "
+                        "or check the agent/opencode configuration."
+                    ),
+                    "ts": utcnow().isoformat(),
+                }
+            )
 
         run.session_id = handle.session_id
         run.finished_at = utcnow()
@@ -441,8 +461,7 @@ class TaskQueue:
         is told to review only — it never pushes. On success Jalebi reads the
         agent's ``.jalebi/review.md`` and posts it as a GitHub PR review COMMENT.
         """
-        prs = json.loads(task.prs_json) if task.prs_json else []
-        pr_number = int(prs[0]) if prs else None
+        pr_number = self._task_pr_number(task)
         if pr_number is None:
             raise RuntimeError("pr_review task has no PR number")
 
@@ -534,6 +553,15 @@ class TaskQueue:
         return run
 
     @staticmethod
+    def _task_pr_number(task: Task) -> int | None:
+        """The PR number a pr_review task targets (first entry of ``prs_json``)."""
+        try:
+            prs = json.loads(task.prs_json) if task.prs_json else []
+        except (ValueError, TypeError):
+            prs = []
+        return int(prs[0]) if prs else None
+
+    @staticmethod
     def _read_review(worktree: Path) -> str:
         review = worktree / ".jalebi" / "review.md"
         if review.is_file():
@@ -598,7 +626,17 @@ class TaskQueue:
 
             git = GitWorkspace(self.config)
             git.ensure_mirror(repo.full_name, repo.clone_url, token)
-            wt = git.create_worktree(task.id, repo.full_name, task.source_branch, token)
+            if task.type == "pr_review":
+                # The session to resume lives in the review worktree (detached at
+                # the PR head). Resuming it from the task worktree makes opencode's
+                # headless --session resume produce an empty stream and hang, so the
+                # follow-up must run from the matching review worktree.
+                pr_number = self._task_pr_number(task)
+                if pr_number is None:
+                    raise RuntimeError(f"pr_review task {task.id} has no PR number to resume")
+                wt = git.create_review_worktree(task.id, repo.full_name, pr_number, token)
+            else:
+                wt = git.create_worktree(task.id, repo.full_name, task.source_branch, token)
             worktree_bootstrap.bootstrap_worktree(wt, prompts.build_agent_md(task, repo))
 
             adapter = get_adapter(cli)
@@ -686,6 +724,13 @@ class TaskQueue:
             name=f"watchdog-{task.id}",
         )
         thread.start()
+        stall = threading.Thread(
+            target=self._stall_watchdog_loop,
+            args=(state,),
+            daemon=True,
+            name=f"stall-{task.id}",
+        )
+        stall.start()
 
     def _maybe_retry(self, session, task: Task, run: Run) -> None:
         """Auto-retry a failed run once if ``retry_policy.auto_retry`` is set."""
@@ -714,6 +759,23 @@ class TaskQueue:
             time.sleep(min(1.0, remaining))
         state.reason = "timeout"
         _kill_proc(state.handle.proc)
+
+    def _stall_watchdog_loop(self, state: _RunState) -> None:
+        """Kill the agent process if it emits no output for STALL_TIMEOUT_SECONDS.
+
+        A hung ``opencode run`` (e.g. a broken ``--session`` resume) would
+        otherwise keep a run "running" forever with an empty timeline until the
+        much longer total timeout fires. The stall guard bounds it and the caller
+        surfaces a clear "agent produced no output" diagnostic.
+        """
+        while True:
+            if state.handle.proc.poll() is not None:
+                return
+            if time.monotonic() - state.last_event >= STALL_TIMEOUT_SECONDS:
+                state.reason = "stalled"
+                _kill_proc(state.handle.proc)
+                return
+            time.sleep(0.5)
 
     def _step_from_event(self, event: AgentEvent, masker) -> dict[str, object]:
         text = event.text or (json.dumps(event.data) if event.data else None)

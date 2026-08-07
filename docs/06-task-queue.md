@@ -49,13 +49,15 @@ Queue items are tagged tuples: `("task", task_id)` or `("followup", task_id, bod
 ## 4b. Follow-ups (`TaskQueue._run_followup`, PRD F11)
 
 - `POST /api/tasks/:id/followup` (JSON `{"prompt": ..., "pat_name"?, "model"?}`) requires the task to be **terminal** and a resumable session — the latest run **with a `session_id`** (`tasks.latest_resumable_run`, so a cancelled follow-up run that captured no session falls back to the last good one). The body is masked at ingest; a `followups` row (with the PAT/model override) is recorded against the resumed run.
-- The worker resumes with `adapter.resume(cwd=worktree, session_id, prompt + context, env)` — **same worktree, same branch** — creating a fresh `runs` row (`seq+1`) and streaming live via SSE (watchdog/cancel apply, same as a normal run). PAT/model overrides are honored (defaults: the task's PAT/model).
+- The worker resumes with `adapter.resume(cwd=worktree, session_id, prompt + context, env)` — creating a fresh `runs` row (`seq+1`) and streaming live via SSE (watchdog/cancel apply, same as a normal run). PAT/model overrides are honored (defaults: the task's PAT/model).
+- **The follow-up runs in the session's own worktree, not the task worktree:** a pr_review session was created in the **review** worktree (`ws/task-<id>-review`, detached at the PR head), so pr_review follow-ups resume there (`create_review_worktree`). Resuming a review session from the task worktree makes opencode's headless `--session` resume return an empty model stream and hang forever (see `docs/03-adapters.md` §6) — the run would sit `running` with an empty timeline until the stall guard or timeout fires.
 - On `done` + `auto_publish`: if the branch is ahead it publishes — reusing the task's existing `pr_number` **or** deduping by `head` if a PR already exists, else opening a new PR.
 - Cancelling a resumed run kills the child; because a cancelled run may capture no `session_id`, follow-ups fall back to the latest run that has one.
 
 ## 5. Timeouts (PRD F16)
 
 - Per-task `timeout_minutes`, defaulting to `settings.default_timeout_minutes` (default 30). A daemon **watchdog thread** enforces it: on expiry it kills the child (SIGTERM → 5s grace → SIGKILL) and the run resolves to `timed_out`. A timeout of `0` fires immediately (used in tests).
+- **Stall guard:** a second daemon **stall watchdog** (`STALL_TIMEOUT_SECONDS = 120`) kills the child if the agent process stays alive but emits **no event for 120s** (checked from run start). The run then resolves to `failed` with a diagnostic step ("Agent produced no output for 120s — the agent process hung and was terminated"). This bounds the empty-stream/hang failure mode so no run can sit `running` with an empty timeline indefinitely; the total-budget timeout remains the last line of defence.
 
 ## 6. Cancellation (PRD F3)
 

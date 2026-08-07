@@ -240,6 +240,37 @@ def test_timeout_marks_timed_out(q, session, repo_row, monkeypatch) -> None:
     assert _latest_run(session, task.id).status == "timed_out"
 
 
+def test_stall_marks_failed_with_diagnostic(q, session, repo_row, monkeypatch) -> None:
+    """A process that emits nothing for STALL_TIMEOUT_SECONDS is killed and failed."""
+    _no_publish(session)
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
+
+    class HungProc(FakeProc):
+        pass
+
+    class HungHandle(FakeHandle):
+        def __init__(self) -> None:
+            super().__init__([], "ses_fake")
+            self.proc = HungProc()
+
+        def events(self):
+            while not self.proc.killed:
+                time.sleep(0.02)
+            return
+            yield  # pragma: no cover — makes this a generator
+
+    monkeypatch.setattr("jalebi.queue.STALL_TIMEOUT_SECONDS", 0)
+    _install_adapter(monkeypatch, HungHandle())
+    q._run_task(task.id)
+
+    fresh = _fresh_task(session, task.id)
+    assert fresh.status == "failed"
+    run = _latest_run(session, task.id)
+    assert run.status == "failed"
+    steps = json.loads(run.steps_json or "[]")
+    assert any("no output" in s.get("text", "") for s in steps)
+
+
 def _wait_until(cond, timeout: float = 5.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:

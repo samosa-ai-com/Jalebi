@@ -77,7 +77,21 @@ class OpenCodeAdapter(AgentAdapter):
         prompt: str,
         env: dict[str, str | None] | None = None,
     ) -> RunHandle:
-        args = [_binary(), "run", "--format", "json", "--session", session_id, prompt]
+        # ``--dir`` must match the session's directory: opencode's headless
+        # ``run --session`` produces an empty stream and hangs when resumed from
+        # a different worktree (e.g. a pr_review session created in the review
+        # worktree resumed from the task worktree).
+        args = [
+            _binary(),
+            "run",
+            "--format",
+            "json",
+            "--dir",
+            str(cwd),
+            "--session",
+            session_id,
+            prompt,
+        ]
         return RunHandle(proc=_spawn(args, cwd, env), parse=self.parse)
 
     def parse(self, line: str) -> list[AgentEvent]:

@@ -144,7 +144,9 @@ def test_resume_command_construction(monkeypatch) -> None:
     args = captured["args"]
     assert "--session" in args and args[args.index("--session") + 1] == "ses_abc"
     assert args[-1] == "keep going"
-    assert "--dir" not in args
+    # resume must pass --dir matching the session's worktree, otherwise
+    # opencode's headless --session resume emits nothing and hangs.
+    assert args[args.index("--dir") + 1] == "/tmp/ws"
 
 
 def test_list_models(monkeypatch) -> None:

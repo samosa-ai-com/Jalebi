@@ -289,3 +289,85 @@ def test_followup_without_session_marks_failed(q, session, repo_row) -> None:
     fresh = tasks.get_task(session, task.id)
     assert fresh is not None
     assert fresh.status == "failed"
+
+
+def test_pr_review_followup_resumes_in_review_worktree(
+    q, session, repo_row, monkeypatch, tmp_path
+) -> None:
+    """pr_review sessions live in the review worktree, so follow-ups must resume there."""
+    settings.set_setting(session, "auto_publish", False)
+    task = tasks.create_task(
+        session,
+        type_="pr_review",
+        repo_id=repo_row.id,
+        prompt="review it",
+        prs=[3],
+        context={
+            "prs": [
+                {
+                    "number": 3,
+                    "title": "t",
+                    "body": "b",
+                    "html_url": "u",
+                    "base": "main",
+                    "head": "h",
+                    "state": "open",
+                    "author": "a",
+                }
+            ]
+        },
+    )
+    run = Run(
+        task_id=task.id,
+        seq=1,
+        session_id="ses_orig",
+        status="done",
+        started_at=utcnow(),
+        finished_at=utcnow(),
+    )
+    session.add(run)
+    task.status = "done"
+    session.commit()
+
+    review_wt = tmp_path / "review-wt"
+    review_wt.mkdir(parents=True)
+
+    class ReviewGit:
+        def __init__(self, config):
+            self.config = config
+
+        @staticmethod
+        def worktree_path(data_dir, task_id):
+            return review_wt
+
+        def ensure_mirror(self, *a, **k):
+            return None
+
+        def create_review_worktree(self, *a, **k):
+            return review_wt
+
+        def create_worktree(self, *a, **k):
+            raise AssertionError("pr_review follow-up must resume in the review worktree")
+
+    monkeypatch.setattr("jalebi.queue.GitWorkspace", ReviewGit)
+    monkeypatch.setattr(
+        "jalebi.queue.worktree_bootstrap.bootstrap_worktree", lambda *a, **k: None
+    )
+
+    handle = FakeHandle([AgentEvent(type="done")], session_id="ses_orig")
+    adapter = ResumeAdapter(handle)
+    monkeypatch.setattr("jalebi.queue.get_adapter", lambda cli: adapter)
+
+    q._run_followup(task.id, "more review")
+
+    session.expire_all()
+    fresh = tasks.get_task(session, task.id)
+    assert fresh is not None
+    assert fresh.status == "done"
+    assert len(adapter.resume_calls) == 1
+    call = adapter.resume_calls[0]
+    assert call["cwd"] == str(review_wt)
+    assert call["session_id"] == "ses_orig"
+    fups = tasks.list_followups(session, task.id)
+    assert len(fups) == 1
+    assert fups[0].body == "more review"
