@@ -83,3 +83,16 @@ def test_all_token_values_dedup(cfg: Config, monkeypatch) -> None:
     assert values.count("ghp_a") == 1
     assert "ghp_env" in values
     assert "ghp_primary" in values
+
+
+def test_named_token_metadata(cfg: Config) -> None:
+    secrets.add_github_token(
+        cfg, "work", "ghp_work", meta={"login": "octocat", "token_type": "classic"}
+    )
+    meta = secrets.token_meta(cfg, "work")
+    assert meta is not None
+    assert meta["login"] == "octocat"
+    assert meta["token_type"] == "classic"
+    entry = secrets.list_github_tokens(cfg)[0]
+    assert entry["token"] == "ghp_work"
+    assert entry["login"] == "octocat"

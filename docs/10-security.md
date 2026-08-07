@@ -61,3 +61,9 @@ Remaining risk (documented): a hypothetical full-path `/usr/bin/gh` call inside 
 
 - Named PATs live only in the `0600` `secrets.json`; the API and UI never return token values (only masked previews).
 - All known PATs are added to the ingest masker, so any token echoed by an agent is redacted to `***` everywhere (console, timeline, PR body).
+
+## 11. Multi-account handling
+
+- Each saved PAT is a separate account, but **all** PAT values live only in the `0600` `secrets.json`; API/UI never return raw values (masked previews only).
+- All known PAT values are added to the ingest masker — any token echoed by an agent is redacted everywhere.
+- The per-worktree gh-guard and env hygiene apply identically regardless of which account a task runs under.

@@ -55,9 +55,16 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ token }),
     }),
-  getGithubRepos: () => request<GithubRepo[]>("/api/github/repos"),
-  getGithubContext: (fullName: string) =>
-    request<GithubContext>(`/api/github/context?repo=${encodeURIComponent(fullName)}`),
+  getGithubRepos: (account?: string) =>
+    request<GithubRepo[]>(
+      `/api/github/repos${account ? `?account=${encodeURIComponent(account)}` : ""}`
+    ),
+  getGithubContext: (fullName: string, account?: string) =>
+    request<GithubContext>(
+      `/api/github/context?repo=${encodeURIComponent(fullName)}${
+        account ? `&account=${encodeURIComponent(account)}` : ""
+      }`
+    ),
   getTokens: () => request<TokensResponse>("/api/github/tokens"),
   addToken: (name: string, token: string) =>
     request<{ stored: boolean; name: string }>("/api/github/tokens", {
@@ -84,8 +91,11 @@ export const api = {
       body: JSON.stringify({ prompt, ...opts }),
     }),
   getRepos: () => request<Repo[]>("/api/repos"),
-  connectRepo: (fullName: string) =>
-    request<Repo>("/api/repos", { method: "POST", body: JSON.stringify({ full_name: fullName }) }),
+  connectRepo: (fullName: string, patName?: string) =>
+    request<Repo>("/api/repos", {
+      method: "POST",
+      body: JSON.stringify({ full_name: fullName, pat_name: patName }),
+    }),
   disconnectRepo: (id: number) =>
     request<{ removed: string }>(`/api/repos/${id}`, { method: "DELETE" }),
   pruneRepos: () =>

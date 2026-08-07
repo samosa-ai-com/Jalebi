@@ -18,17 +18,24 @@ def upsert_repo(
     full_name: str,
     default_branch: str,
     clone_url: str,
+    pat_name: str | None = None,
 ) -> tuple[Repo, bool]:
     """Insert or (re)connect a repo by ``full_name``. Returns ``(repo, created)``."""
     row = session.execute(select(Repo).where(Repo.full_name == full_name)).scalar_one_or_none()
     created = row is None
     if row is None:
-        row = Repo(full_name=full_name, default_branch=default_branch, clone_url=clone_url)
+        row = Repo(
+            full_name=full_name,
+            default_branch=default_branch,
+            clone_url=clone_url,
+            pat_name=pat_name,
+        )
         session.add(row)
     else:
         row.default_branch = default_branch
         row.clone_url = clone_url
         row.connected = True  # reconnect
+        row.pat_name = pat_name  # None = the default account
     session.commit()
     return row, created
 
@@ -47,6 +54,7 @@ def repo_to_dict(repo: Repo) -> dict[str, object]:
         "default_branch": repo.default_branch,
         "clone_url": repo.clone_url,
         "connected": repo.connected,
+        "pat_name": repo.pat_name,
         "webhook_registered": repo.webhook_registered,
         "poll_fallback": repo.poll_fallback,
         "check_runs_enabled": repo.check_runs_enabled,

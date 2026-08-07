@@ -285,6 +285,10 @@ def test_github_status_502_when_unreachable(app, monkeypatch) -> None:
 def test_github_repos_502_when_unreachable(app, monkeypatch) -> None:
     import httpx
 
+    from jalebi import secrets
+
+    secrets.store_secret(app.config["JALEBI_CONFIG"], secrets.GITHUB_TOKEN_KEY, "ghp_test")
+
     class BrokenClient:
         def __init__(self, token):
             pass
@@ -297,7 +301,11 @@ def test_github_repos_502_when_unreachable(app, monkeypatch) -> None:
 
     monkeypatch.setattr("jalebi.routes.github.GitHubClient", BrokenClient)
     resp = app.test_client().get("/api/github/repos")
-    assert resp.status_code == 502
+    # A failing account degrades gracefully: 200 with an error entry per account.
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert any("error" in repo for repo in body)
+    assert "connection refused" in body[0]["error"]
 
 
 # -- settings validation ---------------------------------------------------

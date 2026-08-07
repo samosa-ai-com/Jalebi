@@ -50,6 +50,8 @@ class Repo(Base):
     )
     clone_url: Mapped[str] = mapped_column(Text, nullable=False)
     pat_scope: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # the named PAT/account that owns this repo (None = primary/default)
+    pat_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     connected: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=sa.text("1")
     )

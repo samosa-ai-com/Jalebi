@@ -1,5 +1,12 @@
-"""GitHub integration routes: token status, token provisioning, repo listing."""
+"""GitHub integration routes: accounts (PATs), status, repo listing, context.
 
+Every stored PAT is a first-class **account**. The primary token
+(``JALEBI_GITHUB_TOKEN`` / ``github_token``) is the "default" account; each
+named vault token is its own account. Each account has its own live status and
+its own repository list.
+"""
+
+import os
 from dataclasses import asdict
 
 import httpx
@@ -12,46 +19,77 @@ from jalebi.github import GitHubClient, GitHubError, TokenInfo
 bp = Blueprint("github", __name__, url_prefix="/api/github")
 
 
+def _config():
+    return current_app.config["JALEBI_CONFIG"]
+
+
 def _token() -> str | None:
-    config = current_app.config["JALEBI_CONFIG"]
-    return secrets.load_github_token(config)
+    return secrets.load_github_token(_config())
 
 
 def _client(token: str) -> GitHubClient:
     return GitHubClient(token)
 
 
+def _validate(token: str) -> tuple[TokenInfo | None, str | None]:
+    """Return (info, error); ``error`` set when GitHub is unreachable."""
+    client = _client(token)
+    try:
+        return client.validate_token(), None
+    except httpx.HTTPError as exc:
+        return None, f"GitHub unreachable: {exc}"
+    finally:
+        client.close()
+
+
+def _mask_token(token: str) -> str:
+    if len(token) <= 8:
+        return "***"
+    return f"{token[:4]}…{token[-4:]}"
+
+
+def _account_dict(name: str, token: str, *, is_default: bool) -> dict:
+    info, error = _validate(token)
+    if error is not None:
+        return {"name": name, "is_default": is_default, "valid": False, "error": error}
+    assert info is not None
+    base = asdict(info)
+    base.update(
+        {
+            "name": name,
+            "is_default": is_default,
+            "masked": _mask_token(token),
+        }
+    )
+    return base
+
+
 @bp.get("/status")
 def status() -> ResponseReturnValue:
+    """Live status of the primary (default) account."""
     token = _token()
     if not token:
         return jsonify({"valid": False, "error": "no GitHub token configured"}), 409
-    client = _client(token)
-    try:
-        info: TokenInfo = client.validate_token()
-    except httpx.HTTPError as exc:
-        return jsonify({"valid": False, "error": f"GitHub unreachable: {exc}"}), 502
-    finally:
-        client.close()
+    info, error = _validate(token)
+    if error is not None:
+        return jsonify({"valid": False, "error": error}), 502
+    assert info is not None
     return jsonify(asdict(info))
 
 
 @bp.put("/token")
 def set_token() -> ResponseReturnValue:
-    config = current_app.config["JALEBI_CONFIG"]
+    """Replace the primary (default) account's token."""
+    config = _config()
     payload = request.get_json(silent=True)
     token = payload.get("token") if isinstance(payload, dict) else None
     if not token:
         return jsonify({"error": 'expected JSON body {"token": "<PAT>"}'}), 400
 
-    client = _client(token)
-    try:
-        info = client.validate_token()
-    except httpx.HTTPError as exc:
-        return jsonify({"valid": False, "error": f"GitHub unreachable: {exc}"}), 502
-    finally:
-        client.close()
-
+    info, error = _validate(token)
+    if error is not None:
+        return jsonify({"valid": False, "error": error}), 502
+    assert info is not None
     if not info.valid:
         return jsonify({"stored": False, "detail": asdict(info)}), 400
 
@@ -59,28 +97,67 @@ def set_token() -> ResponseReturnValue:
     return jsonify({"stored": True, "detail": asdict(info)})
 
 
+def _explicit_default_token() -> str | None:
+    """The primary token if explicitly configured (env or stored ``github_token``)."""
+    return os.environ.get(secrets.ENV_GITHUB_TOKEN) or secrets.load_secret(
+        _config(), secrets.GITHUB_TOKEN_KEY
+    )
+
+
+def _all_tokens() -> list[tuple[str, str, bool]]:
+    """[(name, token, is_default)] — explicit default account first, then named."""
+    entries: list[tuple[str, str, bool]] = []
+    default_token = _explicit_default_token()
+    if default_token:
+        entries.append(("default", default_token, True))
+    for item in secrets.list_github_tokens(_config()):
+        if item["name"] != "default":
+            entries.append((item["name"], item["token"], False))
+    return entries
+
+
 @bp.get("/repos")
 def repos() -> ResponseReturnValue:
-    token = _token()
-    if not token:
+    """List repositories across ALL accounts, each tagged with its account login.
+
+    ``?account=<name>`` filters to one account. A failing account contributes
+    its repos as an error entry rather than failing the whole page.
+    """
+    entries = _all_tokens()
+    if not entries:
         return jsonify({"error": "no GitHub token configured"}), 409
-    client = _client(token)
-    try:
-        items = client.list_repos()
-    except (httpx.HTTPError, GitHubError) as exc:
-        return jsonify({"error": str(exc)}), 502
-    finally:
-        client.close()
-    return jsonify(items)
+    account = request.args.get("account")
+    if account:
+        entries = [e for e in entries if e[0] == account]
+        if not entries:
+            return jsonify({"error": f"no such account: {account}"}), 404
+
+    results: list[dict] = []
+    for name, token, _is_default in entries:
+        client = _client(token)
+        try:
+            items = client.list_repos()
+            for repo in items:
+                repo["account"] = name
+            results.extend(items)
+        except (httpx.HTTPError, GitHubError) as exc:
+            results.append({"account": name, "error": str(exc)})
+        finally:
+            client.close()
+    return jsonify(results)
 
 
 @bp.get("/context")
 def context() -> ResponseReturnValue:
-    """Return open issues, open PRs and branches for a repo (task-form pickers)."""
+    """Return open issues, open PRs and branches for a repo (task-form pickers).
+
+    Uses the account that owns the repo if known, else the default account.
+    """
     full_name = request.args.get("repo")
     if not full_name or "/" not in full_name:
         return jsonify({"error": 'expected ?repo=owner/name'}), 400
-    token = _token()
+    account = request.args.get("account")
+    token = secrets.resolve_token(_config(), account)
     if not token:
         return jsonify({"error": "no GitHub token configured"}), 409
     client = _client(token)
@@ -100,26 +177,19 @@ def context() -> ResponseReturnValue:
 
 @bp.get("/tokens")
 def list_tokens() -> ResponseReturnValue:
-    """List the named PATs (masked, for the UI dropdowns). Never returns values."""
-    config = current_app.config["JALEBI_CONFIG"]
-    tokens = secrets.list_github_tokens(config)
-    has_legacy = (
-        secrets.load_secret(config, secrets.GITHUB_TOKEN_KEY) is not None
-        or __import__("os").environ.get(secrets.ENV_GITHUB_TOKEN) is not None
-    )
-    default = None if has_legacy else (tokens[0]["name"] if tokens else None)
-    return jsonify(
-        {
-            "default": default,
-            "items": [{"name": t["name"], "masked": _mask_token(t["token"])} for t in tokens],
-        }
-    )
+    """List all accounts (default + named) with live status. Never returns values."""
+    entries = _all_tokens()
+    default_name = "default" if _explicit_default_token() else (entries[0][0] if entries else None)
+    accounts = [
+        _account_dict(name, token, is_default=is_default) for name, token, is_default in entries
+    ]
+    return jsonify({"default": default_name, "accounts": accounts})
 
 
 @bp.post("/tokens")
 def add_token() -> ResponseReturnValue:
-    """Add a named PAT (validated first). Body: {name, token}."""
-    config = current_app.config["JALEBI_CONFIG"]
+    """Add a named account (validated first). Body: {name, token}."""
+    config = _config()
     payload = request.get_json(silent=True)
     name = payload.get("name") if isinstance(payload, dict) else None
     token = payload.get("token") if isinstance(payload, dict) else None
@@ -129,30 +199,34 @@ def add_token() -> ResponseReturnValue:
         return jsonify({"error": 'expected {"name": "<label>", "token": "<PAT>"}'}), 400
     name = name.strip()
 
-    client = _client(token)
-    try:
-        info = client.validate_token()
-    except httpx.HTTPError as exc:
-        return jsonify({"valid": False, "error": f"GitHub unreachable: {exc}"}), 502
-    finally:
-        client.close()
+    info, error = _validate(token)
+    if error is not None:
+        return jsonify({"valid": False, "error": error}), 502
+    assert info is not None
     if not info.valid:
         return jsonify({"stored": False, "detail": asdict(info)}), 400
 
-    secrets.add_github_token(config, name, token)
+    secrets.add_github_token(
+        config,
+        name,
+        token,
+        meta={
+            "login": info.login,
+            "token_type": info.token_type,
+            "granted_scopes": info.granted_scopes,
+            "missing_scopes": info.missing_scopes,
+            "note": info.note,
+        },
+    )
     return jsonify({"stored": True, "name": name, "detail": asdict(info)})
 
 
 @bp.delete("/tokens/<name>")
 def delete_token(name: str) -> ResponseReturnValue:
-    config = current_app.config["JALEBI_CONFIG"]
+    config = _config()
+    if name == "default":
+        return jsonify({"error": "cannot remove the default account"}), 400
     if name not in secrets.token_names(config):
         return jsonify({"error": f"no such token: {name}"}), 404
     secrets.remove_github_token(config, name)
     return jsonify({"removed": name})
-
-
-def _mask_token(token: str) -> str:
-    if len(token) <= 8:
-        return "***"
-    return f"{token[:4]}…{token[-4:]}"

@@ -109,3 +109,43 @@ def test_rerun_running_conflict(client: FlaskClient, repo_id: int) -> None:
 
 def test_publish_not_found(client: FlaskClient) -> None:
     assert client.post("/api/tasks/999/publish").status_code == 404
+
+
+def test_create_task_inherits_repo_pat(app, client, session) -> None:
+    from jalebi import repos, secrets
+
+    secrets.add_github_token(app.config["JALEBI_CONFIG"], "acct-b", "ghp_b")
+    row, _ = repos.upsert_repo(
+        session,
+        full_name="owner/repo",
+        default_branch="main",
+        clone_url="https://github.com/owner/repo.git",
+        pat_name="acct-b",
+    )
+    resp = client.post(
+        "/api/tasks",
+        json={"repo_id": row.id, "type": "freeform", "prompt": "do it"},
+    )
+    assert resp.status_code == 201
+    body = resp.get_json()
+    assert body["pat_name"] == "acct-b"
+
+
+def test_create_task_explicit_pat_overrides_repo(app, client, session) -> None:
+    from jalebi import repos, secrets
+
+    secrets.add_github_token(app.config["JALEBI_CONFIG"], "acct-b", "ghp_b")
+    secrets.add_github_token(app.config["JALEBI_CONFIG"], "acct-c", "ghp_c")
+    row, _ = repos.upsert_repo(
+        session,
+        full_name="owner/repo",
+        default_branch="main",
+        clone_url="https://github.com/owner/repo.git",
+        pat_name="acct-b",
+    )
+    resp = client.post(
+        "/api/tasks",
+        json={"repo_id": row.id, "type": "freeform", "prompt": "do it", "pat_name": "acct-c"},
+    )
+    assert resp.status_code == 201
+    assert resp.get_json()["pat_name"] == "acct-c"

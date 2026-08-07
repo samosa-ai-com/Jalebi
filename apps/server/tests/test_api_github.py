@@ -152,12 +152,24 @@ def test_tokens_list_and_add_remove(client: FlaskClient, app, monkeypatch) -> No
     assert resp.get_json()["stored"] is True
 
     listed = client.get("/api/github/tokens").get_json()
-    assert listed["items"][0]["name"] == "work"
+    assert listed["accounts"][0]["name"] == "work"
+    assert listed["accounts"][0]["login"] == "octocat"
+    assert listed["accounts"][0]["valid"] is True
     assert "ghp_work" not in client.get("/api/github/tokens").get_data(as_text=True)
 
     resp = client.delete("/api/github/tokens/work")
     assert resp.status_code == 200
-    assert client.get("/api/github/tokens").get_json()["items"] == []
+    assert client.get("/api/github/tokens").get_json()["accounts"] == []
+
+
+def test_tokens_default_account_listed_first(client: FlaskClient, app, monkeypatch) -> None:
+    secrets.store_secret(app.config["JALEBI_CONFIG"], secrets.GITHUB_TOKEN_KEY, "ghp_default")
+    monkeypatch.setattr(routes_github, "GitHubClient", FakeClient)
+
+    listed = client.get("/api/github/tokens").get_json()
+    assert listed["default"] == "default"
+    assert listed["accounts"][0]["name"] == "default"
+    assert listed["accounts"][0]["is_default"] is True
 
 
 def test_add_token_invalid_rejected(client: FlaskClient, monkeypatch) -> None:
@@ -180,3 +192,44 @@ def test_add_token_invalid_rejected(client: FlaskClient, monkeypatch) -> None:
 def test_add_token_missing_fields(client: FlaskClient) -> None:
     resp = client.post("/api/github/tokens", json={"name": "work"})
     assert resp.status_code == 400
+
+
+def test_repos_tagged_by_account(client: FlaskClient, app, monkeypatch) -> None:
+    secrets.store_secret(app.config["JALEBI_CONFIG"], secrets.GITHUB_TOKEN_KEY, "ghp_default")
+    secrets.add_github_token(app.config["JALEBI_CONFIG"], "work", "ghp_work")
+
+    class MultiClient:
+        def __init__(self, token: str):
+            self.token = token
+
+        def list_repos(self):
+            if self.token == "ghp_work":
+                return [
+                    {
+                        "full_name": "acct2/other",
+                        "private": True,
+                        "default_branch": "main",
+                        "clone_url": "u2",
+                        "html_url": "h2",
+                    }
+                ]
+            return [
+                {
+                    "full_name": "acct1/hello",
+                    "private": False,
+                    "default_branch": "main",
+                    "clone_url": "u1",
+                    "html_url": "h1",
+                }
+            ]
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(routes_github, "GitHubClient", MultiClient)
+    body = client.get("/api/github/repos").get_json()
+    by_account = {r["full_name"]: r.get("account") for r in body}
+    assert by_account == {"acct1/hello": "default", "acct2/other": "work"}
+
+    only_work = client.get("/api/github/repos?account=work").get_json()
+    assert [r["full_name"] for r in only_work] == ["acct2/other"]

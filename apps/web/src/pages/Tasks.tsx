@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import { StatusBadge } from "../components/StatusBadge";
-import type { GithubContext, Repo, Task, TokenItem } from "../types";
+import type { Account, GithubContext, Repo, Task } from "../types";
 
 function repoName(repos: Repo[], id: number): string {
   return repos.find((r) => r.id === id)?.full_name ?? `repo#${id}`;
@@ -75,11 +75,11 @@ function Select({
 
 function CreateTask({
   repos,
-  tokens,
+  accounts,
   onCreated,
 }: {
   repos: Repo[];
-  tokens: TokenItem[];
+  accounts: Account[];
   onCreated: () => void;
 }) {
   const [repoId, setRepoId] = useState<number>(0);
@@ -98,6 +98,17 @@ function CreateTask({
 
   const effectiveRepoId = repoId || repos[0]?.id || 0;
   const repo = repoById(repos, effectiveRepoId);
+
+  function accountLabel(name: string | null | undefined): string {
+    if (!name) return "Default account";
+    return accounts.find((a) => a.name === name)?.login ?? name;
+  }
+
+  function selectRepo(id: number) {
+    setRepoId(id);
+    const r = repoById(repos, id);
+    setPatName(r?.pat_name ?? "");
+  }
 
   useEffect(() => {
     api
@@ -193,13 +204,28 @@ function CreateTask({
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <Select label="Repository" value={effectiveRepoId} onChange={(v) => setRepoId(Number(v))}>
-          {repos.map((r) => (
-            <option key={r.id} value={r.id}>
-              {r.full_name}
-            </option>
-          ))}
-        </Select>
+        <label className="block">
+          <span className="mb-1.5 block text-xs font-medium text-ink-400">Repository</span>
+          <select value={effectiveRepoId} onChange={(e) => selectRepo(Number(e.target.value))} className="field">
+            {(() => {
+              const groups = new Map<string, Repo[]>();
+              for (const r of repos) {
+                const key = r.pat_name ?? "__default__";
+                if (!groups.has(key)) groups.set(key, []);
+                groups.get(key)!.push(r);
+              }
+              return [...groups.entries()].map(([key, list]) => (
+                <optgroup key={key} label={accountLabel(key === "__default__" ? null : key)}>
+                  {list.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.full_name}
+                    </option>
+                  ))}
+                </optgroup>
+              ));
+            })()}
+          </select>
+        </label>
         <Select label="Task type" value={type} onChange={setType}>
           {TASK_TYPES.map((t) => (
             <option key={t.value} value={t.value}>
@@ -286,9 +312,9 @@ function CreateTask({
           onChange={setPatName}
           placeholder="Default"
         >
-          {tokens.map((t) => (
-            <option key={t.name} value={t.name}>
-              {t.name} ({t.masked})
+          {accounts.map((a) => (
+            <option key={a.name} value={a.name}>
+              {a.login ?? a.name} ({a.masked})
             </option>
           ))}
         </Select>
@@ -357,7 +383,7 @@ function GhLink({
 export default function Tasks() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [repos, setRepos] = useState<Repo[]>([]);
-  const [tokens, setTokens] = useState<TokenItem[]>([]);
+  const [accounts, setAccounts] = useState<Account[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterId>("all");
   const [query, setQuery] = useState("");
@@ -376,7 +402,7 @@ export default function Tasks() {
       .catch(() => {});
     api
       .getTokens()
-      .then((t) => setTokens(t.items ?? []))
+      .then((t) => setAccounts(t.accounts ?? []))
       .catch(() => {});
   }, []);
 
@@ -459,7 +485,7 @@ export default function Tasks() {
         ))}
       </div>
 
-      <CreateTask repos={repos} tokens={tokens} onCreated={load} />
+      <CreateTask repos={repos} accounts={accounts} onCreated={load} />
 
       {error && <p className="text-sm text-red-400">{error}</p>}
 

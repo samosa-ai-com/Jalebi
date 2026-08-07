@@ -46,24 +46,37 @@ def load_secret(config: Config, key: str) -> str | None:
 
 
 def list_github_tokens(config: Config) -> list[dict[str, str]]:
-    """Return the named PATs as ``[{"name": ..., "token": ...}, ...]``."""
+    """Return the named PATs as ``[{"name": ..., "token": ..., ...}]``."""
     data = _load(config)
     raw = data.get(GITHUB_TOKENS_KEY) or []
-    return [
-        {"name": str(item.get("name")), "token": str(item.get("token"))}
-        for item in raw
-        if isinstance(item, dict) and item.get("name") and item.get("token")
-    ]
+    out: list[dict[str, str]] = []
+    for item in raw:
+        if not isinstance(item, dict) or not item.get("name") or not item.get("token"):
+            continue
+        entry = {
+            "name": str(item["name"]),
+            "token": str(item["token"]),
+        }
+        for key in ("login", "token_type", "granted_scopes", "missing_scopes", "note"):
+            if key in item:
+                entry[key] = item[key]
+        out.append(entry)
+    return out
 
 
-def add_github_token(config: Config, name: str, token: str) -> None:
-    """Add (or replace, by name) a named PAT."""
+def add_github_token(
+    config: Config, name: str, token: str, meta: dict | None = None
+) -> None:
+    """Add (or replace, by name) a named PAT, optionally with account metadata."""
     data = _load(config)
     tokens = data.get(GITHUB_TOKENS_KEY) or []
     if not isinstance(tokens, list):
         tokens = []
     tokens = [t for t in tokens if not (isinstance(t, dict) and t.get("name") == name)]
-    tokens.append({"name": name, "token": token})
+    entry: dict = {"name": name, "token": token}
+    if meta:
+        entry.update(meta)
+    tokens.append(entry)
     data[GITHUB_TOKENS_KEY] = tokens
     _store(config, data)
 
@@ -79,6 +92,13 @@ def remove_github_token(config: Config, name: str) -> None:
 
 def token_names(config: Config) -> list[str]:
     return [t["name"] for t in list_github_tokens(config)]
+
+
+def token_meta(config: Config, name: str) -> dict[str, str] | None:
+    for item in list_github_tokens(config):
+        if item["name"] == name:
+            return item
+    return None
 
 
 def get_named_token(config: Config, name: str) -> str | None:

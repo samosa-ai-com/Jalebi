@@ -170,3 +170,27 @@ def test_reconnect_404_upstream(client: FlaskClient, app, monkeypatch) -> None:
     # repo the client doesn't know to hit the 404 path.
     resp = client.post("/api/repos/999/reconnect")
     assert resp.status_code == 404
+
+
+def test_connect_with_pat_name(client: FlaskClient, app, monkeypatch) -> None:
+    from jalebi import secrets as sec
+
+    sec.store_secret(app.config["JALEBI_CONFIG"], sec.GITHUB_TOKEN_KEY, "ghp_default")
+    sec.add_github_token(app.config["JALEBI_CONFIG"], "work", "ghp_work")
+    monkeypatch.setattr(routes_repos, "GitHubClient", FakeGitHubClient)
+
+    resp = client.post("/api/repos", json={"full_name": "octocat/hello", "pat_name": "work"})
+    assert resp.status_code == 201
+    body = resp.get_json()
+    assert body["pat_name"] == "work"
+
+    listed = client.get("/api/repos").get_json()
+    assert listed[0]["pat_name"] == "work"
+
+
+def test_connect_unknown_pat_rejected(client: FlaskClient, app) -> None:
+    from jalebi import secrets as sec
+
+    sec.store_secret(app.config["JALEBI_CONFIG"], sec.GITHUB_TOKEN_KEY, "ghp_default")
+    resp = client.post("/api/repos", json={"full_name": "octocat/hello", "pat_name": "nope"})
+    assert resp.status_code == 400

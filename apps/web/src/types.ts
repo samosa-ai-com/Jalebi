@@ -63,6 +63,7 @@ export interface Repo {
   default_branch: string;
   clone_url: string;
   connected: boolean;
+  pat_name: string | null;
   webhook_registered: boolean;
   poll_fallback: boolean;
   check_runs_enabled: boolean;
@@ -96,6 +97,8 @@ export interface GithubRepo {
   default_branch: string | null;
   clone_url: string;
   html_url: string;
+  account?: string | null;
+  error?: string;
 }
 
 export interface GithubIssue {
@@ -121,14 +124,22 @@ export interface GithubContext {
   branches: string[];
 }
 
-export interface TokenItem {
+export interface Account {
   name: string;
+  is_default?: boolean;
+  login: string | null;
   masked: string;
+  token_type: string | null;
+  granted_scopes: string[];
+  missing_scopes: string[];
+  note: string | null;
+  valid: boolean;
+  error: string | null;
 }
 
 export interface TokensResponse {
   default: string | null;
-  items: TokenItem[];
+  accounts: Account[];
 }
 
 export interface SettingsMap {

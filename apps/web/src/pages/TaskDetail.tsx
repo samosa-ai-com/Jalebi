@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, taskEvents } from "../api/client";
 import { StatusBadge } from "../components/StatusBadge";
-import type { Artifact, Followup, Repo, Run, SseEvent, Task, TokenItem } from "../types";
+import type { Account, Artifact, Followup, Repo, Run, SseEvent, Task } from "../types";
 
 const TERMINAL = new Set(["done", "failed", "timed_out", "cancelled", "needs_approval", "interrupted"]);
 
@@ -128,13 +128,13 @@ function extOf(path: string): string {
 function FollowUpComposer({
   task,
   followups,
-  tokens,
+  accounts,
   models,
   onSent,
 }: {
   task: Task;
   followups: Followup[];
-  tokens: TokenItem[];
+  accounts: Account[];
   models: string[];
   onSent: () => void;
 }) {
@@ -176,9 +176,9 @@ function FollowUpComposer({
             <span className="mb-1.5 block text-xs font-medium text-ink-400">Credentials</span>
             <select value={patName} onChange={(e) => setPatName(e.target.value)} className="field">
               <option value="">Default</option>
-              {tokens.map((t) => (
-                <option key={t.name} value={t.name}>
-                  {t.name} ({t.masked})
+              {accounts.map((a) => (
+                <option key={a.name} value={a.name}>
+                  {a.login ?? a.name} ({a.masked})
                 </option>
               ))}
             </select>
@@ -311,7 +311,7 @@ export default function TaskDetail() {
   const [task, setTask] = useState<Task | null>(null);
   const [runs, setRuns] = useState<Run[]>([]);
   const [repos, setRepos] = useState<Repo[]>([]);
-  const [tokens, setTokens] = useState<TokenItem[]>([]);
+  const [accounts, setAccounts] = useState<Account[]>([]);
   const [models, setModels] = useState<string[]>([]);
   const [live, setLive] = useState<SseEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -350,7 +350,7 @@ export default function TaskDetail() {
       })
       .catch(() => {});
     api.getRepos().then(setRepos).catch(() => {});
-    api.getTokens().then((t) => setTokens(t.items ?? [])).catch(() => {});
+    api.getTokens().then((t) => setAccounts(t.accounts ?? [])).catch(() => {});
     api.getModels().then((m) => setModels(m.models ?? [])).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [taskId]);
@@ -442,7 +442,7 @@ export default function TaskDetail() {
           {task.pat_name && (
             <>
               <span className="mx-1.5 text-ink-700">·</span>
-              {task.pat_name}
+              {accounts.find((a) => a.name === task.pat_name)?.login ?? task.pat_name}
             </>
           )}
         </span>
@@ -524,7 +524,7 @@ export default function TaskDetail() {
         <FollowUpComposer
           task={task}
           followups={task.followups ?? []}
-          tokens={tokens}
+          accounts={accounts}
           models={models}
           onSent={() => {
             load();

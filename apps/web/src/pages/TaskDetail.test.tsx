@@ -88,7 +88,7 @@ describe("TaskDetail", () => {
         return { ok: true, json: async () => task };
       }
       if (url.includes("/api/github/tokens")) {
-        return { ok: true, json: async () => ({ default: null, items: [] }) };
+        return { ok: true, json: async () => ({ default: null, accounts: [] }) };
       }
       if (url.includes("/api/models")) {
         return { ok: true, json: async () => ({ cli: "opencode", models: ["m1"] }) };
@@ -230,7 +230,7 @@ describe("TaskDetail", () => {
         return { ok: true, json: async () => doneTask };
       }
       if (url.includes("/api/github/tokens")) {
-        return { ok: true, json: async () => ({ default: null, items: [] }) };
+        return { ok: true, json: async () => ({ default: null, accounts: [] }) };
       }
       if (url.includes("/api/models")) {
         return { ok: true, json: async () => ({ cli: "opencode", models: ["m1"] }) };

@@ -102,3 +102,12 @@ Planned capabilities (later phases): issues, PRs (create/update/comment/review),
 - Before `create_pr`, Jalebi calls `find_pr_by_head(full_name, "jalebi/<taskId>")` (state=all, same-repo head) and **reuses** any existing PR — so an agent-created PR can never produce a duplicate, and cross-repo fork PRs (e.g. the personal-account fork that caused task #14's duplicate) are ignored.
 - PR title/body come from the agent-written `.jalebi/pr.md` (title + actual-implementation description), falling back to the prompt. `Closes #N` + Jalebi footer + `Co-authored-by` are appended. `issue_fix` tasks get an **issue comment** linking the PR.
 - GitHub PR review comments are posted with `event: "COMMENT"` only — Jalebi never approves or merges.
+
+## 11. Multi-account model (each PAT = an account)
+
+- Every saved PAT is a first-class **account**. The primary token (`JALEBI_GITHUB_TOKEN` / `github_token`) is the **default** account; each named vault entry is its own account.
+- `GET /api/github/tokens` → `{default, accounts:[...]}` with **live validation** per account (`login`, `token_type`, scopes, valid/error) — one `/user` call each on load.
+- `GET /api/github/repos` lists repos **across all accounts**, each tagged `account: <name>` (`?account=` filters). A failing account contributes an `{account, error}` entry, not a page failure.
+- `repos.pat_name` records which account owns a connected repo. `connect_repo` accepts `pat_name`; `prune`/`branches` resolve each repo's token from its `pat_name` (fallback = primary). Reconnecting a repo without a `pat_name` clears it back to the default account.
+- Task creation **inherits** the selected repo's account (`tasks.pat_name` defaults to `repo.pat_name`); the Credentials dropdown still overrides.
+- Removing an account falls back to the primary for its connected repos (nothing breaks).

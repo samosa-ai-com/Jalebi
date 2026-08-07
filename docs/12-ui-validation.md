@@ -267,3 +267,9 @@ Backend `178` pytest + `15` web vitest pass; ruff/typecheck/eslint clean; `npm r
 - Close PR **#2** (the fork PR `example-owner:jalebi/14`) and delete the `example-owner/example-fork` fork from your personal account — Jalebi can't touch personal-account resources.
 - Re-run W1/W2/W8 and the new picker flows to confirm end-to-end.
 
+
+### Multi-account (owner feedback: "Saved PAT vs connection status should be the same thing")
+
+- **FIXED — each saved PAT is now a first-class account.** The GitHub page shows one **Accounts** list: the default account (primary token) plus every named PAT, each with its own live status (login, token type, scopes), masked token, remove, and its **own repository list** with Connect/Disconnect. Add a second account's PAT and its repos appear alongside the default's.
+- **FIXED — repos from any account, in any task.** The task form's repository dropdown is **grouped by account**; picking a repo pre-fills the Credentials with that account (overridable). A task inherits the selected repo's account automatically.
+- **FIXED — per-account git/GitHub ops.** Connected repos remember their account (`repos.pat_name`); the task's git credentials, GitHub calls, PR, review, issue comment, and pruning all use that account's token (fallback to primary if the account is removed).

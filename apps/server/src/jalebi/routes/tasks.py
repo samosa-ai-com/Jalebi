@@ -41,7 +41,12 @@ def _masker(session) -> Callable[[str], str]:
 
 
 def _fetch_context(
-    session, repo_id: int, type_: str, issue_number: int | None, pr_number: int | None
+    session,
+    repo_id: int,
+    type_: str,
+    issue_number: int | None,
+    pr_number: int | None,
+    pat_name: str | None = None,
 ):
     """Fetch issue/PR context from GitHub for structured task types (masked)."""
     if type_ not in ("issue_fix", "pr_review"):
@@ -50,7 +55,7 @@ def _fetch_context(
     repo = session.get(db.Repo, repo_id)
     if repo is None:
         raise ValueError("repo not found")
-    token = secrets.resolve_token(config, None)
+    token = secrets.resolve_token(config, pat_name)
     if token is None:
         raise ValueError("no GitHub token configured")
     masker = _masker(session)
@@ -125,11 +130,6 @@ def create_task() -> ResponseReturnValue:
     if type_ == "pr_review" and pr_number is None:
         return jsonify({"error": "pr_number is required for pr_review tasks"}), 400
 
-    try:
-        context = _fetch_context(session, repo_id, type_, issue_number, pr_number)
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
-
     pat_name = payload.get("pat_name")
     if pat_name is not None and pat_name not in secrets.token_names(config):
         return jsonify({"error": f"unknown PAT: {pat_name}"}), 400
@@ -142,6 +142,16 @@ def create_task() -> ResponseReturnValue:
     if target_branch is None or not str(target_branch):
         target_branch = repo.default_branch if repo else "main"
 
+    # A task inherits the account that owns the selected repo unless overridden.
+    effective_pat = pat_name or (repo.pat_name if repo is not None else None)
+
+    try:
+        context = _fetch_context(
+            session, repo_id, type_, issue_number, pr_number, pat_name=effective_pat
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
     try:
         task = tasks.create_task(
             session,
@@ -152,7 +162,7 @@ def create_task() -> ResponseReturnValue:
             target_branch=str(target_branch),
             model=payload.get("model"),
             cli=cli,
-            pat_name=pat_name,
+            pat_name=effective_pat,
             issues=[int(issue_number)] if issue_number is not None else None,
             prs=[int(pr_number)] if pr_number is not None else None,
             context=context,
