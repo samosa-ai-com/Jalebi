@@ -1,5 +1,6 @@
 """Flask application factory and CLI entrypoint."""
 
+import hmac
 import logging
 import re
 from pathlib import Path
@@ -58,6 +59,33 @@ def _serve_spa(web_dist: Path, filename: str) -> ResponseReturnValue:
     return send_from_directory(web_dist, "index.html")
 
 
+def _basic_auth_gate() -> ResponseReturnValue | None:
+    """Require Basic auth on everything except /api/health when a password is set.
+
+    PRD §F13: an optional UI password (``JALEBI_PASSWORD``) protects the app if it
+    is ever exposed via a tunnel. Localhost-only installs leave it unset → no gate.
+    The username is ignored (any user with the password passes); the password is
+    compared in constant time to avoid a timing side channel.
+    """
+    password = current_app.config["JALEBI_CONFIG"].password
+    if not password:
+        return None
+    if request.path == "/api/health":
+        return None
+    auth = request.authorization
+    if (
+        auth is not None
+        and auth.password is not None
+        and hmac.compare_digest(auth.password.encode(), password.encode())
+    ):
+        return None
+    return (
+        jsonify({"error": "authentication required"}),
+        401,
+        {"WWW-Authenticate": 'Basic realm="Jalebi"'},
+    )
+
+
 def create_app(config: Config | None = None) -> Flask:
     """Create and configure the Jalebi Flask application."""
     if config is None:
@@ -81,6 +109,8 @@ def create_app(config: Config | None = None) -> Flask:
         session = g.pop("_db_session", None)
         if session is not None:
             session.close()
+
+    app.before_request(_basic_auth_gate)
 
     @app.get("/api/health")
     def health() -> Response:

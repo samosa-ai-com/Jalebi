@@ -18,7 +18,7 @@ class AgentAdapter:
     name: str
     def list_models(self) -> list[str]                          # models the CLI can use
     def start(self, cwd, prompt, model=None, env=None) -> RunHandle
-    def resume(self, cwd, session_id, prompt) -> RunHandle
+    def resume(self, cwd, session_id, prompt, model=None) -> RunHandle
     def parse(self, line: str) -> list[AgentEvent]              # normalize CLI output → AgentEvent
 
 @dataclass
@@ -49,7 +49,7 @@ Registry (`src/jalebi/adapters/__init__.py`): `get_adapter(cli)`. `agent.cli` se
 
 | CLI | Start a new task | Resume (follow-up) | Structured output | Model flag |
 |-----|------------------|--------------------|-------------------|------------|
-| **opencode** (v1.18) | `opencode run --dir <ws> --format json [--model <m>] <prompt>` | `opencode run --dir <ws> --session <sessionId> --format json <prompt>` | `--format json` — newline-delimited events (see mapping below) | `-m/--model provider/model` |
+| **opencode** (v1.18) | `opencode run --dir <ws> --format json [--model <m>] <prompt>` | `opencode run --dir <ws> --session <sessionId> --format json [--model <m>] <prompt>` | `--format json` — newline-delimited events (see mapping below) | `-m/--model provider/model` |
 | **codex** (later) | `codex exec --json [--model <m>] "<prompt>"` | `codex exec resume <session_id> "<prompt>"` | `--json`; `--output-schema` for structured findings | `-m/--model` (or `config.toml`) |
 | **claude** (later) | `claude -p "<prompt>" --output-format stream-json --verbose [--model <m>]` | `claude -p "<prompt>" --resume <session_id> --output-format stream-json` | `--output-format stream-json` (`init.session_id` + typed events) | `--model` |
 
@@ -70,7 +70,7 @@ Real `--format json` top-level `type` values and the adapter mapping (field is *
 
 ## 6. Known adapter quirks (document in code + README)
 
-- **opencode:** resuming keeps the session's original model unless `--model` is passed on resume (supported). `--fork` can fork instead of continuing. `OPENCODE_DISABLE_AUTOUPDATE=1` is set on spawn.
+- **opencode:** resuming keeps the session's original model unless `--model` is passed on resume (supported). The adapter's `resume(…, model=…)` appends `--model` when set, so the follow-up Model dropdown is honored. `--fork` can fork instead of continuing. `OPENCODE_DISABLE_AUTOUPDATE=1` is set on spawn.
 - **opencode (spawn quirk, observed):** `opencode run --session <id>` **stalls with an empty stream when exec'd directly** by `subprocess.Popen` (the agent loop exits immediately after step 1), but runs correctly when spawned through a shell. The adapter therefore wraps every command in `/bin/bash -c 'cd <worktree> && exec opencode …'` (arguments are `shlex`-quoted). `--dir` starts are unaffected by the direct-spawn bug but use the same wrapper for consistency.
 - **opencode (resume directory mismatch, observed Aug 2026):** headless `opencode run --session <id>` **hangs forever when resumed from a different worktree than the one the session was created in** — the model stream comes back empty, opencode logs `exiting loop`, and the process never exits. `resume` therefore passes `--dir <cwd>` (parity with `start`) **and** Jalebi always resumes from the session's own worktree: pr_review sessions live in the review worktree (`ws/task-<id>-review`, detached at the PR head), so `_run_followup` runs pr_review follow-ups there rather than in the task worktree. This is a hard requirement, not a nicety — resuming from the wrong worktree silently produces a run that stays `running` with an empty timeline (see `docs/06-task-queue.md` §4 for the stall guard that bounds it anyway).
 - **codex:** **on resume, the model/reasoning-effort cannot be changed** — the resumed session retains the original run's settings. Model changes on follow-ups must start a fresh run or be surfaced in the UI.
@@ -94,8 +94,9 @@ Real `--format json` top-level `type` values and the adapter mapping (field is *
 - Per-task default: the adapter's configured default.
 - A catalog agent may pin a model.
 - UI shows the model used per task/run; follow-ups reuse the run's model by default but allow override where the CLI permits it (see §6 quirks).
-## 5. Agent subprocess environment
+
+## 9. Agent subprocess environment
 
 - `start`/`resume` accept an `env` dict; `None` values **remove** the key from the inherited environ (used to strip `GH_TOKEN`/`GITHUB_TOKEN`).
-- The queue builds the env via `_build_agent_env(token)`: owner-PAT git creds (`GIT_CONFIG_*`), `GIT_AUTHOR_*`/`GIT_COMMITTER_*` = `Jalebi <jalebi@localhost>`, `JALEBI_GITHUB_TOKEN`, and the `gh`-neutralization vars above.
+- The queue builds the env via `_build_agent_env(token)`: owner-PAT git creds (`GIT_CONFIG_*`), `GIT_AUTHOR_*`/`GIT_COMMITTER_*` = `Jalebi <jalebi@localhost>`, `JALEBI_GITHUB_TOKEN`, and the `gh`-neutralization vars above. Inherited `GIT_CONFIG_*`/`GIT_DIR` state is stripped and `GIT_CONFIG_NOSYSTEM=1`/`GIT_CONFIG_GLOBAL=/dev/null` are pinned, so the parent shell's git config cannot hijack or redirect the agent's git.
 - `resume` now forwards `env` too (previously dropped it) — follow-ups get the same credentials/guards as the original run.

@@ -6,7 +6,7 @@
 
 ## 1. Storage layout
 
-- **SQLite** via SQLAlchemy 2.0 (`jalebi.db`), migrations via **Alembic** (`jalebi/migrations/`).
+- **SQLite** via SQLAlchemy 2.0 (`jalebi/db.py`), migrations via **Alembic** (`jalebi/migrations/`).
 - Data dir (default `~/.jalebi/`, override `JALEBI_DATA_DIR`):
   - `data.db` — the SQLite database.
   - `secrets.json` — PAT + secrets, `0600` permissions (added with the GitHub client).
@@ -25,8 +25,10 @@
 | `id` | int PK | |
 | `full_name` | text UNIQUE | `owner/repo` |
 | `default_branch` | text, default `'main'` | |
-| `clone_url` | text | |
+| `clone_url` | text | never exposed via the API |
 | `pat_scope` | text null | granted scopes snapshot |
+| `pat_name` | text null | the account that owns this repo (`null` = default) |
+| `connected` | bool, default 1 | soft-disconnect flag |
 | `webhook_registered` | bool, default 0 | |
 | `poll_fallback` | bool, default 0 | |
 | `check_runs_enabled` | bool, default 0 | |
@@ -44,6 +46,10 @@
 | `agent_id` | text null | catalog agent slug — **no FK yet**; FK added in Phase 1 |
 | `model` | text null | |
 | `cli` | text null | backend override |
+| `pat_name` | text null | account override (`null`/`"default"` = default account) |
+| `issues_json` | text null | JSON list of linked issue numbers |
+| `prs_json` | text null | JSON list of PR numbers (review tasks) |
+| `context_json` | text null | masked issue/PR context embedded into the agent brief |
 | `prompt` | text | instructions |
 | `status` | text CHECK, default `'queued'` | `queued` \| `running` \| `waiting_review` \| `needs_approval` \| `done` \| `failed` \| `timed_out` \| `interrupted` \| `cancelled` |
 | `timeout_minutes` | int, default 30 | |
@@ -65,11 +71,14 @@ Indexes: `repo_id`, `status`.
 | `session_id` | text null | CLI session id (for resume) |
 | `cli` | text null | |
 | `model` | text null | |
+| `pat_name` | text null | account the run used |
+| `pid` | int null | agent child pid (for crash recovery) |
 | `started_at` | datetime null | |
 | `finished_at` | datetime null | |
 | `status` | text null | |
 | `steps_json` | text null | timeline steps (cache) |
 | `artifacts_json` | text null | artifact refs (cache; relational `artifacts` is the primary record) |
+| `diff_text` | text null | run-end diff snapshot (masked, ≤512 KB; PRD §12) |
 
 Index: `task_id`.
 
@@ -81,6 +90,8 @@ Index: `task_id`.
 | `task_id` | int FK → tasks | |
 | `run_id` | int null FK → runs | |
 | `body` | text | |
+| `pat_name` | text null | account override for the resume |
+| `model` | text null | model override for the resume |
 | `created_at` | datetime | |
 
 Index: `task_id`.
@@ -106,7 +117,7 @@ Index: `run_id`.
 | `key` | text PK | |
 | `value` | text | JSON-encoded |
 
-Settings keys (defaults in `jalebi/settings.py`): `concurrency` (4), `auto_publish` (true), `ntfy_topic` (""), `default_timeout_minutes` (30), `retry_policy` (`{"auto_retry": false}`), `secret_patterns` (`[]`), `artifact_ttl_days` (7). Missing keys fall back to the code defaults; stored values override.
+Settings keys (defaults in `jalebi/settings.py`): `concurrency` (4), `auto_publish` (true), `ntfy_topic` (""), `ntfy_url` (""), `default_timeout_minutes` (30), `retry_policy` (`{"auto_retry": false}`), `secret_patterns` (`[]`), `artifact_ttl_days` (7), `agent_cli` (`"opencode"`). Missing keys fall back to the code defaults; stored values override.
 
 ## 3. Relationships (Phase 0)
 

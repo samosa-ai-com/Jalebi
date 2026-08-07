@@ -61,8 +61,8 @@ This is critical and repeated: **all GitHub interaction in this project goes thr
 ### 3.1 The credentials
 
 - **Primary PAT — `JALEBI_GITHUB_TOKEN`** (the owner's personal access token), stored **locally**:
-  - While developing: in the git-ignored **`.env`** file at the repo root (see `.env.example` for the key name and required scopes).
-  - At runtime: Jalebi moves it into `<data-dir>/secrets.json` with `0600` permissions (PRD §F1) and all GitHub calls go through the thin httpx GitHub client using it.
+  - While developing/testing: in the git-ignored **`.env`** file at the repo root (see `.env.example` for the key name and required scopes).
+  - At runtime: the **stored** token in `<data-dir>/secrets.json` (`0600`) is the **source of truth** (PRD §F1: "user supplies a PAT in Settings") and all GitHub calls go through the thin httpx GitHub client using it. `JALEBI_GITHUB_TOKEN` is a **test/bootstrap fallback** — it never overrides a stored token and is no longer mirrored into the store at startup.
 - **Named PAT vault:** Jalebi also stores a list of **named PATs** in the same `0600` secrets file. Tasks and follow-ups can pick which PAT to use (default = the primary). All PATs are masked everywhere.
 
 ### 3.2 How agents must use it
@@ -106,6 +106,7 @@ This is critical and repeated: **all GitHub interaction in this project goes thr
 | `docs/10-security.md` | Localhost binding, secrets, masking, sandboxing, threat notes. | Security-related changes. |
 | `docs/11-reliability.md` | Restart recovery, live concurrency, settings live-vs-startup, hardening. | Reliability/ops changes. |
 | `docs/12-ui-validation.md` | Manual UI QA checklist for every implemented feature. | Feature/UI behavior changes. |
+| `docs/13-phase0-review.md` | Comprehensive Phase 0 code review (logic, security, PRD compliance). | Post-review follow-up changes. |
 
 **If you add a doc file, add it to this table.**
 
@@ -137,7 +138,8 @@ Jalebi/
 │   ├── 09-testing.md
 │   ├── 10-security.md
 │   ├── 11-reliability.md
-│   └── 12-ui-validation.md
+│   ├── 12-ui-validation.md
+│   └── 13-phase0-review.md
 ├── apps/
 │   ├── server/                    # Flask orchestrator (Python 3.13, uv)
 │   │   ├── pyproject.toml         # uv project; `jalebi` console script → jalebi.app:main

@@ -28,6 +28,7 @@ class Config:
     host: str = "127.0.0.1"
     port: int = 3456
     data_dir: Path = field(default_factory=lambda: Path.home() / ".jalebi")
+    password: str = ""
 
     @property
     def db_url(self) -> str:
@@ -63,4 +64,9 @@ def load_config() -> Config:
         host=os.environ.get("JALEBI_HOST", "127.0.0.1"),
         port=port,
         data_dir=Path(os.environ.get("JALEBI_DATA_DIR") or Path.home() / ".jalebi"),
+        # Optional UI password (PRD §F13): gate the API + SPA behind Basic auth
+        # when the app might be exposed via a tunnel. Localhost-only default: off.
+        password=os.environ.get("JALEBI_PASSWORD")
+        or os.environ.get("OPENCODE_SERVER_PASSWORD")
+        or "",
     )

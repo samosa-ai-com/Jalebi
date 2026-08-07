@@ -117,6 +117,10 @@ export function taskEvents(
   onEvent: (event: SseEvent) => void,
   onEnd: () => void
 ): () => void {
+  // Native EventSource cannot send custom headers: when JALEBI_PASSWORD is set,
+  // this relies on the browser's cached Basic credentials (from the initial
+  // prompt) being attached to the same-origin request. If creds are missing, the
+  // stream 401s and closes — reload the page to re-prompt.
   const source = new EventSource(`/api/tasks/${taskId}/events`);
   source.onmessage = (message) => {
     let event: SseEvent;

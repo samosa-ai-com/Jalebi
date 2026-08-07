@@ -7,21 +7,23 @@
 ## 1. Localhost binding (PRD §F13)
 
 - Server binds to **127.0.0.1** only.
-- Optional UI password (env `JALEBI_PASSWORD` or `OPENCODE_SERVER_PASSWORD` reuse).
+- **Implemented:** optional UI password — when `JALEBI_PASSWORD` (or `OPENCODE_SERVER_PASSWORD`) is set, every route except `/api/health` requires **Basic auth** (`WWW-Authenticate: Basic`; the browser prompts once, then sends credentials on same-origin API/SSE calls). Off by default; intended for tunnel exposure.
 - If the app is ever exposed (tunnel), require the UI password and document the risk.
 
 ## 2. Secrets (PRD §F1, §F13)
 
 - PAT stored with `0600` permissions in `<data-dir>/secrets.json`.
 - Never logged, never sent to the browser, never passed to agent prompts.
-- **Git auth transport:** the PAT is passed to git via the `GIT_CONFIG_*` environment variables (`http.extraHeader: Authorization: basic base64(x-access-token:<PAT>)`) — it never appears in argv, URLs, or logs (GitHub requires Basic auth for git-over-HTTPS; Bearer works for the REST API only).
+- **Git auth transport:** the PAT is passed to git via the `GIT_CONFIG_*` environment variables (`http.extraHeader: Authorization: basic base64(x-access-token:<PAT>)`) — it never appears in argv, URLs, or logs (GitHub requires Basic auth for git-over-HTTPS; Bearer works for the REST API only). Git subprocesses get a **hermetic env**: inherited `GIT_CONFIG_*`/`GIT_DIR` state is stripped and `GIT_CONFIG_NOSYSTEM=1`/`GIT_CONFIG_GLOBAL=/dev/null` pinned, so a parent-shell credential helper or `url.insteadOf` cannot hijack Jalebi's git (and agent git commands get the same treatment).
+- **Token precedence:** the **stored** token (`secrets.json`) is the source of truth (set via Settings); `JALEBI_GITHUB_TOKEN` is a test/bootstrap fallback and never overrides a stored token (PRD §F1).
 - The token is the **only** credential (see `AGENTS.md` §3). The `gh` CLI is forbidden for testing; it is authorized only for local git operations on the Jalebi repo itself.
 
 ## 3. Secret masking in logs (PRD §F17)
 
 - The PAT (and any user-marked secret) is **automatically masked** in the live console and stored run logs: any occurrence of the secret string is redacted (e.g. `***`), so even if an agent echoes an env var or token, the console never shows it.
 - Implemented at the **ingest layer** (before events are broadcast/persisted), not as a display-only filter.
-- Optional user-supplied extra secret patterns (regex) to mask beyond the PAT.
+- Optional user-supplied extra secret patterns (regex) to mask beyond the PAT; patterns are **validated at submission** (an invalid regex is rejected with a 400 instead of silently ignored), and step text is **capped before masking** so a pathological pattern cannot backtrack over unbounded input.
+- **Artifacts are masked too:** captured text files are run through the masker at write time; binary files that contain any known token value are dropped (not stored); a per-file 10 MB cap bounds a runaway agent. The run-end diff snapshot (`runs.diff_text`) is masked **before** truncation so a secret straddling the size boundary can't survive.
 
 ## 4. Sandboxing (PRD §F13)
 

@@ -46,7 +46,7 @@ Jalebi uses the **git CLI** (not libgit2) for all repo operations. Each task/age
   GIT_CONFIG_KEY_0=http.extraHeader
   GIT_CONFIG_VALUE_0="Authorization: basic $(printf 'x-access-token:%s' "$JALEBI_GITHUB_TOKEN" | base64)"
   ```
-- `push_branch` uses the worktree and `-c remote.origin.mirror=false` to push an explicit refspec (`jalebi/<taskId>`) against the `--mirror` clone.
+- `push_branch` pushes the explicit refspec `jalebi/<taskId>` from the worktree, under the per-repo mirror lock.
 - The token is the **only** credential (see `AGENTS.md` §3). The `gh` CLI is forbidden.
 
 ## 7. Source/target branch control (PRD §F8)
@@ -75,11 +75,11 @@ Jalebi uses the **git CLI** (not libgit2) for all repo operations. Each task/age
 - After `create_worktree`, `worktree_bootstrap.bootstrap_worktree(wt, agent_md)` writes into the worktree root:
   - `opencode.json` — `permission.bash` rules **deny `gh`** (`gh`, `gh *`, `/usr/bin/gh*`, `command gh*`, …); project config overrides the user's global opencode config.
   - git identity — `user.name Jalebi`, `user.email jalebi@localhost` (commits are never authored by a stray local account).
-  - `AGENTS.md` — task context + hard rules (no gh, no forks, push only to `origin`, write `.jalebi/pr.md`/`.jalebi/review.md`, **never commit `.jalebi/`**, only update existing docs).
-  - `.gitignore` — appends `.jalebi/` so Jalebi-internal files are never staged by `git add .` and never captured as artifacts.
-  - a **pre-commit hook** in the mirror's common hooks dir (`git rev-parse --git-common-dir`) that rejects any staged `.jalebi/` path — invisible to the PR, covers all worktrees, and blocks even an explicit `git add -f .jalebi/…`.
-- The agent subprocess env carries the owner-PAT git credentials (`GIT_CONFIG_*` http.extraHeader → Basic `x-access-token`), commit identity vars, `JALEBI_GITHUB_TOKEN`, and strips `GH_TOKEN`/`GITHUB_TOKEN` + empty `GH_CONFIG_DIR` so `gh` can never authenticate.
-- `remove_guard` cleans up the bootstrap files, the `.jalebi/` gitignore line, and the hook (idempotent).
+  - `AGENTS.md` — task context + hard rules (no gh, no forks, push only to `origin`, write `.jalebi/pr.md`/`.jalebi/review.md`, **never commit `.jalebi/`**, **never commit the marked Jalebi `AGENTS.md` section**, only update existing docs). A repo that **tracks its own `AGENTS.md` keeps its content** — Jalebi's section is appended inside `<!-- jalebi:start -->…<!-- jalebi:end -->` markers (idempotent to re-bootstrap, stripped by `remove_guard`).
+  - **shared `info/exclude`** — the mirror's common gitdir gets `.jalebi/`, `/opencode.json`, `/AGENTS.md` (root-anchored) so bootstrap files never show in `git status`, are never swept by `git add .`, and never appear as artifacts. The worktree `.gitignore` is **never mutated** (no tracked-file delta can leak into a PR).
+  - a **pre-commit hook** in the mirror's common hooks dir that rejects any staged `.jalebi/` path, a staged `opencode.json`, and a staged `AGENTS.md` still containing the `jalebi:start` marker (with `git restore` recovery instructions) — invisible to the PR, covers all worktrees, and blocks even an explicit `git add -f`.
+- The agent subprocess env carries the owner-PAT git credentials (`GIT_CONFIG_*` http.extraHeader → Basic `x-access-token`), commit identity vars, `JALEBI_GITHUB_TOKEN`, and strips `GH_TOKEN`/`GITHUB_TOKEN` + empty `GH_CONFIG_DIR` so `gh` can never authenticate. Inherited `GIT_CONFIG_*`/`GIT_DIR` state is stripped and `GIT_CONFIG_NOSYSTEM=1`/`GIT_CONFIG_GLOBAL=/dev/null` pinned so the parent shell cannot redirect the agent's git.
+- `remove_guard` restores a pre-existing `AGENTS.md` (marker block stripped), removes `opencode.json`, and — only when this is the **last live worktree** of the mirror — removes the shared `info/exclude` lines and the hook.
 
 ## 12. Review worktrees (PRD §F7)
 

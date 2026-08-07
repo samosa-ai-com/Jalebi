@@ -40,21 +40,23 @@ At startup `main()` calls `TaskQueue.recover()`, which:
 | `retry_policy.auto_retry` | live (per run) |
 | `artifact_ttl_days` | **startup only** (artifact prune runs once at boot) |
 | `ntfy_topic` | reserved for Phase 2 (screening notifications) |
+| `ntfy_url` | reserved for Phase 2 (screening notifications) |
 
-Settings values are **type-validated** on `POST /api/settings` (rejects `"false"` for a bool, non-integers for numbers, non-list `secret_patterns`, unsupported `agent_cli`). Only the `opencode` CLI is currently supported.
+Settings values are **type-validated** on `POST /api/settings` (rejects `"false"` for a bool, non-integers for numbers, non-list `secret_patterns`, unsupported `agent_cli`); `secret_patterns` must be compilable regexes and `ntfy_url` must be empty or `http(s)://`. Only the `opencode` CLI is currently supported.
 
 ## 4. Security hardening
 
-- Prompts, follow-up bodies, and PR title/body are masked with the **PAT and `secret_patterns`** at ingest — pattern-secrets never reach GitHub PRs.
+- Prompts, follow-up bodies, PR title/body, run-end diffs, and artifacts are masked with the **PAT and `secret_patterns`** at ingest — pattern-secrets never reach GitHub PRs.
 - Unknown `/api/*` paths return `404` JSON (they do not fall through to the SPA `index.html`).
-- Artifact downloads are path-traversal-safe; the PAT never appears in argv, URLs, or logs (git auth via `GIT_CONFIG_*` Basic header).
+- Artifact downloads are path-traversal-safe; the PAT never appears in argv, URLs, or logs (git auth via `GIT_CONFIG_*` Basic header). Agent children spawn in their own session and cancel/timeout kill the whole process group.
+- **Stall guard** (fixed constant, 300s) bounds the empty-stream/hang failure mode; the per-task timeout remains the last line of defence.
 
 ## 5. Known limitations (flagged)
 
 - Worktree TTL cleanup (deleting `done` task worktrees after N days) is **not implemented** — only artifacts are pruned.
 - No per-task `auto_publish` override (global setting only).
 - A cancelled/killed agent session may become unresumable (opencode-side session state); the task is still marked `cancelled`/`interrupted`.
-- Single-port localhost only — no TLS, no auth (by design; PRD §F13).
+- Single-port localhost only — no TLS; optional Basic-auth UI password when exposed (PRD §F13).
 
 ## 6. Reference
 

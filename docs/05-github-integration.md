@@ -8,7 +8,7 @@
 
 - **`JALEBI_GITHUB_TOKEN`** — the owner's GitHub personal access token, stored locally in the git-ignored `.env` (dev) or `<data-dir>/secrets.json` with `0600` permissions (runtime).
 - **Python client (httpx):** `jalebi/github.py` — a thin REST wrapper (no PyGithub). The only component that talks to GitHub.
-- **Secrets flow (`jalebi/secrets.py`):** at app startup, if `JALEBI_GITHUB_TOKEN` is set in the environment it is mirrored into `secrets.json` (`0600`, written atomically via a temp file). At runtime, `load_github_token()` prefers the env var, else the stored file. The `PUT /api/github/token` endpoint stores a token set from the Settings UI.
+- **Secrets flow (`jalebi/secrets.py`):** the **stored** token (`secrets.json` `github_token`, `0600`, written atomically via a temp file) is the **source of truth** — the token the owner sets via the Settings UI (`PUT /api/github/token`). `JALEBI_GITHUB_TOKEN` remains a **test/bootstrap fallback** when nothing is stored, but never overrides a stored token (PRD F1: "user supplies a PAT in Settings"). It is no longer mirrored into the store at startup.
 - **The `gh` CLI is forbidden** (PRD §17.2). No other token/credential is ever used (see `AGENTS.md` §3). No endpoint ever returns or logs the token.
 
 ## 2. Required scopes & validation (PRD §F1)
@@ -48,11 +48,11 @@ Connected-repo registry (`jalebi/routes/repos.py`, `/api/repos`):
 | `POST /api/repos` | `{"full_name": "<owner/repo>"}` → `GitHubClient.get_repo` → upsert into the `repos` table. 201 created / 200 updated; 409 no token; 404 not found; 400 bad body. |
 | `GET /api/repos` | Lists connected repos from the `repos` table (DB, not GitHub). |
 
-Planned capabilities (later phases): issues, PRs (create/update/comment/review), refs, webhook registration/management, commit statuses/check runs — all via the same client.
+Implemented via the same client (Phase 0): issue/PR context fetch, publish (create/reuse PR), issue comments, PR review comments, paginated listing. **Planned (later phases):** webhook registration/management, commit statuses/check runs.
 
-## 4. Webhooks (PRD §F14)
+## 4. Webhooks (PRD §F14) — Phase 1, NOT implemented
 
-- Jalebi registers repo webhooks via the API targeting its local listener (URL + optional secret for signature verification).
+- **Planned:** Jalebi registers repo webhooks via the API targeting its local listener (URL + optional secret for signature verification). Not implemented in Phase 0; the trigger/task-queue doc (`docs/06`) keeps webhooks/triggers out of scope until Phase 1.
 - For a localhost-only install, GitHub cannot reach the machine — the listener must be exposed via a **tunnel (e.g. `cloudflared`/`ngrok`)** or the webhook URL points at a small reverse proxy.
 - The app detects an unreachable webhook via a diagnostic status endpoint (`GET /api/webhook/status`) and warns in the UI, offering the **polling fallback**.
 - **Idempotency:** deliveries are deduped on `X-GitHub-Delivery` / `X-GitHub-Event` headers, so re-deliveries never double-run a task.
@@ -66,9 +66,9 @@ Planned capabilities (later phases): issues, PRs (create/update/comment/review),
 4. A matching rule creates and enqueues task(s) immediately (e.g. PR opened ⇒ assigned reviewers auto-start).
 5. Runs proceed like manual tasks and report back via **check runs** on the PR head commit when configured.
 
-## 5. Check runs & merge gating (PRD §F15)
+## 5. Check runs & merge gating (PRD §F15) — Phase 2, NOT implemented
 
-- Jalebi creates **check runs** (commit statuses) on the head SHA of the branch it's working on, via the PAT (`POST /repos/{owner}/{repo}/check-runs`).
+- **Planned:** Jalebi creates **check runs** (commit statuses) on the head SHA of the branch it's working on, via the PAT (`POST /repos/{owner}/{repo}/check-runs`).
 - Lifecycle mirrors a run: `queued` → `in_progress` (friendly name like `Jalebi / review (security-auditor)`) → `completed` with `conclusion` (`success`/`failure`/`neutral`/`cancelled`). Status updates are posted against the latest pushed HEAD SHA on `jalebi/<taskId>`.
 - Because these are real check runs, **branch protection** can require them — merging is blocked until the agent's review/fix check is green. Opt-in per repo.
 - Failure/success of the underlying task drives the conclusion; a follow-up updates the existing check rather than creating duplicates (matched by name + head SHA).
@@ -90,7 +90,7 @@ Planned capabilities (later phases): issues, PRs (create/update/comment/review),
 - PRD §F1 (PAT), §F7 (reviewers), §F9 (publish), §F14 (webhooks), §F15 (check runs), §17.2 (no `gh` CLI).
 ## 9. Named PAT vault (multi-token)
 
-- Jalebi stores a list of **named PATs** in the `0600` secrets file (`secrets.json` → `github_tokens: [{name, token}]`), alongside the legacy `github_token` (env `JALEBI_GITHUB_TOKEN` wins as the primary).
+- Jalebi stores a list of **named PATs** in the `0600` secrets file (`secrets.json` → `github_tokens: [{name, token}]`), alongside the primary `github_token` (the **stored** value wins; `JALEBI_GITHUB_TOKEN` is only a bootstrap fallback).
 - `GET/POST/DELETE /api/github/tokens` manage the vault; add validates first (`validate_token`), the UI sees only **masked** previews (never values).
 - Tasks and follow-ups carry a `pat_name`; the queue resolves the token via `secrets.resolve_token(config, name)` (fallback = primary) and uses it for git credentials, GitHub calls, the agent `JALEBI_GITHUB_TOKEN`, and masking. **All** known PATs are masked at ingest.
 - New client methods (httpx): `list_issues`, `get_issue`, `comment_on_issue`, `list_prs`, `get_pr`, `post_pr_review` (event `COMMENT`), `list_branches`, `find_pr_by_head` (same-repo dedup).
@@ -110,4 +110,5 @@ Planned capabilities (later phases): issues, PRs (create/update/comment/review),
 - `GET /api/github/repos` lists repos **across all accounts**, each tagged `account: <name>` (`?account=` filters). A failing account contributes an `{account, error}` entry, not a page failure.
 - `repos.pat_name` records which account owns a connected repo. `connect_repo` accepts `pat_name`; `prune`/`branches` resolve each repo's token from its `pat_name` (fallback = primary). Reconnecting a repo without a `pat_name` clears it back to the default account.
 - Task creation **inherits** the selected repo's account (`tasks.pat_name` defaults to `repo.pat_name`); the Credentials dropdown still overrides.
-- Removing an account **deletes its connected repos and the tasks on them** (runs, follow-ups, artifacts, worktrees, mirrors). Queued/running tasks for the account are cancelled first. `DELETE /api/github/tokens/<name>` returns `{removed, repos_affected, tasks_affected}` so the UI can confirm.
+- Removing an account **deletes its repos (connected AND soft-disconnected) and the tasks on them** (runs, follow-ups, artifacts, worktrees, mirrors). Queued/running tasks for the account are cancelled first. `DELETE /api/github/tokens/<name>` returns `{removed, repos_affected, tasks_affected}` so the UI can confirm.
+- GitHub list endpoints (`list_repos`/`list_issues`/`list_prs`/`list_branches`) follow `Link: rel="next"` pagination (capped at 10 pages) — nothing silently drops past page 1.

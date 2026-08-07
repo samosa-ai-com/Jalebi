@@ -18,7 +18,7 @@ Jalebi runs a **task queue** with a **worker pool** (threading). Tasks are persi
 | `GET /api/tasks` | List tasks (newest first) with latest run summary. |
 | `GET /api/tasks/:id` | Task detail incl. latest run + steps + followups + artifacts. |
 | `POST /api/tasks/:id/cancel` | Queued → `cancelled` immediately; running → kill child → `cancelled`; terminal → 409. |
-| `POST /api/tasks/:id/rerun` | Terminal task → back to `queued`, `retry_count+1`, enqueue. 409 if queued/running. |
+| `POST /api/tasks/:id/rerun` | Terminal task → back to `queued` and enqueued. 409 if queued/running. Does **not** bump `retry_count` (that counter tracks auto-retries only, so a manual rerun never consumes the auto-retry budget). |
 | `POST /api/tasks/:id/publish` | Manual publish (push + open PR). |
 | `POST /api/tasks/:id/followup` | Resume the task's last session (PRD F11). |
 
@@ -31,12 +31,12 @@ Jalebi runs a **task queue** with a **worker pool** (threading). Tasks are persi
 Queue items are tagged tuples: `("task", task_id)` or `("followup", task_id, body, pat_name?, model?)`; workers dispatch to `_run_task` / `_run_followup`. The shared execution core is `_prepare_run` (open a `runs` row, flip task `running`) + `_stream_and_finish` (stream masked events → SSE + steps, resolve terminal status, auto-publish unless `publish=False`).
 
 1. Worker dequeues, re-fetches the task; skips if `cancelled` (cancelled-while-queued).
-2. **Cancellation state is registered before the `running` commit** so a cancel racing the status flip is never lost.
+2. **Cancellation state is registered before the `running` commit** so a cancel racing the status flip is never lost; after registering, the worker **re-reads the task status** (the first snapshot may be stale) and bails if a queued-cancel landed mid-pickup. The queued-cancel route also calls `queue.cancel` so an already-registered pickup is flagged too.
 3. Marks task `running`; creates a `runs` row (`seq` = `max(seq)+1`), recording the task's `pat_name`.
 4. `GitWorkspace.ensure_mirror` → `create_worktree` (source branch) → **`worktree_bootstrap.bootstrap_worktree`** writes the worktree's `opencode.json` (denies `gh` via opencode permission rules), sets the git commit identity to `Jalebi <jalebi@localhost>`, and writes `AGENTS.md` (task context + hard rules from `prompts.build_agent_md`) → `adapter.start(cwd=worktree, prompt, model, env)` where `env` carries the owner-PAT git credentials (`GIT_CONFIG_*`), commit identity, `JALEBI_GITHUB_TOKEN`, and strips any `gh` auth (`GH_CONFIG_DIR`, no `GH_TOKEN`/`GITHUB_TOKEN`). The child `pid` is recorded on the run row.
 5. Streams `handle.events()`; `step`/`message`/`tool_call`/`done`/`error` events are **masked at ingest** (PRD F17: **all PATs** + `secret_patterns`), broadcast live over the per-task SSE channel, and stored in `runs.steps_json` (bounded: 500 steps, 2000-char texts). **`tool_call` is persisted too**, so a reload doesn't lose console lines. A `cancelled` kill's "exited with code -15" error is replaced with a clean "Run cancelled by user." message.
 6. Terminal status from event stream **or** watchdog/cancel reason.
-7. If `done` and `settings.auto_publish`: **only if the branch is ahead of `origin/<target>`** (`commits_ahead > 0` — nothing to PR otherwise) → `_publish`: recreate the worktree if it was cleaned, `push_branch`, then **dedup** — if a PR with `head=jalebi/<taskId>` already exists (same-repo, via `find_pr_by_head`) it is **reused** (never a second PR, even if an agent opened one), else `create_pr`. Title/body come from the agent-written `.jalebi/pr.md` when present (`# <title>` + description) — **fallback** to the prompt. Body always gets `Closes #N` (for referenced issues, if not already present) + a Jalebi-task footer + `Co-authored-by`. For `issue_fix`, Jalebi **comments on each referenced issue** linking the PR. On publish failure → task `needs_approval` (manual publish available).
+7. If `done` and `settings.auto_publish`: **only if the branch is ahead of `origin/<target>`** (`commits_ahead > 0` — nothing to PR otherwise) → `_publish`: recreate the worktree if it was cleaned, `push_branch`, then **dedup** — if a PR with `head=jalebi/<taskId>` already exists (same-repo, via `find_pr_by_head`) it is **reused** (never a second PR, even if an agent opened one), else `create_pr`. Title/body come from the agent-written `.jalebi/pr.md` when present (`# <title>` + description) — **fallback** to the prompt. Body always gets `Closes #N` derived from **`tasks.issues_json`** (the linked issues, not a `#N` regex over the prompt — so a stray `#3` in the wording never produces a bogus `Closes`) + a Jalebi-task footer + `Co-authored-by`. For `issue_fix`, Jalebi **comments on each linked issue** linking the PR. On publish failure → task `needs_approval` (manual publish available).
 8. Exceptions during the run: the child is killed, `_running` is cleared, the session is rolled back, and the task **and** run are marked `failed` (never left stuck `running`).
 
 ### 4a. Task types
@@ -57,15 +57,16 @@ Queue items are tagged tuples: `("task", task_id)` or `("followup", task_id, bod
 ## 5. Timeouts (PRD F16)
 
 - Per-task `timeout_minutes`, defaulting to `settings.default_timeout_minutes` (default 30). A daemon **watchdog thread** enforces it: on expiry it kills the child (SIGTERM → 5s grace → SIGKILL) and the run resolves to `timed_out`. A timeout of `0` fires immediately (used in tests).
-- **Stall guard:** a second daemon **stall watchdog** (`STALL_TIMEOUT_SECONDS = 120`) kills the child if the agent process stays alive but emits **no event for 120s** (checked from run start). The run then resolves to `failed` with a diagnostic step ("Agent produced no output for 120s — the agent process hung and was terminated"). This bounds the empty-stream/hang failure mode so no run can sit `running` with an empty timeline indefinitely; the total-budget timeout remains the last line of defence.
+- **Stall guard:** a second daemon **stall watchdog** (`STALL_TIMEOUT_SECONDS = 300`) kills the child if the agent process stays alive but emits **no event for 300s** (checked from run start). The run then resolves to `failed` with a diagnostic step ("Agent produced no output for 300s — the agent process hung and was terminated. Re-run the task or check the agent/opencode configuration."). This bounds the empty-stream/hang failure mode so no run can sit `running` with an empty timeline indefinitely; the total-budget timeout remains the last line of defence. (Bumped from 120s so slow-but-healthy long model turns aren't killed.)
 
 ## 6. Cancellation (PRD F3)
 
-- `cancel()` sets a reason and kills the child process (SIGTERM → SIGKILL); the event stream ends and the run resolves to `cancelled`. Cancellation works for a task that is `queued` (status flip only) or `running` (child killed).
+- `cancel()` sets a reason and kills the child process group (SIGTERM → SIGKILL); the event stream ends and the run resolves to `cancelled`. Cancellation works for a task that is `queued` (status flip + `queue.cancel` so an in-flight pickup is flagged) or `running` (child killed). Agent children spawn in their own session (`start_new_session`), so killing the process group reaches MCP servers/grandchildren instead of orphaning them.
+- On run completion the worktree's committed changes are snapshotted into `runs.diff_text` (masked **before** truncation, byte-capped at 512 KB) for the PRD §12 diff viewer — only for non-review tasks (the review worktree is the PR itself). Best-effort; a capture failure never fails the run.
 
 ## 7. Retries (PRD F16)
 
-- `rerun` reuses the same task row + worktree (`create_worktree` resumes an existing worktree); a fresh agent session runs (new `runs` row, new `seq`). `retry_count` is tracked.
+- `rerun` reuses the same task row + worktree (`create_worktree` resumes an existing worktree); a fresh agent session runs (new `runs` row, new `seq`). `retry_count` counts **auto-retries only** — a manual rerun never touches it (so manual reruns never block future auto-retries).
 - **Auto-retry:** if `settings.retry_policy.auto_retry` is set, a run that ends `failed` is re-enqueued once (`retry_count` capped at 1) as a fresh run.
 
 ## 8. Restart recovery (PRD F3/F13)
