@@ -245,3 +245,49 @@ def test_prune_continues_on_transient_error(client, app, monkeypatch, session) -
     assert names["octocat/deleted"] is False
     assert names["octocat/flaky"] is True
     assert names["octocat/hello"] is True
+
+
+def test_reconnect_uses_repo_bound_account(client, app, monkeypatch, session) -> None:
+    """Reconnecting a named-account repo resolves that account's token, not default."""
+    from jalebi import repos as repos_svc
+    from jalebi import secrets as sec
+
+    sec.store_secret(app.config["JALEBI_CONFIG"], sec.GITHUB_TOKEN_KEY, "ghp_default")
+    sec.add_github_token(app.config["JALEBI_CONFIG"], "work", "ghp_work")
+
+    captured: list[str] = []
+
+    class CapturingClient:
+        def __init__(self, token):
+            captured.append(token)
+
+        def get_repo(self, full_name):
+            return dict(REPO_INFO)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(routes_repos, "GitHubClient", CapturingClient)
+    row, _ = repos_svc.upsert_repo(
+        session,
+        full_name="octocat/hello",
+        default_branch="main",
+        clone_url="https://x",
+        pat_name="work",
+    )
+    row.connected = False
+    session.commit()
+
+    resp = client.post(f"/api/repos/{row.id}/reconnect")
+    assert resp.status_code == 200
+    assert captured == ["ghp_work"]
+
+
+def test_connect_empty_pat_normalizes_to_default(client, app, monkeypatch) -> None:
+    """An explicit empty pat_name connects the repo to the default account (None)."""
+    secrets.store_secret(app.config["JALEBI_CONFIG"], secrets.GITHUB_TOKEN_KEY, "ghp_test")
+    monkeypatch.setattr(routes_repos, "GitHubClient", FakeGitHubClient)
+
+    resp = client.post("/api/repos", json={"full_name": "octocat/hello", "pat_name": ""})
+    assert resp.status_code == 201
+    assert resp.get_json()["pat_name"] is None

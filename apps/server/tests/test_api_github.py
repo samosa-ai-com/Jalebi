@@ -343,3 +343,39 @@ def test_delete_token_includes_disconnected_repos(client, app, monkeypatch, sess
     session.expire_all()
     assert session.get(db.Repo, repo_id) is None
     assert tasks_svc.get_task(session, task_id) is None
+
+
+def test_delete_token_cancels_running_tasks_first(client, app, monkeypatch, session) -> None:
+    """Account deletion flags in-flight runs as cancelled before deleting rows."""
+    from jalebi import repos
+    from jalebi import tasks as tasks_svc
+    from jalebi.queue import _RunState
+
+    monkeypatch.setattr(routes_github, "GitHubClient", FakeClient)
+    client.post("/api/github/tokens", json={"name": "work", "token": "ghp_work"})
+    row, _ = repos.upsert_repo(
+        session,
+        full_name="octocat/hello",
+        default_branch="main",
+        clone_url="https://github.com/octocat/hello.git",
+        pat_name="work",
+    )
+    task = tasks_svc.create_task(
+        session, type_="freeform", repo_id=row.id, prompt="x", pat_name="work"
+    )
+    task.status = "running"
+    session.commit()
+
+    q = app.config["JALEBI_QUEUE"]
+    state = _RunState(None)
+    q._running[task.id] = state
+
+    resp = client.delete("/api/github/tokens/work")
+    assert resp.status_code == 200
+    # The queue's in-flight state was cancelled (the worker will wind down).
+    assert state.reason == "cancelled"
+    # Verify the row is gone via a fresh session (the local identity map is stale).
+    from jalebi import db
+
+    with db.Session() as s2:
+        assert tasks_svc.get_task(s2, task.id) is None

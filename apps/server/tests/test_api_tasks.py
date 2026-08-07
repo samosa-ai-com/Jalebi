@@ -258,3 +258,18 @@ def test_run_diff_endpoint(client: FlaskClient, session) -> None:
     detail = client.get(f"/api/tasks/{task.id}").get_json()
     assert detail["run"]["has_diff"] is True
     assert "diff_text" not in detail["run"]
+
+
+def test_rerun_interrupted(client: FlaskClient, session, repo_id: int) -> None:
+    """A task that was interrupted mid-run can be re-run."""
+    from jalebi import tasks as tasks_svc
+
+    task_id = client.post("/api/tasks", json={"repo_id": repo_id, "prompt": "x"}).get_json()["id"]
+    t = tasks_svc.get_task(session, task_id)
+    assert t is not None
+    t.status = "interrupted"
+    session.commit()
+
+    resp = client.post(f"/api/tasks/{task_id}/rerun")
+    assert resp.status_code == 200
+    assert resp.get_json()["status"] == "queued"

@@ -483,3 +483,16 @@ def test_cancel_between_pickup_and_running_bails(q, session, repo_row, monkeypat
     assert fresh is not None
     assert fresh.status == "cancelled"
     assert session.query(Run).filter_by(task_id=task.id).count() == 0
+
+
+def test_watchdog_resolves_task_timeout_override(q, session, repo_row) -> None:
+    """The watchdog honors the task's stored timeout (the default_timeout_minutes
+    setting is resolved into timeout_minutes at creation, per
+    test_create_task_uses_default_timeout_setting)."""
+    settings.set_setting(session, "default_timeout_minutes", 7)
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="x")
+    assert q._resolve_timeout(session, task) == 30  # create_task default
+
+    task.timeout_minutes = 3
+    session.commit()
+    assert q._resolve_timeout(session, task) == 3
