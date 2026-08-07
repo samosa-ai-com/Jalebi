@@ -216,3 +216,45 @@ def test_followup_accepts_default_pat(app, client, session, monkeypatch) -> None
         json={"prompt": "more", "pat_name": "default"},
     )
     assert resp.status_code == 202
+
+
+def test_run_diff_endpoint(client: FlaskClient, session) -> None:
+    from jalebi import tasks as tasks_svc
+    from jalebi.db import Run, utcnow
+
+    row, _ = repos.upsert_repo(
+        session,
+        full_name="owner/diffrepo",
+        default_branch="main",
+        clone_url="https://github.com/owner/diffrepo.git",
+    )
+    task = tasks_svc.create_task(session, type_="freeform", repo_id=row.id, prompt="x")
+    run = Run(task_id=task.id, seq=1, status="done", started_at=utcnow(), diff_text="+a\n-b\n")
+    session.add(run)
+    session.commit()
+    run_id = run.id
+
+    resp = client.get(f"/api/tasks/{task.id}/runs/{run_id}/diff")
+    assert resp.status_code == 200
+    assert resp.get_json()["diff"] == "+a\n-b\n"
+
+    resp = client.get(f"/api/tasks/{task.id}/runs/999/diff")
+    assert resp.status_code == 404
+
+    # A run belonging to a DIFFERENT task must 404 too (ownership check).
+    other = tasks_svc.create_task(session, type_="freeform", repo_id=row.id, prompt="y")
+    resp = client.get(f"/api/tasks/{other.id}/runs/{run_id}/diff")
+    assert resp.status_code == 404
+
+    # A run with no diff returns "" (not an error).
+    no_diff = Run(task_id=other.id, seq=1, status="done", started_at=utcnow())
+    session.add(no_diff)
+    session.commit()
+    resp = client.get(f"/api/tasks/{other.id}/runs/{no_diff.id}/diff")
+    assert resp.status_code == 200
+    assert resp.get_json()["diff"] == ""
+
+    # run dict exposes has_diff (and does not ship the raw diff text)
+    detail = client.get(f"/api/tasks/{task.id}").get_json()
+    assert detail["run"]["has_diff"] is True
+    assert "diff_text" not in detail["run"]

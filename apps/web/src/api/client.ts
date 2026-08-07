@@ -79,6 +79,8 @@ export const api = {
   getTasks: () => request<Task[]>("/api/tasks"),
   getTask: (id: number) => request<Task>(`/api/tasks/${id}`),
   getRuns: (id: number) => request<Run[]>(`/api/tasks/${id}/runs`),
+  getRunDiff: (id: number, runId: number) =>
+    request<{ diff: string }>(`/api/tasks/${id}/runs/${runId}/diff`),
   createTask: (input: CreateTaskInput) =>
     request<Task>("/api/tasks", { method: "POST", body: JSON.stringify(input) }),
   cancelTask: (id: number) =>

@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 MAX_STEPS = 500
 MAX_STEP_TEXT = 2000
+MAX_DIFF_BYTES = 512 * 1024
 KILL_GRACE_SECONDS = 5
 MAX_AUTO_RETRIES = 1
 DEFAULT_TIMEOUT_MINUTES = 30
@@ -421,6 +422,28 @@ class TaskQueue:
                 }
             )
             run.steps_json = json.dumps(steps[-MAX_STEPS:])
+
+        # Run-end diff snapshot (PRD §12 diff viewer). Only for code tasks — the
+        # review worktree is detached at the PR head, so diffing it would show the
+        # PR's own changes, not Jalebi's work. Best-effort: a failure must never
+        # flip a done run to failed.
+        if task.type != "pr_review":
+            target = task.target_branch or task.source_branch or "main"
+            try:
+                diff = git.diff_against_target(worktree, target)
+                if diff:
+                    # Mask BEFORE truncating: a secret straddling the size-cap
+                    # boundary must not survive as a partially-visible fragment.
+                    masked = masker(diff)
+                    raw = masked.encode("utf-8", "ignore")
+                    if len(raw) > MAX_DIFF_BYTES:
+                        masked = (
+                            raw[:MAX_DIFF_BYTES].decode("utf-8", "ignore")
+                            + "\n… (diff truncated)"
+                        )
+                    run.diff_text = masked
+            except Exception:
+                logger.debug("diff capture failed for task %s", task.id)
 
     def _resolve_timeout(self, session, task: Task) -> int:
         if task.timeout_minutes is not None:

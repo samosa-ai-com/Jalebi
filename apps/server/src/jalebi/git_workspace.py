@@ -317,6 +317,23 @@ class GitWorkspace:
         )
         return int(out or "0")
 
+    def diff_against_target(self, worktree: Path, target_branch: str) -> str:
+        """Unified diff of the worktree's committed work vs ``origin/<target>``.
+
+        Uses three-dot semantics (merge-base..HEAD, i.e. the PR diff). Falls back
+        to a two-dot committed-range diff (``origin/<target>..HEAD`` — never the
+        working tree, which would include uncommitted agent scratch files) if the
+        branches have no common ancestor.
+        """
+        try:
+            return _run_git(
+                ["-C", str(worktree), "diff", f"origin/{target_branch}...HEAD"]
+            )
+        except GitWorkspaceError:
+            return _run_git(
+                ["-C", str(worktree), "diff", f"origin/{target_branch}..HEAD"]
+            )
+
     def push_branch(self, task_id: int, full_name: str, token: str | None = None) -> None:
         """Push ``jalebi/<taskId>`` to the mirror's origin with token auth."""
         ws = self.worktree_path(self.config.data_dir, task_id)

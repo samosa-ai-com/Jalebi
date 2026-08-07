@@ -734,7 +734,7 @@ def test_build_agent_env_keeps_own_git_auth(monkeypatch) -> None:
     assert env["GIT_CONFIG_COUNT"] == "1"
     assert env["GIT_CONFIG_KEY_0"] == "http.extraHeader"
     expected = base64.b64encode(b"x-access-token:ghp_x").decode()
-    assert expected in env["GIT_CONFIG_VALUE_0"]
+    assert expected in (env["GIT_CONFIG_VALUE_0"] or "")
 
 
 def test_pr_title_and_body_closes_from_issues_json(q, session, repo_row) -> None:
@@ -758,3 +758,113 @@ def test_pr_title_and_body_no_issues_adds_no_closes(q, session, repo_row) -> Non
     )
     _title, body = q._pr_title_and_body(task)
     assert "Closes" not in body
+
+
+def test_run_captures_masked_diff(q, session, repo_row, monkeypatch) -> None:
+    """A code task's run stores a masked run-end diff (PRD §12 diff viewer)."""
+    settings.set_setting(session, "auto_publish", False)
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
+    git = GitWorkspace(q.config)
+    git.ensure_mirror(FULL_NAME, repo_row.clone_url)
+    wt = git.create_worktree(task.id, FULL_NAME, "main")
+    # The committed change includes the (fake) token so we can prove masking.
+    (wt / "f.txt").write_text("changed token ghp_test here\n")
+    _git(["-C", str(wt), "config", "user.email", "t@example.com"])
+    _git(["-C", str(wt), "config", "user.name", "Test"])
+    _git(["-C", str(wt), "add", "f.txt"])
+    _git(["-C", str(wt), "commit", "-m", "change"])
+    _install_adapter(monkeypatch, FakeHandle([AgentEvent(type="done")]))
+
+    q._run_task(task.id)
+
+    session.expire_all()
+    run = _latest_run(session, task.id)
+    assert run is not None
+    assert run.status == "done"
+    assert run.diff_text is not None
+    assert "f.txt" in run.diff_text
+    assert "+changed" in run.diff_text
+    # The token value never survives; the diff is masked at ingest.
+    assert "ghp_test" not in run.diff_text
+    assert "***" in run.diff_text
+
+
+def test_review_run_has_no_diff(q, session, repo_row, monkeypatch, tmp_path) -> None:
+    """pr_review runs do not capture a diff (the review worktree is the PR itself)."""
+    from pathlib import Path
+
+    settings.set_setting(session, "auto_publish", False)
+    task = tasks.create_task(
+        session,
+        type_="pr_review",
+        repo_id=repo_row.id,
+        prompt="review",
+        prs=[1],
+        context={
+            "prs": [
+                {
+                    "number": 1,
+                    "title": "t",
+                    "body": "b",
+                    "html_url": "u",
+                    "base": "main",
+                    "head": "h",
+                    "state": "open",
+                    "author": "a",
+                }
+            ]
+        },
+    )
+    wt = Path(tmp_path) / "review"
+    wt.mkdir(parents=True)
+    (wt / ".jalebi").mkdir(parents=True)
+    (wt / ".jalebi" / "review.md").write_text("ok\n")
+
+    class ReviewGit:
+        def __init__(self, config):
+            self.config = config
+
+        def ensure_mirror(self, *a, **k):
+            return None
+
+        def create_review_worktree(self, *a, **k):
+            return wt
+
+        def diff_against_target(self, *a, **k):
+            # If the pr_review exclusion guard were removed, this sentinel would
+            # be stored — the assertion below only passes because of the guard.
+            return "diff --git a/x b/x\nSHOULD NOT BE SEEN"
+
+    monkeypatch.setattr("jalebi.queue.GitWorkspace", ReviewGit)
+    monkeypatch.setattr("jalebi.queue.worktree_bootstrap.bootstrap_worktree", lambda *a, **k: None)
+
+    class NoopClient:
+        def __init__(self, token):
+            pass
+
+        def post_pr_review(self, *a, **k):
+            return None
+
+        def close(self):
+            pass
+
+    class ReviewAdapter:
+        def start(self, cwd, prompt, model=None, env=None):
+            return FakeHandle([AgentEvent(type="done")], session_id="ses_r")
+
+        def resume(self, *a, **k):
+            raise NotImplementedError
+
+        def list_models(self):
+            return []
+
+    monkeypatch.setattr("jalebi.queue.get_adapter", lambda cli: ReviewAdapter())
+    monkeypatch.setattr("jalebi.queue.GitHubClient", NoopClient)
+
+    q._run_task(task.id)
+
+    session.expire_all()
+    run = _latest_run(session, task.id)
+    assert run is not None
+    assert run.status == "done"
+    assert run.diff_text is None

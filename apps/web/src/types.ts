@@ -22,6 +22,7 @@ export interface Run {
   status: string | null;
   started_at: string | null;
   finished_at: string | null;
+  has_diff: boolean;
   steps: Step[];
   artifacts?: Artifact[];
 }

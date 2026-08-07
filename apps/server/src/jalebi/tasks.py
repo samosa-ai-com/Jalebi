@@ -133,6 +133,7 @@ def run_to_dict(run: Run, artifacts: list[Artifact] | None = None) -> dict[str, 
         "status": run.status,
         "started_at": run.started_at.isoformat() if run.started_at else None,
         "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+        "has_diff": bool(run.diff_text),
         "steps": json.loads(run.steps_json) if run.steps_json else [],
         "artifacts": [
             {

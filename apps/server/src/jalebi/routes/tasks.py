@@ -365,6 +365,16 @@ def download_artifact(task_id: int, artifact_id: int) -> ResponseReturnValue:
     return send_file(path, as_attachment=True, download_name=Path(artifact.path).name)
 
 
+@bp.get("/<int:task_id>/runs/<int:run_id>/diff")
+def run_diff(task_id: int, run_id: int) -> ResponseReturnValue:
+    """The run-end diff snapshot for a run (PRD §12 diff viewer)."""
+    session = db.get_session()
+    run = session.get(Run, run_id)
+    if run is None or run.task_id != task_id:
+        return jsonify({"error": "run not found"}), 404
+    return jsonify({"diff": run.diff_text or ""})
+
+
 @bp.get("/<int:task_id>/events")
 def task_events(task_id: int) -> ResponseReturnValue:
     """SSE stream of live (masked) events for a task's current run."""

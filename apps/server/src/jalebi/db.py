@@ -152,6 +152,7 @@ class Run(Base):
     status: Mapped[str | None] = mapped_column(Text, nullable=True)
     steps_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     artifacts_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    diff_text: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class Followup(Base):

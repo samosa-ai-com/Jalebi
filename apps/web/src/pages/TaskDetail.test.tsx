@@ -14,6 +14,7 @@ const RUN = {
   status: "running",
   started_at: "2026-08-06T10:01:00",
   finished_at: null,
+  has_diff: false,
   steps: [{ type: "message", text: "scanning repo", ts: "2026-08-06T10:01:01" }],
 };
 
@@ -187,6 +188,43 @@ describe("TaskDetail", () => {
       "href",
       "/api/tasks/7/artifacts/1/download"
     );
+  });
+
+  it("renders the run-end diff in the Diff section", async () => {
+    const withDiff = {
+      ...TASK,
+      status: "done",
+      run: { ...RUN, id: 5, status: "done", has_diff: true },
+    };
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes("/diff")) {
+        return {
+          ok: true,
+          json: async () => ({
+            diff: "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-old\n+new\n",
+          }),
+        };
+      }
+      if (url.endsWith("/runs")) {
+        return { ok: true, json: async () => [withDiff.run] };
+      }
+      if (url.includes("/api/tasks")) {
+        return { ok: true, json: async () => withDiff };
+      }
+      if (url.includes("/api/github/tokens")) {
+        return { ok: true, json: async () => ({ default: null, accounts: [] }) };
+      }
+      if (url.includes("/api/models")) {
+        return { ok: true, json: async () => ({ cli: "opencode", models: ["m1"] }) };
+      }
+      return { ok: true, json: async () => REPOS };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderDetail();
+    expect(await screen.findByText("Diff")).toBeInTheDocument();
+    expect(await screen.findByText("diff --git a/f.txt b/f.txt")).toBeInTheDocument();
+    expect(screen.getByText("+new")).toBeInTheDocument();
   });
 
   it("shows Cancel for a queued task", async () => {

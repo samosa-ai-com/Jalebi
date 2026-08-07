@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, taskEvents } from "../api/client";
 import { StatusBadge } from "../components/StatusBadge";
@@ -309,6 +309,93 @@ function useAutoScroll<T extends HTMLElement>(dep: unknown, enabled: boolean) {
     ref.current.scrollTop = ref.current.scrollHeight;
   }, [dep, enabled]);
   return ref;
+}
+
+function diffLineClass(line: string): string {
+  // Git emits file headers as "--- a/..." / "+++ b/..." (with a space); a
+  // content line merely starting with "---"/"+++" is a real removal/addition.
+  if (line.startsWith("--- ") || line.startsWith("+++ ")) return "text-ink-400";
+  if (line.startsWith("@@")) return "text-syrup-300";
+  if (line.startsWith("+")) return "bg-green-500/10 text-green-300";
+  if (line.startsWith("-")) return "bg-red-500/10 text-red-300";
+  return "text-ink-300";
+}
+
+function DiffView({ diff }: { diff: string }) {
+  // Split the unified diff into per-file chunks on `diff --git` headers.
+  const files = useMemo(() => {
+    const chunks: { header: string; lines: string[] }[] = [];
+    let current: { header: string; lines: string[] } | null = null;
+    for (const line of diff.split("\n")) {
+      if (line.startsWith("diff --git ")) {
+        current = { header: line, lines: [] };
+        chunks.push(current);
+      } else if (current) {
+        current.lines.push(line);
+      } else if (line.trim()) {
+        chunks.push({ header: "(header)", lines: [line] });
+      }
+    }
+    return chunks;
+  }, [diff]);
+
+  if (files.length === 0) {
+    return <p className="text-sm text-ink-500">No diff.</p>;
+  }
+  return (
+    <div className="space-y-3">
+      {files.map((file, i) => (
+        <details key={`${file.header}-${i}`} open={files.length === 1}>
+          <summary className="cursor-pointer select-none font-mono text-xs text-ink-200 transition-colors hover:text-syrup-300">
+            {file.header}
+          </summary>
+          <pre className="mt-1 max-h-96 overflow-auto whitespace-pre rounded bg-ink-900/60 p-2 font-mono text-[11px] leading-relaxed">
+            {file.lines.map((line, j) => (
+              <div key={j} className={diffLineClass(line)}>
+                {line}
+              </div>
+            ))}
+          </pre>
+        </details>
+      ))}
+    </div>
+  );
+}
+
+function DiffSection({
+  taskId,
+  run,
+}: {
+  taskId: number;
+  run: Run;
+}) {
+  const [diff, setDiff] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!run.has_diff) return;
+    let cancelled = false;
+    api
+      .getRunDiff(taskId, run.id)
+      .then((r) => !cancelled && setDiff(r.diff))
+      .catch((e) => !cancelled && setError(e instanceof Error ? e.message : "failed to load diff"));
+    return () => {
+      cancelled = true;
+    };
+  }, [taskId, run.id, run.has_diff]);
+
+  if (!run.has_diff) return null;
+  return (
+    <section className="surface p-5 animate-fade-up">
+      <h2 className="panel-title mb-3">Diff</h2>
+      {error && <p className="text-xs text-red-400">{error}</p>}
+      {diff === null ? (
+        <p className="text-sm text-ink-500">Loading…</p>
+      ) : (
+        <DiffView diff={diff} />
+      )}
+    </section>
+  );
 }
 
 export default function TaskDetail() {
@@ -662,6 +749,10 @@ export default function TaskDetail() {
           </pre>
         </section>
       </div>
+
+      {selectedRun && (
+        <DiffSection key={selectedRun.id} taskId={task.id} run={selectedRun} />
+      )}
 
       {runs.length > 1 && (
         <section className="surface p-5 animate-fade-up">
