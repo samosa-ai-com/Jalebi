@@ -187,6 +187,21 @@ def test_get_issue(monkeypatch) -> None:
     assert issue["body"] == "b"
 
 
+def test_get_issue_rejects_pr(monkeypatch) -> None:
+    client = make_client()
+    monkeypatch.setattr(
+        client,
+        "_request",
+        lambda method, path, **kw: (
+            200,
+            {"number": 4, "title": "t", "pull_request": {"url": "x"}},
+            {},
+        ),
+    )
+    with pytest.raises(GitHubError, match="pull request"):
+        client.get_issue("octocat/hello", 4)
+
+
 def test_comment_on_issue(monkeypatch) -> None:
     client = make_client()
 

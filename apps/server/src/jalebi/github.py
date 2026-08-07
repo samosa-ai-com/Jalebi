@@ -165,6 +165,8 @@ class GitHubClient:
             raise GitHubNotFound(f"{full_name}#{number}")
         if status != 200 or not isinstance(body, dict):
             raise GitHubError(f"failed to fetch issue: HTTP {status}")
+        if "pull_request" in body:
+            raise GitHubError(f"{full_name}#{number} is a pull request, not an issue")
         return {
             "number": body.get("number"),
             "title": body.get("title"),
