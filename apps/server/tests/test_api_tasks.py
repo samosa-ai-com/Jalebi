@@ -149,3 +149,56 @@ def test_create_task_explicit_pat_overrides_repo(app, client, session) -> None:
     )
     assert resp.status_code == 201
     assert resp.get_json()["pat_name"] == "acct-c"
+
+
+def test_create_task_accepts_default_pat(app, client, session) -> None:
+    from jalebi import repos
+
+    row, _ = repos.upsert_repo(
+        session,
+        full_name="owner/repo",
+        default_branch="main",
+        clone_url="https://github.com/owner/repo.git",
+    )
+    resp = client.post(
+        "/api/tasks",
+        json={"repo_id": row.id, "type": "freeform", "prompt": "do it", "pat_name": "default"},
+    )
+    assert resp.status_code == 201
+    assert resp.get_json()["pat_name"] == "default"
+
+
+def test_followup_accepts_default_pat(app, client, session, monkeypatch) -> None:
+    from jalebi import repos, tasks
+
+    row, _ = repos.upsert_repo(
+        session,
+        full_name="owner/repo",
+        default_branch="main",
+        clone_url="https://github.com/owner/repo.git",
+    )
+    task = tasks.create_task(session, type_="freeform", repo_id=row.id, prompt="do it")
+    from jalebi.db import Run, utcnow
+
+    run = Run(
+        task_id=task.id,
+        seq=1,
+        session_id="ses_1",
+        status="done",
+        started_at=utcnow(),
+        finished_at=utcnow(),
+    )
+    session.add(run)
+    session.commit()
+    task.status = "done"
+    session.commit()
+
+    q = app.config["JALEBI_QUEUE"]
+    monkeypatch.setattr(
+        q, "enqueue_followup", lambda tid, body, pat_name=None, model=None: None
+    )
+    resp = client.post(
+        f"/api/tasks/{task.id}/followup",
+        json={"prompt": "more", "pat_name": "default"},
+    )
+    assert resp.status_code == 202

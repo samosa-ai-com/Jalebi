@@ -29,6 +29,11 @@ def _repo_name(session, repo_id: int) -> str | None:
     return repo.full_name if repo is not None else None
 
 
+def _valid_pat(config, name: str | None) -> bool:
+    """A PAT/account name is valid if it's the default account or a named one."""
+    return name is None or name == "default" or name in secrets.token_names(config)
+
+
 def _masker(session) -> Callable[[str], str]:
     config: Config = current_app.config["JALEBI_CONFIG"]
     patterns = settings.get_setting(session, "secret_patterns") or []
@@ -131,7 +136,7 @@ def create_task() -> ResponseReturnValue:
         return jsonify({"error": "pr_number is required for pr_review tasks"}), 400
 
     pat_name = payload.get("pat_name")
-    if pat_name is not None and pat_name not in secrets.token_names(config):
+    if not _valid_pat(config, pat_name):
         return jsonify({"error": f"unknown PAT: {pat_name}"}), 400
 
     source_branch = payload.get("source_branch")
@@ -276,7 +281,7 @@ def followup_task(task_id: int) -> ResponseReturnValue:
         return jsonify({"error": "no resumable session for this task"}), 409
 
     pat_name = payload.get("pat_name") if isinstance(payload, dict) else None
-    if pat_name is not None and pat_name not in secrets.token_names(config):
+    if not _valid_pat(config, pat_name):
         return jsonify({"error": f"unknown PAT: {pat_name}"}), 400
     model = payload.get("model") if isinstance(payload, dict) else None
 
