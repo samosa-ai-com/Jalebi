@@ -24,6 +24,11 @@ def _queue() -> TaskQueue:
     return current_app.config["JALEBI_QUEUE"]
 
 
+def _repo_name(session, repo_id: int) -> str | None:
+    repo = session.get(db.Repo, repo_id)
+    return repo.full_name if repo is not None else None
+
+
 def _masker(session) -> Callable[[str], str]:
     config: Config = current_app.config["JALEBI_CONFIG"]
     patterns = settings.get_setting(session, "secret_patterns") or []
@@ -158,7 +163,7 @@ def create_task() -> ResponseReturnValue:
         return jsonify({"error": str(exc)}), 400
 
     _queue().enqueue(task.id)
-    return jsonify(tasks.task_to_dict(task)), 201
+    return jsonify(tasks.task_to_dict(task, repo_full_name=_repo_name(session, task.repo_id))), 201
 
 
 @bp.get("")
@@ -173,6 +178,7 @@ def list_tasks() -> ResponseReturnValue:
                 run=run,
                 followups=tasks.list_followups(session, task.id),
                 artifacts=tasks.list_artifacts(session, run.id) if run is not None else None,
+                repo_full_name=_repo_name(session, task.repo_id),
             )
         )
     return jsonify(items)
@@ -191,6 +197,7 @@ def get_task(task_id: int) -> ResponseReturnValue:
             run=run,
             followups=tasks.list_followups(session, task_id),
             artifacts=tasks.list_artifacts(session, run.id) if run is not None else None,
+            repo_full_name=_repo_name(session, task.repo_id),
         )
     )
 
@@ -225,7 +232,7 @@ def rerun_task(task_id: int) -> ResponseReturnValue:
     task.updated_at = utcnow()
     session.commit()
     _queue().enqueue(task.id)
-    return jsonify(tasks.task_to_dict(task))
+    return jsonify(tasks.task_to_dict(task, repo_full_name=_repo_name(session, task.repo_id)))
 
 
 @bp.post("/<int:task_id>/publish")
@@ -275,6 +282,7 @@ def followup_task(task_id: int) -> ResponseReturnValue:
             run=run,
             followups=tasks.list_followups(session, task_id),
             artifacts=tasks.list_artifacts(session, run.id) if run is not None else None,
+            repo_full_name=_repo_name(session, task.repo_id),
         )
     ), 202
 

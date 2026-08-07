@@ -52,19 +52,49 @@ def connect_repo() -> ResponseReturnValue:
 
 @bp.delete("/<int:repo_id>")
 def disconnect_repo(repo_id: int) -> ResponseReturnValue:
-    """Disconnect a repo: remove the DB row (keeps local mirrors/artifacts)."""
+    """Disconnect a repo: hide it from the UI (soft — history stays intact)."""
     session = db.get_session()
     row = session.get(db.Repo, repo_id)
     if row is None:
         return jsonify({"error": "repo not found"}), 404
-    session.delete(row)
+    row.connected = False
     session.commit()
-    return jsonify({"removed": row.full_name})
+    return jsonify({"disconnected": row.full_name})
+
+
+@bp.post("/<int:repo_id>/reconnect")
+def reconnect_repo(repo_id: int) -> ResponseReturnValue:
+    """Reconnect a previously disconnected repo (requires it to still exist)."""
+    config: Config = current_app.config["JALEBI_CONFIG"]
+    token = secrets.resolve_token(config, None)
+    if not token:
+        return jsonify({"error": "no GitHub token configured"}), 409
+
+    session = db.get_session()
+    row = session.get(db.Repo, repo_id)
+    if row is None:
+        return jsonify({"error": "repo not found"}), 404
+
+    client = GitHubClient(token)
+    try:
+        info = client.get_repo(row.full_name)
+    except GitHubNotFound:
+        return jsonify({"error": f"repo not found on GitHub: {row.full_name}"}), 404
+    except (httpx.HTTPError, GitHubError) as exc:
+        return jsonify({"error": str(exc)}), 502
+    finally:
+        client.close()
+
+    row.default_branch = info["default_branch"] or row.default_branch
+    row.clone_url = info["clone_url"]
+    row.connected = True
+    session.commit()
+    return jsonify(repos.repo_to_dict(row))
 
 
 @bp.post("/prune")
 def prune_repos() -> ResponseReturnValue:
-    """Remove connected repos that no longer exist on GitHub (deleted upstream)."""
+    """Soft-remove connected repos that no longer exist on GitHub (deleted upstream)."""
     config: Config = current_app.config["JALEBI_CONFIG"]
     token = secrets.resolve_token(config, None)
     if not token:
@@ -74,12 +104,12 @@ def prune_repos() -> ResponseReturnValue:
     removed: list[str] = []
     client = GitHubClient(token)
     try:
-        for row in repos.list_repos(session):
+        for row in repos.list_repos(session, connected_only=True):
             try:
                 client.get_repo(row.full_name)
             except GitHubNotFound:
                 removed.append(row.full_name)
-                session.delete(row)
+                row.connected = False
     except (httpx.HTTPError, GitHubError) as exc:
         return jsonify({"error": str(exc)}), 502
     finally:

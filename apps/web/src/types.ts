@@ -38,6 +38,7 @@ export interface Task {
   id: number;
   type: string;
   repo_id: number;
+  repo_full_name: string | null;
   source_branch: string;
   target_branch: string;
   model: string | null;
@@ -61,6 +62,7 @@ export interface Repo {
   full_name: string;
   default_branch: string;
   clone_url: string;
+  connected: boolean;
   webhook_registered: boolean;
   poll_fallback: boolean;
   check_runs_enabled: boolean;

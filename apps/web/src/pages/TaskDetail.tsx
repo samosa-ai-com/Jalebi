@@ -416,7 +416,7 @@ export default function TaskDetail() {
   if (error) return <p className="text-red-400">{error}</p>;
   if (!task) return <p className="text-ink-500">Loading…</p>;
 
-  const repoName = repos.find((r) => r.id === task.repo_id)?.full_name ?? `repo#${task.repo_id}`;
+  const repoName = task.repo_full_name ?? repos.find((r) => r.id === task.repo_id)?.full_name ?? `repo#${task.repo_id}`;
   const selectedRun =
     runs.find((r) => r.id === selectedRunId) ?? task.run ?? runs[runs.length - 1] ?? null;
   const steps = selectedRun?.steps ?? [];

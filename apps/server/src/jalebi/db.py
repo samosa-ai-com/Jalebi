@@ -50,6 +50,9 @@ class Repo(Base):
     )
     clone_url: Mapped[str] = mapped_column(Text, nullable=False)
     pat_scope: Mapped[str | None] = mapped_column(Text, nullable=True)
+    connected: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=sa.text("1")
+    )
     webhook_registered: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=sa.text("0")
     )

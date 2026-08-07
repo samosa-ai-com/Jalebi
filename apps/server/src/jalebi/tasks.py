@@ -149,11 +149,13 @@ def task_to_dict(
     run: Run | None = None,
     followups: list[Followup] | None = None,
     artifacts: list[Artifact] | None = None,
+    repo_full_name: str | None = None,
 ) -> dict[str, object]:
     data: dict[str, object] = {
         "id": task.id,
         "type": task.type,
         "repo_id": task.repo_id,
+        "repo_full_name": repo_full_name,
         "source_branch": task.source_branch,
         "target_branch": task.target_branch,
         "model": task.model,

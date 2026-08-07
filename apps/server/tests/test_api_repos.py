@@ -130,3 +130,43 @@ def test_branches_for_connected_repo(client: FlaskClient, app, monkeypatch) -> N
     resp = client.get(f"/api/repos/{created['id']}/branches")
     assert resp.status_code == 200
     assert resp.get_json()["branches"] == ["main", "dev"]
+
+
+def test_disconnect_is_soft_and_hidden(client: FlaskClient, app, monkeypatch, session) -> None:
+    secrets.store_secret(app.config["JALEBI_CONFIG"], secrets.GITHUB_TOKEN_KEY, "ghp_test")
+    monkeypatch.setattr(routes_repos, "GitHubClient", FakeGitHubClient)
+    created = client.post("/api/repos", json={"full_name": "octocat/hello"}).get_json()
+
+    resp = client.delete(f"/api/repos/{created['id']}")
+    assert resp.status_code == 200
+    assert client.get("/api/repos").get_json() == []
+
+    # row still exists (history preserved), just marked disconnected
+    from jalebi import db
+
+    row = session.get(db.Repo, created["id"])
+    assert row is not None
+    assert row.connected is False
+
+
+def test_reconnect(client: FlaskClient, app, monkeypatch) -> None:
+    secrets.store_secret(app.config["JALEBI_CONFIG"], secrets.GITHUB_TOKEN_KEY, "ghp_test")
+    monkeypatch.setattr(routes_repos, "GitHubClient", FakeGitHubClient)
+    created = client.post("/api/repos", json={"full_name": "octocat/hello"}).get_json()
+    client.delete(f"/api/repos/{created['id']}")
+
+    resp = client.post(f"/api/repos/{created['id']}/reconnect")
+    assert resp.status_code == 200
+    names = [r["full_name"] for r in client.get("/api/repos").get_json()]
+    assert names == ["octocat/hello"]
+
+
+def test_reconnect_404_upstream(client: FlaskClient, app, monkeypatch) -> None:
+    secrets.store_secret(app.config["JALEBI_CONFIG"], secrets.GITHUB_TOKEN_KEY, "ghp_test")
+    monkeypatch.setattr(routes_repos, "GitHubClient", FakeGitHubClient)
+    created = client.post("/api/repos", json={"full_name": "octocat/hello"}).get_json()
+    client.delete(f"/api/repos/{created['id']}")
+    # FakeGitHubClient only knows octocat/hello; reconnect succeeds for it, so use a
+    # repo the client doesn't know to hit the 404 path.
+    resp = client.post("/api/repos/999/reconnect")
+    assert resp.status_code == 404

@@ -402,7 +402,7 @@ export default function Tasks() {
       return (
         String(t.id).includes(q) ||
         t.prompt.toLowerCase().includes(q) ||
-        repoName(repos, t.repo_id).toLowerCase().includes(q)
+        (t.repo_full_name ?? repoName(repos, t.repo_id)).toLowerCase().includes(q)
       );
     });
     list.sort((a, b) => {
@@ -516,7 +516,7 @@ export default function Tasks() {
               </tr>
             )}
             {pageRows.map((t) => {
-              const rn = repoName(repos, t.repo_id);
+              const rn = t.repo_full_name ?? repoName(repos, t.repo_id);
               return (
                 <tr key={t.id} className="border-t border-ink-800/70 transition-colors hover:bg-ink-875/50">
                   <td className="px-4 py-3">

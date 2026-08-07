@@ -250,9 +250,9 @@ Comments from the owner's QA pass and how each was addressed. Items marked **FIX
 
 ### Repos & GitHub page (prereq line 11, 4.7)
 
-- **FIXED — disconnect repos.** Disconnect buttons on both the GitHub and Repos pages.
-- **FIXED — auto-removal of deleted repos.** **Prune deleted** button on the GitHub page removes connected repos that no longer exist upstream.
-- **FIXED — full repo list for connection.** The GitHub page lists the account's repos with Connect buttons (as before), now with disconnect + prune.
+- **FIXED — disconnect repos.** Disconnect buttons on both the GitHub and Repos pages. Disconnect is now **soft** (a repo with existing tasks couldn't be hard-deleted — FK constraint → 500); it hides the repo from all lists/pickers while preserving task history, and **Reconnect** is available. Verified live: `example-account/example-deleted-repo` (deleted upstream) is now hidden.
+- **FIXED — auto-removal of deleted repos.** **Prune deleted** button on the GitHub page hides connected repos that no longer exist upstream (also soft).
+- **FIXED — full repo list for connection.** The GitHub page lists the account's repos with Connect buttons (as before), now with disconnect + reconnect + prune.
 
 ### Settings (6.7)
 
