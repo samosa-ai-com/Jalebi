@@ -245,7 +245,52 @@ def test_add_token_default_name_rejected(client: FlaskClient, monkeypatch) -> No
 def test_delete_token_reports_affected_repos_and_tasks(
     client: FlaskClient, app, monkeypatch, session
 ) -> None:
-    from jalebi import repos
+    from jalebi import db, repos
+    from jalebi import tasks as tasks_svc
+    from jalebi.db import Run, utcnow
+
+    monkeypatch.setattr(routes_github, "GitHubClient", FakeClient)
+    client.post("/api/github/tokens", json={"name": "work", "token": "ghp_work"})
+    row, _ = repos.upsert_repo(
+        session,
+        full_name="octocat/hello",
+        default_branch="main",
+        clone_url="https://github.com/octocat/hello.git",
+        pat_name="work",
+    )
+    task = tasks_svc.create_task(
+        session, type_="freeform", repo_id=row.id, prompt="x", pat_name="work"
+    )
+    run = Run(
+        task_id=task.id,
+        seq=1,
+        status="done",
+        started_at=utcnow(),
+        finished_at=utcnow(),
+    )
+    session.add(run)
+    session.commit()
+    repo_id, task_id, run_id = row.id, task.id, run.id
+
+    resp = client.delete("/api/github/tokens/work")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["removed"] == "work"
+    assert body["repos_affected"] == ["octocat/hello"]
+    assert body["tasks_affected"] == 1
+
+    # The account's repos and tasks are actually deleted (with their runs).
+    session.expire_all()
+    assert session.get(db.Repo, repo_id) is None
+    assert tasks_svc.get_task(session, task_id) is None
+    assert session.get(Run, run_id) is None
+
+
+def test_delete_token_deletes_tasks_on_repos_bound_to_account(
+    client: FlaskClient, app, monkeypatch, session
+) -> None:
+    """A task on the account's repo is deleted even if it used another PAT."""
+    from jalebi import db, repos
     from jalebi import tasks as tasks_svc
 
     monkeypatch.setattr(routes_github, "GitHubClient", FakeClient)
@@ -257,11 +302,13 @@ def test_delete_token_reports_affected_repos_and_tasks(
         clone_url="https://github.com/octocat/hello.git",
         pat_name="work",
     )
-    tasks_svc.create_task(session, type_="freeform", repo_id=row.id, prompt="x", pat_name="work")
+    task = tasks_svc.create_task(
+        session, type_="freeform", repo_id=row.id, prompt="x", pat_name=None
+    )
+    repo_id, task_id = row.id, task.id
 
-    resp = client.delete("/api/github/tokens/work")
-    assert resp.status_code == 200
-    body = resp.get_json()
-    assert body["removed"] == "work"
-    assert body["repos_affected"] == ["octocat/hello"]
-    assert body["tasks_affected"] == 1
+    client.delete("/api/github/tokens/work")
+
+    session.expire_all()
+    assert tasks_svc.get_task(session, task_id) is None
+    assert session.get(db.Repo, repo_id) is None

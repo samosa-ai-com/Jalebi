@@ -3,17 +3,23 @@
 Every stored PAT is a first-class **account**. The primary token
 (``JALEBI_GITHUB_TOKEN`` / ``github_token``) is the "default" account; each
 named vault token is its own account. Each account has its own live status and
-its own repository list.
+its own repository list. Removing an account deletes its connected repos and
+their tasks.
 """
 
 import os
+import shutil
 from dataclasses import asdict
 
 import httpx
 from flask import Blueprint, current_app, jsonify, request
 from flask.typing import ResponseReturnValue
+from sqlalchemy import delete as sa_delete
+from sqlalchemy import select
 
-from jalebi import secrets
+from jalebi import artifacts, db, secrets
+from jalebi.db import Artifact, Followup, Repo, Run, Task
+from jalebi.git_workspace import GitWorkspace
 from jalebi.github import GitHubClient, GitHubError, TokenInfo
 
 bp = Blueprint("github", __name__, url_prefix="/api/github")
@@ -225,37 +231,84 @@ def add_token() -> ResponseReturnValue:
 
 @bp.delete("/tokens/<name>")
 def delete_token(name: str) -> ResponseReturnValue:
+    """Remove an account AND delete everything tied to it.
+
+    Deleting an account deletes its connected repos and the tasks on them
+    (runs, follow-ups, artifacts, worktrees, mirrors). Running/queued tasks for
+    the account are cancelled first.
+    """
     config = _config()
     if name == "default":
         return jsonify({"error": "cannot remove the default account"}), 400
     if name not in secrets.token_names(config):
         return jsonify({"error": f"no such token: {name}"}), 404
 
-    # Report what will fall back to the primary so the UI can warn the user.
-    from sqlalchemy import func, select
-
-    from jalebi import db
-    from jalebi.db import Repo, Task
-
     session = db.get_session()
-    repos_affected = [
-        r.full_name
-        for r in session.execute(
+
+    repos = list(
+        session.execute(
             select(Repo).where(Repo.pat_name == name, Repo.connected.is_(True))
         ).scalars()
-    ]
-    tasks_affected = (
-        session.execute(
-            select(func.count()).select_from(Task).where(Task.pat_name == name)
-        ).scalar()
-        or 0
     )
+    repo_ids = [r.id for r in repos]
+
+    tasks = list(
+        session.execute(
+            select(Task).where(
+                (Task.pat_name == name) | Task.repo_id.in_(repo_ids)
+            )
+        ).scalars()
+    )
+    task_ids = [t.id for t in tasks]
+
+    # Cancel queued/running tasks so no orphaned agent keeps working on data
+    # that is about to be deleted.
+    queue = current_app.config["JALEBI_QUEUE"]
+    for task in tasks:
+        if task.status == "running":
+            queue.cancel(task.id)
+        if task.status in ("queued", "running"):
+            task.status = "cancelled"
+
+    # Cascade-delete children first (FK order): followups → artifacts → runs → tasks → repos.
+    runs = list(
+        session.execute(select(Run).where(Run.task_id.in_(task_ids))).scalars()
+        if task_ids
+        else []
+    )
+    run_ids = [r.id for r in runs]
+    if task_ids:
+        session.execute(sa_delete(Followup).where(Followup.task_id.in_(task_ids)))
+    if run_ids:
+        session.execute(sa_delete(Artifact).where(Artifact.run_id.in_(run_ids)))
+        session.execute(sa_delete(Run).where(Run.id.in_(run_ids)))
+    if task_ids:
+        session.execute(sa_delete(Task).where(Task.id.in_(task_ids)))
+    if repo_ids:
+        session.execute(sa_delete(Repo).where(Repo.id.in_(repo_ids)))
 
     secrets.remove_github_token(config, name)
+    session.commit()
+
+    # Best-effort disk cleanup (outside the DB transaction).
+    for run_id in run_ids:
+        shutil.rmtree(
+            artifacts.artifact_store_dir(config.data_dir) / str(run_id), ignore_errors=True
+        )
+    for task_id in task_ids:
+        shutil.rmtree(
+            GitWorkspace.worktree_path(config.data_dir, task_id), ignore_errors=True
+        )
+        shutil.rmtree(
+            GitWorkspace.review_worktree_path(config.data_dir, task_id), ignore_errors=True
+        )
+    for repo in repos:
+        shutil.rmtree(GitWorkspace.mirror_path(config.data_dir, repo.full_name), ignore_errors=True)
+
     return jsonify(
         {
             "removed": name,
-            "repos_affected": repos_affected,
-            "tasks_affected": int(tasks_affected),
+            "repos_affected": [r.full_name for r in repos],
+            "tasks_affected": len(tasks),
         }
     )

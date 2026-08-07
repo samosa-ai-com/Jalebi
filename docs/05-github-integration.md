@@ -110,4 +110,4 @@ Planned capabilities (later phases): issues, PRs (create/update/comment/review),
 - `GET /api/github/repos` lists repos **across all accounts**, each tagged `account: <name>` (`?account=` filters). A failing account contributes an `{account, error}` entry, not a page failure.
 - `repos.pat_name` records which account owns a connected repo. `connect_repo` accepts `pat_name`; `prune`/`branches` resolve each repo's token from its `pat_name` (fallback = primary). Reconnecting a repo without a `pat_name` clears it back to the default account.
 - Task creation **inherits** the selected repo's account (`tasks.pat_name` defaults to `repo.pat_name`); the Credentials dropdown still overrides.
-- Removing an account falls back to the primary for its connected repos (nothing breaks).
+- Removing an account **deletes its connected repos and the tasks on them** (runs, follow-ups, artifacts, worktrees, mirrors). Queued/running tasks for the account are cancelled first. `DELETE /api/github/tokens/<name>` returns `{removed, repos_affected, tasks_affected}` so the UI can confirm.
