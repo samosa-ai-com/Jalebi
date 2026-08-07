@@ -242,3 +242,39 @@ def test_run_dict_includes_artifacts(app, session, repo_row) -> None:
     assert len(arts) == 1
     assert arts[0]["path"] == "a.txt"
     assert arts[0]["size"] == 3
+
+
+def test_capture_excludes_jalebi_internal(tmp_path, session) -> None:
+    """After bootstrap, .jalebi/ files are ignored and never captured."""
+    from jalebi import worktree_bootstrap
+
+    repo = tmp_path / "repo"
+    repo.mkdir(parents=True)
+    _git(["init", "-q", str(repo)])
+    _git(["-C", str(repo), "config", "user.email", "t@example.com"])
+    _git(["-C", str(repo), "config", "user.name", "Test"])
+    (repo / "base.txt").write_text("x\n")
+    _git(["-C", str(repo), "add", "base.txt"])
+    _git(["-C", str(repo), "commit", "-m", "init"])
+
+    repo_row, _ = repos.upsert_repo(
+        session,
+        full_name=FULL_NAME,
+        default_branch="main",
+        clone_url="https://github.com/owner/repo.git",
+    )
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="x")
+    worktree_bootstrap.bootstrap_worktree(repo)
+    (repo / "output.log").write_text("logs\n")
+    (repo / ".jalebi").mkdir(exist_ok=True)
+    (repo / ".jalebi" / "pr.md").write_text("# title\n")
+
+    run = Run(task_id=task.id, seq=1, status="done", started_at=utcnow(), finished_at=utcnow())
+    session.add(run)
+    session.flush()
+
+    captured = artifacts.capture_run_artifacts(session, run, repo, tmp_path)
+    paths = [str(c["path"]) for c in captured]
+    assert "output.log" in paths
+    assert not any(".jalebi" in p for p in paths)
+    assert ".jalebi/pr.md" not in paths

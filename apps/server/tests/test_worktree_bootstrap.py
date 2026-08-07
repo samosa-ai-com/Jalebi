@@ -51,3 +51,59 @@ def test_bootstrap_is_idempotent(tmp_path) -> None:
     assert (tmp_path / "opencode.json").read_text() == first
     assert (tmp_path / "AGENTS.md").is_file()
     assert _git(["config", "user.name"], tmp_path) == "Jalebi"
+
+
+def test_write_gitignore_appends_jalebi(tmp_path) -> None:
+    _init_repo(tmp_path)
+    (tmp_path / ".gitignore").write_text("node_modules/\n")
+    worktree_bootstrap.write_gitignore(tmp_path)
+    lines = (tmp_path / ".gitignore").read_text().splitlines()
+    assert ".jalebi/" in lines
+    assert "node_modules/" in lines
+    # idempotent — no duplicate
+    worktree_bootstrap.write_gitignore(tmp_path)
+    assert (tmp_path / ".gitignore").read_text().splitlines().count(".jalebi/") == 1
+
+
+def test_precommit_hook_rejects_jalebi_staging(tmp_path) -> None:
+    _init_repo(tmp_path)
+    worktree_bootstrap.bootstrap_worktree(tmp_path)
+
+    (tmp_path / "file.txt").write_text("ok\n")
+    _git(["add", "file.txt"], tmp_path)
+    _git(["commit", "-m", "normal"], tmp_path)
+
+    # A normal commit works; a forced-stage of .jalebi is rejected by the hook.
+    (tmp_path / ".jalebi").mkdir(exist_ok=True)
+    (tmp_path / ".jalebi" / "pr.md").write_text("# t\n")
+    _git(["add", "-f", ".jalebi/pr.md"], tmp_path)  # -f bypasses the gitignore
+    proc = subprocess.run(
+        ["git", "commit", "-m", "should fail"],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode != 0
+    assert "Jalebi" in proc.stderr
+
+
+def test_bootstrap_marks_hook_executable(tmp_path) -> None:
+    _init_repo(tmp_path)
+    hook = worktree_bootstrap.write_precommit_hook(tmp_path)
+    assert hook is not None
+    assert hook.is_file()
+    assert hook.stat().st_mode & 0o111
+
+
+def test_remove_guard_cleans_gitignore_and_hook(tmp_path) -> None:
+    _init_repo(tmp_path)
+    worktree_bootstrap.bootstrap_worktree(tmp_path)
+    hook = worktree_bootstrap.write_precommit_hook(tmp_path)
+    assert hook is not None and hook.is_file()
+    assert (tmp_path / ".gitignore").is_file()
+
+    worktree_bootstrap.remove_guard(tmp_path)
+    assert (tmp_path / "opencode.json").exists() is False
+    assert (tmp_path / "AGENTS.md").exists() is False
+    assert (tmp_path / ".gitignore").exists() is False
+    assert hook.exists() is False

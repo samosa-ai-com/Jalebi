@@ -23,8 +23,9 @@ BEST_PRACTICES = """\
   subset and say what you ran.
 - Update or add tests where appropriate for the change.
 - Keep the diff focused; do not reformat unrelated files.
-- If you modify user-facing behavior, update docs/README/changelog entries where the
-  repo keeps them.
+- **Docs:** only update documentation that already exists and is meant to be kept in
+  sync (e.g. `CHANGELOG.md`, relevant `README.md` sections). Do NOT create new
+  documentation or changelog files unless the task explicitly asks for them.
 """
 
 HARD_RULES = """\
@@ -39,6 +40,10 @@ HARD_RULES = """\
    environment and used by git) for anything GitHub-related — e.g. `curl -H
    "Authorization: Bearer $JALEBI_GITHUB_TOKEN"`.
 6. Commit messages: a short imperative summary, one line.
+7. **Never commit anything under `.jalebi/`.** It is Jalebi-internal — your PR
+   description and review live there. If you staged `.jalebi/` files (e.g. via
+   `git add .`), unstage them with `git reset HEAD .jalebi/` before committing.
+   The pre-commit hook will reject them otherwise.
 """
 
 

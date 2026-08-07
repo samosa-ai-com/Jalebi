@@ -68,6 +68,24 @@ You are working inside a git worktree prepared by Jalebi.
 6. For review tasks, write your review to `.jalebi/review.md` — Jalebi posts it.
 7. Use only the GitHub token provided in `JALEBI_GITHUB_TOKEN` for anything
    GitHub-related. Do not use gh at all.
+8. **Never commit anything under `.jalebi/`** — it is Jalebi-internal (your PR
+   description/review live there). If you staged `.jalebi/` files, unstage with
+   `git reset HEAD .jalebi/`. A pre-commit hook rejects them otherwise.
+9. **Docs:** only update documentation that already exists and is kept in sync
+   (e.g. `CHANGELOG.md`, relevant `README.md` sections). Do NOT create new
+   documentation/changelog files unless the task explicitly asks for them.
+"""
+
+GITIGNORE_LINE = ".jalebi/"
+
+PRECOMMIT_HOOK = """#!/bin/sh
+# Jalebi: never allow committing Jalebi-internal files under .jalebi/.
+if git diff --cached --name-only -z | tr '\\0' '\\n' | grep -q '^\\.jalebi/'; then
+  echo "Jalebi: refusing to commit .jalebi/ (internal files)." >&2
+  echo "Unstage them with: git reset HEAD .jalebi/" >&2
+  exit 1
+fi
+exit 0
 """
 
 
@@ -78,7 +96,7 @@ def write_opencode_guard(worktree: Path) -> Path:
     return path
 
 
-def _run_git(args: list[str], cwd: Path) -> None:
+def _run_git(args: list[str], cwd: Path) -> str:
     proc = subprocess.run(
         ["git", *args],
         cwd=str(cwd),
@@ -88,6 +106,7 @@ def _run_git(args: list[str], cwd: Path) -> None:
     )
     if proc.returncode != 0:
         raise RuntimeError(f"git {' '.join(args)} failed: {proc.stderr.strip()}")
+    return (proc.stdout or "").strip()
 
 
 def set_git_identity(worktree: Path) -> None:
@@ -103,12 +122,55 @@ def write_agent_md(worktree: Path, content: str = DEFAULT_AGENT_MD) -> Path:
     return path
 
 
+def write_gitignore(worktree: Path) -> Path:
+    """Ensure the worktree ignores ``.jalebi/`` (keeps it out of git and artifacts).
+
+    Appends the line to an existing ``.gitignore`` rather than clobbering it.
+    """
+    path = worktree / ".gitignore"
+    lines = path.read_text().splitlines() if path.exists() else []
+    if GITIGNORE_LINE not in lines:
+        lines.append(GITIGNORE_LINE)
+        path.write_text("\n".join(lines) + "\n")
+    return path
+
+
+def _git_common_dir(worktree: Path) -> Path:
+    out = _run_git(["rev-parse", "--git-common-dir"], worktree)
+    common = Path(out).expanduser()
+    if not common.is_absolute():
+        common = worktree / common
+    return common.resolve()
+
+
+def write_precommit_hook(worktree: Path) -> Path | None:
+    """Install a pre-commit hook that rejects staged ``.jalebi/`` files.
+
+    Worktrees share the common gitdir's hooks, so one hook covers every worktree.
+    Returns the hook path, or ``None`` if the worktree has no git dir yet.
+    """
+    try:
+        hooks = _git_common_dir(worktree) / "hooks"
+    except RuntimeError:
+        return None
+    hook = hooks / "pre-commit"
+    hooks.mkdir(parents=True, exist_ok=True)
+    hook.write_text(PRECOMMIT_HOOK)
+    hook.chmod(0o755)
+    return hook
+
+
 def bootstrap_worktree(worktree: Path, agent_md: str = DEFAULT_AGENT_MD) -> None:
-    """Apply the full bootstrap: guard + identity + AGENTS.md. Idempotent."""
+    """Apply the full bootstrap: guard + identity + AGENTS.md + .jalebi guards.
+
+    Idempotent.
+    """
     worktree.mkdir(parents=True, exist_ok=True)
     write_opencode_guard(worktree)
     set_git_identity(worktree)
     write_agent_md(worktree, agent_md)
+    write_gitignore(worktree)
+    write_precommit_hook(worktree)
 
 
 def remove_guard(worktree: Path) -> None:
@@ -116,5 +178,25 @@ def remove_guard(worktree: Path) -> None:
     for name in ("opencode.json", "AGENTS.md"):
         try:
             (worktree / name).unlink()
+        except FileNotFoundError:
+            pass
+    # Drop the .jalebi/ ignore line we added (keep any pre-existing lines).
+    gitignore = worktree / ".gitignore"
+    if gitignore.is_file():
+        remaining = [ln for ln in gitignore.read_text().splitlines() if ln != GITIGNORE_LINE]
+        if remaining:
+            gitignore.write_text("\n".join(remaining) + "\n")
+        else:
+            try:
+                gitignore.unlink()
+            except FileNotFoundError:
+                pass
+    try:
+        hook = _git_common_dir(worktree) / "hooks" / "pre-commit"
+    except RuntimeError:
+        return
+    if hook.is_file() and PRECOMMIT_HOOK.strip() in (hook.read_text() or ""):
+        try:
+            hook.unlink()
         except FileNotFoundError:
             pass

@@ -248,6 +248,16 @@ Comments from the owner's QA pass and how each was addressed. Items marked **FIX
 - **FIXED — timeline scroll + follow (3.9).** Timeline/console auto-scroll with a **follow toggle**.
 - **FIXED — in-browser artifact preview (3.19).** Click an artifact to preview text/markdown/JSON/logs or images in a modal; download kept.
 
+### `pr.md` consistency (owner feedback on tasks 25/26)
+
+- **FIXED — `.jalebi/pr.md` is Jalebi-internal and never lands in the PR or as an artifact.** Previously the agent inconsistently committed it (task 25 → file inside PR #5) or left it untracked (task 26 → captured as an artifact). Now:
+  - the agent is told (AGENTS.md + prompts hard rule) to **never commit `.jalebi/`** (unstage with `git reset HEAD .jalebi/` if staged);
+  - each worktree gets a `.gitignore` entry for `.jalebi/` (keeps it out of `git add .` and out of artifact capture);
+  - a **pre-commit hook** rejects any staged `.jalebi/` path (even `git add -f`);
+  - the PR description still comes from `pr.md` (Jalebi reads it from the worktree at publish time) — only the file's visibility changed.
+- **FIXED — no gratuitous new docs.** The agent is instructed to only update existing docs (CHANGELOG.md, relevant README sections) and **not create new documentation/changelog files** unless the task explicitly asks.
+- Existing PR #5 (already has a committed `pr.md`) was left as-is per owner choice; the fix prevents it going forward.
+
 ### Repos & GitHub page (prereq line 11, 4.7)
 
 - **FIXED — disconnect repos.** Disconnect buttons on both the GitHub and Repos pages. Disconnect is now **soft** (a repo with existing tasks couldn't be hard-deleted — FK constraint → 500); it hides the repo from all lists/pickers while preserving task history, and **Reconnect** is available. Verified live: `example-account/example-deleted-repo` (deleted upstream) is now hidden.
