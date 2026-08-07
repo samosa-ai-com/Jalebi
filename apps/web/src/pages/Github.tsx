@@ -206,8 +206,15 @@ export default function Github() {
   }
 
   async function removeAccount(name: string) {
+    const confirmMsg = `Remove account "${name}"?\n\nRepos/tasks bound to it will fall back to the primary token.`;
+    if (!window.confirm(confirmMsg)) return;
     try {
-      await api.deleteToken(name);
+      const res = await api.deleteToken(name);
+      if (res.repos_affected.length > 0 || res.tasks_affected > 0) {
+        window.alert(
+          `Account removed. ${res.repos_affected.length} repo(s) and ${res.tasks_affected} task(s) that used it now fall back to the primary token.`
+        );
+      }
       setError(null);
       load();
     } catch (e) {

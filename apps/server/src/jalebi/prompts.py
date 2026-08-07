@@ -69,7 +69,7 @@ def build_agent_md(task: Task, repo: Repo) -> str:
         f"- Source branch (worktree base): `{task.source_branch or 'default'}`",
         f"- Target branch (PR base): `{task.target_branch or 'default'}`",
     ]
-    if task.pat_name:
+    if task.pat_name and task.pat_name != "default":
         parts.append(f"- Using GitHub token: `{task.pat_name}`")
     parts += ["", HARD_RULES, "", BEST_PRACTICES]
 

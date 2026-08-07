@@ -240,3 +240,28 @@ def test_add_token_default_name_rejected(client: FlaskClient, monkeypatch) -> No
     resp = client.post("/api/github/tokens", json={"name": "default", "token": "ghp_x"})
     assert resp.status_code == 400
     assert "reserved" in resp.get_json()["error"]
+
+
+def test_delete_token_reports_affected_repos_and_tasks(
+    client: FlaskClient, app, monkeypatch, session
+) -> None:
+    from jalebi import repos
+    from jalebi import tasks as tasks_svc
+
+    monkeypatch.setattr(routes_github, "GitHubClient", FakeClient)
+    client.post("/api/github/tokens", json={"name": "work", "token": "ghp_work"})
+    row, _ = repos.upsert_repo(
+        session,
+        full_name="octocat/hello",
+        default_branch="main",
+        clone_url="https://github.com/octocat/hello.git",
+        pat_name="work",
+    )
+    tasks_svc.create_task(session, type_="freeform", repo_id=row.id, prompt="x", pat_name="work")
+
+    resp = client.delete("/api/github/tokens/work")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["removed"] == "work"
+    assert body["repos_affected"] == ["octocat/hello"]
+    assert body["tasks_affected"] == 1

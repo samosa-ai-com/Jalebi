@@ -72,9 +72,10 @@ export const api = {
       body: JSON.stringify({ name, token }),
     }),
   deleteToken: (name: string) =>
-    request<{ removed: string }>(`/api/github/tokens/${encodeURIComponent(name)}`, {
-      method: "DELETE",
-    }),
+    request<{ removed: string; repos_affected: string[]; tasks_affected: number }>(
+      `/api/github/tokens/${encodeURIComponent(name)}`,
+      { method: "DELETE" }
+    ),
   getTasks: () => request<Task[]>("/api/tasks"),
   getTask: (id: number) => request<Task>(`/api/tasks/${id}`),
   getRuns: (id: number) => request<Run[]>(`/api/tasks/${id}/runs`),

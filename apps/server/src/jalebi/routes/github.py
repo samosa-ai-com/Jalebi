@@ -230,5 +230,32 @@ def delete_token(name: str) -> ResponseReturnValue:
         return jsonify({"error": "cannot remove the default account"}), 400
     if name not in secrets.token_names(config):
         return jsonify({"error": f"no such token: {name}"}), 404
+
+    # Report what will fall back to the primary so the UI can warn the user.
+    from sqlalchemy import func, select
+
+    from jalebi import db
+    from jalebi.db import Repo, Task
+
+    session = db.get_session()
+    repos_affected = [
+        r.full_name
+        for r in session.execute(
+            select(Repo).where(Repo.pat_name == name, Repo.connected.is_(True))
+        ).scalars()
+    ]
+    tasks_affected = (
+        session.execute(
+            select(func.count()).select_from(Task).where(Task.pat_name == name)
+        ).scalar()
+        or 0
+    )
+
     secrets.remove_github_token(config, name)
-    return jsonify({"removed": name})
+    return jsonify(
+        {
+            "removed": name,
+            "repos_affected": repos_affected,
+            "tasks_affected": int(tasks_affected),
+        }
+    )
