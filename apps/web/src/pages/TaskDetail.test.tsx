@@ -45,7 +45,6 @@ const REPOS = [
     id: 1,
     full_name: "owner/repo",
     default_branch: "main",
-    clone_url: "https://x.git",
     connected: true,
     webhook_registered: false,
     poll_fallback: false,
@@ -206,6 +205,41 @@ describe("TaskDetail", () => {
     stubFetch(cancelledTask);
     renderDetail();
     expect(await screen.findByRole("button", { name: "Re-run" })).toBeInTheDocument();
+  });
+
+  it("surfaces a publish error inline instead of swallowing it", async () => {
+    const needsApproval = {
+      ...TASK,
+      status: "needs_approval",
+      run: { ...RUN, status: "needs_approval" },
+    };
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "POST" && url.includes("/publish")) {
+        return { ok: false, json: async () => ({ error: "PR create failed" }) };
+      }
+      if (url.endsWith("/runs")) {
+        return { ok: true, json: async () => [needsApproval.run] };
+      }
+      if (url.includes("/api/tasks")) {
+        return { ok: true, json: async () => needsApproval };
+      }
+      if (url.includes("/api/github/tokens")) {
+        return { ok: true, json: async () => ({ default: null, accounts: [] }) };
+      }
+      if (url.includes("/api/models")) {
+        return { ok: true, json: async () => ({ cli: "opencode", models: ["m1"] }) };
+      }
+      return { ok: true, json: async () => REPOS };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderDetail();
+    const publish = await screen.findByRole("button", { name: "Publish" });
+    await userEvent.click(publish);
+
+    expect(await screen.findByText("PR create failed")).toBeInTheDocument();
+    // The failure is shown inline; the page is NOT replaced by a full-page error.
+    expect(screen.getByText("fix the bug")).toBeInTheDocument();
   });
 
   it("polls after a follow-up until the new run starts", async () => {

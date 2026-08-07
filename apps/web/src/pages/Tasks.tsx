@@ -43,8 +43,6 @@ const TASK_TYPES = [
   { value: "screen_finding", label: "Screen finding" },
 ];
 
-const DEFAULT_MODEL = "opencode-go/deepseek-v4-flash";
-
 function Select({
   label,
   value,
@@ -87,7 +85,7 @@ function CreateTask({
   const [prompt, setPrompt] = useState("");
   const [sourceBranch, setSourceBranch] = useState("");
   const [targetBranch, setTargetBranch] = useState("");
-  const [model, setModel] = useState(DEFAULT_MODEL);
+  const [model, setModel] = useState("");
   const [patName, setPatName] = useState("");
   const [issueNumber, setIssueNumber] = useState("");
   const [prNumber, setPrNumber] = useState("");
@@ -121,7 +119,7 @@ function CreateTask({
     if (!repo) return;
     let cancelled = false;
     api
-      .getGithubContext(repo.full_name)
+      .getGithubContext(repo.full_name, repo.pat_name ?? undefined)
       .then((c) => {
         if (cancelled) return;
         setContext(c);

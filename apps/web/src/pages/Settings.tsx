@@ -85,7 +85,7 @@ export default function Settings() {
         <input
           type="number"
           min={0}
-          max={16}
+          max={64}
           defaultValue={settings.concurrency}
           onBlur={(e) => save("concurrency", Number(e.target.value))}
           className="field w-28 font-mono"

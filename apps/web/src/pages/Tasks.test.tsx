@@ -34,7 +34,6 @@ const REPOS = [
     id: 1,
     full_name: "owner/repo",
     default_branch: "main",
-    clone_url: "https://x.git",
     connected: true,
     webhook_registered: false,
     poll_fallback: false,
@@ -125,5 +124,24 @@ describe("Tasks", () => {
 
     expect(screen.getByText("running one")).toBeInTheDocument();
     expect(screen.queryByText("done one")).not.toBeInTheDocument();
+  });
+
+  it("fetches GitHub context with the selected repo's account", async () => {
+    const namedRepos = [{ ...REPOS[0], pat_name: "work" }];
+    const fetchMock = stubFetch({ ...DEFAULT_HANDLERS, "/api/repos": namedRepos });
+
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      const ctxCall = fetchMock.mock.calls.find((call) =>
+        String(call[0]).includes("/api/github/context")
+      );
+      expect(ctxCall).toBeTruthy();
+      expect(String(ctxCall![0])).toContain("account=work");
+    });
   });
 });

@@ -118,6 +118,21 @@ function App() {
           <Route path="/screenings" element={<ComingSoon feature="Screenings" />} />
           <Route path="/agents" element={<ComingSoon feature="Agents" />} />
           <Route path="/triggers" element={<ComingSoon feature="Triggers" />} />
+          <Route
+            path="*"
+            element={
+              <div className="surface flex flex-col items-start gap-3 p-6">
+                <h2 className="panel-title">Page not found</h2>
+                <p className="text-sm text-ink-400">
+                  That URL doesn&apos;t exist.{" "}
+                  <Link to="/" className="link">
+                    Back to tasks
+                  </Link>
+                  .
+                </p>
+              </div>
+            }
+          />
         </Routes>
       </main>
     </div>

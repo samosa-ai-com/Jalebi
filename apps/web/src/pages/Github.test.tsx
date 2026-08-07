@@ -83,8 +83,8 @@ describe("Github", () => {
       ],
     };
     const repos = [
-      { full_name: "acct1/hello", private: false, default_branch: "main", clone_url: "u", html_url: "h1", account: "default" },
-      { full_name: "acct2/other", private: true, default_branch: "main", clone_url: "u", html_url: "h2", account: "work" },
+      { full_name: "acct1/hello", private: false, default_branch: "main", html_url: "h1", account: "default" },
+      { full_name: "acct2/other", private: true, default_branch: "main", html_url: "h2", account: "work" },
     ];
     const fetchMock = stubFetch({
       "/api/github/tokens": accounts,

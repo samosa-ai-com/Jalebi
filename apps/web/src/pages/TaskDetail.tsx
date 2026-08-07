@@ -6,6 +6,8 @@ import type { Account, Artifact, Followup, Repo, Run, SseEvent, Task } from "../
 
 const TERMINAL = new Set(["done", "failed", "timed_out", "cancelled", "needs_approval", "interrupted"]);
 
+const MAX_LIVE = 500; // live timeline buffer cap (backend persists last 500 steps)
+
 const PHASE_ORDER = [
   "scanning",
   "planning",
@@ -146,6 +148,7 @@ function FollowUpComposer({
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (busy) return;
     if (!text.trim()) return;
     setBusy(true);
     setError(null);
@@ -322,6 +325,9 @@ export default function TaskDetail() {
   const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
   const [preview, setPreview] = useState<Artifact | null>(null);
   const [followScroll, setFollowScroll] = useState(true);
+  const [actionBusy, setActionBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const actionInFlightRef = useRef(false);
   const lastRunIdRef = useRef<number | null>(null);
 
   const load = useCallback(() => {
@@ -330,12 +336,14 @@ export default function TaskDetail() {
       .then((t) => {
         const runId = t.run?.id ?? null;
         if (lastRunIdRef.current !== runId) {
+          const prior = lastRunIdRef.current;
           setLive([]);
           lastRunIdRef.current = runId;
-          if (selectedRunId === null || !runs.some((r) => r.id === selectedRunId)) {
-            // first load / new run → select the latest
-            setSelectedRunId(runId);
-          }
+          // Auto-follow the latest run unless the user hand-picked an older one
+          // (stale-closure + auto-advance fix, F8/M1). A selection that is null
+          // (first load) or the PREVIOUS latest (watching the live stream) follows
+          // the new run; a genuinely pinned older run stays put.
+          setSelectedRunId((cur) => (cur === null || cur === prior ? runId : cur));
         }
         setTask(t);
       })
@@ -355,12 +363,30 @@ export default function TaskDetail() {
     api.getRepos().then(setRepos).catch(() => {});
     api.getTokens().then((t) => setAccounts(t.accounts ?? [])).catch(() => {});
     api.getModels().then((m) => setModels(m.models ?? [])).catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [taskId]);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  // Cancel / Re-run / Publish: serialized, with errors surfaced inline instead of
+  // silently swallowed (D-4). The ref check is synchronous so two clicks in the
+  // same tick (before React re-renders) cannot double-fire.
+  function runAction(fn: () => Promise<unknown>) {
+    if (actionInFlightRef.current) return;
+    actionInFlightRef.current = true;
+    setActionBusy(true);
+    setActionError(null);
+    fn()
+      .then(load)
+      .catch((e) =>
+        setActionError(e instanceof Error ? e.message : "action failed")
+      )
+      .finally(() => {
+        actionInFlightRef.current = false;
+        setActionBusy(false);
+      });
+  }
 
   const running = task !== null && !TERMINAL.has(task.status);
   const isLatest = selectedRunId === null || selectedRunId === task?.run?.id;
@@ -370,7 +396,11 @@ export default function TaskDetail() {
     if (!task || !running || !isLatest) return;
     const unsubscribe = taskEvents(
       taskId,
-      (event) => setLive((l) => [...l, event]),
+      (event) =>
+        setLive((l) =>
+          // Bound the live buffer (backend persists only the last 500 steps).
+          l.length >= MAX_LIVE ? [...l.slice(l.length - MAX_LIVE + 1), event] : [...l, event]
+        ),
       () => {
         setLive([]);
         load();
@@ -514,17 +544,33 @@ export default function TaskDetail() {
 
       <div className="flex flex-wrap gap-2">
         {(task.status === "running" || task.status === "queued") && (
-          <Action onClick={() => api.cancelTask(task.id).then(load)}>Cancel</Action>
+          <Action
+            onClick={() => runAction(() => api.cancelTask(task.id))}
+            disabled={actionBusy}
+          >
+            Cancel
+          </Action>
         )}
         {TERMINAL.has(task.status) && task.status !== "needs_approval" && (
-          <Action onClick={() => api.rerunTask(task.id).then(load)}>Re-run</Action>
+          <Action
+            onClick={() => runAction(() => api.rerunTask(task.id))}
+            disabled={actionBusy}
+          >
+            Re-run
+          </Action>
         )}
         {task.status === "needs_approval" && (
-          <Action onClick={() => api.publishTask(task.id).then(load)}>Publish</Action>
+          <Action
+            onClick={() => runAction(() => api.publishTask(task.id))}
+            disabled={actionBusy}
+          >
+            Publish
+          </Action>
         )}
+        {actionError && <p className="text-xs text-red-400">{actionError}</p>}
       </div>
 
-      {task.run?.session_id && TERMINAL.has(task.status) && (
+      {runs.some((r) => r.session_id) && TERMINAL.has(task.status) && (
         <FollowUpComposer
           task={task}
           followups={task.followups ?? []}
@@ -582,7 +628,11 @@ export default function TaskDetail() {
           <ol ref={timelineRef} className="space-y-3 overflow-y-auto pr-2 text-sm">
             {timeline.length === 0 && <li className="text-ink-600">No steps yet.</li>}
             {timeline.map((step, i) => (
-              <TimelineItem key={i} step={step} index={i} />
+              <TimelineItem
+                key={`${step.ts ?? "?"}-${step.type}`}
+                step={step}
+                index={i}
+              />
             ))}
           </ol>
         </section>
@@ -595,8 +645,8 @@ export default function TaskDetail() {
           </div>
           <pre ref={consoleRef} className="flex-1 overflow-y-auto whitespace-pre-wrap pr-2 font-mono text-xs leading-relaxed text-ink-300">
             {consoleLines.length === 0 ? "No output yet." : ""}
-            {consoleLines.map((line, i) => (
-              <div key={i} className="flex gap-2">
+            {consoleLines.map((line) => (
+              <div key={`${line.ts ?? "?"}-${line.type}`} className="flex gap-2">
                 <span
                   className={`shrink-0 select-none ${
                     line.type === "tool_call" ? "text-chai-500" : "text-ink-700"

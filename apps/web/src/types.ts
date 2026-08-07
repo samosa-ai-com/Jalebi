@@ -61,7 +61,6 @@ export interface Repo {
   id: number;
   full_name: string;
   default_branch: string;
-  clone_url: string;
   connected: boolean;
   pat_name: string | null;
   webhook_registered: boolean;
@@ -95,7 +94,6 @@ export interface GithubRepo {
   full_name: string;
   private: boolean;
   default_branch: string | null;
-  clone_url: string;
   html_url: string;
   account?: string | null;
   error?: string;

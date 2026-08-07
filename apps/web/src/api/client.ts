@@ -98,7 +98,7 @@ export const api = {
       body: JSON.stringify({ full_name: fullName, pat_name: patName }),
     }),
   disconnectRepo: (id: number) =>
-    request<{ removed: string }>(`/api/repos/${id}`, { method: "DELETE" }),
+    request<{ disconnected: string }>(`/api/repos/${id}`, { method: "DELETE" }),
   pruneRepos: () =>
     request<{ removed: string[] }>("/api/repos/prune", { method: "POST" }),
   getBranches: (id: number) =>
