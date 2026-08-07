@@ -1,5 +1,6 @@
 """Thin GitHub REST client (httpx) with PAT scope validation."""
 
+import urllib.parse
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -7,6 +8,7 @@ import httpx
 
 API_BASE_URL = "https://api.github.com"
 DEFAULT_TIMEOUT = 10.0
+MAX_PAGINATION_PAGES = 10  # bound Link-header following (10×per_page)
 
 REQUIRED_CLASSIC_SCOPES = ("repo",)
 
@@ -62,6 +64,39 @@ class GitHubClient:
         except ValueError:
             body = None
         return resp.status_code, body, dict(resp.headers)
+
+    @staticmethod
+    def _next_page(headers: dict[str, str]) -> int | None:
+        """Page number from a GitHub ``Link: <…>; rel="next"`` header, or None."""
+        link = headers.get("link")
+        if not link:
+            return None
+        for part in link.split(","):
+            segment, _, rel = part.partition(";")
+            if 'rel="next"' in rel:
+                url = segment.strip().strip("<>")
+                query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
+                try:
+                    return int(query["page"][0])
+                except (KeyError, ValueError):
+                    return None
+        return None
+
+    def _request_paginated(self, path: str, params: dict[str, Any]) -> list[Any]:
+        """GET ``path`` following ``Link rel=next`` until exhausted (capped)."""
+        items: list[Any] = []
+        page = 1
+        for _ in range(MAX_PAGINATION_PAGES):
+            current = dict(params, page=page)
+            status, body, headers = self._request("GET", path, params=current)
+            if status != 200 or not isinstance(body, list):
+                raise GitHubError(f"failed to list {path}: HTTP {status}")
+            items.extend(body)
+            next_page = self._next_page(headers)
+            if next_page is None:
+                break
+            page = next_page
+        return items
 
     def validate_token(self) -> TokenInfo:
         """Validate the PAT against ``GET /user`` and enumerate classic scopes."""
@@ -142,11 +177,9 @@ class GitHubClient:
 
     def list_issues(self, full_name: str, state: str = "open") -> list[dict[str, Any]]:
         """List the repo's issues (PRs excluded by GitHub's issue API)."""
-        status, body, _ = self._request(
-            "GET", f"/repos/{full_name}/issues", params={"state": state, "per_page": 100}
+        body = self._request_paginated(
+            f"/repos/{full_name}/issues", {"state": state, "per_page": 100}
         )
-        if status != 200 or not isinstance(body, list):
-            raise GitHubError(f"failed to list issues: HTTP {status}")
         return [
             {
                 "number": issue.get("number"),
@@ -183,11 +216,9 @@ class GitHubClient:
             raise GitHubError(f"failed to comment on issue #{number}: HTTP {status}")
 
     def list_prs(self, full_name: str, state: str = "open") -> list[dict[str, Any]]:
-        status, body, _ = self._request(
-            "GET", f"/repos/{full_name}/pulls", params={"state": state, "per_page": 100}
+        body = self._request_paginated(
+            f"/repos/{full_name}/pulls", {"state": state, "per_page": 100}
         )
-        if status != 200 or not isinstance(body, list):
-            raise GitHubError(f"failed to list PRs: HTTP {status}")
         return [
             {
                 "number": pr.get("number"),
@@ -229,22 +260,15 @@ class GitHubClient:
             raise GitHubError(f"failed to post review on PR #{pr_number}: HTTP {status}")
 
     def list_branches(self, full_name: str) -> list[str]:
-        """List the repo's branch names (first 100)."""
-        status, body, _ = self._request(
-            "GET", f"/repos/{full_name}/branches", params={"per_page": 100}
-        )
-        if status != 200 or not isinstance(body, list):
-            raise GitHubError(f"failed to list branches: HTTP {status}")
+        """List the repo's branch names (paged)."""
+        body = self._request_paginated(f"/repos/{full_name}/branches", {"per_page": 100})
         return [name for name in (b.get("name") for b in body) if isinstance(name, str)]
 
     def list_repos(self, per_page: int = 100) -> list[dict[str, Any]]:
-        status, body, _ = self._request(
-            "GET",
+        body = self._request_paginated(
             "/user/repos",
-            params={"per_page": per_page, "sort": "updated", "visibility": "all"},
+            {"per_page": per_page, "sort": "updated", "visibility": "all"},
         )
-        if status != 200 or not isinstance(body, list):
-            raise GitHubError(f"failed to list repos: HTTP {status}")
         return [
             {
                 "full_name": repo.get("full_name"),

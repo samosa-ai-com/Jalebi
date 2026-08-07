@@ -140,13 +140,26 @@ def test_resume_command_construction(monkeypatch) -> None:
         return FakeProc()
 
     monkeypatch.setattr("jalebi.adapters.opencode._spawn", fake_spawn)
-    adapter.resume("/tmp/ws", "ses_abc", "keep going")
+    adapter.resume("/tmp/ws", "ses_abc", "keep going", model="opencode-go/m1")
     args = captured["args"]
     assert "--session" in args and args[args.index("--session") + 1] == "ses_abc"
+    assert "--model" in args and args[args.index("--model") + 1] == "opencode-go/m1"
     assert args[-1] == "keep going"
     # resume must pass --dir matching the session's worktree, otherwise
     # opencode's headless --session resume emits nothing and hangs.
     assert args[args.index("--dir") + 1] == "/tmp/ws"
+
+
+def test_resume_no_model(monkeypatch) -> None:
+    captured: dict = {}
+
+    def fake_spawn(args, cwd, env=None):
+        captured["args"] = args
+        return FakeProc()
+
+    monkeypatch.setattr("jalebi.adapters.opencode._spawn", fake_spawn)
+    adapter.resume("/tmp/ws", "ses_abc", "keep going")
+    assert "--model" not in captured["args"]
 
 
 def test_list_models(monkeypatch) -> None:

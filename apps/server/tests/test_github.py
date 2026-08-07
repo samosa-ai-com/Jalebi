@@ -250,3 +250,30 @@ def test_list_branches(monkeypatch) -> None:
     body = [{"name": "main"}, {"name": "dev"}]
     monkeypatch.setattr(client, "_request", lambda method, path, **kw: (200, body, {}))
     assert client.list_branches("octocat/hello") == ["main", "dev"]
+
+
+def test_list_repos_follows_pagination(monkeypatch) -> None:
+    """list_repos must follow Link rel=next until the list is exhausted."""
+    from jalebi.github import GitHubClient
+
+    client = GitHubClient("ghp_test")
+    pages = [
+        ([{"full_name": f"o/repo{i}"} for i in range(2)], {
+            "link": '<https://api.github.com/user/repos?per_page=100&page=2>; rel="next", '
+                    '<https://api.github.com/user/repos?per_page=100&page=2>; rel="last"'
+        }),
+        ([{"full_name": "o/repo2"}], {}),
+    ]
+    calls: list[int] = []
+    seen = iter(pages)
+
+    def fake_request(method, path, **kwargs):
+        params = kwargs.get("params") or {}
+        calls.append(params.get("page", 1))
+        body, headers = next(seen)
+        return 200, body, headers
+
+    monkeypatch.setattr(client, "_request", fake_request)
+    names = [r["full_name"] for r in client.list_repos()]
+    assert names == ["o/repo0", "o/repo1", "o/repo2"]
+    assert calls == [1, 2]

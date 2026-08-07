@@ -32,6 +32,8 @@ def create_task(
     repo = session.get(Repo, repo_id)
     if repo is None:
         raise ValueError(f"repo {repo_id} not found")
+    if not repo.connected:
+        raise ValueError(f"repo {repo.full_name} is disconnected")
     if not prompt or not prompt.strip():
         raise ValueError("prompt must not be empty")
 

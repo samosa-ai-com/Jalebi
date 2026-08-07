@@ -312,3 +312,34 @@ def test_delete_token_deletes_tasks_on_repos_bound_to_account(
     session.expire_all()
     assert tasks_svc.get_task(session, task_id) is None
     assert session.get(db.Repo, repo_id) is None
+
+
+def test_delete_token_includes_disconnected_repos(client, app, monkeypatch, session) -> None:
+    """Deleting an account also removes its soft-disconnected repos + tasks."""
+    from jalebi import db, repos
+    from jalebi import tasks as tasks_svc
+
+    monkeypatch.setattr(routes_github, "GitHubClient", FakeClient)
+    client.post("/api/github/tokens", json={"name": "work", "token": "ghp_work"})
+    row, _ = repos.upsert_repo(
+        session,
+        full_name="octocat/disc",
+        default_branch="main",
+        clone_url="https://github.com/octocat/disc.git",
+        pat_name="work",
+    )
+    task = tasks_svc.create_task(
+        session, type_="freeform", repo_id=row.id, prompt="x", pat_name="work"
+    )
+    repo_id, task_id = row.id, task.id
+    row.connected = False  # soft-disconnect AFTER the task exists
+    session.commit()
+
+    resp = client.delete("/api/github/tokens/work")
+    assert resp.status_code == 200
+    assert resp.get_json()["repos_affected"] == ["octocat/disc"]
+    assert resp.get_json()["tasks_affected"] == 1
+
+    session.expire_all()
+    assert session.get(db.Repo, repo_id) is None
+    assert tasks_svc.get_task(session, task_id) is None

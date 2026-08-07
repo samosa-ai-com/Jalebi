@@ -127,6 +127,9 @@ def test_branches_for_connected_repo(client: FlaskClient, app, monkeypatch) -> N
     monkeypatch.setattr(
         routes_repos.GitWorkspace, "list_branches", lambda self, full_name: ["main", "dev"]
     )
+    monkeypatch.setattr(
+        routes_repos.GitWorkspace, "ensure_mirror", lambda self, *a, **k: None
+    )
     resp = client.get(f"/api/repos/{created['id']}/branches")
     assert resp.status_code == 200
     assert resp.get_json()["branches"] == ["main", "dev"]
@@ -194,3 +197,51 @@ def test_connect_unknown_pat_rejected(client: FlaskClient, app) -> None:
     sec.store_secret(app.config["JALEBI_CONFIG"], sec.GITHUB_TOKEN_KEY, "ghp_default")
     resp = client.post("/api/repos", json={"full_name": "octocat/hello", "pat_name": "nope"})
     assert resp.status_code == 400
+
+
+def test_prune_continues_on_transient_error(client, app, monkeypatch, session) -> None:
+    """One repo erroring must not abort the whole prune sweep."""
+    import httpx
+    from sqlalchemy import select
+
+    from jalebi import repos as repos_svc
+    from jalebi.db import Repo
+
+    secrets.store_secret(app.config["JALEBI_CONFIG"], secrets.GITHUB_TOKEN_KEY, "ghp_test")
+
+    class PartialClient:
+        def __init__(self, token):
+            self.token = token
+
+        def get_repo(self, full_name):
+            if full_name == "octocat/deleted":
+                raise GitHubNotFound(full_name)
+            if full_name == "octocat/flaky":
+                raise httpx.HTTPError("boom")
+            return dict(REPO_INFO)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(routes_repos, "GitHubClient", PartialClient)
+    repos_svc.upsert_repo(
+        session, full_name="octocat/deleted", default_branch="main", clone_url="x"
+    )
+    repos_svc.upsert_repo(
+        session, full_name="octocat/flaky", default_branch="main", clone_url="x"
+    )
+    repos_svc.upsert_repo(
+        session, full_name="octocat/hello", default_branch="main", clone_url="x"
+    )
+
+    resp = client.post("/api/repos/prune")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["removed"] == ["octocat/deleted"]
+    assert len(body["errors"]) == 1
+
+    session.expire_all()
+    names = {r.full_name: r.connected for r in session.execute(select(Repo)).scalars()}
+    assert names["octocat/deleted"] is False
+    assert names["octocat/flaky"] is True
+    assert names["octocat/hello"] is True

@@ -110,29 +110,33 @@ def prune_repos() -> ResponseReturnValue:
 
     session = db.get_session()
     removed: list[str] = []
+    errors: list[str] = []
     client_by_token: dict[str, GitHubClient] = {}
-    try:
-        for row in repos.list_repos(session, connected_only=True):
-            token = secrets.resolve_token(config, row.pat_name)
-            if not token:
-                continue
-            client = client_by_token.get(token)
-            if client is None:
-                client = GitHubClient(token)
-                client_by_token[token] = client
-            try:
-                client.get_repo(row.full_name)
-            except GitHubNotFound:
-                removed.append(row.full_name)
-                row.connected = False
-    except (httpx.HTTPError, GitHubError) as exc:
-        return jsonify({"error": str(exc)}), 502
-    finally:
-        for client in client_by_token.values():
-            client.close()
+    for row in repos.list_repos(session, connected_only=True):
+        token = secrets.resolve_token(config, row.pat_name)
+        if not token:
+            continue
+        client = client_by_token.get(token)
+        if client is None:
+            client = GitHubClient(token)
+            client_by_token[token] = client
+        try:
+            client.get_repo(row.full_name)
+        except GitHubNotFound:
+            removed.append(row.full_name)
+            row.connected = False
+        except (httpx.HTTPError, GitHubError) as exc:
+            # One transient failure must not abort the whole sweep.
+            errors.append(f"{row.full_name}: {exc}")
+            continue
+    for client in client_by_token.values():
+        client.close()
     if removed:
         session.commit()
-    return jsonify({"removed": removed})
+    result: dict[str, object] = {"removed": removed}
+    if errors:
+        result["errors"] = errors
+    return jsonify(result)
 
 
 @bp.get("/<int:repo_id>/branches")
@@ -143,8 +147,13 @@ def branches(repo_id: int) -> ResponseReturnValue:
     if row is None:
         return jsonify({"error": "repo not found"}), 404
     config = current_app.config["JALEBI_CONFIG"]
+    token = secrets.resolve_token(config, row.pat_name)
+    if not token:
+        return jsonify({"error": "no GitHub token configured"}), 409
     git = GitWorkspace(config)
     try:
+        # Fetch the mirror first so a newly-connected repo isn't served stale/empty.
+        git.ensure_mirror(row.full_name, row.clone_url, token)
         names = git.list_branches(row.full_name)
     except Exception as exc:
         return jsonify({"error": str(exc)}), 502

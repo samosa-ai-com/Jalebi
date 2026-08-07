@@ -245,10 +245,11 @@ def delete_token(name: str) -> ResponseReturnValue:
 
     session = db.get_session()
 
+    # Every repo bound to the account is deleted — connected OR soft-disconnected.
+    # (A disconnected repo's tasks would otherwise silently fall back to the
+    # primary token after the account is gone.)
     repos = list(
-        session.execute(
-            select(Repo).where(Repo.pat_name == name, Repo.connected.is_(True))
-        ).scalars()
+        session.execute(select(Repo).where(Repo.pat_name == name)).scalars()
     )
     repo_ids = [r.id for r in repos]
 

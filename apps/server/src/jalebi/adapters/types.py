@@ -92,6 +92,7 @@ class AgentAdapter:
         cwd: str,
         session_id: str,
         prompt: str,
+        model: str | None = None,
         env: dict[str, str | None] | None = None,
     ) -> RunHandle:
         raise NotImplementedError

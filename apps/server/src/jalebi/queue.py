@@ -4,7 +4,6 @@ import json
 import logging
 import os
 import queue
-import re
 import signal
 import threading
 import time
@@ -460,6 +459,15 @@ class TaskQueue:
             with self._running_lock:
                 self._running[task.id] = state
 
+            # Re-read the status fresh: the snapshot taken at the top may be stale
+            # (a cancel committed by the route between then and now). Any cancel
+            # landing after this point hits the registered state via queue.cancel.
+            session.expire(task)
+            if task.status == "cancelled":
+                with self._running_lock:
+                    self._running.pop(task.id, None)
+                return
+
             if task.type == "pr_review":
                 run = self._run_review(session, task, repo, cli, timeout, token, masker, state)
                 session.commit()
@@ -493,6 +501,7 @@ class TaskQueue:
             self._maybe_retry(session, task, run)
         except Exception:
             logger.exception("task %s run failed", task_id)
+            run_id = run.id if run is not None else None
             session.rollback()
             if state is not None and state.handle is not None:
                 _kill_proc(state.handle.proc)
@@ -502,9 +511,12 @@ class TaskQueue:
             if task is not None and task.status != "cancelled":
                 task.status = "failed"
                 task.updated_at = utcnow()
-            if run is not None:
-                run.status = "failed"
-                run.finished_at = utcnow()
+            if run_id is not None:
+                # Re-fetch after rollback — the pre-rollback object may be stale.
+                run = session.get(Run, run_id)
+                if run is not None:
+                    run.status = "failed"
+                    run.finished_at = utcnow()
             session.commit()
         finally:
             session.close()
@@ -605,13 +617,16 @@ class TaskQueue:
                         session.commit()
         except Exception:
             logger.exception("pr_review task %s failed", task.id)
+            run_id = run.id
             session.rollback()
             if state.handle is not None:
                 _kill_proc(state.handle.proc)
             with self._running_lock:
                 self._running.pop(task.id, None)
-            run.status = "failed"
-            run.finished_at = utcnow()
+            run = session.get(Run, run_id)
+            if run is not None:
+                run.status = "failed"
+                run.finished_at = utcnow()
             if task.status not in ("cancelled",):
                 task.status = "failed"
                 task.updated_at = utcnow()
@@ -710,6 +725,7 @@ class TaskQueue:
                 str(wt),
                 prev_session_id,
                 prompts.build_followup_prompt(task, repo, body),
+                model=effective_model,
                 env=_build_agent_env(token),
             )
             run.pid = getattr(state.handle.proc, "pid", None)
@@ -733,6 +749,7 @@ class TaskQueue:
             session.commit()
         except Exception:
             logger.exception("follow-up for task %s failed", task_id)
+            run_id = run.id if run is not None else None
             session.rollback()
             if state is not None and state.handle is not None:
                 _kill_proc(state.handle.proc)
@@ -742,9 +759,11 @@ class TaskQueue:
             if task is not None and task.status not in ("cancelled", "done"):
                 task.status = "failed"
                 task.updated_at = utcnow()
-            if run is not None:
-                run.status = "failed"
-                run.finished_at = utcnow()
+            if run_id is not None:
+                run = session.get(Run, run_id)
+                if run is not None:
+                    run.status = "failed"
+                    run.finished_at = utcnow()
             session.commit()
         finally:
             session.close()
@@ -956,9 +975,12 @@ class TaskQueue:
 
         parts = [body]
         if task.type == "issue_fix":
-            numbers = re.findall(r"#(\d+)", task.prompt)
+            try:
+                numbers = json.loads(task.issues_json) if task.issues_json else []
+            except (ValueError, TypeError):
+                numbers = []
             if numbers:
-                closes = " ".join(f"#{n}" for n in numbers)
+                closes = " ".join(f"#{int(n)}" for n in numbers)
                 if f"Closes {closes}" not in body:
                     parts.append(f"Closes {closes}")
         parts.append(

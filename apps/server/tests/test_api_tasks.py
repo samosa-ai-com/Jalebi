@@ -43,6 +43,19 @@ def test_create_task_unknown_repo(client: FlaskClient) -> None:
     assert resp.status_code == 400
 
 
+def test_create_task_disconnected_repo_rejected(client: FlaskClient, session) -> None:
+    row, _ = repos.upsert_repo(
+        session,
+        full_name="owner/disc",
+        default_branch="main",
+        clone_url="https://github.com/owner/disc.git",
+    )
+    client.delete(f"/api/repos/{row.id}")  # soft-disconnect
+    resp = client.post("/api/tasks", json={"repo_id": row.id, "prompt": "x"})
+    assert resp.status_code == 400
+    assert "disconnected" in resp.get_json()["error"]
+
+
 def test_create_task_empty_prompt(client: FlaskClient, repo_id: int) -> None:
     resp = client.post("/api/tasks", json={"repo_id": repo_id, "prompt": "  "})
     assert resp.status_code == 400
@@ -98,7 +111,8 @@ def test_rerun(client: FlaskClient, repo_id: int) -> None:
     assert resp.status_code == 200
     body = resp.get_json()
     assert body["status"] == "queued"
-    assert body["retry_count"] == 1
+    # Manual reruns do not consume the auto-retry budget.
+    assert body["retry_count"] == 0
 
 
 def test_rerun_running_conflict(client: FlaskClient, repo_id: int) -> None:

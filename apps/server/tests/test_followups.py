@@ -46,13 +46,15 @@ class FakeHandle:
 class ResumeAdapter:
     def __init__(self, handle):
         self.handle = handle
-        self.resume_calls: list[dict[str, str]] = []
+        self.resume_calls: list[dict[str, object]] = []
 
     def start(self, cwd, prompt, model=None, env=None):
         return self.handle
 
-    def resume(self, cwd, session_id, prompt, env=None):
-        self.resume_calls.append({"cwd": cwd, "session_id": session_id, "prompt": prompt})
+    def resume(self, cwd, session_id, prompt, model=None, env=None):
+        self.resume_calls.append(
+            {"cwd": cwd, "session_id": session_id, "prompt": prompt, "model": model}
+        )
         return self.handle
 
     def list_models(self):
@@ -111,8 +113,12 @@ def q(app):
     return app.config["JALEBI_QUEUE"]
 
 
-def _done_task_with_session(session, repo_id: int, session_id: str = "ses_orig"):
-    task = tasks.create_task(session, type_="freeform", repo_id=repo_id, prompt="do it")
+def _done_task_with_session(
+    session, repo_id: int, session_id: str = "ses_orig", model: str | None = None
+):
+    task = tasks.create_task(
+        session, type_="freeform", repo_id=repo_id, prompt="do it", model=model
+    )
     run = Run(
         task_id=task.id,
         seq=1,
@@ -225,8 +231,8 @@ def test_followup_resumes_session_in_same_worktree(q, session, repo_row, monkeyp
     call = adapter.resume_calls[0]
     assert call["cwd"] == str(GitWorkspace.worktree_path(q.config.data_dir, task.id))
     assert call["session_id"] == "ses_orig"
-    assert call["prompt"].startswith("do more\n")
-    assert "AGENTS.md" in call["prompt"]
+    assert str(call["prompt"]).startswith("do more\n")
+    assert "AGENTS.md" in str(call["prompt"])
 
     fups = tasks.list_followups(session, task.id)
     assert len(fups) == 1
@@ -371,3 +377,34 @@ def test_pr_review_followup_resumes_in_review_worktree(
     fups = tasks.list_followups(session, task.id)
     assert len(fups) == 1
     assert fups[0].body == "more review"
+
+
+def test_followup_forwards_model_override(q, session, repo_row, monkeypatch) -> None:
+    settings.set_setting(session, "auto_publish", False)
+    task = _done_task_with_session(session, repo_row.id, session_id="ses_orig")
+    handle = FakeHandle([AgentEvent(type="done")], session_id="ses_orig")
+    adapter = ResumeAdapter(handle)
+    monkeypatch.setattr("jalebi.queue.get_adapter", lambda cli: adapter)
+
+    q._run_followup(task.id, "switch model", model="opencode-go/m9")
+
+    assert len(adapter.resume_calls) == 1
+    assert adapter.resume_calls[0]["model"] == "opencode-go/m9"
+    session.expire_all()
+    run = tasks.latest_run(session, task.id)
+    assert run is not None
+    assert run.model == "opencode-go/m9"
+
+
+def test_followup_no_model_uses_task_model(q, session, repo_row, monkeypatch) -> None:
+    settings.set_setting(session, "auto_publish", False)
+    task = _done_task_with_session(
+        session, repo_row.id, session_id="ses_orig", model="opencode-go/m1"
+    )
+    handle = FakeHandle([AgentEvent(type="done")], session_id="ses_orig")
+    adapter = ResumeAdapter(handle)
+    monkeypatch.setattr("jalebi.queue.get_adapter", lambda cli: adapter)
+
+    q._run_followup(task.id, "keep model")
+
+    assert adapter.resume_calls[0]["model"] == "opencode-go/m1"

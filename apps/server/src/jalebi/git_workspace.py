@@ -321,4 +321,7 @@ class GitWorkspace:
         """Push ``jalebi/<taskId>`` to the mirror's origin with token auth."""
         ws = self.worktree_path(self.config.data_dir, task_id)
         branch = self.task_branch(task_id)
-        _run_git(["-C", str(ws), "push", "origin", branch], auth_env=_auth_env(token))
+        # Serialize with the mirror lock: a push racing a fetch/worktree-add on
+        # the same repo surfaces as a spurious error otherwise.
+        with self._lock_for(full_name):
+            _run_git(["-C", str(ws), "push", "origin", branch], auth_env=_auth_env(token))

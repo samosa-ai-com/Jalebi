@@ -48,11 +48,13 @@ def list_repos(session: Session, connected_only: bool = True) -> list[Repo]:
 
 
 def repo_to_dict(repo: Repo) -> dict[str, object]:
+    # Note: clone_url is deliberately NOT exposed — it never contains a token
+    # (Jalebi stores the API's plain https URL), but keeping it out of the API
+    # removes any chance of a future token-embedded URL leaking to the UI.
     return {
         "id": repo.id,
         "full_name": repo.full_name,
         "default_branch": repo.default_branch,
-        "clone_url": repo.clone_url,
         "connected": repo.connected,
         "pat_name": repo.pat_name,
         "webhook_registered": repo.webhook_registered,

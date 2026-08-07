@@ -227,6 +227,11 @@ def cancel_task(task_id: int) -> ResponseReturnValue:
         task.status = "cancelled"
         task.updated_at = utcnow()
         session.commit()
+        # Also flag any in-flight pickup: if the worker has already registered
+        # this task's _RunState (but not yet committed "running"), queue.cancel
+        # sets state.reason so the worker kills the process instead of running
+        # a task the user saw as cancelled.
+        _queue().cancel(task_id)
         return jsonify({"status": "cancelled"})
     if task.status == "running":
         killed = _queue().cancel(task_id)
@@ -243,7 +248,6 @@ def rerun_task(task_id: int) -> ResponseReturnValue:
     if task.status in ("queued", "running"):
         return jsonify({"error": f"cannot rerun task in state {task.status}"}), 409
     task.status = "queued"
-    task.retry_count = (task.retry_count or 0) + 1
     task.updated_at = utcnow()
     session.commit()
     _queue().enqueue(task.id)

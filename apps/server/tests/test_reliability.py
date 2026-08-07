@@ -434,3 +434,52 @@ def test_auto_retry_failed_task_once(q, session, repo_row, monkeypatch) -> None:
     assert fresh is not None
     assert fresh.status == "done"
     assert len(tasks.runs_for_task(session, task.id)) == 2
+
+
+def test_cancel_between_pickup_and_running_bails(q, session, repo_row, monkeypatch) -> None:
+    """A cancel committed after the worker snapshots a queued task must not run.
+
+    The route sets the DB row to cancelled AND calls queue.cancel; the worker
+    re-reads status after registering _RunState. Flip the row mid-flow and the
+    worker must bail without spawning an agent or creating a run.
+    """
+    from jalebi.db import Run
+
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="x")
+    started: list[str] = []
+
+    class NeverStartAdapter:
+        def start(self, *a, **k):
+            started.append("start")
+            raise AssertionError("agent must not start after a queued cancel")
+
+        def resume(self, *a, **k):
+            raise NotImplementedError
+
+        def list_models(self):
+            return []
+
+    monkeypatch.setattr("jalebi.queue.get_adapter", lambda cli: NeverStartAdapter())
+
+    def _resolve_and_cancel(config, name):
+        # Simulate the cancel route committing between the worker's first read
+        # and its post-registration re-read.
+        from jalebi import db
+
+        with db.Session() as s2:
+            t2 = s2.get(db.Task, task.id)
+            t2.status = "cancelled"
+            s2.commit()
+        return "ghp_test"
+
+    monkeypatch.setattr("jalebi.queue.secrets.resolve_token", _resolve_and_cancel)
+    monkeypatch.setattr("jalebi.queue.secrets.load_github_token", lambda c: "ghp_test")
+
+    q._run_task(task.id)
+
+    assert started == []
+    session.expire_all()
+    fresh = tasks.get_task(session, task.id)
+    assert fresh is not None
+    assert fresh.status == "cancelled"
+    assert session.query(Run).filter_by(task_id=task.id).count() == 0

@@ -735,3 +735,26 @@ def test_build_agent_env_keeps_own_git_auth(monkeypatch) -> None:
     assert env["GIT_CONFIG_KEY_0"] == "http.extraHeader"
     expected = base64.b64encode(b"x-access-token:ghp_x").decode()
     assert expected in env["GIT_CONFIG_VALUE_0"]
+
+
+def test_pr_title_and_body_closes_from_issues_json(q, session, repo_row) -> None:
+    # Closes must come from issues_json (the real linked issue), NOT from a
+    # stray #N in the prompt text (D-5).
+    task = tasks.create_task(
+        session,
+        type_="issue_fix",
+        repo_id=repo_row.id,
+        prompt="fix the bug mentioned in #3 (see linked issue)",
+        issues=[12],
+    )
+    title, body = q._pr_title_and_body(task)
+    assert "Closes #12" in body
+    assert "Closes #3" not in body
+
+
+def test_pr_title_and_body_no_issues_adds_no_closes(q, session, repo_row) -> None:
+    task = tasks.create_task(
+        session, type_="issue_fix", repo_id=repo_row.id, prompt="fix #7 please"
+    )
+    _title, body = q._pr_title_and_body(task)
+    assert "Closes" not in body

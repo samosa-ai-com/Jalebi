@@ -76,6 +76,7 @@ class OpenCodeAdapter(AgentAdapter):
         cwd: str,
         session_id: str,
         prompt: str,
+        model: str | None = None,
         env: dict[str, str | None] | None = None,
     ) -> RunHandle:
         # ``--dir`` must match the session's directory: opencode's headless
@@ -91,8 +92,10 @@ class OpenCodeAdapter(AgentAdapter):
             str(cwd),
             "--session",
             session_id,
-            prompt,
         ]
+        if model:
+            args += ["--model", model]
+        args.append(prompt)
         return RunHandle(proc=_spawn(args, cwd, env), parse=self.parse)
 
     def parse(self, line: str) -> list[AgentEvent]:
