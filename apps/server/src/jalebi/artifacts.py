@@ -31,10 +31,10 @@ def artifact_store_dir(data_dir: Path) -> Path:
 def _untracked_files(worktree: Path) -> list[str]:
     """Relative paths of untracked, non-ignored files in ``worktree``.
 
-    Jalebi's own bootstrap files (``AGENTS.md``, ``opencode.json``,
-    ``.gitignore``) are excluded — they are infrastructure, not agent output.
-    ``.jalebi/*`` is also ignored via the worktree/mirror excludes (e.g.
-    ``pr.md``, ``review.md``), so it never shows up as an artifact.
+    Jalebi's bootstrap files (``AGENTS.md``, ``opencode.json``) and ``.jalebi/*``
+    are excluded via the mirror's shared ``info/exclude`` (see
+    ``worktree_bootstrap``), so they never appear as artifacts. The explicit set
+    below is a belt-and-braces backstop in case the exclude is missing.
     """
     proc = subprocess.run(
         ["git", "-C", str(worktree), "ls-files", "--others", "--exclude-standard", "-z"],

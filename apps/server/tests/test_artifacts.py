@@ -279,6 +279,9 @@ def test_capture_excludes_jalebi_internal(tmp_path, session) -> None:
     assert "output.log" in paths
     assert not any(".jalebi" in p for p in paths)
     assert ".jalebi/pr.md" not in paths
+    # bootstrap files are excluded from artifacts too (info/exclude + backstop set)
+    assert "AGENTS.md" not in paths
+    assert "opencode.json" not in paths
 
 
 def test_capture_masks_text_files(session, repo_row, tmp_path) -> None:

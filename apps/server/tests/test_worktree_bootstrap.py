@@ -40,7 +40,59 @@ def test_set_git_identity(tmp_path) -> None:
 
 def test_write_agent_md(tmp_path) -> None:
     path = worktree_bootstrap.write_agent_md(tmp_path, "no gh here")
-    assert path.read_text() == "no gh here"
+    text = path.read_text()
+    assert text.startswith(worktree_bootstrap.JALEBI_MD_START)
+    assert text.endswith(worktree_bootstrap.JALEBI_MD_END + "\n")
+    assert "no gh here" in text
+
+
+def test_write_agent_md_preserves_tracked_repo_content(tmp_path) -> None:
+    _init_repo(tmp_path)
+    (tmp_path / "AGENTS.md").write_text("# Repo agents\n\nOriginal repo instructions.\n")
+    _git(["add", "AGENTS.md"], tmp_path)
+    _git(["commit", "-qm", "add agents.md"], tmp_path)
+    worktree_bootstrap.write_agent_md(tmp_path, "jalebi instructions")
+    text = (tmp_path / "AGENTS.md").read_text()
+    assert "# Repo agents" in text
+    assert "Original repo instructions." in text
+    assert "jalebi instructions" in text
+    assert worktree_bootstrap.JALEBI_MD_START in text
+    # Idempotent re-bootstrap: repo content preserved once, Jalebi block replaced.
+    worktree_bootstrap.write_agent_md(tmp_path, "updated instructions")
+    text2 = (tmp_path / "AGENTS.md").read_text()
+    assert text2.count("Original repo instructions.") == 1
+    assert "updated instructions" in text2
+    assert "jalebi instructions" not in text2
+
+
+def test_write_agent_md_handles_repo_content_quoting_markers(tmp_path) -> None:
+    """A repo AGENTS.md that itself mentions the marker strings must be untouched."""
+    _init_repo(tmp_path)
+    original = (
+        "# Repo agents\n\n"
+        "See the `<!-- jalebi:start -->` docs for how we signal blocks — "
+        "remember the `<!-- jalebi:end -->` comment too.\n"
+    )
+    (tmp_path / "AGENTS.md").write_text(original)
+    _git(["add", "AGENTS.md"], tmp_path)
+    _git(["commit", "-qm", "add agents.md"], tmp_path)
+
+    worktree_bootstrap.write_agent_md(tmp_path, "jalebi instructions")
+    text = (tmp_path / "AGENTS.md").read_text()
+    # The repo's own marker-quoting sentence is fully preserved.
+    assert "how we signal blocks" in text
+    assert "comment too" in text
+
+    worktree_bootstrap.remove_guard(tmp_path)
+    assert (tmp_path / "AGENTS.md").read_text() == original
+
+
+def test_remove_guard_keeps_preexisting_untracked_agent_md(tmp_path) -> None:
+    _init_repo(tmp_path)
+    (tmp_path / "AGENTS.md").write_text("# Local notes\n")
+    worktree_bootstrap.bootstrap_worktree(tmp_path)
+    worktree_bootstrap.remove_guard(tmp_path)
+    assert (tmp_path / "AGENTS.md").read_text() == "# Local notes\n"
 
 
 def test_bootstrap_is_idempotent(tmp_path) -> None:
@@ -53,16 +105,21 @@ def test_bootstrap_is_idempotent(tmp_path) -> None:
     assert _git(["config", "user.name"], tmp_path) == "Jalebi"
 
 
-def test_write_gitignore_appends_jalebi(tmp_path) -> None:
+def test_info_exclude_keeps_bootstrap_files_out(tmp_path) -> None:
     _init_repo(tmp_path)
-    (tmp_path / ".gitignore").write_text("node_modules/\n")
-    worktree_bootstrap.write_gitignore(tmp_path)
-    lines = (tmp_path / ".gitignore").read_text().splitlines()
-    assert ".jalebi/" in lines
-    assert "node_modules/" in lines
-    # idempotent — no duplicate
-    worktree_bootstrap.write_gitignore(tmp_path)
-    assert (tmp_path / ".gitignore").read_text().splitlines().count(".jalebi/") == 1
+    worktree_bootstrap.bootstrap_worktree(tmp_path)
+
+    # git add . must not stage opencode.json / AGENTS.md / .jalebi
+    (tmp_path / ".jalebi").mkdir(exist_ok=True)
+    (tmp_path / ".jalebi" / "pr.md").write_text("# t\n")
+    _git(["add", "."], tmp_path)
+    staged = _git(["diff", "--cached", "--name-only"], tmp_path)
+    assert staged == ""  # nothing new to stage — bootstrap files are excluded
+    # git status does not show them either
+    status = _git(["status", "--porcelain"], tmp_path)
+    assert "opencode.json" not in status
+    assert "AGENTS.md" not in status
+    assert ".jalebi" not in status
 
 
 def test_precommit_hook_rejects_jalebi_staging(tmp_path) -> None:
@@ -87,6 +144,44 @@ def test_precommit_hook_rejects_jalebi_staging(tmp_path) -> None:
     assert "Jalebi" in proc.stderr
 
 
+def test_precommit_hook_rejects_marked_agents_md(tmp_path) -> None:
+    # A repo that tracks AGENTS.md: the marked Jalebi section must not be committed.
+    _init_repo(tmp_path)
+    (tmp_path / "AGENTS.md").write_text("# Repo agents\n")
+    _git(["add", "AGENTS.md"], tmp_path)
+    _git(["commit", "-qm", "track agents.md"], tmp_path)
+
+    worktree_bootstrap.bootstrap_worktree(tmp_path)
+    assert "jalebi:start" in (tmp_path / "AGENTS.md").read_text()
+
+    proc = subprocess.run(
+        ["git", "add", "AGENTS.md"],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0
+    proc = subprocess.run(
+        ["git", "commit", "-m", "should fail"],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode != 0
+    assert "AGENTS.md" in proc.stderr
+
+    # Removing the marker block lets a legitimate AGENTS.md commit through.
+    (tmp_path / "AGENTS.md").write_text("# Repo agents\n\nUpdated instructions.\n")
+    _git(["add", "AGENTS.md"], tmp_path)
+    proc = subprocess.run(
+        ["git", "commit", "-m", "legit update"],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+
+
 def test_bootstrap_marks_hook_executable(tmp_path) -> None:
     _init_repo(tmp_path)
     hook = worktree_bootstrap.write_precommit_hook(tmp_path)
@@ -95,15 +190,72 @@ def test_bootstrap_marks_hook_executable(tmp_path) -> None:
     assert hook.stat().st_mode & 0o111
 
 
-def test_remove_guard_cleans_gitignore_and_hook(tmp_path) -> None:
+def test_remove_guard_restores_agent_md_and_cleans_up(tmp_path) -> None:
     _init_repo(tmp_path)
+    original = "# Repo agents\n\nOriginal instructions.\n"
+    (tmp_path / "AGENTS.md").write_text(original)
     worktree_bootstrap.bootstrap_worktree(tmp_path)
     hook = worktree_bootstrap.write_precommit_hook(tmp_path)
     assert hook is not None and hook.is_file()
-    assert (tmp_path / ".gitignore").is_file()
 
     worktree_bootstrap.remove_guard(tmp_path)
     assert (tmp_path / "opencode.json").exists() is False
-    assert (tmp_path / "AGENTS.md").exists() is False
-    assert (tmp_path / ".gitignore").exists() is False
+    # AGENTS.md restored exactly to its original content (marker block stripped).
+    assert (tmp_path / "AGENTS.md").read_text() == original
     assert hook.exists() is False
+
+
+def test_remove_guard_on_bootstrap_only_files(tmp_path) -> None:
+    _init_repo(tmp_path)
+    worktree_bootstrap.bootstrap_worktree(tmp_path)
+    assert (tmp_path / "AGENTS.md").is_file()
+    worktree_bootstrap.remove_guard(tmp_path)
+    assert (tmp_path / "AGENTS.md").exists() is False
+    assert (tmp_path / "opencode.json").exists() is False
+
+
+def test_linked_worktrees_share_and_keep_guards(tmp_path) -> None:
+    """Linked worktrees share the mirror's info/exclude + hook; remove_guard on
+    one must not strip guards another live worktree still needs."""
+    mirror = tmp_path / "mirror.git"
+    src = tmp_path / "src"
+    _git(["init", "--bare", str(mirror)], tmp_path)
+    _git(["init", str(src)], tmp_path)
+    _git(["-C", str(src), "config", "user.email", "t@example.com"], tmp_path)
+    _git(["-C", str(src), "config", "user.name", "Test"], tmp_path)
+    (src / "f.txt").write_text("hi\n")
+    _git(["-C", str(src), "add", "f.txt"], tmp_path)
+    _git(["-C", str(src), "commit", "-m", "init"], tmp_path)
+    _git(["-C", str(src), "branch", "-M", "main"], tmp_path)
+    _git(["-C", str(src), "remote", "add", "origin", str(mirror)], tmp_path)
+    _git(["-C", str(src), "push", "-u", "origin", "main"], tmp_path)
+
+    wt1 = tmp_path / "wt1"
+    wt2 = tmp_path / "wt2"
+    _git(["-C", str(mirror), "worktree", "add", "-b", "jalebi/1", str(wt1), "main"], tmp_path)
+    _git(["-C", str(mirror), "worktree", "add", "-b", "jalebi/2", str(wt2), "main"], tmp_path)
+
+    worktree_bootstrap.bootstrap_worktree(wt1)
+    common = worktree_bootstrap._git_common_dir(wt1)
+    assert common == mirror.resolve()
+    exclude = common / "info" / "exclude"
+    for line in worktree_bootstrap.INFO_EXCLUDE_LINES:
+        assert line in exclude.read_text()
+    hook = common / "hooks" / "pre-commit"
+    assert hook.is_file()
+
+    # wt2 is still live → remove_guard keeps the shared guards.
+    worktree_bootstrap.remove_guard(wt1)
+    assert hook.is_file()
+    assert all(
+        line in exclude.read_text() for line in worktree_bootstrap.INFO_EXCLUDE_LINES
+    )
+
+    # Last worktree gone → remove_guard strips the shared guards.
+    _git(["-C", str(mirror), "worktree", "remove", "--force", str(wt2)], tmp_path)
+    worktree_bootstrap.remove_guard(wt1)
+    assert hook.exists() is False
+    # git init's default comment lines may remain; Jalebi's must be gone.
+    assert all(
+        line not in exclude.read_text() for line in worktree_bootstrap.INFO_EXCLUDE_LINES
+    )

@@ -10,7 +10,12 @@ git/curl only. This module hardens that contract at the worktree level:
 - ``set_git_identity`` pins the worktree's commit author to Jalebi, so pushes
   are never authored by a stray local account.
 - ``write_agent_md`` writes the task's ``AGENTS.md`` (built by ``prompts``) that
-  carries the task context and hard constraints.
+  carries the task context and hard constraints. A repo that tracks its own
+  ``AGENTS.md`` keeps that content; Jalebi's section is appended inside markers.
+- ``write_info_exclude`` keeps the bootstrap files out of ``git add .`` and
+  artifact capture via the repo's shared ``info/exclude`` (never touching a
+  tracked ``.gitignore``), and the pre-commit hook backstops the repo-tracked
+  ``AGENTS.md`` case.
 
 These are layered with environment hygiene in the queue (git credential env,
 no ``GH_TOKEN``/``GH_CONFIG_DIR``) — even a bypassed deny has no gh credentials.
@@ -48,6 +53,9 @@ OPENCODE_GUARD = {
 GIT_USER_NAME = "Jalebi"
 GIT_USER_EMAIL = "jalebi@localhost"
 
+JALEBI_MD_START = "<!-- jalebi:start -->"
+JALEBI_MD_END = "<!-- jalebi:end -->"
+
 DEFAULT_AGENT_MD = """\
 # Jalebi task environment
 
@@ -71,19 +79,43 @@ You are working inside a git worktree prepared by Jalebi.
 8. **Never commit anything under `.jalebi/`** — it is Jalebi-internal (your PR
    description/review live there). If you staged `.jalebi/` files, unstage with
    `git reset HEAD .jalebi/`. A pre-commit hook rejects them otherwise.
-9. **Docs:** only update documentation that already exists and is kept in sync
+9. **Never commit this Jalebi AGENTS.md section** — the block delimited by the
+   two HTML-comment markers at the end of ``AGENTS.md``. It is Jalebi
+   infrastructure, not repository content. If you staged it, recover with:
+   `git restore --staged AGENTS.md && git restore AGENTS.md`. The pre-commit
+   hook rejects it otherwise.
+10. **Docs:** only update documentation that already exists and is kept in sync
    (e.g. `CHANGELOG.md`, relevant `README.md` sections). Do NOT create new
    documentation/changelog files unless the task explicitly asks for them.
 """
 
-GITIGNORE_LINE = ".jalebi/"
+# Patterns added to the repo's shared info/exclude so bootstrap files stay out of
+# `git add .`, `git status`, and artifact capture. Root-anchored: they only hide
+# the worktree-root files Jalebi creates (a repo that *tracks* AGENTS.md is
+# unaffected — excludes never apply to tracked files; the hook covers that case).
+INFO_EXCLUDE_LINES = (".jalebi/", "/opencode.json", "/AGENTS.md")
 
 PRECOMMIT_HOOK = """#!/bin/sh
-# Jalebi: never allow committing Jalebi-internal files under .jalebi/.
+# Jalebi: never allow committing Jalebi-internal files.
 if git diff --cached --name-only -z | tr '\\0' '\\n' | grep -q '^\\.jalebi/'; then
   echo "Jalebi: refusing to commit .jalebi/ (internal files)." >&2
   echo "Unstage them with: git reset HEAD .jalebi/" >&2
   exit 1
+fi
+if git diff --cached --name-only | grep -qx 'opencode.json'; then
+  echo "Jalebi: refusing to commit opencode.json (Jalebi gh-guard)." >&2
+  echo "Unstage it with: git reset HEAD opencode.json" >&2
+  exit 1
+fi
+# A repo-tracked AGENTS.md that still carries the Jalebi bootstrap section must
+# not be committed (it is Jalebi infrastructure, not repository content).
+if git diff --cached --name-only | grep -qx 'AGENTS.md'; then
+  if git show :AGENTS.md 2>/dev/null | grep -q 'jalebi:start'; then
+    echo "Jalebi: refusing to commit AGENTS.md (contains the Jalebi bootstrap section)." >&2
+    echo "Remove it from the commit with:" >&2
+    echo "  git restore --staged AGENTS.md && git restore AGENTS.md" >&2
+    exit 1
+  fi
 fi
 exit 0
 """
@@ -115,23 +147,55 @@ def set_git_identity(worktree: Path) -> None:
     _run_git(["config", "user.email", GIT_USER_EMAIL], worktree)
 
 
-def write_agent_md(worktree: Path, content: str = DEFAULT_AGENT_MD) -> Path:
-    """Write the task's ``AGENTS.md`` (task context + constraints)."""
-    path = worktree / "AGENTS.md"
-    path.write_text(content)
-    return path
+def _jalebi_block(content: str) -> str:
+    return f"{JALEBI_MD_START}\n{content}\n{JALEBI_MD_END}"
 
 
-def write_gitignore(worktree: Path) -> Path:
-    """Ensure the worktree ignores ``.jalebi/`` (keeps it out of git and artifacts).
+def _jalebi_block_span(raw: str) -> tuple[int, int] | None:
+    """Locate the Jalebi marker block ``(start, end)``, or ``None``.
 
-    Appends the line to an existing ``.gitignore`` rather than clobbering it.
+    The block Jalebi writes is appended at the very END of the file, so its
+    closing marker must be the last non-whitespace content. ``rfind`` the closing
+    marker, verify nothing but whitespace follows it, then ``rfind`` the opening
+    marker before it. This stays correct even when the repo's own AGENTS.md
+    content happens to quote the marker strings mid-file, and when the Jalebi
+    rules reference them.
     """
-    path = worktree / ".gitignore"
-    lines = path.read_text().splitlines() if path.exists() else []
-    if GITIGNORE_LINE not in lines:
-        lines.append(GITIGNORE_LINE)
-        path.write_text("\n".join(lines) + "\n")
+    end = raw.rfind(JALEBI_MD_END)
+    if end == -1:
+        return None
+    if raw[end + len(JALEBI_MD_END):].strip():
+        return None  # closing marker is not at the end of the file
+    start = raw.rfind(JALEBI_MD_START, 0, end)
+    if start == -1:
+        return None
+    return start, end + len(JALEBI_MD_END)
+
+
+def write_agent_md(worktree: Path, content: str = DEFAULT_AGENT_MD) -> Path:
+    """Write (or update) the Jalebi ``AGENTS.md`` section, preserving any existing file.
+
+    A repo that already tracks ``AGENTS.md`` keeps its own content; Jalebi's
+    section is appended inside markers so re-bootstrapping is idempotent and the
+    pre-commit hook can detect it. When no file exists, the whole file is the
+    marked block.
+    """
+    path = worktree / "AGENTS.md"
+    raw = path.read_text() if path.exists() else ""
+    span = _jalebi_block_span(raw)
+    if span is not None:
+        start, end = span
+        pre = raw[:start]
+        post = raw[end:]
+        body = (
+            (pre.rstrip() + "\n\n" if pre.strip() else "")
+            + _jalebi_block(content)
+            + ("\n\n" + post.lstrip() if post.strip() else "\n")
+        )
+    else:
+        base = raw.rstrip()
+        body = (base + "\n\n" if base else "") + _jalebi_block(content) + "\n"
+    path.write_text(body)
     return path
 
 
@@ -143,8 +207,30 @@ def _git_common_dir(worktree: Path) -> Path:
     return common.resolve()
 
 
+def write_info_exclude(worktree: Path) -> Path | None:
+    """Add the bootstrap-file patterns to the repo's shared ``info/exclude``.
+
+    ``info/exclude`` lives in the common gitdir, so one write covers every
+    worktree of the mirror and never mutates a tracked ``.gitignore``. Returns
+    the exclude path, or ``None`` if the worktree has no git dir yet.
+    """
+    try:
+        common = _git_common_dir(worktree)
+    except RuntimeError:
+        return None
+    info = common / "info"
+    info.mkdir(parents=True, exist_ok=True)
+    path = info / "exclude"
+    lines = path.read_text().splitlines() if path.exists() else []
+    for line in INFO_EXCLUDE_LINES:
+        if line not in lines:
+            lines.append(line)
+    path.write_text("\n".join(lines) + "\n")
+    return path
+
+
 def write_precommit_hook(worktree: Path) -> Path | None:
-    """Install a pre-commit hook that rejects staged ``.jalebi/`` files.
+    """Install a pre-commit hook that rejects staged Jalebi-internal files.
 
     Worktrees share the common gitdir's hooks, so one hook covers every worktree.
     Returns the hook path, or ``None`` if the worktree has no git dir yet.
@@ -161,7 +247,7 @@ def write_precommit_hook(worktree: Path) -> Path | None:
 
 
 def bootstrap_worktree(worktree: Path, agent_md: str = DEFAULT_AGENT_MD) -> None:
-    """Apply the full bootstrap: guard + identity + AGENTS.md + .jalebi guards.
+    """Apply the full bootstrap: guard + identity + AGENTS.md + excludes.
 
     Idempotent.
     """
@@ -169,32 +255,84 @@ def bootstrap_worktree(worktree: Path, agent_md: str = DEFAULT_AGENT_MD) -> None
     write_opencode_guard(worktree)
     set_git_identity(worktree)
     write_agent_md(worktree, agent_md)
-    write_gitignore(worktree)
+    write_info_exclude(worktree)
     write_precommit_hook(worktree)
 
 
+def _strip_agent_md(raw: str) -> str:
+    """Return ``raw`` with the Jalebi marker block removed (used by remove_guard)."""
+    span = _jalebi_block_span(raw)
+    if span is None:
+        return raw.strip()
+    start, end = span
+    pre = raw[:start]
+    post = raw[end:]
+    restored = pre.rstrip() + ("\n\n" + post.lstrip() if post.strip() else "")
+    return restored.strip()
+
+
+def _has_other_worktrees(worktree: Path) -> bool:
+    """True if the repo's common gitdir hosts other live worktrees.
+
+    The info/exclude patterns and pre-commit hook live in the SHARED common
+    gitdir. With concurrent tasks on one repo, removing them when another
+    worktree still relies on them would silently re-expose bootstrap files.
+    Being conservative (fail toward keeping the guards) is safe — they are
+    idempotent to write.
+    """
+    try:
+        out = _run_git(["worktree", "list", "--porcelain"], worktree)
+    except RuntimeError:
+        return True
+    blocks = [b for b in out.split("\n\n") if b.strip()]
+    # A bare mirror reports itself as a worktree entry with a "bare" line; it
+    # has no files to guard, so it doesn't count as a live worktree.
+    real = [b for b in blocks if "bare" not in b.splitlines()]
+    return len(real) > 1
+
+
 def remove_guard(worktree: Path) -> None:
-    """Remove the Jalebi guard files from a worktree (cleanup)."""
-    for name in ("opencode.json", "AGENTS.md"):
+    """Remove the Jalebi guard files from a worktree (cleanup).
+
+    ``AGENTS.md`` is restored to its pre-bootstrap content (the marked section is
+    stripped) and ``opencode.json`` is removed. The shared ``info/exclude`` lines
+    and the pre-commit hook are only removed when this is the last live worktree
+    of the repo.
+    """
+    for name in ("opencode.json",):
         try:
             (worktree / name).unlink()
         except FileNotFoundError:
             pass
-    # Drop the .jalebi/ ignore line we added (keep any pre-existing lines).
-    gitignore = worktree / ".gitignore"
-    if gitignore.is_file():
-        remaining = [ln for ln in gitignore.read_text().splitlines() if ln != GITIGNORE_LINE]
-        if remaining:
-            gitignore.write_text("\n".join(remaining) + "\n")
+    md = worktree / "AGENTS.md"
+    if md.is_file():
+        restored = _strip_agent_md(md.read_text())
+        if restored:
+            md.write_text(restored + "\n")
         else:
             try:
-                gitignore.unlink()
+                md.unlink()
             except FileNotFoundError:
                 pass
     try:
-        hook = _git_common_dir(worktree) / "hooks" / "pre-commit"
+        common = _git_common_dir(worktree)
     except RuntimeError:
         return
+    if _has_other_worktrees(worktree):
+        return  # another live worktree still needs the shared excludes + hook
+    exclude = common / "info" / "exclude"
+    if exclude.is_file():
+        remaining = [
+            ln for ln in exclude.read_text().splitlines() if ln not in INFO_EXCLUDE_LINES
+        ]
+        if remaining:
+            exclude.write_text("\n".join(remaining) + "\n")
+        else:
+            try:
+                exclude.unlink()
+            except FileNotFoundError:
+                pass
+    hook = common / "hooks" / "pre-commit"
     if hook.is_file() and PRECOMMIT_HOOK.strip() in (hook.read_text() or ""):
         try:
             hook.unlink()
