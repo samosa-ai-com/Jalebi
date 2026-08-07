@@ -70,3 +70,16 @@ Jalebi uses the **git CLI** (not libgit2) for all repo operations. Each task/age
 
 - PRD §F8 (branch selection), §F9 (publish), §F12 (storage/prune), §17.2 (no `gh` CLI).
 - Implementation: `src/jalebi/git_workspace.py` (+ tests in `tests/test_git_workspace.py`). Publish/PR creation is handled by the task-queue step (uses `push_branch` + the GitHub client).
+## 11. Per-task worktree bootstrap
+
+- After `create_worktree`, `worktree_bootstrap.bootstrap_worktree(wt, agent_md)` writes into the worktree root:
+  - `opencode.json` — `permission.bash` rules **deny `gh`** (`gh`, `gh *`, `/usr/bin/gh*`, `command gh*`, …); project config overrides the user's global opencode config.
+  - git identity — `user.name Jalebi`, `user.email jalebi@localhost` (commits are never authored by a stray local account).
+  - `AGENTS.md` — task context + hard rules (no gh, no forks, push only to `origin`, write `.jalebi/pr.md`/`.jalebi/review.md`).
+- The agent subprocess env carries the owner-PAT git credentials (`GIT_CONFIG_*` http.extraHeader → Basic `x-access-token`), commit identity vars, `JALEBI_GITHUB_TOKEN`, and strips `GH_TOKEN`/`GITHUB_TOKEN` + empty `GH_CONFIG_DIR` so `gh` can never authenticate.
+
+## 12. Review worktrees (PRD §F7)
+
+- `create_review_worktree(task_id, full_name, pr_number)` fetches `refs/pull/<n>/head` into the mirror (works for same-repo **and** fork PRs without touching the fork) and checks it out **detached** into `ws/task-<id>-review`. Reviewers read/validate but can never push.
+- `list_branches(full_name)` lists `origin/*` from the mirror (task-form branch pickers).
+- The same `opencode.json`/identity bootstrap applies to review worktrees.

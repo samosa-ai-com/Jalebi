@@ -11,6 +11,7 @@ DEFAULTS: dict[str, object] = {
     "concurrency": 4,
     "auto_publish": True,
     "ntfy_topic": "",
+    "ntfy_url": "",
     "default_timeout_minutes": 30,
     "retry_policy": {"auto_retry": False},
     "secret_patterns": [],

@@ -9,22 +9,55 @@ const TASKS = [
     id: 1,
     type: "freeform",
     repo_id: 1,
+    source_branch: "main",
+    target_branch: "main",
     model: null,
     cli: null,
+    pat_name: null,
     prompt: "do the thing",
     status: "done",
     timeout_minutes: 30,
     retry_count: 0,
     pr_number: null,
+    issues: [],
+    prs: [],
     created_at: "2026-08-06T10:00:00",
     updated_at: "2026-08-06T10:05:00",
     run: null,
+    followups: [],
   },
 ];
 
 const REPOS = [
-  { id: 1, full_name: "owner/repo", default_branch: "main", clone_url: "https://x.git" },
+  {
+    id: 1,
+    full_name: "owner/repo",
+    default_branch: "main",
+    clone_url: "https://x.git",
+    webhook_registered: false,
+    poll_fallback: false,
+    check_runs_enabled: false,
+    last_checked_at: null,
+  },
 ];
+
+function stubFetch(handlers: Record<string, unknown>) {
+  const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
+    const match = Object.entries(handlers).find(([needle]) => url.includes(needle));
+    const value = match ? match[1] : [];
+    return { ok: true, json: async () => value };
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+const DEFAULT_HANDLERS = {
+  "/api/tasks": TASKS,
+  "/api/repos": REPOS,
+  "/api/models": { cli: "opencode", models: ["opencode-go/deepseek-v4-flash"] },
+  "/api/github/tokens": { default: null, items: [{ name: "work", masked: "ghp_****" }] },
+  "/api/github/context": { issues: [], prs: [], branches: ["main", "dev"] },
+};
 
 describe("Tasks", () => {
   afterEach(() => {
@@ -32,13 +65,7 @@ describe("Tasks", () => {
   });
 
   it("lists tasks with status and repo", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string, _init?: RequestInit) => ({
-        ok: true,
-        json: async () => (url.includes("/api/tasks") ? TASKS : REPOS),
-      }))
-    );
+    stubFetch({ ...DEFAULT_HANDLERS });
     render(
       <MemoryRouter>
         <Tasks />
@@ -50,11 +77,7 @@ describe("Tasks", () => {
   });
 
   it("creates a task and reloads", async () => {
-    const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => ({
-      ok: true,
-      json: async () => (url.includes("/api/tasks") ? [] : REPOS),
-    }));
-    vi.stubGlobal("fetch", fetchMock);
+    const fetchMock = stubFetch({ ...DEFAULT_HANDLERS, "/api/tasks": [] });
 
     render(
       <MemoryRouter>
@@ -81,11 +104,7 @@ describe("Tasks", () => {
       { ...TASKS[0], id: 1, status: "running", prompt: "running one" },
       { ...TASKS[0], id: 2, status: "done", prompt: "done one" },
     ];
-    const fetchMock = vi.fn(async (url: string) => ({
-      ok: true,
-      json: async () => (url.includes("/api/tasks") ? mixed : REPOS),
-    }));
-    vi.stubGlobal("fetch", fetchMock);
+    stubFetch({ ...DEFAULT_HANDLERS, "/api/tasks": mixed });
 
     render(
       <MemoryRouter>

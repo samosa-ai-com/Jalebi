@@ -106,6 +106,13 @@ class Task(Base):
     model: Mapped[str | None] = mapped_column(Text, nullable=True)
     cli: Mapped[str | None] = mapped_column(Text, nullable=True)
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    # which named PAT drives this task (None = the primary/default token)
+    pat_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # JSON lists of referenced issue/PR numbers (UI chips)
+    issues_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    prs_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # JSON dict of fetched context used to build the worktree AGENTS.md
+    context_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(
         Text, nullable=False, default="queued", server_default=sa.text("'queued'")
     )
@@ -133,6 +140,7 @@ class Run(Base):
     session_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     cli: Mapped[str | None] = mapped_column(Text, nullable=True)
     model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    pat_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     pid: Mapped[int | None] = mapped_column(Integer, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -149,6 +157,8 @@ class Followup(Base):
     task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id"), nullable=False)
     run_id: Mapped[int | None] = mapped_column(ForeignKey("runs.id"), nullable=True)
     body: Mapped[str] = mapped_column(Text, nullable=False)
+    pat_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    model: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
 
 

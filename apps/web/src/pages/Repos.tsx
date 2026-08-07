@@ -98,6 +98,19 @@ export default function Repos() {
                 <span className="hidden font-mono text-[11px] text-ink-600 sm:block">
                   #{r.id}
                 </span>
+                <button
+                  onClick={async () => {
+                    try {
+                      await api.disconnectRepo(r.id);
+                      load();
+                    } catch (e) {
+                      setError(e instanceof Error ? e.message : "failed to disconnect");
+                    }
+                  }}
+                  className="text-[11px] text-ink-500 transition-colors hover:text-red-300"
+                >
+                  disconnect
+                </button>
               </li>
             );
           })}

@@ -79,11 +79,21 @@ class AgentAdapter:
         raise NotImplementedError
 
     def start(
-        self, cwd: str, prompt: str, model: str | None = None, env: dict[str, str] | None = None
+        self,
+        cwd: str,
+        prompt: str,
+        model: str | None = None,
+        env: dict[str, str | None] | None = None,
     ) -> RunHandle:
         raise NotImplementedError
 
-    def resume(self, cwd: str, session_id: str, prompt: str) -> RunHandle:
+    def resume(
+        self,
+        cwd: str,
+        session_id: str,
+        prompt: str,
+        env: dict[str, str | None] | None = None,
+    ) -> RunHandle:
         raise NotImplementedError
 
     def parse(self, line: str) -> list[AgentEvent]:

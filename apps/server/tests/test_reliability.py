@@ -60,6 +60,9 @@ class FakeGitHubClient:
     def __init__(self, token: str):
         self.token = token
 
+    def find_pr_by_head(self, full_name, head) -> int | None:
+        return None
+
     def create_pr(self, full_name, *, title, body, head, base) -> int:
         return 42
 
@@ -245,6 +248,9 @@ def test_publish_route_502_when_github_fails(app, session, repo_row, monkeypatch
     _seed_commit(app.config["JALEBI_QUEUE"], task.id, repo_row.clone_url)
 
     class BoomGitHub(FakeGitHubClient):
+        def find_pr_by_head(self, full_name, head) -> int | None:
+            raise RuntimeError("github down")
+
         def create_pr(self, full_name, *, title, body, head, base) -> int:
             raise RuntimeError("github down")
 

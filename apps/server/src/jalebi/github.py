@@ -120,8 +120,122 @@ class GitHubClient:
             raise GitHubError(f"failed to create PR: HTTP {status}")
         return payload["number"]
 
+    def find_pr_by_head(self, full_name: str, head: str) -> int | None:
+        """Return the number of an existing PR whose head ref is ``head``, if any.
+
+        ``head`` is matched same-repo as ``{owner}:{head}`` (cross-repo PRs from
+        forks are intentionally ignored so an agent-created fork PR can never
+        be mistaken for the task's own PR).
+        """
+        owner = full_name.split("/", 1)[0]
+        status, body, _ = self._request(
+            "GET",
+            f"/repos/{full_name}/pulls",
+            params={"state": "all", "head": f"{owner}:{head}", "per_page": 100},
+        )
+        if status != 200 or not isinstance(body, list):
+            raise GitHubError(f"failed to list PRs: HTTP {status}")
+        for pr in body:
+            if isinstance(pr, dict) and pr.get("head", {}).get("ref") == head:
+                return pr.get("number")
+        return None
+
+    def list_issues(self, full_name: str, state: str = "open") -> list[dict[str, Any]]:
+        """List the repo's issues (PRs excluded by GitHub's issue API)."""
+        status, body, _ = self._request(
+            "GET", f"/repos/{full_name}/issues", params={"state": state, "per_page": 100}
+        )
+        if status != 200 or not isinstance(body, list):
+            raise GitHubError(f"failed to list issues: HTTP {status}")
+        return [
+            {
+                "number": issue.get("number"),
+                "title": issue.get("title"),
+                "html_url": issue.get("html_url"),
+                "state": issue.get("state"),
+                "pull_request": "pull_request" in issue,  # issues API includes PRs
+            }
+            for issue in body
+            if "pull_request" not in issue
+        ]
+
+    def get_issue(self, full_name: str, number: int) -> dict[str, Any]:
+        status, body, _ = self._request("GET", f"/repos/{full_name}/issues/{number}")
+        if status == 404:
+            raise GitHubNotFound(f"{full_name}#{number}")
+        if status != 200 or not isinstance(body, dict):
+            raise GitHubError(f"failed to fetch issue: HTTP {status}")
+        return {
+            "number": body.get("number"),
+            "title": body.get("title"),
+            "body": body.get("body") or "",
+            "html_url": body.get("html_url"),
+            "state": body.get("state"),
+        }
+
+    def comment_on_issue(self, full_name: str, number: int, body: str) -> None:
+        status, _, _ = self._request(
+            "POST", f"/repos/{full_name}/issues/{number}/comments", json={"body": body}
+        )
+        if status != 201:
+            raise GitHubError(f"failed to comment on issue #{number}: HTTP {status}")
+
+    def list_prs(self, full_name: str, state: str = "open") -> list[dict[str, Any]]:
+        status, body, _ = self._request(
+            "GET", f"/repos/{full_name}/pulls", params={"state": state, "per_page": 100}
+        )
+        if status != 200 or not isinstance(body, list):
+            raise GitHubError(f"failed to list PRs: HTTP {status}")
+        return [
+            {
+                "number": pr.get("number"),
+                "title": pr.get("title"),
+                "html_url": pr.get("html_url"),
+                "state": pr.get("state"),
+                "base": (pr.get("base") or {}).get("ref"),
+                "head": (pr.get("head") or {}).get("ref"),
+                "author": (pr.get("user") or {}).get("login"),
+            }
+            for pr in body
+        ]
+
+    def get_pr(self, full_name: str, number: int) -> dict[str, Any]:
+        status, body, _ = self._request("GET", f"/repos/{full_name}/pulls/{number}")
+        if status == 404:
+            raise GitHubNotFound(f"{full_name}#{number}")
+        if status != 200 or not isinstance(body, dict):
+            raise GitHubError(f"failed to fetch PR: HTTP {status}")
+        return {
+            "number": body.get("number"),
+            "title": body.get("title"),
+            "body": body.get("body") or "",
+            "html_url": body.get("html_url"),
+            "state": body.get("state"),
+            "base": (body.get("base") or {}).get("ref"),
+            "head": (body.get("head") or {}).get("ref"),
+            "author": (body.get("user") or {}).get("login"),
+        }
+
+    def post_pr_review(self, full_name: str, pr_number: int, body: str) -> None:
+        """Post a PR review comment (event COMMENT) — never approves/merges."""
+        status, _, _ = self._request(
+            "POST",
+            f"/repos/{full_name}/pulls/{pr_number}/reviews",
+            json={"event": "COMMENT", "body": body},
+        )
+        if status != 201:
+            raise GitHubError(f"failed to post review on PR #{pr_number}: HTTP {status}")
+
+    def list_branches(self, full_name: str) -> list[str]:
+        """List the repo's branch names (first 100)."""
+        status, body, _ = self._request(
+            "GET", f"/repos/{full_name}/branches", params={"per_page": 100}
+        )
+        if status != 200 or not isinstance(body, list):
+            raise GitHubError(f"failed to list branches: HTTP {status}")
+        return [name for name in (b.get("name") for b in body) if isinstance(name, str)]
+
     def list_repos(self, per_page: int = 100) -> list[dict[str, Any]]:
-        """List the authenticated user's repositories (name, default branch, clone URL)."""
         status, body, _ = self._request(
             "GET",
             "/user/repos",

@@ -61,6 +61,11 @@ def _auth_env(token: str | None) -> dict[str, str]:
     }
 
 
+def auth_env(token: str | None) -> dict[str, str]:
+    """Public alias of ``_auth_env`` for building agent subprocess envs."""
+    return _auth_env(token)
+
+
 class GitWorkspace:
     def __init__(self, config: Config):
         self.config = config
@@ -79,6 +84,10 @@ class GitWorkspace:
     @staticmethod
     def task_branch(task_id: int) -> str:
         return f"{BRANCH_PREFIX}{task_id}"
+
+    @staticmethod
+    def review_worktree_path(data_dir: Path, task_id: int) -> Path:
+        return data_dir / "ws" / f"task-{task_id}-review"
 
     def _lock_for(self, full_name: str) -> threading.Lock:
         with self._locks_guard:
@@ -200,6 +209,81 @@ class GitWorkspace:
             ).splitlines()
             if branch in branches:
                 _run_git(["-C", str(mirror), "branch", "-D", branch])
+
+    def create_review_worktree(
+        self,
+        task_id: int,
+        full_name: str,
+        pr_number: int,
+        token: str | None = None,
+    ) -> Path:
+        """Check out PR ``pr_number``'s head into a detached review worktree.
+
+        Fetches the PR head via ``refs/pull/<n>/head`` (works for same-repo and
+        cross-repo PRs without touching the fork) and checks it out detached, so
+        the reviewer can read/validate but never push.
+        """
+        mirror = self.mirror_path(self.config.data_dir, full_name)
+        ws = self.review_worktree_path(self.config.data_dir, task_id)
+        auth = _auth_env(token)
+        ref = f"refs/remotes/origin/pr-{pr_number}"
+
+        with self._lock_for(full_name):
+            if not mirror.exists():
+                raise GitWorkspaceError(f"mirror missing for {full_name}; call ensure_mirror first")
+            if not (ws / ".git").is_file():
+                _run_git(
+                    [
+                        "-C",
+                        str(mirror),
+                        "fetch",
+                        "origin",
+                        f"refs/pull/{pr_number}/head:{ref}",
+                    ],
+                    auth_env=auth,
+                )
+                _run_git(
+                    ["-C", str(mirror), "worktree", "add", "--detach", str(ws), ref],
+                    auth_env=auth,
+                )
+        return ws
+
+    def remove_review_worktree(
+        self, task_id: int, full_name: str, pr_number: int | None = None
+    ) -> None:
+        """Remove a review worktree and its mirror-local PR ref (no-op if absent)."""
+        mirror = self.mirror_path(self.config.data_dir, full_name)
+        ws = self.review_worktree_path(self.config.data_dir, task_id)
+        with self._lock_for(full_name):
+            if not mirror.exists():
+                return
+            if (ws / ".git").is_file():
+                _run_git(["-C", str(mirror), "worktree", "remove", "--force", str(ws)])
+            if pr_number is not None:
+                _run_git(
+                    [
+                        "-C",
+                        str(mirror),
+                        "update-ref",
+                        "-d",
+                        f"refs/remotes/origin/pr-{pr_number}",
+                    ]
+                )
+        return None
+
+    def list_branches(self, full_name: str, token: str | None = None) -> list[str]:
+        """Branch names available in the mirror (from ``origin/*``)."""
+        mirror = self.mirror_path(self.config.data_dir, full_name)
+        if not mirror.exists():
+            return []
+        out = _run_git(
+            ["-C", str(mirror), "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin"],
+        )
+        return sorted(
+            name.split("/", 1)[1]
+            for name in out.splitlines()
+            if "/" in name and name != "origin/HEAD"
+        )
 
     def commits_ahead(self, worktree: Path, base_branch: str) -> int:
         """Number of commits on the worktree's HEAD beyond ``origin/<base_branch>``."""

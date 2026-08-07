@@ -44,3 +44,42 @@ def test_persist_env_github_token(cfg: Config, monkeypatch) -> None:
     assert secrets.load_secret(cfg, "github_token") == "ghp_abc"
     secrets.persist_env_github_token(cfg)  # idempotent
     assert secrets.load_secret(cfg, "github_token") == "ghp_abc"
+
+
+def test_named_tokens_crud(cfg: Config) -> None:
+    secrets.add_github_token(cfg, "work", "ghp_work")
+    secrets.add_github_token(cfg, "personal", "ghp_personal")
+    assert secrets.token_names(cfg) == ["work", "personal"]
+    assert secrets.get_named_token(cfg, "work") == "ghp_work"
+    secrets.remove_github_token(cfg, "work")
+    assert secrets.token_names(cfg) == ["personal"]
+
+
+def test_add_named_token_replaces_same_name(cfg: Config) -> None:
+    secrets.add_github_token(cfg, "work", "ghp_old")
+    secrets.add_github_token(cfg, "work", "ghp_new")
+    names = secrets.token_names(cfg)
+    assert names == ["work"]
+    assert secrets.get_named_token(cfg, "work") == "ghp_new"
+
+
+def test_resolve_named_then_primary(cfg: Config, monkeypatch) -> None:
+    monkeypatch.delenv(secrets.ENV_GITHUB_TOKEN, raising=False)
+    secrets.add_github_token(cfg, "work", "ghp_work")
+    assert secrets.resolve_token(cfg, "work") == "ghp_work"
+    # unknown name falls back to the primary (here: the first named token)
+    assert secrets.resolve_token(cfg, "missing") == "ghp_work"
+    secrets.store_secret(cfg, "github_token", "ghp_primary")
+    assert secrets.resolve_token(cfg, "missing") == "ghp_primary"
+    assert secrets.resolve_token(cfg, None) == "ghp_primary"
+
+
+def test_all_token_values_dedup(cfg: Config, monkeypatch) -> None:
+    monkeypatch.setenv(secrets.ENV_GITHUB_TOKEN, "ghp_env")
+    secrets.store_secret(cfg, "github_token", "ghp_primary")
+    secrets.add_github_token(cfg, "a", "ghp_a")
+    secrets.add_github_token(cfg, "b", "ghp_a")  # duplicate value
+    values = secrets.all_token_values(cfg)
+    assert values.count("ghp_a") == 1
+    assert "ghp_env" in values
+    assert "ghp_primary" in values

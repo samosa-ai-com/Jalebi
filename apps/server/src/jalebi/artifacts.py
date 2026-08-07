@@ -22,7 +22,12 @@ def artifact_store_dir(data_dir: Path) -> Path:
 
 
 def _untracked_files(worktree: Path) -> list[str]:
-    """Relative paths of untracked, non-ignored files in ``worktree``."""
+    """Relative paths of untracked, non-ignored files in ``worktree``.
+
+    Jalebi's own bootstrap files (``AGENTS.md``, ``opencode.json``) are excluded
+    — they are infrastructure, not agent output. ``.jalebi/*`` (e.g. ``pr.md``,
+    ``review.md``) IS captured as agent output.
+    """
     proc = subprocess.run(
         ["git", "-C", str(worktree), "ls-files", "--others", "--exclude-standard", "-z"],
         capture_output=True,
@@ -30,7 +35,11 @@ def _untracked_files(worktree: Path) -> list[str]:
     )
     if proc.returncode != 0:
         return []
-    return [p for p in proc.stdout.split("\0") if p]
+    return [
+        p
+        for p in proc.stdout.split("\0")
+        if p and p not in ("AGENTS.md", "opencode.json")
+    ]
 
 
 def capture_run_artifacts(

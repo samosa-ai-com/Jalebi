@@ -7,6 +7,7 @@ const SETTINGS = {
   concurrency: 4,
   auto_publish: true,
   ntfy_topic: "",
+  ntfy_url: "",
   default_timeout_minutes: 30,
   retry_policy: { auto_retry: false },
   secret_patterns: [],

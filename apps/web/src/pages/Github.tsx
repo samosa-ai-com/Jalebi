@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api/client";
-import type { GithubRepo, Repo, TokenInfo } from "../types";
+import type { GithubRepo, Repo, TokenItem, TokenInfo } from "../types";
 
 function ScopeChip({ scope }: { scope: string }) {
   return (
@@ -60,11 +60,91 @@ function TokenForm({ onStored }: { onStored: () => void }) {
   );
 }
 
+function TokensManager({
+  tokens,
+  onChanged,
+}: {
+  tokens: TokenItem[];
+  onChanged: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function add(e: React.FormEvent) {
+    e.preventDefault();
+    if (!name.trim() || !value.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.addToken(name.trim(), value.trim());
+      setName("");
+      setValue("");
+      onChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "failed to add token");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="surface p-5 animate-fade-up">
+      <h2 className="panel-title mb-2">Saved PATs</h2>
+      <p className="mb-4 text-xs text-ink-500">
+        Multiple tokens can be stored here and picked per task (task form / follow-up). The{" "}
+        <span className="text-ink-300">Default</span> option uses your primary token.
+      </p>
+      {tokens.length === 0 && (
+        <p className="mb-4 text-sm text-ink-600">No named tokens yet.</p>
+      )}
+      <ul className="mb-4 space-y-1.5">
+        {tokens.map((t) => (
+          <li key={t.name} className="flex items-center gap-2 text-sm">
+            <span className="font-mono text-ink-200">{t.name}</span>
+            <span className="font-mono text-[11px] text-ink-500">{t.masked}</span>
+            <button
+              onClick={() => api.deleteToken(t.name).then(onChanged).catch(() => {})}
+              className="ml-auto text-[11px] text-red-400 hover:text-red-300"
+            >
+              remove
+            </button>
+          </li>
+        ))}
+      </ul>
+      <form onSubmit={add} className="grid gap-2 sm:grid-cols-[1fr_2fr_auto] sm:items-center">
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="label (e.g. work, personal)"
+          className="field font-mono"
+          spellCheck={false}
+        />
+        <input
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          type="password"
+          placeholder="ghp_…"
+          className="field font-mono"
+          autoComplete="off"
+          spellCheck={false}
+        />
+        <button type="submit" disabled={busy || !name.trim() || !value.trim()} className="btn-primary">
+          {busy ? "Adding…" : "Add token"}
+        </button>
+      </form>
+      {error && <p className="mt-2 text-xs text-red-400">{error}</p>}
+    </section>
+  );
+}
+
 export default function Github() {
   const [info, setInfo] = useState<TokenInfo | null>(null);
   const [hasToken, setHasToken] = useState(true);
   const [repos, setRepos] = useState<GithubRepo[]>([]);
   const [connected, setConnected] = useState<Repo[]>([]);
+  const [tokens, setTokens] = useState<TokenItem[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loadingRepos, setLoadingRepos] = useState(false);
 
@@ -75,6 +155,13 @@ export default function Github() {
       .then(setRepos)
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoadingRepos(false));
+  }, []);
+
+  const loadTokens = useCallback(() => {
+    api
+      .getTokens()
+      .then((t) => setTokens(t.items ?? []))
+      .catch(() => {});
   }, []);
 
   const load = useCallback(() => {
@@ -98,7 +185,8 @@ export default function Github() {
       .getRepos()
       .then(setConnected)
       .catch(() => {});
-  }, [loadRepos]);
+    loadTokens();
+  }, [loadRepos, loadTokens]);
 
   useEffect(() => {
     load();
@@ -112,6 +200,25 @@ export default function Github() {
       setConnected(await api.getRepos());
     } catch (e) {
       setError(e instanceof Error ? e.message : "failed to connect repo");
+    }
+  }
+
+  async function disconnect(id: number) {
+    try {
+      await api.disconnectRepo(id);
+      setConnected(await api.getRepos());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "failed to disconnect repo");
+    }
+  }
+
+  async function prune() {
+    try {
+      const res = await api.pruneRepos();
+      setConnected(await api.getRepos());
+      if (res.removed.length === 0) setError("No deleted repos found — all connected repos still exist.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "failed to prune repos");
     }
   }
 
@@ -204,13 +311,25 @@ export default function Github() {
       {error && <p className="text-sm text-red-400">{error}</p>}
 
       {hasToken && (
+        <TokensManager
+          tokens={tokens}
+          onChanged={() => {
+            loadTokens();
+          }}
+        />
+      )}
+
+      {hasToken && (
         <section
           className="surface animate-fade-up"
           style={{ animationDelay: "0.1s" }}
         >
           <div className="flex items-center gap-3 border-b border-ink-800 px-6 py-4">
             <h2 className="panel-title">Your GitHub repositories</h2>
-            <button onClick={loadRepos} className="btn-ghost ml-auto !px-3 !py-1 text-xs">
+            <button onClick={prune} className="btn-ghost ml-auto !px-3 !py-1 text-xs">
+              Prune deleted
+            </button>
+            <button onClick={loadRepos} className="btn-ghost !px-3 !py-1 text-xs">
               Refresh
             </button>
           </div>
@@ -246,9 +365,20 @@ export default function Github() {
                       </span>
                     </span>
                     {isConnected ? (
-                      <span className="rounded-full bg-green-500/10 px-3 py-1 font-mono text-[11px] text-green-300">
-                        connected
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="rounded-full bg-green-500/10 px-3 py-1 font-mono text-[11px] text-green-300">
+                          connected
+                        </span>
+                        <button
+                          onClick={() => {
+                            const row = connected.find((c) => c.full_name === r.full_name);
+                            if (row) disconnect(row.id);
+                          }}
+                          className="text-[11px] text-ink-500 transition-colors hover:text-red-300"
+                        >
+                          disconnect
+                        </button>
+                      </div>
                     ) : (
                       <button
                         onClick={() => connect(r.full_name)}

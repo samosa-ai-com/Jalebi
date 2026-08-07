@@ -1,0 +1,137 @@
+"""Task prompt + AGENTS.md builders (PRD F6/F8).
+
+The user-facing ``task.prompt`` stays the user's own words. Type-specific
+instructions, task context (issue/PR bodies, branches) and hard constraints are
+injected as the worktree's ``AGENTS.md`` (opencode auto-reads it), keeping the
+stored prompt clean while the agent gets the full brief.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from jalebi.db import Repo, Task
+
+BEST_PRACTICES = """\
+## Working conventions
+
+- Follow the repository's existing code style and conventions; match surrounding code.
+- Implement only what the task asks — do not add unrelated changes or extra features.
+- Validate your change before finishing: run relevant tests, linters, or a smoke
+  check; fix what you break. If a full test suite is too slow, run the targeted
+  subset and say what you ran.
+- Update or add tests where appropriate for the change.
+- Keep the diff focused; do not reformat unrelated files.
+- If you modify user-facing behavior, update docs/README/changelog entries where the
+  repo keeps them.
+"""
+
+HARD_RULES = """\
+## Hard rules (non-negotiable)
+
+1. **Never use the `gh` CLI.** It is blocked and unauthenticated in this worktree.
+2. **Never create forks.** Never add git remotes pointing at another account.
+3. **Push only to `origin`**, on the current `jalebi/<taskId>` branch.
+4. **Never open, edit, or close pull requests yourself.** Jalebi publishes PRs.
+   You only commit and push. For review tasks you never push at all.
+5. Use **only** the GitHub token provided via `JALEBI_GITHUB_TOKEN` (already in the
+   environment and used by git) for anything GitHub-related — e.g. `curl -H
+   "Authorization: Bearer $JALEBI_GITHUB_TOKEN"`.
+6. Commit messages: a short imperative summary, one line.
+"""
+
+
+def _pr_md_note() -> str:
+    return (
+        "When the task asks you to make code changes, write `.jalebi/pr.md` before "
+        "finishing: first line `# <concise title>` (what you did), then a description "
+        "of the actual implementation — what changed, why, and any caveats. Jalebi "
+        "uses this file for the pull request it opens."
+    )
+
+
+def _review_md_note() -> str:
+    return (
+        "Write your review to `.jalebi/review.md`: start with an overall verdict, then "
+        "a prioritized list of findings (severity, file/line, issue, suggestion). "
+        "Jalebi posts this as a comment on the pull request."
+    )
+
+
+def build_agent_md(task: Task, repo: Repo) -> str:
+    """Build the worktree ``AGENTS.md`` from the task's stored context."""
+    parts = [
+        "# Jalebi task environment",
+        "",
+        f"- Repo: `{repo.full_name}`",
+        f"- Task type: `{task.type}`",
+        f"- Source branch (worktree base): `{task.source_branch or 'default'}`",
+        f"- Target branch (PR base): `{task.target_branch or 'default'}`",
+    ]
+    if task.pat_name:
+        parts.append(f"- Using GitHub token: `{task.pat_name}`")
+    parts += ["", HARD_RULES, "", BEST_PRACTICES]
+
+    ctx = json.loads(task.context_json) if task.context_json else {}
+    issues = ctx.get("issues") or []
+    prs = ctx.get("prs") or []
+
+    if task.type == "issue_fix" and issues:
+        parts += [
+            "",
+            "## Issue(s) to fix",
+            "Implement a fix for the issue(s) below. Branch off the source branch, make",
+            "the change, validate it, and commit on the current branch. Jalebi opens the",
+            "PR (into the target branch, with `Closes #N`) and comments on the issue.",
+            "",
+        ]
+        for issue in issues:
+            parts += [
+                f"- **#{issue['number']} — {issue.get('title', '')}** "
+                f"({issue.get('html_url', '')})",
+                "  ```",
+                (issue.get("body") or "(no description)").strip(),
+                "  ```",
+            ]
+        parts += ["", _pr_md_note()]
+
+    if task.type == "pr_review" and prs:
+        pr = prs[0]
+        parts += [
+            "",
+            "## Pull request to review",
+            "Review the PR below. The worktree is checked out at the PR head commit —",
+            "read the diff and the surrounding code there. Build/run it if feasible.",
+            "Do **not** modify files or push anything. You are reviewing only.",
+            "",
+            f"- **PR #{pr['number']} — {pr.get('title', '')}** "
+            f"({pr.get('html_url', '')})",
+            f"- Base: `{pr.get('base') or '?'}` ← Head: `{pr.get('head') or '?'}`",
+            f"- Author: `{pr.get('author') or '?'}` · State: `{pr.get('state') or '?'}`",
+            f"- Description: {pr.get('body') or '(none)'}",
+            "",
+            _review_md_note(),
+        ]
+
+    if task.type == "freeform" or task.type == "screen_finding":
+        parts += ["", _pr_md_note()]
+
+    return "\n".join(parts)
+
+
+def build_followup_prompt(task: Task, repo: Repo, body: str) -> str:
+    """The follow-up text with an explicit instruction to fetch current context."""
+    return (
+        body.strip()
+        + "\n\n"
+        f"(You are resuming a Jalebi task in `{repo.full_name}`. Follow the hard rules "
+        "in AGENTS.md: no gh, no forks, push only to origin, update .jalebi/pr.md if "
+        "you change code. If this follow-up asks you to address PR review comments, "
+        f"fetch them via `curl -H \"Authorization: Bearer $JALEBI_GITHUB_TOKEN\" "
+        f"https://api.github.com/repos/{repo.full_name}/pulls/<n>/reviews` first.)"
+    )
+
+
+def review_file(worktree: Path) -> Path:
+    return worktree / ".jalebi" / "review.md"

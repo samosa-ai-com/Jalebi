@@ -7,6 +7,7 @@ from flask import Flask, Response, current_app, g, jsonify, request, send_from_d
 from flask.typing import ResponseReturnValue
 
 from jalebi import artifacts, db, secrets, settings
+from jalebi.adapters import get_adapter
 from jalebi.config import Config, load_config, repo_root
 from jalebi.queue import TaskQueue
 from jalebi.routes.github import bp as github_bp
@@ -24,6 +25,7 @@ _SETTING_VALIDATORS = {
     "auto_publish": lambda v: isinstance(v, bool),
     "default_timeout_minutes": lambda v: isinstance(v, int) and v >= 1,
     "ntfy_topic": lambda v: isinstance(v, str),
+    "ntfy_url": lambda v: isinstance(v, str),
     "retry_policy": lambda v: isinstance(v, dict) and isinstance(v.get("auto_retry"), bool),
     "secret_patterns": lambda v: isinstance(v, list) and all(isinstance(x, str) for x in v),
     "artifact_ttl_days": lambda v: isinstance(v, int) and v >= 1,
@@ -73,6 +75,17 @@ def create_app(config: Config | None = None) -> Flask:
     def get_settings() -> Response:
         session = db.get_session()
         return jsonify({key: settings.get_setting(session, key) for key in settings.SETTING_KEYS})
+
+    @app.get("/api/models")
+    def list_models() -> ResponseReturnValue:
+        """Models available from the configured agent CLI (for the task form)."""
+        session = db.get_session()
+        cli = str(settings.get_setting(session, "agent_cli") or "opencode")
+        try:
+            models = get_adapter(cli).list_models()
+        except Exception:
+            models = []
+        return jsonify({"cli": cli, "models": models})
 
     @app.post("/api/settings")
     def update_settings() -> ResponseReturnValue:

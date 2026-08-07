@@ -23,12 +23,16 @@ def _binary() -> str:
 
 
 def _spawn(
-    args: list[str], cwd: str | Path, env: dict[str, str] | None = None
+    args: list[str], cwd: str | Path, env: dict[str, str | None] | None = None
 ) -> subprocess.Popen[str]:
     full_env = os.environ.copy()
     full_env.setdefault("OPENCODE_DISABLE_AUTOUPDATE", "1")
     if env:
-        full_env.update(env)
+        for key, value in env.items():
+            if value is None:
+                full_env.pop(key, None)
+            else:
+                full_env[key] = value
     # Spawn through a shell: `opencode run --session` stalls when exec'd directly
     # (empty stream, agent loop exits immediately), but works via `sh -c`.
     cmd = "cd " + shlex.quote(str(cwd)) + " && exec " + " ".join(shlex.quote(a) for a in args)
@@ -54,7 +58,11 @@ class OpenCodeAdapter(AgentAdapter):
         return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
 
     def start(
-        self, cwd: str, prompt: str, model: str | None = None, env: dict[str, str] | None = None
+        self,
+        cwd: str,
+        prompt: str,
+        model: str | None = None,
+        env: dict[str, str | None] | None = None,
     ) -> RunHandle:
         args = [_binary(), "run", "--format", "json", "--dir", str(cwd)]
         if model:
@@ -62,9 +70,15 @@ class OpenCodeAdapter(AgentAdapter):
         args.append(prompt)
         return RunHandle(proc=_spawn(args, cwd, env), parse=self.parse)
 
-    def resume(self, cwd: str, session_id: str, prompt: str) -> RunHandle:
+    def resume(
+        self,
+        cwd: str,
+        session_id: str,
+        prompt: str,
+        env: dict[str, str | None] | None = None,
+    ) -> RunHandle:
         args = [_binary(), "run", "--format", "json", "--session", session_id, prompt]
-        return RunHandle(proc=_spawn(args, cwd), parse=self.parse)
+        return RunHandle(proc=_spawn(args, cwd, env), parse=self.parse)
 
     def parse(self, line: str) -> list[AgentEvent]:
         try:

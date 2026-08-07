@@ -8,16 +8,17 @@ import re
 import signal
 import threading
 import time
+from pathlib import Path
 
 from sqlalchemy import func, select
 
-from jalebi import artifacts, masking, secrets, settings, tasks
+from jalebi import artifacts, masking, prompts, secrets, settings, tasks, worktree_bootstrap
 from jalebi.adapters import get_adapter
 from jalebi.adapters.types import AgentEvent
 from jalebi.config import Config
 from jalebi.db import Repo, Run, Session, Task, utcnow
 from jalebi.events import TaskEvents
-from jalebi.git_workspace import GitWorkspace
+from jalebi.git_workspace import GitWorkspace, auth_env
 from jalebi.github import GitHubClient
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,32 @@ MAX_STEP_TEXT = 2000
 KILL_GRACE_SECONDS = 5
 MAX_AUTO_RETRIES = 1
 DEFAULT_TIMEOUT_MINUTES = 30
+
+GIT_USER_NAME = "Jalebi"
+GIT_USER_EMAIL = "jalebi@localhost"
+
+
+def _build_agent_env(token: str) -> dict[str, str | None]:
+    """Env for the agent subprocess: owner-PAT git creds + bot commit identity.
+
+    ``gh`` is deliberately never authenticated: ``JALEBI_GITHUB_TOKEN`` is the
+    only token exposed, and any inherited ``GH_TOKEN``/``GITHUB_TOKEN`` are
+    stripped so even a guard bypass cannot act as the owner via gh.
+    """
+    env: dict[str, str | None] = dict(auth_env(token))
+    env.update(
+        {
+            "GIT_AUTHOR_NAME": GIT_USER_NAME,
+            "GIT_AUTHOR_EMAIL": GIT_USER_EMAIL,
+            "GIT_COMMITTER_NAME": GIT_USER_NAME,
+            "GIT_COMMITTER_EMAIL": GIT_USER_EMAIL,
+            "JALEBI_GITHUB_TOKEN": token,
+            "GH_CONFIG_DIR": "/nonexistent-jalebi-gh",
+            "GH_TOKEN": None,  # None → removed from the inherited environ
+            "GITHUB_TOKEN": None,
+        }
+    )
+    return env
 
 
 class _RunState:
@@ -129,8 +156,14 @@ class TaskQueue:
     def enqueue(self, task_id: int) -> None:
         self._queue.put(("task", task_id))
 
-    def enqueue_followup(self, task_id: int, body: str) -> None:
-        self._queue.put(("followup", task_id, body))
+    def enqueue_followup(
+        self,
+        task_id: int,
+        body: str,
+        pat_name: str | None = None,
+        model: str | None = None,
+    ) -> None:
+        self._queue.put(("followup", task_id, body, pat_name, model))
 
     # -- worker loop -------------------------------------------------------
 
@@ -150,7 +183,7 @@ class TaskQueue:
                     continue
                 try:
                     if item[0] == "followup":
-                        self._run_followup(item[1], item[2])
+                        self._run_followup(item[1], item[2], item[3], item[4])
                     else:
                         self._run_task(item[1])
                 except Exception:
@@ -236,11 +269,19 @@ class TaskQueue:
         masker,
         handle,
         state: _RunState,
+        *,
+        publish: bool = True,
+        worktree: Path | None = None,
     ) -> None:
         """Stream a handle's events to the SSE bus, then finalize run + task."""
         steps: list[dict[str, object]] = []
         last_event_type: str | None = None
         for event in handle.events():
+            if state.reason == "cancelled" and event.type == "error":
+                # A kill surfaces as "opencode exited with code -15"; replace it
+                # with a clean cancellation marker so the timeline never shows a
+                # scary error for an intentional cancel.
+                event = AgentEvent(type="message", text="Run cancelled by user.")
             if event.type in ("step", "message", "tool_call", "done", "error"):
                 entry = self._step_from_event(event, masker)
                 self.events.publish(task.id, entry)
@@ -271,7 +312,7 @@ class TaskQueue:
         task.status = final_status
         task.updated_at = utcnow()
 
-        if run.status == "done" and settings.get_setting(session, "auto_publish"):
+        if publish and run.status == "done" and settings.get_setting(session, "auto_publish"):
             if self._branch_ahead(task, git):
                 try:
                     task.pr_number = self._publish(task, repo, token, git)
@@ -289,7 +330,8 @@ class TaskQueue:
                     run.steps_json = json.dumps(steps[-MAX_STEPS:])
 
         # Capture agent-produced (untracked) files from the worktree (PRD F18).
-        worktree = GitWorkspace.worktree_path(self.config.data_dir, task.id)
+        if worktree is None:
+            worktree = GitWorkspace.worktree_path(self.config.data_dir, task.id)
         captured = artifacts.capture_run_artifacts(
             session, run, worktree, self.config.data_dir
         )
@@ -317,12 +359,12 @@ class TaskQueue:
                 session.commit()
                 return
 
-            token = secrets.load_github_token(self.config)
+            token = secrets.resolve_token(self.config, task.pat_name)
             if token is None:
                 raise RuntimeError("no GitHub token configured")
             raw_patterns = settings.get_setting(session, "secret_patterns") or []
             patterns = [str(p) for p in raw_patterns] if isinstance(raw_patterns, list) else []
-            masker = masking.build_masker(token, patterns)
+            masker = masking.build_masker(secrets.all_token_values(self.config) + [token], patterns)
             cli = str(task.cli or settings.get_setting(session, "agent_cli") or "opencode")
             timeout = self._resolve_timeout(session, task)
 
@@ -332,14 +374,25 @@ class TaskQueue:
             with self._running_lock:
                 self._running[task.id] = state
 
+            if task.type == "pr_review":
+                run = self._run_review(session, task, repo, cli, timeout, token, masker, state)
+                session.commit()
+                self._maybe_retry(session, task, run)
+                return
+
             run = self._prepare_run(session, task, cli)
+            run.pat_name = task.pat_name
+            session.commit()
 
             git = GitWorkspace(self.config)
             git.ensure_mirror(repo.full_name, repo.clone_url, token)
             wt = git.create_worktree(task.id, repo.full_name, task.source_branch, token)
+            worktree_bootstrap.bootstrap_worktree(wt, prompts.build_agent_md(task, repo))
 
             adapter = get_adapter(cli)
-            state.handle = adapter.start(str(wt), task.prompt, model=task.model)
+            state.handle = adapter.start(
+                str(wt), task.prompt, model=task.model, env=_build_agent_env(token)
+            )
             run.pid = getattr(state.handle.proc, "pid", None)
             session.commit()
             self._start_watchdog(task, state, timeout)
@@ -371,7 +424,138 @@ class TaskQueue:
             session.close()
             self.events.close(task_id)
 
-    def _run_followup(self, task_id: int, body: str) -> None:
+    def _run_review(
+        self,
+        session,
+        task: Task,
+        repo: Repo,
+        cli: str,
+        timeout: int,
+        token: str,
+        masker,
+        state: _RunState,
+    ) -> Run:
+        """Run a PR-review task in an isolated worktree and post the review (F7).
+
+        The review worktree is checked out at the PR head (detached) and the agent
+        is told to review only — it never pushes. On success Jalebi reads the
+        agent's ``.jalebi/review.md`` and posts it as a GitHub PR review COMMENT.
+        """
+        prs = json.loads(task.prs_json) if task.prs_json else []
+        pr_number = int(prs[0]) if prs else None
+        if pr_number is None:
+            raise RuntimeError("pr_review task has no PR number")
+
+        run = self._prepare_run(session, task, cli)
+        run.pat_name = task.pat_name
+        session.commit()
+
+        try:
+            git = GitWorkspace(self.config)
+            git.ensure_mirror(repo.full_name, repo.clone_url, token)
+            wt = git.create_review_worktree(task.id, repo.full_name, pr_number, token)
+            worktree_bootstrap.bootstrap_worktree(wt, prompts.build_agent_md(task, repo))
+
+            adapter = get_adapter(cli)
+            state.handle = adapter.start(
+                str(wt), task.prompt, model=task.model, env=_build_agent_env(token)
+            )
+            run.pid = getattr(state.handle.proc, "pid", None)
+            session.commit()
+            self._start_watchdog(task, state, timeout)
+
+            if state.reason == "cancelled":
+                _kill_proc(state.handle.proc)
+
+            self._stream_and_finish(
+                session,
+                task,
+                repo,
+                run,
+                git,
+                token,
+                masker,
+                state.handle,
+                state,
+                publish=False,
+                worktree=wt,
+            )
+            session.commit()
+
+            if run.status == "done":
+                review_text = self._read_review(wt)
+                if not review_text:
+                    review_text = self._last_message(session, task.id)
+                if review_text:
+                    try:
+                        client = GitHubClient(token)
+                        try:
+                            client.post_pr_review(repo.full_name, pr_number, review_text)
+                        finally:
+                            client.close()
+                        steps = json.loads(run.steps_json or "[]")
+                        steps.append(
+                            {
+                                "type": "message",
+                                "phase": None,
+                                "text": f"Review posted to PR #{pr_number}.",
+                                "ts": utcnow().isoformat(),
+                            }
+                        )
+                        run.steps_json = json.dumps(steps[-MAX_STEPS:])
+                        session.commit()
+                    except Exception as exc:
+                        logger.warning("posting review for task %s failed: %s", task.id, exc)
+                        steps = json.loads(run.steps_json or "[]")
+                        steps.append(
+                            {
+                                "type": "error",
+                                "phase": None,
+                                "text": f"posting review to PR #{pr_number} failed: {exc}",
+                                "ts": utcnow().isoformat(),
+                            }
+                        )
+                        run.steps_json = json.dumps(steps[-MAX_STEPS:])
+                        session.commit()
+        except Exception:
+            logger.exception("pr_review task %s failed", task.id)
+            session.rollback()
+            if state.handle is not None:
+                _kill_proc(state.handle.proc)
+            with self._running_lock:
+                self._running.pop(task.id, None)
+            run.status = "failed"
+            run.finished_at = utcnow()
+            if task.status not in ("cancelled",):
+                task.status = "failed"
+                task.updated_at = utcnow()
+            session.commit()
+        return run
+
+    @staticmethod
+    def _read_review(worktree: Path) -> str:
+        review = worktree / ".jalebi" / "review.md"
+        if review.is_file():
+            return review.read_text().strip()
+        return ""
+
+    @staticmethod
+    def _last_message(session, task_id: int) -> str:
+        run = tasks.latest_run(session, task_id)
+        if run is None or not run.steps_json:
+            return ""
+        for step in reversed(json.loads(run.steps_json)):
+            if step.get("type") == "message" and step.get("text"):
+                return step["text"]
+        return ""
+
+    def _run_followup(
+        self,
+        task_id: int,
+        body: str,
+        pat_name: str | None = None,
+        model: str | None = None,
+    ) -> None:
         """Resume a completed task's session in its own worktree (PRD F11)."""
         session = Session()
         run: Run | None = None
@@ -390,29 +574,39 @@ class TaskQueue:
                 raise RuntimeError(f"task {task_id} has no resumable session")
             prev_session_id = prev.session_id
 
-            token = secrets.load_github_token(self.config)
+            token = secrets.resolve_token(self.config, pat_name or task.pat_name)
             if token is None:
                 raise RuntimeError("no GitHub token configured")
             raw_patterns = settings.get_setting(session, "secret_patterns") or []
             patterns = [str(p) for p in raw_patterns] if isinstance(raw_patterns, list) else []
-            masker = masking.build_masker(token, patterns)
+            masker = masking.build_masker(secrets.all_token_values(self.config) + [token], patterns)
             cli = str(
                 task.cli or prev.cli or settings.get_setting(session, "agent_cli") or "opencode"
             )
             timeout = self._resolve_timeout(session, task)
+            effective_model = model or task.model or prev.model
 
             state = _RunState(None)
             with self._running_lock:
                 self._running[task.id] = state
 
             run = self._prepare_run(session, task, cli)
+            run.pat_name = pat_name or task.pat_name
+            run.model = effective_model
+            session.commit()
 
             git = GitWorkspace(self.config)
             git.ensure_mirror(repo.full_name, repo.clone_url, token)
             wt = git.create_worktree(task.id, repo.full_name, task.source_branch, token)
+            worktree_bootstrap.bootstrap_worktree(wt, prompts.build_agent_md(task, repo))
 
             adapter = get_adapter(cli)
-            state.handle = adapter.resume(str(wt), prev_session_id, body)
+            state.handle = adapter.resume(
+                str(wt),
+                prev_session_id,
+                prompts.build_followup_prompt(task, repo, body),
+                env=_build_agent_env(token),
+            )
             run.pid = getattr(state.handle.proc, "pid", None)
             session.commit()
             self._start_watchdog(task, state, timeout)
@@ -423,7 +617,14 @@ class TaskQueue:
             self._stream_and_finish(
                 session, task, repo, run, git, token, masker, state.handle, state
             )
-            tasks.add_followup(session, task.id, prev.id, body)
+            tasks.add_followup(
+                session,
+                task.id,
+                prev.id,
+                body,
+                pat_name=pat_name or task.pat_name,
+                model=effective_model,
+            )
             session.commit()
         except Exception:
             logger.exception("follow-up for task %s failed", task_id)
@@ -526,36 +727,85 @@ class TaskQueue:
             return False
 
     def _publish(self, task: Task, repo: Repo, token: str, git: GitWorkspace) -> int:
+        # Ensure the worktree exists (it may have been cleaned for old tasks);
+        # create_worktree reuses the existing jalebi/<taskId> branch if present.
+        git.create_worktree(task.id, repo.full_name, task.target_branch, token)
         git.push_branch(task.id, repo.full_name, token)
         if task.pr_number:
             # A PR already exists for jalebi/<taskId>; the push just updated it.
             return task.pr_number
         client = GitHubClient(token)
         try:
-            return client.create_pr(
-                repo.full_name,
-                title=self._pr_title(task),
-                body=self._pr_body(task),
-                head=f"jalebi/{task.id}",
-                base=task.target_branch,
-            )
+            head = f"jalebi/{task.id}"
+            existing = client.find_pr_by_head(repo.full_name, head)
+            if existing:
+                # An agent-created PR already exists for this head — reuse it
+                # instead of opening a duplicate.
+                pr_number = existing
+            else:
+                title, body = self._pr_title_and_body(task)
+                pr_number = client.create_pr(
+                    repo.full_name,
+                    title=title,
+                    body=body,
+                    head=head,
+                    base=task.target_branch,
+                )
+            self._comment_on_issues(client, repo.full_name, task, pr_number)
+            return pr_number
         finally:
             client.close()
 
-    @staticmethod
-    def _pr_title(task: Task) -> str:
-        first = task.prompt.strip().splitlines()[0][:80] if task.prompt.strip() else "Jalebi task"
-        return f"[Jalebi] {first}"
+    def _comment_on_issues(
+        self, client: GitHubClient, full_name: str, task: Task, pr_number: int
+    ) -> None:
+        """Comment on each referenced issue that the task opened a PR for it."""
+        if task.type != "issue_fix":
+            return
+        try:
+            issue_numbers = json.loads(task.issues_json) if task.issues_json else []
+        except (ValueError, TypeError):
+            issue_numbers = []
+        for number in issue_numbers:
+            try:
+                client.comment_on_issue(
+                    full_name,
+                    int(number),
+                    f"Jalebi opened a pull request for this issue — "
+                    f"[task {task.id}](http://127.0.0.1:3456/tasks/{task.id}), "
+                    f"PR #{pr_number}.",
+                )
+            except Exception as exc:
+                logger.warning("commenting on issue #%s failed: %s", number, exc)
 
-    @staticmethod
-    def _pr_body(task: Task) -> str:
-        parts = [task.prompt]
+    def _pr_title_and_body(self, task: Task) -> tuple[str, str]:
+        """PR title/body from the agent-written ``.jalebi/pr.md`` when present.
+
+        Falls back to the prompt when the agent didn't write one. The Jalebi
+        footer is always appended; ``Closes #N`` is added for referenced issues.
+        """
+        title, body = "", ""
+        pr_md = GitWorkspace.worktree_path(self.config.data_dir, task.id) / ".jalebi" / "pr.md"
+        if pr_md.is_file():
+            lines = (pr_md.read_text() or "").splitlines()
+            if lines and lines[0].startswith("# "):
+                title = lines[0][2:].strip()[:80]
+            body = "\n".join(lines[1:]).strip()
+        if not title:
+            first = task.prompt.strip().splitlines()[0][:80] if task.prompt.strip() else ""
+            title = f"[Jalebi] {first}".strip() or "Jalebi task"
+        if not body:
+            body = task.prompt
+
+        parts = [body]
         if task.type == "issue_fix":
             numbers = re.findall(r"#(\d+)", task.prompt)
             if numbers:
-                parts.append("Closes " + " ".join(f"#{n}" for n in numbers))
+                closes = " ".join(f"#{n}" for n in numbers)
+                if f"Closes {closes}" not in body:
+                    parts.append(f"Closes {closes}")
         parts.append(
             f"_Automated by Jalebi — [task {task.id}](http://127.0.0.1:3456/tasks/{task.id})_\n"
             "Co-authored-by: Jalebi <jalebi@localhost>"
         )
-        return "\n\n".join(parts)
+        return title, "\n\n".join(parts)

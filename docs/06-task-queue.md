@@ -28,22 +28,29 @@ Jalebi runs a **task queue** with a **worker pool** (threading). Tasks are persi
 
 ## 4. Run lifecycle (`TaskQueue._run_task`)
 
-Queue items are tagged tuples: `("task", task_id)` or `("followup", task_id, body)`; workers dispatch to `_run_task` / `_run_followup`. The shared execution core is `_prepare_run` (open a `runs` row, flip task `running`) + `_stream_and_finish` (stream masked events → SSE + steps, resolve terminal status, auto-publish).
+Queue items are tagged tuples: `("task", task_id)` or `("followup", task_id, body, pat_name?, model?)`; workers dispatch to `_run_task` / `_run_followup`. The shared execution core is `_prepare_run` (open a `runs` row, flip task `running`) + `_stream_and_finish` (stream masked events → SSE + steps, resolve terminal status, auto-publish unless `publish=False`).
 
 1. Worker dequeues, re-fetches the task; skips if `cancelled` (cancelled-while-queued).
 2. **Cancellation state is registered before the `running` commit** so a cancel racing the status flip is never lost.
-3. Marks task `running`; creates a `runs` row (`seq` = `max(seq)+1`).
-4. `GitWorkspace.ensure_mirror` → `create_worktree` (source branch) → `adapter.start(cwd=worktree, prompt, model)`; the child `pid` is recorded on the run row (for orphan cleanup after a crash).
-5. Streams `handle.events()`; `step`/`message`/`tool_call`/`done`/`error` events are **masked at ingest** (PRD F17: PAT + `secret_patterns`), broadcast live over the per-task SSE channel, and stored in `runs.steps_json` (bounded: 500 steps, 2000-char texts). **`tool_call` is persisted too**, so a reload doesn't lose console lines.
+3. Marks task `running`; creates a `runs` row (`seq` = `max(seq)+1`), recording the task's `pat_name`.
+4. `GitWorkspace.ensure_mirror` → `create_worktree` (source branch) → **`worktree_bootstrap.bootstrap_worktree`** writes the worktree's `opencode.json` (denies `gh` via opencode permission rules), sets the git commit identity to `Jalebi <jalebi@localhost>`, and writes `AGENTS.md` (task context + hard rules from `prompts.build_agent_md`) → `adapter.start(cwd=worktree, prompt, model, env)` where `env` carries the owner-PAT git credentials (`GIT_CONFIG_*`), commit identity, `JALEBI_GITHUB_TOKEN`, and strips any `gh` auth (`GH_CONFIG_DIR`, no `GH_TOKEN`/`GITHUB_TOKEN`). The child `pid` is recorded on the run row.
+5. Streams `handle.events()`; `step`/`message`/`tool_call`/`done`/`error` events are **masked at ingest** (PRD F17: **all PATs** + `secret_patterns`), broadcast live over the per-task SSE channel, and stored in `runs.steps_json` (bounded: 500 steps, 2000-char texts). **`tool_call` is persisted too**, so a reload doesn't lose console lines. A `cancelled` kill's "exited with code -15" error is replaced with a clean "Run cancelled by user." message.
 6. Terminal status from event stream **or** watchdog/cancel reason.
-7. If `done` and `settings.auto_publish`: **only if the branch is ahead of `origin/<target>`** (`commits_ahead > 0` — nothing to PR otherwise) → `push_branch` + `GitHubClient.create_pr` (`head=jalebi/<taskId>`, `base=target_branch`, title `[Jalebi] <first prompt line>`, body includes prompt + `Closes #N` for `issue_fix` + a Jalebi-task footer + `Co-authored-by`). On publish failure → task `needs_approval` (manual publish available).
+7. If `done` and `settings.auto_publish`: **only if the branch is ahead of `origin/<target>`** (`commits_ahead > 0` — nothing to PR otherwise) → `_publish`: recreate the worktree if it was cleaned, `push_branch`, then **dedup** — if a PR with `head=jalebi/<taskId>` already exists (same-repo, via `find_pr_by_head`) it is **reused** (never a second PR, even if an agent opened one), else `create_pr`. Title/body come from the agent-written `.jalebi/pr.md` when present (`# <title>` + description) — **fallback** to the prompt. Body always gets `Closes #N` (for referenced issues, if not already present) + a Jalebi-task footer + `Co-authored-by`. For `issue_fix`, Jalebi **comments on each referenced issue** linking the PR. On publish failure → task `needs_approval` (manual publish available).
 8. Exceptions during the run: the child is killed, `_running` is cleared, the session is rolled back, and the task **and** run are marked `failed` (never left stuck `running`).
+
+### 4a. Task types
+
+- **`freeform`** — the user's text, plus the shared best-practices/hard-rules `AGENTS.md`.
+- **`issue_fix`** — task creation fetches the issue (`GET /api/github/context` picker → `github.get_issue`), stores its body in `tasks.context_json` (masked) and the number in `tasks.issues_json`. `AGENTS.md` embeds the issue; the agent implements on the source branch, validates, commits, pushes, and writes `.jalebi/pr.md`. Jalebi opens the PR into the **target** branch (`Closes #N`) and comments on the issue. Requires `issue_number` at creation.
+- **`pr_review`** — `TaskQueue._run_review`: the agent runs in a **detached review worktree** checked out at the PR head (`refs/pull/<n>/head`, works for fork PRs too), told to review only (never push). On success Jalebi reads `.jalebi/review.md` (fallback: last message) and posts it as a GitHub PR review **COMMENT** (`POST .../pulls/N/reviews`, event `COMMENT` — never approve/merge). Review tasks never publish. Requires `pr_number` at creation.
+- **`screen_finding`** / **`triggered`** — reserved (Phase 2/1).
 
 ## 4b. Follow-ups (`TaskQueue._run_followup`, PRD F11)
 
-- `POST /api/tasks/:id/followup` (JSON `{"prompt": ...}`) requires the task to be **terminal** and a resumable session — the latest run **with a `session_id`** (`tasks.latest_resumable_run`, so a cancelled follow-up run that captured no session falls back to the last good one). The body is masked at ingest; a `followups` row is recorded against the resumed run.
-- The worker resumes with `adapter.resume(cwd=worktree, session_id, prompt)` — **same worktree, same branch** — creating a fresh `runs` row (`seq+1`) and streaming live via SSE (watchdog/cancel apply, same as a normal run).
-- On `done` + `auto_publish`: if the branch is ahead it publishes — reusing the task's existing `pr_number` if a PR is already open (the push updated it; `create_pr` would 409), else opening a new PR.
+- `POST /api/tasks/:id/followup` (JSON `{"prompt": ..., "pat_name"?, "model"?}`) requires the task to be **terminal** and a resumable session — the latest run **with a `session_id`** (`tasks.latest_resumable_run`, so a cancelled follow-up run that captured no session falls back to the last good one). The body is masked at ingest; a `followups` row (with the PAT/model override) is recorded against the resumed run.
+- The worker resumes with `adapter.resume(cwd=worktree, session_id, prompt + context, env)` — **same worktree, same branch** — creating a fresh `runs` row (`seq+1`) and streaming live via SSE (watchdog/cancel apply, same as a normal run). PAT/model overrides are honored (defaults: the task's PAT/model).
+- On `done` + `auto_publish`: if the branch is ahead it publishes — reusing the task's existing `pr_number` **or** deduping by `head` if a PR already exists, else opening a new PR.
 - Cancelling a resumed run kills the child; because a cancelled run may capture no `session_id`, follow-ups fall back to the latest run that has one.
 
 ## 5. Timeouts (PRD F16)
@@ -71,6 +78,7 @@ Queue items are tagged tuples: `("task", task_id)` or `("followup", task_id, bod
 
 - No per-task `auto_publish` override (global setting only). A cancelled/killed agent session may become unresumable (opencode-side session state).
 - Worktree TTL cleanup (deleting `done` task worktrees after N days) is not yet implemented (only artifacts are pruned).
+- The `gh` denial is enforced at the opencode permission layer + env hygiene; a hypothetical full-path `/usr/bin/gh` invocation inside a compound command could in theory reach a shell, but with no `gh` credentials in the env it cannot act as the owner.
 
 ## 11. Artifacts (PRD F18)
 

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, taskEvents } from "../api/client";
 import { StatusBadge } from "../components/StatusBadge";
-import type { Followup, Repo, SseEvent, Task } from "../types";
+import type { Artifact, Followup, Repo, Run, SseEvent, Task, TokenItem } from "../types";
 
 const TERMINAL = new Set(["done", "failed", "timed_out", "cancelled", "needs_approval", "interrupted"]);
 
@@ -33,24 +33,114 @@ const STEP_DOT: Record<string, string> = {
   error: "bg-red-400",
 };
 
-function Action({ onClick, children }: { onClick: () => void; children: string }) {
+const TEXT_EXTENSIONS = new Set([
+  "txt", "md", "json", "log", "py", "js", "ts", "tsx", "jsx", "sh", "yaml", "yml",
+  "toml", "csv", "html", "css", "go", "rs", "java", "c", "h", "cpp", "hpp",
+]);
+const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "ico", "bmp"]);
+
+function Action({ onClick, children, disabled }: { onClick: () => void; children: string; disabled?: boolean }) {
   return (
-    <button onClick={onClick} className="btn-ghost">
+    <button onClick={onClick} disabled={disabled} className="btn-ghost disabled:opacity-40">
       {children}
     </button>
   );
 }
 
+function ToolCallEntry({ step }: { step: SseEvent }) {
+  let title = step.text ?? "";
+  let details = step.text ?? "";
+  try {
+    const data = JSON.parse(step.text ?? "{}");
+    const tool = data.tool ?? "";
+    title = data.title ? `${tool} — ${data.title}` : (tool || (step.text ?? ""));
+    details = JSON.stringify(
+      { tool: data.tool, input: data.input, output: data.output, status: data.status },
+      null,
+      2
+    );
+  } catch {
+    // keep raw text as both title and details
+  }
+  return (
+    <details className="group">
+      <summary className="cursor-pointer select-none font-mono text-xs text-chai-300 hover:text-chai-200">
+        <span className="mr-1 inline-block transition-transform group-open:rotate-90">▸</span>
+        <span className="opacity-70">⚙</span> {title || "tool call"}
+      </summary>
+      <pre className="mt-1 max-h-72 overflow-auto whitespace-pre-wrap rounded bg-ink-900/60 p-2 font-mono text-[11px] leading-relaxed text-ink-300">
+        {details}
+      </pre>
+    </details>
+  );
+}
+
+function TimelineItem({ step, index }: { step: SseEvent; index: number }) {
+  const dot = STEP_DOT[step.type] ?? "bg-ink-600";
+  return (
+    <li
+      className="relative flex gap-3 animate-fade-up"
+      style={{ animationDelay: `${Math.min(index * 0.02, 0.3)}s` }}
+    >
+      <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ring-2 ring-ink-950 ${dot}`} />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className="font-mono text-[11px] text-ink-600">
+            {step.ts?.slice(11, 19) ?? ""}
+          </span>
+          <span className="font-mono text-[11px] uppercase tracking-wide text-ink-500">
+            {step.type}
+          </span>
+          {step.phase && (
+            <span
+              className={`rounded px-1.5 py-0.5 font-mono text-[10px] ${
+                PHASE_STYLE[step.phase] ?? "bg-ink-700/40 text-ink-300"
+              }`}
+            >
+              {step.phase}
+            </span>
+          )}
+        </div>
+        {step.type === "tool_call" ? (
+          <div className="mt-0.5">
+            <ToolCallEntry step={step} />
+          </div>
+        ) : (
+          step.text && <p className="mt-0.5 text-sm leading-snug text-ink-300">{step.text}</p>
+        )}
+      </div>
+    </li>
+  );
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${kb.toFixed(1)} KB`;
+  return `${(kb / 1024).toFixed(1)} MB`;
+}
+
+function extOf(path: string): string {
+  const i = path.lastIndexOf(".");
+  return i >= 0 ? path.slice(i + 1).toLowerCase() : "";
+}
+
 function FollowUpComposer({
   task,
   followups,
+  tokens,
+  models,
   onSent,
 }: {
   task: Task;
   followups: Followup[];
+  tokens: TokenItem[];
+  models: string[];
   onSent: () => void;
 }) {
   const [text, setText] = useState("");
+  const [patName, setPatName] = useState("");
+  const [model, setModel] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -60,7 +150,10 @@ function FollowUpComposer({
     setBusy(true);
     setError(null);
     try {
-      await api.postFollowup(task.id, text.trim());
+      await api.postFollowup(task.id, text.trim(), {
+        pat_name: patName || undefined,
+        model: model || undefined,
+      });
       setText("");
       onSent();
     } catch (err) {
@@ -78,6 +171,30 @@ function FollowUpComposer({
         the agent picks up where it left off.
       </p>
       <form onSubmit={submit} className="space-y-3">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="block">
+            <span className="mb-1.5 block text-xs font-medium text-ink-400">Credentials</span>
+            <select value={patName} onChange={(e) => setPatName(e.target.value)} className="field">
+              <option value="">Default</option>
+              {tokens.map((t) => (
+                <option key={t.name} value={t.name}>
+                  {t.name} ({t.masked})
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="mb-1.5 block text-xs font-medium text-ink-400">Model</span>
+            <select value={model} onChange={(e) => setModel(e.target.value)} className="field">
+              <option value="">Reuse task model</option>
+              {models.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
@@ -108,100 +225,158 @@ function FollowUpComposer({
   );
 }
 
-function TimelineItem({
-  step,
-  index,
+function ArtifactPreview({
+  taskId,
+  artifact,
+  onClose,
 }: {
-  step: SseEvent;
-  index: number;
+  taskId: number;
+  artifact: Artifact;
+  onClose: () => void;
 }) {
-  const dot = STEP_DOT[step.type] ?? "bg-ink-600";
+  const [content, setContent] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  const ext = extOf(artifact.path);
+  const isImage = IMAGE_EXTENSIONS.has(ext);
+  const isText = TEXT_EXTENSIONS.has(ext);
+
+  useEffect(() => {
+    if (!isText) return;
+    fetch(api.artifactContentUrl(taskId, artifact.id))
+      .then((r) => (r.ok ? r.text() : Promise.reject(new Error(String(r.status)))))
+      .then((t) => {
+        if (t.includes("\u0000")) {
+          setFailed(true);
+        } else {
+          setContent(t);
+        }
+      })
+      .catch(() => setFailed(true));
+  }, [taskId, artifact.id, isText]);
+
   return (
-    <li
-      className="relative flex gap-3 animate-fade-up"
-      style={{ animationDelay: `${Math.min(index * 0.02, 0.3)}s` }}
-    >
-      <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ring-2 ring-ink-950 ${dot}`} />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="font-mono text-[11px] text-ink-600">
-            {step.ts?.slice(11, 19) ?? ""}
-          </span>
-          <span className="font-mono text-[11px] uppercase tracking-wide text-ink-500">
-            {step.type}
-          </span>
-          {step.phase && (
-            <span
-              className={`rounded px-1.5 py-0.5 font-mono text-[10px] ${
-                PHASE_STYLE[step.phase] ?? "bg-ink-700/40 text-ink-300"
-              }`}
-            >
-              {step.phase}
-            </span>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink-950/80 p-4" onClick={onClose}>
+      <div
+        className="surface flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center gap-3 border-b border-ink-800 px-5 py-3">
+          <h3 className="min-w-0 flex-1 truncate font-mono text-sm text-ink-100">{artifact.path}</h3>
+          <a
+            href={api.artifactUrl(taskId, artifact.id)}
+            className="btn-ghost !px-3 !py-1 text-xs"
+          >
+            Download
+          </a>
+          <button onClick={onClose} className="btn-ghost !px-2 !py-1 text-xs">
+            ✕
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-auto p-5">
+          {isImage ? (
+            <img
+              src={api.artifactContentUrl(taskId, artifact.id)}
+              alt={artifact.path}
+              className="max-h-full max-w-full"
+            />
+          ) : failed ? (
+            <p className="text-sm text-ink-400">
+              Preview unavailable for this file type — use Download.
+            </p>
+          ) : content === null ? (
+            <p className="text-sm text-ink-500">Loading…</p>
+          ) : (
+            <pre className="whitespace-pre-wrap font-mono text-xs leading-relaxed text-ink-300">
+              {content}
+            </pre>
           )}
         </div>
-        {step.text && <p className="mt-0.5 text-sm leading-snug text-ink-300">{step.text}</p>}
       </div>
-    </li>
+    </div>
   );
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  const kb = bytes / 1024;
-  if (kb < 1024) return `${kb.toFixed(1)} KB`;
-  return `${(kb / 1024).toFixed(1)} MB`;
+function useAutoScroll<T extends HTMLElement>(dep: unknown, enabled: boolean) {
+  const ref = useRef<T | null>(null);
+  useEffect(() => {
+    if (!enabled || !ref.current) return;
+    ref.current.scrollTop = ref.current.scrollHeight;
+  }, [dep, enabled]);
+  return ref;
 }
 
 export default function TaskDetail() {
   const { id } = useParams();
   const taskId = Number(id);
   const [task, setTask] = useState<Task | null>(null);
+  const [runs, setRuns] = useState<Run[]>([]);
   const [repos, setRepos] = useState<Repo[]>([]);
+  const [tokens, setTokens] = useState<TokenItem[]>([]);
+  const [models, setModels] = useState<string[]>([]);
   const [live, setLive] = useState<SseEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [followUpPending, setFollowUpPending] = useState(false);
-  const lastRunRef = useRef<number | null>(null);
+  const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
+  const [preview, setPreview] = useState<Artifact | null>(null);
+  const [followScroll, setFollowScroll] = useState(true);
+  const lastRunIdRef = useRef<number | null>(null);
 
   const load = useCallback(() => {
     api
       .getTask(taskId)
       .then((t) => {
         const runId = t.run?.id ?? null;
-        if (lastRunRef.current !== runId) {
-          // New run (or first load): drop stale live events.
+        if (lastRunIdRef.current !== runId) {
           setLive([]);
-          lastRunRef.current = runId;
+          lastRunIdRef.current = runId;
+          if (selectedRunId === null || !runs.some((r) => r.id === selectedRunId)) {
+            // first load / new run → select the latest
+            setSelectedRunId(runId);
+          }
         }
         setTask(t);
       })
       .catch((e) => setError(e.message));
     api
-      .getRepos()
-      .then(setRepos)
+      .getRuns(taskId)
+      .then((rs) => {
+        setRuns(rs);
+        setSelectedRunId((cur) => {
+          if (cur === null || !rs.some((r) => r.id === cur)) {
+            return rs.length > 0 ? rs[rs.length - 1].id : null;
+          }
+          return cur;
+        });
+      })
       .catch(() => {});
+    api.getRepos().then(setRepos).catch(() => {});
+    api.getTokens().then((t) => setTokens(t.items ?? [])).catch(() => {});
+    api.getModels().then((m) => setModels(m.models ?? [])).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [taskId]);
 
   useEffect(() => {
     load();
   }, [load]);
 
+  const running = task !== null && !TERMINAL.has(task.status);
+  const isLatest = selectedRunId === null || selectedRunId === task?.run?.id;
+
   useEffect(() => {
-    if (!task || TERMINAL.has(task.status)) return;
+    if (!task || !running || !isLatest) return;
     const unsubscribe = taskEvents(
       taskId,
       (event) => setLive((l) => [...l, event]),
       () => {
-        // stream_end: persisted steps now own the data.
         setLive([]);
         load();
       }
     );
     return unsubscribe;
-  }, [taskId, task, load]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [taskId, task, running, isLatest]);
 
-  // After sending a follow-up, poll until a new run appears, then refresh so the
-  // live SSE stream reconnects (the task flips to running once the worker starts).
+  // After sending a follow-up, poll until a new run appears, then refresh.
   useEffect(() => {
     if (!followUpPending) return;
     let attempts = 0;
@@ -215,10 +390,11 @@ export default function TaskDetail() {
         .getTask(taskId)
         .then((t) => {
           const runId = t.run?.id ?? null;
-          if (runId !== lastRunRef.current) {
-            lastRunRef.current = runId;
+          if (runId !== lastRunIdRef.current) {
+            lastRunIdRef.current = runId;
             setLive([]);
             setTask(t);
+            setSelectedRunId(runId);
             setFollowUpPending(false);
           }
         })
@@ -227,12 +403,24 @@ export default function TaskDetail() {
     return () => clearInterval(timer);
   }, [followUpPending, taskId]);
 
+  // Hooks must run unconditionally — compute safe deps before the early returns.
+  const previewRun = task
+    ? (runs.find((r) => r.id === selectedRunId) ?? task.run ?? runs[runs.length - 1] ?? null)
+    : null;
+  const previewStepsLen = previewRun?.steps?.length ?? 0;
+  const previewIsLatest = task !== null && (selectedRunId === null || selectedRunId === task.run?.id);
+  const previewTimelineLen = previewIsLatest ? previewStepsLen + live.length : previewStepsLen;
+  const timelineRef = useAutoScroll<HTMLOListElement>(previewTimelineLen, followScroll);
+  const consoleRef = useAutoScroll<HTMLPreElement>(previewTimelineLen, followScroll);
+
   if (error) return <p className="text-red-400">{error}</p>;
   if (!task) return <p className="text-ink-500">Loading…</p>;
 
   const repoName = repos.find((r) => r.id === task.repo_id)?.full_name ?? `repo#${task.repo_id}`;
-  const steps = task.run?.steps ?? [];
-  const timeline = [...steps, ...live];
+  const selectedRun =
+    runs.find((r) => r.id === selectedRunId) ?? task.run ?? runs[runs.length - 1] ?? null;
+  const steps = selectedRun?.steps ?? [];
+  const timeline = isLatest ? [...steps, ...live] : steps;
   const consoleLines = timeline.filter((s) => s.type === "message" || s.type === "tool_call");
 
   const lastPhase = timeline.reduce<string | null>((acc, s) => s.phase ?? acc, null);
@@ -251,17 +439,13 @@ export default function TaskDetail() {
           {repoName}
           <span className="mx-1.5 text-ink-700">·</span>
           {task.model ?? "default model"}
+          {task.pat_name && (
+            <>
+              <span className="mx-1.5 text-ink-700">·</span>
+              {task.pat_name}
+            </>
+          )}
         </span>
-        {task.pr_number && repos.some((r) => r.id === task.repo_id) && (
-          <a
-            className="btn-ghost !px-3 !py-1 text-xs"
-            href={`https://github.com/${repoName}/pull/${task.pr_number}`}
-            target="_blank"
-            rel="noreferrer"
-          >
-            PR #{task.pr_number} ↗
-          </a>
-        )}
       </div>
 
       <section className="surface p-6">
@@ -276,6 +460,32 @@ export default function TaskDetail() {
             </div>
           )}
         </div>
+
+        <div className="mt-4 flex flex-wrap gap-2 border-t border-ink-800 pt-4">
+          {(task.prs?.length ? task.prs : task.pr_number ? [task.pr_number] : []).map((n) => (
+            <a
+              key={`pr-${n}`}
+              className="btn-ghost !px-3 !py-1 text-xs"
+              href={`https://github.com/${repoName}/pull/${n}`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              PR #{n} ↗
+            </a>
+          ))}
+          {(task.issues ?? []).map((n) => (
+            <a
+              key={`issue-${n}`}
+              className="btn-ghost !px-3 !py-1 text-xs"
+              href={`https://github.com/${repoName}/issues/${n}`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Issue #{n} ↗
+            </a>
+          ))}
+        </div>
+
         <dl className="mt-4 grid grid-cols-2 gap-x-6 gap-y-2 border-t border-ink-800 pt-4 text-xs sm:grid-cols-4">
           <div>
             <dt className="text-ink-600">Type</dt>
@@ -302,7 +512,7 @@ export default function TaskDetail() {
         {(task.status === "running" || task.status === "queued") && (
           <Action onClick={() => api.cancelTask(task.id).then(load)}>Cancel</Action>
         )}
-        {TERMINAL.has(task.status) && task.status !== "cancelled" && (
+        {TERMINAL.has(task.status) && task.status !== "needs_approval" && (
           <Action onClick={() => api.rerunTask(task.id).then(load)}>Re-run</Action>
         )}
         {task.status === "needs_approval" && (
@@ -314,6 +524,8 @@ export default function TaskDetail() {
         <FollowUpComposer
           task={task}
           followups={task.followups ?? []}
+          tokens={tokens}
+          models={models}
           onSent={() => {
             load();
             setFollowUpPending(true);
@@ -321,22 +533,28 @@ export default function TaskDetail() {
         />
       )}
 
-      {task.run?.artifacts && task.run.artifacts.length > 0 && (
+      {selectedRun && selectedRun.artifacts && selectedRun.artifacts.length > 0 && (
         <section className="surface p-5 animate-fade-up">
-          <h2 className="panel-title mb-3">Artifacts</h2>
+          <h2 className="panel-title mb-3">Artifacts (run #{selectedRun.seq})</h2>
           <ul className="divide-y divide-ink-800/70">
-            {task.run.artifacts.map((a) => (
+            {selectedRun.artifacts.map((a) => (
               <li key={a.id} className="flex items-center gap-3 py-2">
                 <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-chai-400" />
-                <a
-                  href={api.artifactUrl(task.id, a.id)}
-                  className="min-w-0 flex-1 truncate font-mono text-sm text-ink-200 transition-colors hover:text-syrup-300"
+                <button
+                  onClick={() => setPreview(a)}
+                  className="min-w-0 flex-1 truncate text-left font-mono text-sm text-ink-200 transition-colors hover:text-syrup-300"
                 >
                   {a.path}
-                </a>
+                </button>
                 <span className="shrink-0 font-mono text-[11px] text-ink-500">
                   {formatBytes(a.size)}
                 </span>
+                <a
+                  href={api.artifactUrl(task.id, a.id)}
+                  className="shrink-0 text-[11px] text-ink-500 transition-colors hover:text-syrup-300"
+                >
+                  download
+                </a>
               </li>
             ))}
           </ul>
@@ -345,8 +563,19 @@ export default function TaskDetail() {
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <section className="surface flex min-h-[24rem] flex-col p-5">
-          <h2 className="panel-title mb-3">Timeline</h2>
-          <ol className="space-y-3 overflow-y-auto pr-2 text-sm">
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <h2 className="panel-title">Timeline</h2>
+            <label className="flex shrink-0 items-center gap-1.5 text-[11px] text-ink-500">
+              <input
+                type="checkbox"
+                checked={followScroll}
+                onChange={(e) => setFollowScroll(e.target.checked)}
+                className="accent-syrup-500"
+              />
+              auto-scroll
+            </label>
+          </div>
+          <ol ref={timelineRef} className="space-y-3 overflow-y-auto pr-2 text-sm">
             {timeline.length === 0 && <li className="text-ink-600">No steps yet.</li>}
             {timeline.map((step, i) => (
               <TimelineItem key={i} step={step} index={i} />
@@ -360,7 +589,7 @@ export default function TaskDetail() {
               {consoleLines.length} {consoleLines.length === 1 ? "line" : "lines"}
             </span>
           </div>
-          <pre className="flex-1 overflow-y-auto whitespace-pre-wrap pr-2 font-mono text-xs leading-relaxed text-ink-300">
+          <pre ref={consoleRef} className="flex-1 overflow-y-auto whitespace-pre-wrap pr-2 font-mono text-xs leading-relaxed text-ink-300">
             {consoleLines.length === 0 ? "No output yet." : ""}
             {consoleLines.map((line, i) => (
               <div key={i} className="flex gap-2">
@@ -379,6 +608,31 @@ export default function TaskDetail() {
           </pre>
         </section>
       </div>
+
+      {runs.length > 1 && (
+        <section className="surface p-5 animate-fade-up">
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <h2 className="panel-title">Runs</h2>
+            <select
+              value={selectedRunId ?? ""}
+              onChange={(e) => setSelectedRunId(Number(e.target.value))}
+              className="field w-auto !py-1 text-sm"
+            >
+              {runs.map((r) => (
+                <option key={r.id} value={r.id}>
+                  Run #{r.seq} — {r.status ?? "—"}
+                  {r.model ? ` · ${r.model}` : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+          <p className="text-xs text-ink-500">
+            Viewing run #{selectedRun?.seq ?? "?"} logs above. The live stream follows the latest run.
+          </p>
+        </section>
+      )}
+
+      {preview && <ArtifactPreview taskId={task.id} artifact={preview} onClose={() => setPreview(null)} />}
     </div>
   );
 }

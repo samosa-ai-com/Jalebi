@@ -78,3 +78,55 @@ def test_connect_update_returns_200(client: FlaskClient, app, monkeypatch) -> No
     resp = client.post("/api/repos", json={"full_name": "octocat/hello"})
     assert resp.status_code == 200
     assert len(client.get("/api/repos").get_json()) == 1
+
+
+def test_disconnect_repo(client: FlaskClient, app, monkeypatch, session) -> None:
+    secrets.store_secret(app.config["JALEBI_CONFIG"], secrets.GITHUB_TOKEN_KEY, "ghp_test")
+    monkeypatch.setattr(routes_repos, "GitHubClient", FakeGitHubClient)
+    created = client.post("/api/repos", json={"full_name": "octocat/hello"}).get_json()
+    assert client.get("/api/repos").get_json() != []
+    resp = client.delete(f"/api/repos/{created['id']}")
+    assert resp.status_code == 200
+    assert client.get("/api/repos").get_json() == []
+
+
+def test_disconnect_missing_repo(client: FlaskClient) -> None:
+    resp = client.delete("/api/repos/999")
+    assert resp.status_code == 404
+
+
+def test_prune_removes_deleted_repos(client: FlaskClient, app, monkeypatch) -> None:
+    secrets.store_secret(app.config["JALEBI_CONFIG"], secrets.GITHUB_TOKEN_KEY, "ghp_test")
+    monkeypatch.setattr(routes_repos, "GitHubClient", FakeGitHubClient)
+    client.post("/api/repos", json={"full_name": "octocat/hello"})
+    # create a stale connected repo that no longer exists on GitHub
+    app.app_context().push()
+    from jalebi import db
+
+    s = db.Session()
+    from jalebi.db import Repo
+
+    s.add(Repo(full_name="octocat/gone", default_branch="main", clone_url="u"))
+    s.commit()
+    s.close()
+    resp = client.post("/api/repos/prune")
+    assert resp.status_code == 200
+    names = [r["full_name"] for r in client.get("/api/repos").get_json()]
+    assert names == ["octocat/hello"]
+
+
+def test_prune_requires_token(client: FlaskClient) -> None:
+    resp = client.post("/api/repos/prune")
+    assert resp.status_code == 409
+
+
+def test_branches_for_connected_repo(client: FlaskClient, app, monkeypatch) -> None:
+    secrets.store_secret(app.config["JALEBI_CONFIG"], secrets.GITHUB_TOKEN_KEY, "ghp_test")
+    monkeypatch.setattr(routes_repos, "GitHubClient", FakeGitHubClient)
+    created = client.post("/api/repos", json={"full_name": "octocat/hello"}).get_json()
+    monkeypatch.setattr(
+        routes_repos.GitWorkspace, "list_branches", lambda self, full_name: ["main", "dev"]
+    )
+    resp = client.get(f"/api/repos/{created['id']}/branches")
+    assert resp.status_code == 200
+    assert resp.get_json()["branches"] == ["main", "dev"]

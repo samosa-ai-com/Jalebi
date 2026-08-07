@@ -1,10 +1,12 @@
-"""Connected-repository routes: list and connect (upsert) repos."""
+"""Connected-repository routes: list, connect (upsert), disconnect, prune, branches."""
 
 import httpx
 from flask import Blueprint, current_app, jsonify, request
 from flask.typing import ResponseReturnValue
 
 from jalebi import db, repos, secrets
+from jalebi.config import Config
+from jalebi.git_workspace import GitWorkspace
 from jalebi.github import GitHubClient, GitHubError, GitHubNotFound
 
 bp = Blueprint("repos", __name__, url_prefix="/api/repos")
@@ -24,7 +26,7 @@ def connect_repo() -> ResponseReturnValue:
         return jsonify({"error": 'expected JSON body {"full_name": "<owner/repo>"}'}), 400
 
     config = current_app.config["JALEBI_CONFIG"]
-    token = secrets.load_github_token(config)
+    token = secrets.resolve_token(config, None)
     if not token:
         return jsonify({"error": "no GitHub token configured"}), 409
 
@@ -46,3 +48,58 @@ def connect_repo() -> ResponseReturnValue:
         clone_url=info["clone_url"],
     )
     return jsonify(repos.repo_to_dict(row)), (201 if created else 200)
+
+
+@bp.delete("/<int:repo_id>")
+def disconnect_repo(repo_id: int) -> ResponseReturnValue:
+    """Disconnect a repo: remove the DB row (keeps local mirrors/artifacts)."""
+    session = db.get_session()
+    row = session.get(db.Repo, repo_id)
+    if row is None:
+        return jsonify({"error": "repo not found"}), 404
+    session.delete(row)
+    session.commit()
+    return jsonify({"removed": row.full_name})
+
+
+@bp.post("/prune")
+def prune_repos() -> ResponseReturnValue:
+    """Remove connected repos that no longer exist on GitHub (deleted upstream)."""
+    config: Config = current_app.config["JALEBI_CONFIG"]
+    token = secrets.resolve_token(config, None)
+    if not token:
+        return jsonify({"error": "no GitHub token configured"}), 409
+
+    session = db.get_session()
+    removed: list[str] = []
+    client = GitHubClient(token)
+    try:
+        for row in repos.list_repos(session):
+            try:
+                client.get_repo(row.full_name)
+            except GitHubNotFound:
+                removed.append(row.full_name)
+                session.delete(row)
+    except (httpx.HTTPError, GitHubError) as exc:
+        return jsonify({"error": str(exc)}), 502
+    finally:
+        client.close()
+    if removed:
+        session.commit()
+    return jsonify({"removed": removed})
+
+
+@bp.get("/<int:repo_id>/branches")
+def branches(repo_id: int) -> ResponseReturnValue:
+    """Branch names for a connected repo (from its mirror)."""
+    session = db.get_session()
+    row = session.get(db.Repo, repo_id)
+    if row is None:
+        return jsonify({"error": "repo not found"}), 404
+    config = current_app.config["JALEBI_CONFIG"]
+    git = GitWorkspace(config)
+    try:
+        names = git.list_branches(row.full_name)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 502
+    return jsonify({"full_name": row.full_name, "branches": names})

@@ -2,14 +2,17 @@
 
 import json
 import queue as _queue_module
+from collections.abc import Callable
 from pathlib import Path
 
+import httpx
 from flask import Blueprint, Response, current_app, jsonify, request, send_file
 from flask.typing import ResponseReturnValue
 
 from jalebi import artifacts, db, masking, secrets, settings, tasks
 from jalebi.config import Config
 from jalebi.db import Artifact, Run, utcnow
+from jalebi.github import GitHubClient, GitHubError
 from jalebi.queue import TaskQueue
 
 bp = Blueprint("tasks", __name__, url_prefix="/api/tasks")
@@ -19,6 +22,66 @@ TERMINAL_STATUSES = {"done", "failed", "timed_out", "cancelled", "needs_approval
 
 def _queue() -> TaskQueue:
     return current_app.config["JALEBI_QUEUE"]
+
+
+def _masker(session) -> Callable[[str], str]:
+    config: Config = current_app.config["JALEBI_CONFIG"]
+    patterns = settings.get_setting(session, "secret_patterns") or []
+    patterns = [str(p) for p in patterns] if isinstance(patterns, list) else []
+    values = secrets.all_token_values(config)
+    active = secrets.resolve_token(config, None)
+    if active and active not in values:
+        values.append(active)
+    return masking.build_masker(values, patterns)
+
+
+def _fetch_context(
+    session, repo_id: int, type_: str, issue_number: int | None, pr_number: int | None
+):
+    """Fetch issue/PR context from GitHub for structured task types (masked)."""
+    if type_ not in ("issue_fix", "pr_review"):
+        return {}
+    config: Config = current_app.config["JALEBI_CONFIG"]
+    repo = session.get(db.Repo, repo_id)
+    if repo is None:
+        raise ValueError("repo not found")
+    token = secrets.resolve_token(config, None)
+    if token is None:
+        raise ValueError("no GitHub token configured")
+    masker = _masker(session)
+    context: dict = {}
+    client = GitHubClient(token)
+    try:
+        if type_ == "issue_fix" and issue_number is not None:
+            issue = client.get_issue(repo.full_name, issue_number)
+            masked_body = masker(issue["body"]) if issue.get("body") else ""
+            context["issues"] = [
+                {
+                    "number": issue["number"],
+                    "title": issue["title"],
+                    "body": masked_body,
+                    "html_url": issue["html_url"],
+                }
+            ]
+        if type_ == "pr_review" and pr_number is not None:
+            pr = client.get_pr(repo.full_name, pr_number)
+            context["prs"] = [
+                {
+                    "number": pr["number"],
+                    "title": pr["title"],
+                    "body": masker(pr["body"]) if pr.get("body") else "",
+                    "html_url": pr["html_url"],
+                    "state": pr["state"],
+                    "base": pr["base"],
+                    "head": pr["head"],
+                    "author": pr["author"],
+                }
+            ]
+    except (httpx.HTTPError, GitHubError) as exc:
+        raise ValueError(f"failed to fetch task context: {exc}")
+    finally:
+        client.close()
+    return context
 
 
 @bp.post("")
@@ -33,10 +96,7 @@ def create_task() -> ResponseReturnValue:
         return jsonify({"error": "repo_id is required"}), 400
 
     session = db.get_session()
-    token = secrets.load_github_token(config)
-    raw_patterns = settings.get_setting(session, "secret_patterns") or []
-    patterns = [str(p) for p in raw_patterns] if isinstance(raw_patterns, list) else []
-    masker = masking.build_masker(token, patterns)
+    masker = _masker(session)
 
     cli = payload.get("cli")
     if cli is not None and cli not in ("opencode",):
@@ -50,16 +110,47 @@ def create_task() -> ResponseReturnValue:
         timeout_minutes = (
             raw_default if isinstance(raw_default, int) and raw_default > 0 else 30
         )
+
+    type_ = payload.get("type", "freeform")
+    prompt = payload.get("prompt", "")
+    issue_number = payload.get("issue_number")
+    pr_number = payload.get("pr_number")
+    if type_ == "issue_fix" and issue_number is None:
+        return jsonify({"error": "issue_number is required for issue_fix tasks"}), 400
+    if type_ == "pr_review" and pr_number is None:
+        return jsonify({"error": "pr_number is required for pr_review tasks"}), 400
+
+    try:
+        context = _fetch_context(session, repo_id, type_, issue_number, pr_number)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    pat_name = payload.get("pat_name")
+    if pat_name is not None and pat_name not in secrets.token_names(config):
+        return jsonify({"error": f"unknown PAT: {pat_name}"}), 400
+
+    source_branch = payload.get("source_branch")
+    target_branch = payload.get("target_branch")
+    repo = session.get(db.Repo, repo_id)
+    if source_branch is None or not str(source_branch):
+        source_branch = repo.default_branch if repo else "main"
+    if target_branch is None or not str(target_branch):
+        target_branch = repo.default_branch if repo else "main"
+
     try:
         task = tasks.create_task(
             session,
-            type_=payload.get("type", "freeform"),
+            type_=type_,
             repo_id=repo_id,
-            prompt=payload.get("prompt", ""),
-            source_branch=payload.get("source_branch", "main"),
-            target_branch=payload.get("target_branch", "main"),
+            prompt=prompt,
+            source_branch=str(source_branch),
+            target_branch=str(target_branch),
             model=payload.get("model"),
             cli=cli,
+            pat_name=pat_name,
+            issues=[int(issue_number)] if issue_number is not None else None,
+            prs=[int(pr_number)] if pr_number is not None else None,
+            context=context,
             timeout_minutes=timeout_minutes,
             masker=masker,
         )
@@ -167,14 +258,16 @@ def followup_task(task_id: int) -> ResponseReturnValue:
     if prev is None:
         return jsonify({"error": "no resumable session for this task"}), 409
 
-    token = secrets.load_github_token(config)
-    raw_patterns = settings.get_setting(session, "secret_patterns") or []
-    patterns = [str(p) for p in raw_patterns] if isinstance(raw_patterns, list) else []
-    masker = masking.build_masker(token, patterns)
+    pat_name = payload.get("pat_name") if isinstance(payload, dict) else None
+    if pat_name is not None and pat_name not in secrets.token_names(config):
+        return jsonify({"error": f"unknown PAT: {pat_name}"}), 400
+    model = payload.get("model") if isinstance(payload, dict) else None
+
+    masker = _masker(session)
     masked = masker(body.strip())
-    # The Followup row is recorded by the worker when the resume actually runs
-    # (see TaskQueue._run_followup) — not here, to avoid duplicates.
-    _queue().enqueue_followup(task_id, masked)
+    # The Followup row (incl. PAT/model overrides) is recorded by the worker when
+    # the resume actually runs — not here, to avoid duplicates.
+    _queue().enqueue_followup(task_id, masked, pat_name=pat_name, model=model)
     run = tasks.latest_run(session, task_id)
     return jsonify(
         tasks.task_to_dict(
@@ -184,6 +277,44 @@ def followup_task(task_id: int) -> ResponseReturnValue:
             artifacts=tasks.list_artifacts(session, run.id) if run is not None else None,
         )
     ), 202
+
+
+@bp.get("/<int:task_id>/runs")
+def list_runs(task_id: int) -> ResponseReturnValue:
+    """All runs for a task (run selector on the detail page)."""
+    session = db.get_session()
+    task = tasks.get_task(session, task_id)
+    if task is None:
+        return jsonify({"error": "task not found"}), 404
+    return jsonify(
+        [
+            tasks.run_to_dict(
+                run, artifacts=tasks.list_artifacts(session, run.id) or []
+            )
+            for run in tasks.runs_for_task(session, task_id)
+        ]
+    )
+
+
+@bp.get("/<int:task_id>/artifacts/<int:artifact_id>/content")
+def artifact_content(task_id: int, artifact_id: int) -> ResponseReturnValue:
+    """Serve an artifact inline (for the in-browser preview)."""
+    session = db.get_session()
+    artifact = session.get(Artifact, artifact_id)
+    if artifact is None:
+        return jsonify({"error": "artifact not found"}), 404
+    run = session.get(Run, artifact.run_id)
+    if run is None or run.task_id != task_id:
+        return jsonify({"error": "artifact not found"}), 404
+
+    config: Config = current_app.config["JALEBI_CONFIG"]
+    try:
+        path = artifacts.artifact_file(config.data_dir, run.id, artifact.path)
+    except ValueError:
+        return jsonify({"error": "artifact not found"}), 404
+    if not path.is_file():
+        return jsonify({"error": "artifact file missing"}), 404
+    return send_file(path, as_attachment=False)
 
 
 @bp.get("/<int:task_id>/artifacts/<int:artifact_id>/download")

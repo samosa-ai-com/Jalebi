@@ -59,6 +59,11 @@ class BlockingHandle(FakeHandle):
 class FakeGitHubClient:
     def __init__(self, token: str):
         self.token = token
+        self.find_pr_calls = 0
+
+    def find_pr_by_head(self, full_name, head) -> int | None:
+        self.find_pr_calls += 1
+        return None
 
     def create_pr(self, full_name, *, title, body, head, base) -> int:
         return 42
@@ -70,6 +75,20 @@ class FakeGitHubClient:
 class FailingGitHubClient(FakeGitHubClient):
     def create_pr(self, full_name, *, title, body, head, base) -> int:
         raise RuntimeError("PR create failed")
+
+
+class ReusingGitHubClient(FakeGitHubClient):
+    def __init__(self, token: str):
+        super().__init__(token)
+        self.create_pr_calls = 0
+
+    def find_pr_by_head(self, full_name, head) -> int | None:
+        self.find_pr_calls += 1
+        return 99
+
+    def create_pr(self, full_name, *, title, body, head, base) -> int:
+        self.create_pr_calls += 1
+        raise AssertionError("create_pr must not be called when a PR exists")
 
 
 @pytest.fixture(autouse=True)
@@ -283,6 +302,121 @@ def test_publish_opens_pr_and_sets_number(q, session, repo_row, monkeypatch) -> 
     assert any(f"refs/heads/jalebi/{task.id}" in line for line in refs)
 
 
+def test_publish_reuses_existing_pr_for_head(q, session, repo_row, monkeypatch) -> None:
+    settings.set_setting(session, "auto_publish", True)
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
+    _seed_commit(q, task.id, repo_row)
+    _install_adapter(monkeypatch, FakeHandle([AgentEvent(type="done")]))
+    monkeypatch.setattr("jalebi.queue.GitHubClient", ReusingGitHubClient)
+
+    q._run_task(task.id)
+
+    fresh = _fresh_task(session, task.id)
+    assert fresh.status == "done"
+    assert fresh.pr_number == 99
+
+
+def test_publish_uses_agent_written_pr_md(q, session, repo_row, monkeypatch) -> None:
+    settings.set_setting(session, "auto_publish", True)
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
+    _seed_commit(q, task.id, repo_row)
+    pr_md = GitWorkspace.worktree_path(q.config.data_dir, task.id) / ".jalebi" / "pr.md"
+    pr_md.parent.mkdir(parents=True, exist_ok=True)
+    pr_md.write_text("# Implement the thing\n\nAdded the thing and a changelog entry.\n")
+    _install_adapter(monkeypatch, FakeHandle([AgentEvent(type="done")]))
+    monkeypatch.setattr("jalebi.queue.GitHubClient", FakeGitHubClient)
+
+    q._run_task(task.id)
+
+    fresh = _fresh_task(session, task.id)
+    assert fresh.status == "done"
+    assert fresh.pr_number == 42
+
+
+def test_cancel_suppresses_error_event(q, session, repo_row, monkeypatch) -> None:
+    """Cancelling a run must not surface 'exited with code -15' as an error."""
+    _no_publish(session)
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
+    _install_adapter(monkeypatch, BlockingHandle())
+    thread = threading.Thread(target=q._run_task, args=(task.id,))
+    thread.start()
+    assert _wait_until(lambda: _fresh_task(session, task.id).status == "running")
+    assert q.cancel(task.id) is True
+    thread.join(timeout=5)
+
+    run = _latest_run(session, task.id)
+    assert run.status == "cancelled"
+    steps = json.loads(run.steps_json or "[]")
+    assert not any("code -15" in (s.get("text") or "") for s in steps)
+    assert any("cancelled" in (s.get("text") or "").lower() for s in steps)
+
+
+def test_review_task_posts_review_and_does_not_publish(
+    q, session, repo_row, monkeypatch, tmp_path
+) -> None:
+    settings.set_setting(session, "auto_publish", True)
+    task = tasks.create_task(
+        session,
+        type_="pr_review",
+        repo_id=repo_row.id,
+        prompt="review it",
+        prs=[3],
+        context={
+            "prs": [
+                {
+                    "number": 3,
+                    "title": "t",
+                    "body": "b",
+                    "html_url": "u",
+                    "base": "main",
+                    "head": "h",
+                    "state": "open",
+                    "author": "a",
+                }
+            ]
+        },
+    )
+    wt = tmp_path / "review"
+    wt.mkdir(parents=True)
+    (wt / ".jalebi").mkdir(parents=True)
+    (wt / ".jalebi" / "review.md").write_text("LGTM with nits:\n- fix x\n")
+
+    class ReviewGit:
+        def __init__(self, config):
+            self.config = config
+
+        def ensure_mirror(self, *a, **k):
+            return None
+
+        def create_review_worktree(self, *a, **k):
+            return wt
+
+    monkeypatch.setattr("jalebi.queue.GitWorkspace", ReviewGit)
+    monkeypatch.setattr("jalebi.queue.worktree_bootstrap.bootstrap_worktree", lambda *a, **k: None)
+
+    class RecordingClient:
+        def __init__(self, token: str):
+            self.token = token
+            self.reviews = []
+
+        def post_pr_review(self, full_name, pr_number, body):
+            self.reviews.append((pr_number, body))
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("jalebi.queue.GitHubClient", RecordingClient)
+    _install_adapter(monkeypatch, FakeHandle([AgentEvent(type="done")]))
+
+    q._run_task(task.id)
+
+    fresh = _fresh_task(session, task.id)
+    assert fresh.status == "done"
+    run = _latest_run(session, task.id)
+    assert run.status == "done"
+    assert run.steps_json and "Review posted" in run.steps_json
+
+
 def test_no_changes_skips_publish(q, session, repo_row, monkeypatch) -> None:
     settings.set_setting(session, "auto_publish", True)
     task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
@@ -290,6 +424,9 @@ def test_no_changes_skips_publish(q, session, repo_row, monkeypatch) -> None:
     class MustNotPublish:
         def __init__(self, token: str):
             self.token = token
+
+        def find_pr_by_head(self, *args, **kwargs) -> int | None:
+            return None
 
         def create_pr(self, *args, **kwargs) -> int:
             raise AssertionError("publish must be skipped when nothing changed")

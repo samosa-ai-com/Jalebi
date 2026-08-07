@@ -212,3 +212,58 @@
 ## Done checklist
 
 When all boxes above are ticked, Phase 0 is validated. Note any failing check (page, step, expected-vs-actual) and share it — a failing check is a bug to fix, not a test failure.
+
+---
+
+# Phase 0 remediation (2026-08-06) — fixes from the QA pass
+
+Comments from the owner's QA pass and how each was addressed. Items marked **FIXED** are implemented; re-verify via the numbered check.
+
+### Critical — `gh` ban + credentials + PR accuracy (tasks 12/14/15/16/18)
+
+- **FIXED — agent used `gh` (personal account), creating a fork `example-owner/example-fork`, 2 PRs, commits by the wrong account.** Three-layer guard: per-worktree `opencode.json` denies `gh` via opencode permission rules (overrides global config); the agent env strips `GH_TOKEN`/`GITHUB_TOKEN` and empties `GH_CONFIG_DIR` (gh can't authenticate even if bypassed); `AGENTS.md` + prompts forbid gh/forks. The agent gets **working owner-PAT git credentials** + identity `Jalebi <jalebi@localhost>`, so `git push` to `origin` just works — no reason to improvise.
+- **FIXED — duplicate PRs.** `_publish` dedups: if a same-repo PR with head `jalebi/<taskId>` exists (e.g. one the agent created), it's reused, never a second PR. Cross-repo fork PRs are ignored.
+- **FIXED — PR description was the raw prompt.** The agent writes `.jalebi/pr.md` (title + description of the actual implementation) and Jalebi uses it, falling back to the prompt. `Closes #N` + footer retained.
+- **FIXED — issue-fix did nothing (task 12).** `issue_fix` now fetches the issue, embeds it in the worktree `AGENTS.md`, and instructs: read issue → branch from source → implement → validate → commit → push → Jalebi opens PR to target with `Closes #N` and **comments on the issue**.
+- **FIXED — "Review PR" didn't post a review (task 15).** `pr_review` now checks out the PR head in an isolated review worktree (no push), the agent writes `.jalebi/review.md`, and Jalebi posts it as a GitHub PR review **COMMENT** (never approve/merge).
+- **FIXED — publish on an old task did nothing (3.6).** `_publish` recreates the worktree from the mirror branch if it was cleaned before pushing.
+- **FIXED — clean cancel on a re-run (3.7).** Cancelling no longer shows "opencode exited with code -15"; it records "Run cancelled by user." and **Re-run** is available on `cancelled` tasks. A **run selector** on the detail page lets you view any earlier run's logs/artifacts.
+
+### Task form & types (2.5, 2.6, 2.7)
+
+- **FIXED — type-aware options.** Selecting **Issue fix** lists the repo's open issues to pick from; **Review PR** lists open PRs; both populate the effective task.
+- **FIXED — source/target branch selectors.** Two dropdowns (from `GET /api/repos/<id>/branches`), prefilled with the default branch.
+- **FIXED — PAT never entered in a prompt.** A **Saved PATs** manager (GitHub page) stores named tokens; the task form and follow-up composer have a **Credentials** dropdown (default = primary). Prompts no longer ask for a PAT; all PATs are masked everywhere. The instruction "only use this PAT; never use gh" is injected.
+- **FIXED — agent/model selection.** Task form + follow-up have an Agent select (opencode) and a **Model** dropdown (`opencode models`), default `opencode-go/deepseek-v4-flash`.
+
+### Tasks table (2.9, 2.12, 2.13)
+
+- **FIXED — search bar** (id/prompt/repo), **sortable columns** (ID/Status/Updated), **pagination** (10/page).
+- **FIXED — multiple PRs/issues.** Tasks carry `prs`/`issues` lists; the table and detail header render **chips** for each (a task can link several PRs and issues).
+- **FIXED — "just now" on old tasks.** Relative times now parse the server's naive-UTC timestamps as UTC (they were being read as local time, skewing old rows into the future).
+
+### Task detail (3.3, 3.9, 3.19)
+
+- **FIXED — collapsible tool calls (3.3).** Timeline tool-call entries collapse to a one-line summary (tool + title) and expand to show the full input/output.
+- **FIXED — timeline scroll + follow (3.9).** Timeline/console auto-scroll with a **follow toggle**.
+- **FIXED — in-browser artifact preview (3.19).** Click an artifact to preview text/markdown/JSON/logs or images in a modal; download kept.
+
+### Repos & GitHub page (prereq line 11, 4.7)
+
+- **FIXED — disconnect repos.** Disconnect buttons on both the GitHub and Repos pages.
+- **FIXED — auto-removal of deleted repos.** **Prune deleted** button on the GitHub page removes connected repos that no longer exist upstream.
+- **FIXED — full repo list for connection.** The GitHub page lists the account's repos with Connect buttons (as before), now with disconnect + prune.
+
+### Settings (6.7)
+
+- **FIXED — ntfy base URL.** New **ntfy server URL** setting alongside the topic.
+
+### Regression check
+
+Backend `178` pytest + `15` web vitest pass; ruff/typecheck/eslint clean; `npm run build` green. New tests cover: worktree gh-guard + identity, prompt builders, PAT vault, GitHub context/review/comment methods, publish dedup (reuse + pr.md), review posting, cancel-event suppression, disconnect/prune/branches routes, run-selector + re-run-cancelled + artifact preview UI.
+
+### Remaining manual steps
+
+- Close PR **#2** (the fork PR `example-owner:jalebi/14`) and delete the `example-owner/example-fork` fork from your personal account — Jalebi can't touch personal-account resources.
+- Re-run W1/W2/W8 and the new picker flows to confirm end-to-end.
+

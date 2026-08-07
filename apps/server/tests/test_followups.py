@@ -51,7 +51,7 @@ class ResumeAdapter:
     def start(self, cwd, prompt, model=None, env=None):
         return self.handle
 
-    def resume(self, cwd, session_id, prompt):
+    def resume(self, cwd, session_id, prompt, env=None):
         self.resume_calls.append({"cwd": cwd, "session_id": session_id, "prompt": prompt})
         return self.handle
 
@@ -62,6 +62,9 @@ class ResumeAdapter:
 class FakeGitHubClient:
     def __init__(self, token: str):
         self.token = token
+
+    def find_pr_by_head(self, full_name, head) -> int | None:
+        return None
 
     def create_pr(self, full_name, *, title, body, head, base) -> int:
         return 77
@@ -144,10 +147,12 @@ def test_followup_route_enqueues_masked_body(app, session, repo_row, monkeypatch
     )
     settings.set_setting(session, "auto_publish", False)
     task = _done_task_with_session(session, repo_row.id)
-    enqueued: list[tuple[int, str]] = []
+    enqueued: list[tuple[int, str, str | None, str | None]] = []
     q = app.config["JALEBI_QUEUE"]
     monkeypatch.setattr(
-        q, "enqueue_followup", lambda tid, body: enqueued.append((tid, body))
+        q,
+        "enqueue_followup",
+        lambda tid, body, pat_name=None, model=None: enqueued.append((tid, body, pat_name, model)),
     )
 
     client = app.test_client()
@@ -162,8 +167,8 @@ def test_followup_route_enqueues_masked_body(app, session, repo_row, monkeypatch
     # No row at route time — the worker records it when the resume runs.
     session.expire_all()
     assert tasks.list_followups(session, task.id) == []
-    # Masked body is what gets enqueued.
-    assert enqueued == [(task.id, "use *** here")]
+    # Masked body is what gets enqueued (no PAT/model override → None).
+    assert enqueued == [(task.id, "use *** here", None, None)]
 
 
 def test_followup_route_validations(app, session, repo_row) -> None:
@@ -220,7 +225,8 @@ def test_followup_resumes_session_in_same_worktree(q, session, repo_row, monkeyp
     call = adapter.resume_calls[0]
     assert call["cwd"] == str(GitWorkspace.worktree_path(q.config.data_dir, task.id))
     assert call["session_id"] == "ses_orig"
-    assert call["prompt"] == "do more"
+    assert call["prompt"].startswith("do more\n")
+    assert "AGENTS.md" in call["prompt"]
 
     fups = tasks.list_followups(session, task.id)
     assert len(fups) == 1

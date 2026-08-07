@@ -93,3 +93,8 @@ Real `--format json` top-level `type` values and the adapter mapping (field is *
 - Per-task default: the adapter's configured default.
 - A catalog agent may pin a model.
 - UI shows the model used per task/run; follow-ups reuse the run's model by default but allow override where the CLI permits it (see §6 quirks).
+## 5. Agent subprocess environment
+
+- `start`/`resume` accept an `env` dict; `None` values **remove** the key from the inherited environ (used to strip `GH_TOKEN`/`GITHUB_TOKEN`).
+- The queue builds the env via `_build_agent_env(token)`: owner-PAT git creds (`GIT_CONFIG_*`), `GIT_AUTHOR_*`/`GIT_COMMITTER_*` = `Jalebi <jalebi@localhost>`, `JALEBI_GITHUB_TOKEN`, and the `gh`-neutralization vars above.
+- `resume` now forwards `env` too (previously dropped it) — follow-ups get the same credentials/guards as the original run.

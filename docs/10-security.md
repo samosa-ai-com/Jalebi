@@ -47,3 +47,17 @@
 ## 8. Reference
 
 - PRD §F1 (PAT), §F13 (security & privacy), §F14 (webhooks), §F17 (secret masking), §17.2 (no `gh` CLI).
+## 9. Banning the `gh` CLI (the agent cannot use it)
+
+Layered defense — **all three must hold** for an agent run:
+
+1. **opencode permission deny** — every worktree gets an `opencode.json` whose `permission.bash` denies `gh`/`gh *`/full-path variants (`worktree_bootstrap.OPENCODE_GUARD`). Project config deep-merges over the user's global config, so the deny wins.
+2. **Env hygiene** — the agent env never has `GH_TOKEN`/`GITHUB_TOKEN` (inherited ones are stripped), `GH_CONFIG_DIR` points at a nonexistent dir, and the only token is `JALEBI_GITHUB_TOKEN` (used by git/curl). Even a guard bypass cannot authenticate `gh`.
+3. **Instructions** — `AGENTS.md` + follow-up prompts say never to use `gh`/forks, and working git credentials remove any incentive.
+
+Remaining risk (documented): a hypothetical full-path `/usr/bin/gh` call inside a compound command could reach a shell, but it cannot act as the owner (no credentials). Jalebi itself never calls `gh`.
+
+## 10. Multi-PAT handling
+
+- Named PATs live only in the `0600` `secrets.json`; the API and UI never return token values (only masked previews).
+- All known PATs are added to the ingest masker, so any token echoed by an agent is redacted to `***` everywhere (console, timeline, PR body).

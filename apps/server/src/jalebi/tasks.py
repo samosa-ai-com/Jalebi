@@ -19,6 +19,10 @@ def create_task(
     target_branch: str = "main",
     model: str | None = None,
     cli: str | None = None,
+    pat_name: str | None = None,
+    issues: list[int] | None = None,
+    prs: list[int] | None = None,
+    context: dict | None = None,
     timeout_minutes: int = 30,
     masker: Callable[[str], str] | None = None,
 ) -> Task:
@@ -39,6 +43,10 @@ def create_task(
         target_branch=target_branch,
         model=model,
         cli=cli,
+        pat_name=pat_name,
+        issues_json=json.dumps(issues) if issues else None,
+        prs_json=json.dumps(prs) if prs else None,
+        context_json=json.dumps(context) if context else None,
         prompt=masked_prompt,
         status="queued",
         timeout_minutes=timeout_minutes,
@@ -80,9 +88,16 @@ def runs_for_task(session: Session, task_id: int) -> list[Run]:
     )
 
 
-def add_followup(session: Session, task_id: int, run_id: int, body: str) -> Followup:
+def add_followup(
+    session: Session,
+    task_id: int,
+    run_id: int,
+    body: str,
+    pat_name: str | None = None,
+    model: str | None = None,
+) -> Followup:
     """Persist a follow-up against ``run_id`` (the run it resumes)."""
-    row = Followup(task_id=task_id, run_id=run_id, body=body)
+    row = Followup(task_id=task_id, run_id=run_id, body=body, pat_name=pat_name, model=model)
     session.add(row)
     session.commit()
     session.refresh(row)
@@ -112,6 +127,7 @@ def run_to_dict(run: Run, artifacts: list[Artifact] | None = None) -> dict[str, 
         "session_id": run.session_id,
         "cli": run.cli,
         "model": run.model,
+        "pat_name": run.pat_name,
         "status": run.status,
         "started_at": run.started_at.isoformat() if run.started_at else None,
         "finished_at": run.finished_at.isoformat() if run.finished_at else None,
@@ -142,11 +158,14 @@ def task_to_dict(
         "target_branch": task.target_branch,
         "model": task.model,
         "cli": task.cli,
+        "pat_name": task.pat_name,
         "prompt": task.prompt,
         "status": task.status,
         "timeout_minutes": task.timeout_minutes,
         "retry_count": task.retry_count,
         "pr_number": task.pr_number,
+        "issues": json.loads(task.issues_json) if task.issues_json else [],
+        "prs": json.loads(task.prs_json) if task.prs_json else [],
         "created_at": task.created_at.isoformat(),
         "updated_at": task.updated_at.isoformat(),
         "run": run_to_dict(run, artifacts=artifacts) if run is not None else None,
@@ -154,6 +173,8 @@ def task_to_dict(
             {
                 "id": f.id,
                 "body": f.body,
+                "pat_name": f.pat_name,
+                "model": f.model,
                 "created_at": f.created_at.isoformat(),
             }
             for f in (followups or [])

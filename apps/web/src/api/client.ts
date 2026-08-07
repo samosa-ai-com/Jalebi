@@ -1,11 +1,14 @@
 import type {
+  GithubContext,
   GithubRepo,
   Health,
   Repo,
+  Run,
   SettingsMap,
   SseEvent,
   Task,
   TokenInfo,
+  TokensResponse,
 } from "../types";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -34,11 +37,16 @@ export interface CreateTaskInput {
   source_branch?: string;
   target_branch?: string;
   model?: string;
+  cli?: string;
+  pat_name?: string;
+  issue_number?: number;
+  pr_number?: number;
 }
 
 export const api = {
   getHealth: () => request<Health>("/api/health"),
   getSettings: () => request<SettingsMap>("/api/settings"),
+  getModels: () => request<{ cli: string; models: string[] }>("/api/models"),
   updateSetting: (key: string, value: unknown) =>
     request<SettingsMap>(`/api/settings`, { method: "POST", body: JSON.stringify({ key, value }) }),
   getGithubStatus: () => request<TokenInfo>("/api/github/status"),
@@ -48,8 +56,21 @@ export const api = {
       body: JSON.stringify({ token }),
     }),
   getGithubRepos: () => request<GithubRepo[]>("/api/github/repos"),
+  getGithubContext: (fullName: string) =>
+    request<GithubContext>(`/api/github/context?repo=${encodeURIComponent(fullName)}`),
+  getTokens: () => request<TokensResponse>("/api/github/tokens"),
+  addToken: (name: string, token: string) =>
+    request<{ stored: boolean; name: string }>("/api/github/tokens", {
+      method: "POST",
+      body: JSON.stringify({ name, token }),
+    }),
+  deleteToken: (name: string) =>
+    request<{ removed: string }>(`/api/github/tokens/${encodeURIComponent(name)}`, {
+      method: "DELETE",
+    }),
   getTasks: () => request<Task[]>("/api/tasks"),
   getTask: (id: number) => request<Task>(`/api/tasks/${id}`),
+  getRuns: (id: number) => request<Run[]>(`/api/tasks/${id}/runs`),
   createTask: (input: CreateTaskInput) =>
     request<Task>("/api/tasks", { method: "POST", body: JSON.stringify(input) }),
   cancelTask: (id: number) =>
@@ -57,16 +78,24 @@ export const api = {
   rerunTask: (id: number) => request<Task>(`/api/tasks/${id}/rerun`, { method: "POST" }),
   publishTask: (id: number) =>
     request<{ pr_number: number }>(`/api/tasks/${id}/publish`, { method: "POST" }),
-  postFollowup: (id: number, prompt: string) =>
+  postFollowup: (id: number, prompt: string, opts?: { pat_name?: string; model?: string }) =>
     request<Task>(`/api/tasks/${id}/followup`, {
       method: "POST",
-      body: JSON.stringify({ prompt }),
+      body: JSON.stringify({ prompt, ...opts }),
     }),
   getRepos: () => request<Repo[]>("/api/repos"),
   connectRepo: (fullName: string) =>
     request<Repo>("/api/repos", { method: "POST", body: JSON.stringify({ full_name: fullName }) }),
+  disconnectRepo: (id: number) =>
+    request<{ removed: string }>(`/api/repos/${id}`, { method: "DELETE" }),
+  pruneRepos: () =>
+    request<{ removed: string[] }>("/api/repos/prune", { method: "POST" }),
+  getBranches: (id: number) =>
+    request<{ full_name: string; branches: string[] }>(`/api/repos/${id}/branches`),
   artifactUrl: (taskId: number, artifactId: number) =>
     `/api/tasks/${taskId}/artifacts/${artifactId}/download`,
+  artifactContentUrl: (taskId: number, artifactId: number) =>
+    `/api/tasks/${taskId}/artifacts/${artifactId}/content`,
 };
 
 /** Subscribe to a task's live SSE stream. Returns an unsubscribe function. */

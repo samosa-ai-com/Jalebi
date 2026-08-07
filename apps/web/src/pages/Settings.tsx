@@ -176,6 +176,19 @@ export default function Settings() {
       ),
     },
     {
+      key: "ntfy_url",
+      label: "ntfy server URL",
+      desc: "Base URL of the ntfy server (e.g. https://ntfy.sh). Leave blank for the default.",
+      control: (
+        <input
+          defaultValue={settings.ntfy_url}
+          onBlur={(e) => save("ntfy_url", e.target.value.trim())}
+          placeholder="https://ntfy.sh"
+          className="field max-w-xs font-mono"
+        />
+      ),
+    },
+    {
       key: "secret_patterns",
       label: "Secret patterns",
       desc: "Regex patterns (one per line) redacted from agent output.",

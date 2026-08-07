@@ -88,3 +88,17 @@ Planned capabilities (later phases): issues, PRs (create/update/comment/review),
 ## 8. Reference
 
 - PRD §F1 (PAT), §F7 (reviewers), §F9 (publish), §F14 (webhooks), §F15 (check runs), §17.2 (no `gh` CLI).
+## 9. Named PAT vault (multi-token)
+
+- Jalebi stores a list of **named PATs** in the `0600` secrets file (`secrets.json` → `github_tokens: [{name, token}]`), alongside the legacy `github_token` (env `JALEBI_GITHUB_TOKEN` wins as the primary).
+- `GET/POST/DELETE /api/github/tokens` manage the vault; add validates first (`validate_token`), the UI sees only **masked** previews (never values).
+- Tasks and follow-ups carry a `pat_name`; the queue resolves the token via `secrets.resolve_token(config, name)` (fallback = primary) and uses it for git credentials, GitHub calls, the agent `JALEBI_GITHUB_TOKEN`, and masking. **All** known PATs are masked at ingest.
+- New client methods (httpx): `list_issues`, `get_issue`, `comment_on_issue`, `list_prs`, `get_pr`, `post_pr_review` (event `COMMENT`), `list_branches`, `find_pr_by_head` (same-repo dedup).
+- `GET /api/github/context?repo=` returns open issues + open PRs + branches for the task-form pickers.
+
+## 10. Publish dedup & PR accuracy
+
+- `_publish` **recreates the worktree** from the mirror branch if it was cleaned (fixes "Publish on an old task did nothing").
+- Before `create_pr`, Jalebi calls `find_pr_by_head(full_name, "jalebi/<taskId>")` (state=all, same-repo head) and **reuses** any existing PR — so an agent-created PR can never produce a duplicate, and cross-repo fork PRs (e.g. the personal-account fork that caused task #14's duplicate) are ignored.
+- PR title/body come from the agent-written `.jalebi/pr.md` (title + actual-implementation description), falling back to the prompt. `Closes #N` + Jalebi footer + `Co-authored-by` are appended. `issue_fix` tasks get an **issue comment** linking the PR.
+- GitHub PR review comments are posted with `event: "COMMENT"` only — Jalebi never approves or merges.
