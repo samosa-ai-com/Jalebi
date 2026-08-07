@@ -365,6 +365,7 @@ export default function TaskDetail() {
   const running = task !== null && !TERMINAL.has(task.status);
   const isLatest = selectedRunId === null || selectedRunId === task?.run?.id;
 
+  const runId = task?.run?.id ?? null;
   useEffect(() => {
     if (!task || !running || !isLatest) return;
     const unsubscribe = taskEvents(
@@ -377,7 +378,7 @@ export default function TaskDetail() {
     );
     return unsubscribe;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [taskId, task, running, isLatest]);
+  }, [taskId, runId, running, isLatest]);
 
   // After sending a follow-up, poll until a new run appears, then refresh.
   useEffect(() => {
