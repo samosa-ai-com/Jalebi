@@ -263,6 +263,61 @@ def test_publish_route_502_when_github_fails(app, session, repo_row, monkeypatch
     assert "github down" in resp.get_json()["error"]
 
 
+def test_publish_route_409_when_nothing_to_publish(app, session, repo_row, monkeypatch) -> None:
+    """Manual publish with zero commits ahead of the target is a client error
+    (409), not a server failure."""
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
+
+    class MustNotRun:
+        def __init__(self, token):
+            self.token = token
+
+        def create_pr(self, *a, **k):
+            raise AssertionError("create_pr must not be called")
+
+        def find_pr_by_head(self, *a, **k):
+            raise AssertionError("find_pr_by_head must not be called")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("jalebi.queue.GitHubClient", MustNotRun)
+    client = app.test_client()
+    resp = client.post(f"/api/tasks/{task.id}/publish")
+    assert resp.status_code == 409
+    assert "no commits ahead" in resp.get_json()["error"]
+
+
+def test_publish_route_409_on_conflict(app, session, repo_row, monkeypatch) -> None:
+    """A publish that would conflict with the target is a 409 with the
+    conflicting files surfaced — never a 502."""
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
+    _seed_commit(app.config["JALEBI_QUEUE"], task.id, repo_row.clone_url)
+
+    class ConflictGit(GitWorkspace):
+        def __init__(self, config):
+            self.config = config
+
+        def commits_ahead(self, *a, **k):
+            return 1
+
+        def create_worktree(self, *a, **k):  # type: ignore[override]
+            return None
+
+        def merge_origin_into(self, *a, **k):
+            return ["file.txt"]
+
+        def push_branch(self, *a, **k):
+            raise AssertionError("push must not happen on a conflict")
+
+    monkeypatch.setattr("jalebi.queue.GitWorkspace", ConflictGit)
+    client = app.test_client()
+    resp = client.post(f"/api/tasks/{task.id}/publish")
+    assert resp.status_code == 409
+    assert "conflict" in resp.get_json()["error"]
+    assert "file.txt" in resp.get_json()["error"]
+
+
 # -- github-unreachable 502 arms ------------------------------------------
 
 

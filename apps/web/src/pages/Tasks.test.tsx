@@ -144,4 +144,48 @@ describe("Tasks", () => {
       expect(String(ctxCall![0])).toContain("account=work");
     });
   });
+
+  it("issue_fix shows a single target-branch picker", async () => {
+    stubFetch({ ...DEFAULT_HANDLERS });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+
+    await screen.findByText("New task");
+    await userEvent.selectOptions(screen.getByLabelText("Task type"), "issue_fix");
+    expect(
+      await screen.findByLabelText("Target branch (worktree base / PR base)")
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText("Source branch")).not.toBeInTheDocument();
+  });
+
+  it("pr_review hides both branch pickers", async () => {
+    stubFetch({ ...DEFAULT_HANDLERS });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+
+    await screen.findByText("New task");
+    await userEvent.selectOptions(screen.getByLabelText("Task type"), "pr_review");
+    expect(screen.queryByLabelText("Source branch")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Target branch (PR base)")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Target branch (worktree base / PR base)")).not.toBeInTheDocument();
+  });
+
+  it("freeform keeps both branch pickers", async () => {
+    stubFetch({ ...DEFAULT_HANDLERS });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+
+    await screen.findByText("New task");
+    expect(await screen.findByLabelText("Source branch")).toBeInTheDocument();
+    expect(screen.getByLabelText("Target branch (PR base)")).toBeInTheDocument();
+  });
 });

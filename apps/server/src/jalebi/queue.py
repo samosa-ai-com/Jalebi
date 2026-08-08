@@ -34,6 +34,14 @@ GIT_USER_NAME = "Jalebi"
 GIT_USER_EMAIL = "jalebi@localhost"
 
 
+class PublishError(Exception):
+    """Base error for the publish step (push + open PR)."""
+
+
+class PublishConflict(PublishError):
+    """The task branch conflicts with the PR target; nothing was pushed."""
+
+
 _GIT_ENV_PREFIXES = ("GIT_CONFIG",)
 _GIT_ENV_KEYS = (
     "GIT_DIR",
@@ -291,6 +299,19 @@ class TaskQueue:
             session.close()
 
     # -- run lifecycle -----------------------------------------------------
+
+    @staticmethod
+    def _worktree_base(task: Task) -> str:
+        """Branch the task's worktree is created from (and reset to).
+
+        issue_fix uses the SINGLE-target model (PRD F8 superseded): the worktree
+        is based on the target/PR-base branch, so the PR diff is exactly the
+        agent's fix and merges cleanly by construction. Other types keep the
+        source branch as the worktree base.
+        """
+        if task.type == "issue_fix":
+            return task.target_branch or task.source_branch or "main"
+        return task.source_branch or "main"
 
     @staticmethod
     def _agent_token_for(task: Task, token: str | None) -> str | None:
@@ -578,9 +599,13 @@ class TaskQueue:
             stale_branch = git.branch_exists(task.id, repo.full_name)
             wt_path = GitWorkspace.worktree_path(self.config.data_dir, task.id)
             worktree_existed = (wt_path / ".git").is_file()
-            wt = git.create_worktree(task.id, repo.full_name, task.source_branch, token)
+            wt = git.create_worktree(
+                task.id, repo.full_name, self._worktree_base(task), token
+            )
             if run.seq == 1 and stale_branch and not worktree_existed:
-                git.reset_branch_to_base(task.id, repo.full_name, task.source_branch)
+                git.reset_branch_to_base(
+                    task.id, repo.full_name, self._worktree_base(task)
+                )
             worktree_bootstrap.bootstrap_worktree(wt, prompts.build_agent_md(task, repo))
 
             adapter = get_adapter(cli)
@@ -820,7 +845,9 @@ class TaskQueue:
                     raise RuntimeError(f"pr_review task {task.id} has no PR number to resume")
                 wt = git.create_review_worktree(task.id, repo.full_name, pr_number, token)
             else:
-                wt = git.create_worktree(task.id, repo.full_name, task.source_branch, token)
+                wt = git.create_worktree(
+                    task.id, repo.full_name, self._worktree_base(task), token
+                )
             worktree_bootstrap.bootstrap_worktree(wt, prompts.build_agent_md(task, repo))
 
             adapter = get_adapter(cli)
@@ -891,6 +918,19 @@ class TaskQueue:
             patterns = [str(p) for p in raw_patterns] if isinstance(raw_patterns, list) else []
             masker = masking.build_masker(secrets.all_token_values(self.config) + [token], patterns)
             git = GitWorkspace(self.config)
+            # No-op gate: a branch with zero commits ahead of the target has
+            # nothing to publish — refuse instead of pushing an empty PR. A
+            # missing worktree (never ran / no commits) counts as nothing ahead.
+            worktree = GitWorkspace.worktree_path(self.config.data_dir, task.id)
+            try:
+                ahead = git.commits_ahead(worktree, task.target_branch or "main")
+            except Exception:
+                ahead = 0
+            if ahead <= 0:
+                raise PublishError(
+                    "the task branch has no commits ahead of the target branch — "
+                    "nothing to publish"
+                )
             pr_number = self._publish(task, repo, token, git, masker=masker)
             task.pr_number = pr_number
             task.status = "done"
@@ -1019,6 +1059,21 @@ class TaskQueue:
         # Ensure the worktree exists (it may have been cleaned for old tasks);
         # create_worktree reuses the existing jalebi/<taskId> branch if present.
         git.create_worktree(task.id, repo.full_name, task.target_branch, token)
+        # Sync the task branch with the PR base BEFORE pushing so the PR is up to
+        # date with target's progress made during the run and merges cleanly. A
+        # conflict aborts the merge and surfaces the files instead of pushing a
+        # conflicted branch (main→dev divergence handling).
+        worktree = GitWorkspace.worktree_path(self.config.data_dir, task.id)
+        conflicts = git.merge_origin_into(
+            worktree, repo.full_name, task.target_branch, token
+        )
+        if conflicts:
+            raise PublishConflict(
+                f"PR would conflict with `{task.target_branch}`: "
+                + ", ".join(conflicts)
+                + " — the merge was aborted. Send a follow-up asking the agent to "
+                "merge origin/<target> and resolve the conflicts, then publish again."
+            )
         git.push_branch(task.id, repo.full_name, token)
         if task.pr_number:
             # A PR already exists for jalebi/<taskId>; the push just updated it.
@@ -1055,7 +1110,9 @@ class TaskQueue:
                     head=head,
                     base=task.target_branch,
                 )
-            self._comment_on_issues(client, repo.full_name, task, pr_number)
+                # Only a NEWLY created PR gets the issue link comments — reusing
+                # an existing open PR (follow-up pushes) must stay silent.
+                self._comment_on_issues(client, repo.full_name, task, pr_number)
             return pr_number
         finally:
             client.close()

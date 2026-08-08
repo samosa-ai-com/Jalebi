@@ -25,10 +25,10 @@ Jalebi uses the **git CLI** (not libgit2) for all repo operations. Each task/age
 
 ## 4. Worktree lifecycle
 
-`create_worktree(task_id, full_name, base_branch="main", token=None)`, `remove_worktree(task_id, full_name)`, `push_branch(task_id, full_name, token)`, `commits_ahead(worktree, base_branch)`.
+`create_worktree(task_id, full_name, base_branch="main", token=None)`, `remove_worktree(task_id, full_name)`, `push_branch(task_id, full_name, token)`, `commits_ahead(worktree, base_branch)`, `merge_origin_into(worktree, full_name, base_branch, token)`.
 
 1. **Create / Resume:**
-   - **New task:** `git worktree add -b jalebi/<taskId> <ws/task-<id>> origin/<source-branch>` — the worktree starts from the task's **source branch**.
+   - **New task:** `git worktree add -b jalebi/<taskId> <ws/task-<id>> origin/<base-branch>` — the worktree starts from the task's **base branch**. `issue_fix` uses the **single-target model**: the base is the **target branch** (the PR base), so the PR diff is exactly the agent's fix and merges cleanly (PRD §F8's two-selector design was superseded). Other task types keep the source branch as the base.
    - **Resume / Follow-up:** if `jalebi/<taskId>` already exists in the mirror, `git worktree add <ws/task-<id>> jalebi/<taskId>` (without `-b`); if the worktree dir already exists it is reused as-is.
 2. **Run:** the agent CLI is spawned with `cwd = <ws/task-<id>>` so it discovers `AGENTS.md`/skills.
 3. **Discard:** `remove_worktree` runs `git worktree remove --force` and deletes the `jalebi/<taskId>` branch. `git worktree prune` on restart is a future cleanup step.
@@ -49,17 +49,20 @@ Jalebi uses the **git CLI** (not libgit2) for all repo operations. Each task/age
 - `push_branch` pushes the explicit refspec `jalebi/<taskId>` from the worktree, under the per-repo mirror lock.
 - The token is the **only** credential (see `AGENTS.md` §3). The `gh` CLI is forbidden.
 
-## 7. Source/target branch control (PRD §F8)
+## 7. Branch control (PRD §F8, single-target model for issue_fix)
 
-- **Source branch** — the base to branch off / the branch whose state the worktree starts from.
-- **Target branch** — the PR base (`base`), where the fix will land.
-- The orchestrator creates the worktree from **source**, opens the PR with `base = target`, `head = jalebi/<taskId>`.
+- **`issue_fix` (single-target model):** a single **target branch** picker (the PR base). The worktree is based on that same branch, so the PR diff is exactly the agent's fix and merges cleanly by construction. This supersedes PRD §F8's two-selector design ("source `main`, target `development`"): diverged source/target produced PRs that smuggled source-only commits into the target or silently conflicted.
+- **Other task types (freeform):** a **source branch** (the worktree base) and a **target branch** (the PR base) remain available.
+- **`pr_review`:** branch pickers are hidden — the review worktree checks out the PR head, so branches are irrelevant.
 
 ## 8. Publish (PRD §F9)
 
 - **Default: auto-publish** — on task completion, push the branch and open a PR (title = `[Jalebi] <first prompt line>`; body includes task instructions + `Closes #N` when an issue was referenced; footer links the Jalebi task and adds `Co-authored-by`).
 - **Configurable:** global `auto_publish: true|false`; when `false` (or auto-publish fails), the UI shows a **"Publish"** button (push + open PR).
+- **No-op gate:** publishing (auto or manual) requires the task branch to have **at least one commit ahead of the target** — a `done` run where the agent made no commits never opens an empty PR, and manual publish refuses with "nothing to publish".
+- **Sync-before-push + conflict detection:** before pushing, Jalebi fetches origin and **merges `origin/<target>` into the task branch** (`merge_origin_into`) so the PR is up to date with target's progress and mergable. A **conflict aborts the merge**, surfaces the conflicting files ("PR would conflict with `<target>`: file1…"), sets the task to `needs_approval`, and pushes/opens nothing. The user resolves via a follow-up asking the agent to merge `origin/<target>` and resolve, then publishes again.
 - **PR updates on follow-ups:** follow-ups amend the same branch; the existing PR is updated by the push (publish reuses the existing PR number) — never a second PR for the same task.
+- **Issue comments on new PR only:** the "Jalebi opened a pull request for this issue" comment is posted **only when a PR is newly created**, never when re-publishing to an existing open PR (follow-up pushes stay silent).
 
 ## 9. Cleanup / prune policy (PRD §F12)
 

@@ -16,7 +16,7 @@ from jalebi.config import Config
 from jalebi.db import Artifact, Followup, Run, Task, utcnow
 from jalebi.git_workspace import GitWorkspace
 from jalebi.github import GitHubClient, GitHubError
-from jalebi.queue import TaskQueue
+from jalebi.queue import PublishConflict, PublishError, TaskQueue
 
 bp = Blueprint("tasks", __name__, url_prefix="/api/tasks")
 
@@ -327,6 +327,8 @@ def publish_task(task_id: int) -> ResponseReturnValue:
         pr_number = _queue().publish_task(task_id)
     except KeyError as exc:
         return jsonify({"error": str(exc)}), 404
+    except (PublishConflict, PublishError) as exc:
+        return jsonify({"error": str(exc)}), 409
     except Exception as exc:
         return jsonify({"error": str(exc)}), 502
     return jsonify({"pr_number": pr_number, "status": "done"})

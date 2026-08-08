@@ -785,6 +785,168 @@ def test_publish_failure_sets_needs_approval(q, session, repo_row, monkeypatch) 
     assert _latest_run(session, task.id).status == "done"
 
 
+def test_publish_conflict_sets_needs_approval_and_skips_pr(
+    q, session, repo_row, monkeypatch
+) -> None:
+    """A task branch that conflicts with the PR target must NOT be pushed or
+    published: the task goes to needs_approval with the conflicting files
+    surfaced, and no PR is opened (main→dev divergence handling)."""
+    settings.set_setting(session, "auto_publish", True)
+    task = tasks.create_task(session, type_="issue_fix", repo_id=repo_row.id, prompt="fix it")
+
+    # Branch the worktree off main and commit a conflicting change.
+    git = GitWorkspace(q.config)
+    git.ensure_mirror(FULL_NAME, repo_row.clone_url)
+    wt = git.create_worktree(task.id, FULL_NAME, "main")
+    (wt / "file.txt").write_text("hello\nagent change\n")
+    _git(["-C", str(wt), "config", "user.email", "t@example.com"])
+    _git(["-C", str(wt), "config", "user.name", "Test"])
+    _git(["-C", str(wt), "add", "file.txt"])
+    _git(["-C", str(wt), "commit", "-m", "agent change"])
+
+    class ConflictGit(GitWorkspace):
+        def merge_origin_into(self, worktree, full_name, base_branch, token=None):
+            return ["file.txt"]
+
+    monkeypatch.setattr("jalebi.queue.GitWorkspace", ConflictGit)
+
+    class MustNotPublish:
+        def __init__(self, token: str):
+            self.token = token
+
+        def create_pr(self, *args, **kwargs) -> int:
+            raise AssertionError("publish must not open a PR on a conflict")
+
+        def find_pr_by_head(self, *args, **kwargs):
+            raise AssertionError("publish must not query PRs on a conflict")
+
+        def get_pr(self, *args, **kwargs):
+            raise AssertionError("publish must not query PRs on a conflict")
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr("jalebi.queue.GitHubClient", MustNotPublish)
+    _install_adapter(monkeypatch, FakeHandle([AgentEvent(type="done")]))
+
+    q._run_task(task.id)
+
+    fresh = _fresh_task(session, task.id)
+    assert fresh.status == "needs_approval"
+    assert fresh.pr_number is None
+    steps = json.loads(_latest_run(session, task.id).steps_json or "[]")
+    conflicted = [s for s in steps if "conflict" in (s.get("text") or "")]
+    assert conflicted and "file.txt" in conflicted[0]["text"]
+
+
+def test_publish_comments_only_on_new_pr(q, session, repo_row, monkeypatch) -> None:
+    """Re-publishing to an existing OPEN PR (follow-up pushes) must NOT re-comment
+    on the linked issues — only a freshly created PR gets the issue link comments."""
+    settings.set_setting(session, "auto_publish", True)
+    task = tasks.create_task(session, type_="issue_fix", repo_id=repo_row.id, prompt="fix it")
+
+    comments: list[tuple[int, str]] = []
+
+    class ReuseClient(ReusingGitHubClient):
+        def __init__(self, token: str):
+            super().__init__(token)
+
+        def comment_on_issue(self, full_name, number, body):
+            comments.append((number, body))
+
+    _seed_commit(q, task.id, repo_row)
+    _install_adapter(monkeypatch, FakeHandle([AgentEvent(type="done")]))
+    monkeypatch.setattr("jalebi.queue.GitHubClient", ReuseClient)
+
+    q._run_task(task.id)
+
+    assert _fresh_task(session, task.id).status == "done"
+    assert _fresh_task(session, task.id).pr_number == 99
+    assert comments == []  # reuse path stays silent
+
+
+def test_manual_publish_refuses_no_commits(q, session, repo_row, monkeypatch) -> None:
+    """Manual publish on a branch with zero commits ahead of the target must be
+    refused (no-op gate) instead of pushing an empty PR."""
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
+
+    class MustNotPublish:
+        def __init__(self, token: str):
+            self.token = token
+
+        def create_pr(self, *args, **kwargs) -> int:
+            raise AssertionError("publish must be refused when nothing to publish")
+
+        def find_pr_by_head(self, *args, **kwargs):
+            raise AssertionError("publish must be refused when nothing to publish")
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr("jalebi.queue.GitHubClient", MustNotPublish)
+    from jalebi.queue import PublishError
+
+    with pytest.raises(PublishError):
+        q.publish_task(task.id)
+
+
+def test_issue_fix_worktree_based_on_target_branch(q, session, repo_row, monkeypatch) -> None:
+    """issue_fix uses the SINGLE-target model: the worktree must be created from
+    the target branch (the PR base), not the source branch."""
+    from jalebi.db import Run as RunRow
+    from jalebi.db import utcnow
+
+    task = tasks.create_task(
+        session,
+        type_="issue_fix",
+        repo_id=repo_row.id,
+        prompt="fix it",
+        source_branch="main",
+        target_branch="development",
+    )
+    run = RunRow(
+        task_id=task.id,
+        seq=1,
+        cli="opencode",
+        model=None,
+        started_at=utcnow(),
+        status="running",
+    )
+    session.add(run)
+    session.commit()
+
+    seen: dict[str, str] = {}
+
+    class CapturingGit(GitWorkspace):
+        def __init__(self, config):
+            self.config = config
+
+        def ensure_mirror(self, *a, **k):  # type: ignore[override]
+            return None
+
+        def branch_exists(self, *a, **k):
+            return False
+
+        def create_worktree(self, task_id, full_name, base_branch, token=None):  # type: ignore[override]
+            seen["base_branch"] = base_branch
+            wt = GitWorkspace.worktree_path(self.config.data_dir, task_id)
+            wt.mkdir(parents=True, exist_ok=True)
+            (wt / ".git").write_text("gitdir: x\n")
+            return wt
+
+        def reset_branch_to_base(self, *a, **k):
+            raise AssertionError("no stale branch on first run")
+
+    monkeypatch.setattr("jalebi.queue.GitWorkspace", CapturingGit)
+    monkeypatch.setattr("jalebi.queue.worktree_bootstrap.bootstrap_worktree", lambda *a, **k: None)
+    _install_adapter(monkeypatch, FakeHandle([AgentEvent(type="done")]))
+    _no_publish(session)
+
+    q._run_task(task.id)
+
+    assert seen["base_branch"] == "development"
+
+
 def test_exception_finalizes_run_failed(q, session, repo_row, monkeypatch) -> None:
     _no_publish(session)
     task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")

@@ -268,32 +268,49 @@ function CreateTask({
         </div>
       )}
 
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Select
-          label="Source branch"
-          value={sourceBranch}
-          onChange={setSourceBranch}
-          placeholder={context ? (context.branches.length ? "default" : "no branches") : "loading…"}
-        >
-          {(context?.branches ?? []).map((b) => (
-            <option key={b} value={b}>
-              {b}
-            </option>
-          ))}
-        </Select>
-        <Select
-          label="Target branch (PR base)"
-          value={targetBranch}
-          onChange={setTargetBranch}
-          placeholder={context ? (context.branches.length ? "default" : "no branches") : "loading…"}
-        >
-          {(context?.branches ?? []).map((b) => (
-            <option key={b} value={b}>
-              {b}
-            </option>
-          ))}
-        </Select>
-      </div>
+      {type === "issue_fix" ? (
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Select
+            label="Target branch (worktree base / PR base)"
+            value={targetBranch}
+            onChange={setTargetBranch}
+            placeholder={context ? (context.branches.length ? "default" : "no branches") : "loading…"}
+          >
+            {(context?.branches ?? []).map((b) => (
+              <option key={b} value={b}>
+                {b}
+              </option>
+            ))}
+          </Select>
+        </div>
+      ) : type === "pr_review" ? null : (
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Select
+            label="Source branch"
+            value={sourceBranch}
+            onChange={setSourceBranch}
+            placeholder={context ? (context.branches.length ? "default" : "no branches") : "loading…"}
+          >
+            {(context?.branches ?? []).map((b) => (
+              <option key={b} value={b}>
+                {b}
+              </option>
+            ))}
+          </Select>
+          <Select
+            label="Target branch (PR base)"
+            value={targetBranch}
+            onChange={setTargetBranch}
+            placeholder={context ? (context.branches.length ? "default" : "no branches") : "loading…"}
+          >
+            {(context?.branches ?? []).map((b) => (
+              <option key={b} value={b}>
+                {b}
+              </option>
+            ))}
+          </Select>
+        </div>
+      )}
 
       <div className="grid gap-4 sm:grid-cols-4">
         <Select label="Agent" value="opencode" onChange={() => {}}>

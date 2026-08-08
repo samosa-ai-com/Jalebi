@@ -404,3 +404,50 @@ class GitWorkspace:
         # the same repo surfaces as a spurious error otherwise.
         with self._lock_for(full_name):
             _run_git(["-C", str(ws), "push", "origin", branch], auth_env=_auth_env(token))
+
+    def merge_origin_into(
+        self, worktree: Path, full_name: str, base_branch: str, token: str | None = None
+    ) -> list[str]:
+        """Sync the task branch with ``origin/<base_branch>`` before pushing.
+
+        Fetches origin (updating the mirror the worktree shares), then merges
+        ``origin/<base_branch>`` into the worktree's current branch so the PR is
+        up to date with its base and mergable. On conflict the merge is ABORTED
+        (the worktree is left as it was) and the conflicting paths are returned;
+        the caller surfaces them instead of pushing a conflicted branch.
+
+        Returns a list of conflicting file paths (empty = clean merge).
+        """
+        mirror = self.mirror_path(self.config.data_dir, full_name)
+        auth = _auth_env(token)
+        with self._lock_for(full_name):
+            if not mirror.exists():
+                raise GitWorkspaceError(
+                    f"mirror missing for {full_name}; call ensure_mirror first"
+                )
+            _run_git(["-C", str(mirror), "fetch", "origin", "--prune"], auth_env=auth)
+            env = _clean_git_env(os.environ.copy())
+            if auth:
+                env.update(auth)
+            proc = subprocess.run(
+                ["git", "-C", str(worktree), "merge", f"origin/{base_branch}"],
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=GIT_TIMEOUT_SECONDS,
+            )
+            if proc.returncode == 0:
+                return []
+            # Merge failed — likely a conflict. Capture the unmerged paths, then
+            # abort so the worktree is restored for the agent/follow-up instead of
+            # being left in a conflicted state.
+            try:
+                conflicts = _run_git(
+                    ["-C", str(worktree), "diff", "--name-only", "--diff-filter=U"]
+                ).splitlines()
+            except GitWorkspaceError:
+                conflicts = []
+            if conflicts:
+                _run_git(["-C", str(worktree), "merge", "--abort"])
+                return conflicts
+            raise GitWorkspaceError(f"git merge failed: {(proc.stderr or '').strip()}")

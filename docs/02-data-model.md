@@ -41,8 +41,8 @@
 | `id` | int PK | |
 | `type` | text CHECK | `issue_fix` \| `pr_review` \| `freeform` \| `screen_finding` \| `triggered` |
 | `repo_id` | int FK → repos | |
-| `source_branch` | text, default `'main'` | base to branch off |
-| `target_branch` | text, default `'main'` | PR base |
+| `source_branch` | text, default `'main'` | worktree base for freeform (and other non-issue_fix types); **unused for `issue_fix`** (single-target model) |
+| `target_branch` | text, default `'main'` | PR base; also the worktree base for `issue_fix` |
 | `agent_id` | text null | catalog agent slug — **no FK yet**; FK added in Phase 1 |
 | `model` | text null | |
 | `cli` | text null | backend override |

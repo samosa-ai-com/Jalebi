@@ -88,9 +88,17 @@ def build_agent_md(task: Task, repo: Repo) -> str:
         "",
         f"- Repo: `{repo.full_name}`",
         f"- Task type: `{task.type}`",
-        f"- Source branch (worktree base): `{task.source_branch or 'default'}`",
-        f"- Target branch (PR base): `{task.target_branch or 'default'}`",
     ]
+    if task.type == "issue_fix":
+        # Single-target model: the worktree is based on the PR base branch, so
+        # the PR diff is exactly the agent's fix and merges cleanly (PRD F8's
+        # two-selector design was superseded).
+        parts.append(
+            f"- Target branch (worktree base / PR base): `{task.target_branch or 'default'}`"
+        )
+    else:
+        parts.append(f"- Source branch (worktree base): `{task.source_branch or 'default'}`")
+        parts.append(f"- Target branch (PR base): `{task.target_branch or 'default'}`")
     if task.pat_name and task.pat_name != "default":
         parts.append(f"- Using GitHub token: `{task.pat_name}`")
     parts += ["", HARD_RULES, "", BEST_PRACTICES]
@@ -103,9 +111,11 @@ def build_agent_md(task: Task, repo: Repo) -> str:
         parts += [
             "",
             "## Issue(s) to fix",
-            "Implement a fix for the issue(s) below. Branch off the source branch, make",
-            "the change, validate it, and commit on the current branch. Jalebi opens the",
-            "PR (into the target branch, with `Closes #N`) and comments on the issue.",
+            "Implement a fix for the issue(s) below. The worktree is checked out on "
+            "the current branch (based on the target branch). Make the change, "
+            "validate it, and commit on the current branch. Jalebi opens the PR "
+            "into the same target branch (with `Closes #N`) and comments on the "
+            "issue.",
             "",
         ]
         for issue in issues:

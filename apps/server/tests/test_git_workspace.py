@@ -157,6 +157,70 @@ def test_worktree_push(ws: GitWorkspace, remote: str) -> None:
     assert "change" in _git(["-C", remote, "log", "jalebi/1", "--format=%s"])
 
 
+def test_merge_origin_into_clean_merges_target(ws: GitWorkspace, remote: str, tmp_path) -> None:
+    """Publish-time sync: origin/<target> advanced after the worktree branched
+    off it — merging it in must succeed and fold target's commits into the task
+    branch."""
+    ws.ensure_mirror(FULL_NAME, remote)
+    wt = ws.create_worktree(1, FULL_NAME, "main")
+    _add_commit(wt, "agent work")
+
+    # Target advances on the remote after the worktree was created (a DIFFERENT
+    # file, so the merge is clean — _add_commit would touch file.txt and clash).
+    src = tmp_path / "src2"
+    _git(["clone", remote, str(src)])
+    (src / "other.txt").write_text("new file\n")
+    _git(["-C", str(src), "config", "user.email", "t@example.com"])
+    _git(["-C", str(src), "config", "user.name", "Test"])
+    _git(["-C", str(src), "add", "other.txt"])
+    _git(["-C", str(src), "commit", "-m", "target advanced"])
+    _git(["-C", str(src), "push", "origin", "main"])
+
+    conflicts = ws.merge_origin_into(wt, FULL_NAME, "main")
+    assert conflicts == []
+    log = _git(["-C", str(wt), "log", "--format=%s"])
+    assert "target advanced" in log
+    assert "agent work" in log
+    # The merge is a commit on the branch (no conflicted state left behind).
+    assert not _git(["-C", str(wt), "status", "--porcelain"]).strip()
+
+
+def test_merge_origin_into_conflict_aborts_and_reports(
+    ws: GitWorkspace, remote: str, tmp_path
+) -> None:
+    """A conflicting target advance must be aborted (worktree restored) and the
+    conflicting paths reported — never left in a conflicted state."""
+    ws.ensure_mirror(FULL_NAME, remote)
+    wt = ws.create_worktree(1, FULL_NAME, "main")
+    (wt / "file.txt").write_text("hello\nagent\n")
+    _git(["-C", str(wt), "config", "user.email", "t@example.com"])
+    _git(["-C", str(wt), "config", "user.name", "Test"])
+    _git(["-C", str(wt), "add", "file.txt"])
+    _git(["-C", str(wt), "commit", "-m", "agent work"])
+
+    # Target changes the same file differently, then advances.
+    src = tmp_path / "src2"
+    _git(["clone", remote, str(src)])
+    (src / "file.txt").write_text("hello\nremote\n")
+    _git(["-C", str(src), "config", "user.email", "t@example.com"])
+    _git(["-C", str(src), "config", "user.name", "Test"])
+    _git(["-C", str(src), "add", "file.txt"])
+    _git(["-C", str(src), "commit", "-m", "remote changed same file"])
+    _git(["-C", str(src), "push", "origin", "main"])
+
+    conflicts = ws.merge_origin_into(wt, FULL_NAME, "main")
+    assert conflicts == ["file.txt"]
+    # The merge was aborted: no MERGE_HEAD and no conflicted files left.
+    proc = subprocess.run(
+        ["git", "-C", str(wt), "rev-parse", "-q", "--verify", "MERGE_HEAD"],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode != 0
+    assert _git(["-C", str(wt), "status", "--porcelain"]).strip() == ""
+
+
+
 def test_push_auth_env(ws: GitWorkspace, monkeypatch) -> None:
     captured: dict = {}
 
