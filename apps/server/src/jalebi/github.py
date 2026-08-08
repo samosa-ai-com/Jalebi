@@ -262,7 +262,7 @@ class GitHubClient:
             f"/repos/{full_name}/pulls/{pr_number}/reviews",
             json={"event": "COMMENT", "body": body},
         )
-        if status != 201:
+        if status not in (200, 201):
             raise GitHubError(f"failed to post review on PR #{pr_number}: HTTP {status}")
 
     def list_branches(self, full_name: str) -> list[str]:

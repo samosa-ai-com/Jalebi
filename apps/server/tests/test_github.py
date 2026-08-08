@@ -260,15 +260,31 @@ def test_list_prs(monkeypatch) -> None:
 
 
 def test_post_pr_review(monkeypatch) -> None:
+    """GitHub returns 200 OK on a successful review POST, not 201."""
     client = make_client()
 
     def fake_request(method, path, **kwargs):
         assert path == "/repos/octocat/hello/pulls/3/reviews"
         assert kwargs["json"]["event"] == "COMMENT"
-        return (201, {}, {})
+        return (200, {}, {})
 
     monkeypatch.setattr(client, "_request", fake_request)
     client.post_pr_review("octocat/hello", 3, "looks good")
+
+
+def test_post_pr_review_accepts_legacy_201(monkeypatch) -> None:
+    """Some mocks / older API responses return 201 — both must be accepted."""
+    client = make_client()
+    monkeypatch.setattr(client, "_request", lambda *a, **kw: (201, {}, {}))
+    client.post_pr_review("octocat/hello", 3, "looks good")
+
+
+def test_post_pr_review_raises_on_real_failure(monkeypatch) -> None:
+    """Non-2xx responses must still raise so the error step is appended."""
+    client = make_client()
+    monkeypatch.setattr(client, "_request", lambda *a, **kw: (422, {}, {}))
+    with pytest.raises(GitHubError, match="HTTP 422"):
+        client.post_pr_review("octocat/hello", 3, "looks good")
 
 
 def test_list_branches(monkeypatch) -> None:
