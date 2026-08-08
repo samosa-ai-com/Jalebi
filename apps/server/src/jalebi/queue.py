@@ -30,7 +30,7 @@ from jalebi.adapters.types import AgentEvent
 from jalebi.config import Config
 from jalebi.db import CatalogAgent, Repo, Run, Session, Task, utcnow
 from jalebi.events import TaskEvents
-from jalebi.git_workspace import GitWorkspace
+from jalebi.git_workspace import GitWorkspace, PushLeaseFailed
 from jalebi.github import GitHubClient
 
 logger = logging.getLogger(__name__)
@@ -1140,8 +1140,30 @@ class TaskQueue:
             session.close()
             self.events.close(task_id)
 
-    def publish_task(self, task_id: int) -> int:
-        """Manually publish a task's branch (push + open PR). Returns the PR number."""
+    def publish_task(
+        self,
+        task_id: int,
+        *,
+        mode: str = "new_pr",
+        target_branch: str | None = None,
+        pr_number: int | None = None,
+    ) -> int:
+        """Manually publish a task's branch. Returns the PR number (0 if push_branch).
+
+        ``mode`` selects the publish behaviour:
+
+        - ``new_pr`` (default) — push ``jalebi/<id>`` and open a new PR into
+          ``task.target_branch`` (or reuse an existing open PR with that head).
+        - ``update_pr`` — fast-forward ``jalebi/<id>`` into an existing PR's
+          head branch and force-push with ``--force-with-lease``. Requires
+          ``pr_number`` (or ``task.prs_json[0]``). The existing PR is reused;
+          no new PR is opened and no issue comment is posted.
+        - ``push_branch`` — fast-forward ``jalebi/<id>`` into ``target_branch``
+          directly and force-push. No PR interaction.
+
+        Validation lives in the route handler (``routes/tasks.py``) so the
+        caller surfaces 400s on bad input before any work starts.
+        """
         session = Session()
         try:
             task = session.get(Task, task_id)
@@ -1172,10 +1194,52 @@ class TaskQueue:
                     "the task branch has no commits ahead of the target branch — "
                     "nothing to publish"
                 )
-            pr_number = self._publish(task, repo, token, git, masker=masker)
-            task.pr_number = pr_number
+            # Mode-specific validation (route catches ValueError → 400).
+            if mode not in ("new_pr", "update_pr", "push_branch"):
+                raise ValueError(f"unknown publish mode: {mode!r}")
+            if mode == "push_branch" and not target_branch:
+                raise ValueError("push_branch mode requires `branch`")
+            if mode == "update_pr":
+                if pr_number is None:
+                    try:
+                        linked = json.loads(task.prs_json) if task.prs_json else []
+                    except (ValueError, TypeError):
+                        linked = []
+                    if linked:
+                        pr_number = int(linked[0])
+                    else:
+                        raise ValueError("update_pr mode requires `pr_number`")
+            pr_number = self._publish(
+                task,
+                repo,
+                token,
+                git,
+                masker=masker,
+                mode=mode,
+                target_branch=target_branch,
+                pr_number=pr_number,
+            )
+            # ``push_branch`` returns 0 (no PR interaction); leave the existing
+            # ``task.pr_number`` untouched in that case. For ``new_pr`` /
+            # ``update_pr`` the return value is the real PR number to record.
+            if mode != "push_branch":
+                task.pr_number = pr_number
             task.status = "done"
             task.updated_at = utcnow()
+            # Append a timeline step so the owner sees what mode actually ran.
+            run = tasks.latest_run(session, task.id)
+            if run is not None:
+                steps = json.loads(run.steps_json or "[]")
+                if mode == "new_pr":
+                    text = f"Published as PR #{pr_number}." if pr_number else "Published."
+                elif mode == "update_pr":
+                    text = f"Pushed to PR #{pr_number} (existing PR head branch)."
+                else:  # push_branch
+                    text = f"Pushed to branch `{target_branch}`."
+                steps.append(
+                    {"type": "message", "phase": None, "text": text, "ts": utcnow().isoformat()}
+                )
+                run.steps_json = json.dumps(steps[-MAX_STEPS:])
             session.commit()
             return pr_number
         finally:
@@ -1357,6 +1421,30 @@ class TaskQueue:
         token: str,
         git: GitWorkspace,
         masker=None,
+        *,
+        mode: str = "new_pr",
+        target_branch: str | None = None,
+        pr_number: int | None = None,
+    ) -> int:
+        if mode == "update_pr":
+            return self._publish_update_pr(
+                task, repo, token, git, pr_number=pr_number
+            )
+        if mode == "push_branch":
+            if not target_branch:
+                raise PublishError("push_branch mode requires `target_branch`")
+            return self._publish_push_branch(task, repo, token, git, target_branch)
+        if mode != "new_pr":
+            raise PublishError(f"unknown publish mode: {mode!r}")
+        return self._publish_new_pr(task, repo, token, git, masker=masker)
+
+    def _publish_new_pr(
+        self,
+        task: Task,
+        repo: Repo,
+        token: str,
+        git: GitWorkspace,
+        masker=None,
     ) -> int:
         # Ensure the worktree exists (it may have been cleaned for old tasks);
         # create_worktree reuses the existing jalebi/<taskId> branch if present.
@@ -1418,6 +1506,106 @@ class TaskQueue:
             return pr_number
         finally:
             client.close()
+
+    def _publish_update_pr(
+        self,
+        task: Task,
+        repo: Repo,
+        token: str,
+        git: GitWorkspace,
+        *,
+        pr_number: int | None,
+    ) -> int:
+        """Push ``jalebi/<id>`` onto an existing PR's head branch.
+
+        Validates the PR is open, fast-forwards (or merges) the agent's
+        commits into the PR's head branch, and force-pushes with
+        ``--force-with-lease``. Does NOT open a new PR, does NOT comment on
+        linked issues (this is an update, not a new publication).
+        """
+        if pr_number is None:
+            raise PublishError("update_pr mode requires `pr_number`")
+        client = GitHubClient(token)
+        try:
+            pr = client.get_pr(repo.full_name, pr_number)
+        finally:
+            client.close()
+        if pr.get("state") != "open":
+            raise PublishError(
+                f"PR #{pr_number} is {pr.get('state')}; cannot update a closed PR"
+            )
+        head_branch = (pr.get("head") or {}).get("ref")
+        if not head_branch:
+            raise PublishError(
+                f"PR #{pr_number} has no resolvable head branch"
+            )
+        # The worktree is already ensured by ``publish_task`` (commits_ahead
+        # gate ran on it), so ``jalebi/<id>`` is on disk — no second
+        # create_worktree call needed.
+        old_sha = git.current_remote_sha(repo.full_name, head_branch, token)
+        conflicts = git.fast_forward_into(
+            task.id, repo.full_name, head_branch, token
+        )
+        if conflicts:
+            raise PublishConflict(
+                f"pushing to PR #{pr_number} ({head_branch}) would conflict: "
+                + ", ".join(conflicts)
+                + " — the merge was aborted. Send a follow-up asking the agent to "
+                "resolve, then publish again."
+            )
+        try:
+            git.push_existing_branch(repo.full_name, head_branch, token)
+        except PushLeaseFailed:
+            raise
+        # The merge + push updated the local mirror's tracking ref (push
+        # does an implicit fetch). Read it without an extra network round
+        # trip so we log what actually went up, not what the remote looks
+        # like now.
+        new_sha = git.local_ref_sha(repo.full_name, head_branch)
+        logger.info(
+            "task %s updated PR #%s (%s): %s -> %s",
+            task.id,
+            pr_number,
+            head_branch,
+            (old_sha or "?")[:10],
+            (new_sha or "?")[:10],
+        )
+        return pr_number
+
+    def _publish_push_branch(
+        self,
+        task: Task,
+        repo: Repo,
+        token: str,
+        git: GitWorkspace,
+        target_branch: str,
+    ) -> int:
+        """Push ``jalebi/<id>`` onto ``target_branch`` directly (no PR)."""
+        # Same as _publish_update_pr: worktree was already ensured.
+        old_sha = git.current_remote_sha(repo.full_name, target_branch, token)
+        conflicts = git.fast_forward_into(
+            task.id, repo.full_name, target_branch, token
+        )
+        if conflicts:
+            raise PublishConflict(
+                f"pushing to `{target_branch}` would conflict: "
+                + ", ".join(conflicts)
+                + " — the merge was aborted. Send a follow-up asking the agent to "
+                "resolve, then publish again."
+            )
+        try:
+            git.push_existing_branch(repo.full_name, target_branch, token)
+        except PushLeaseFailed:
+            raise
+        new_sha = git.local_ref_sha(repo.full_name, target_branch)
+        logger.info(
+            "task %s pushed to branch %s: %s -> %s",
+            task.id,
+            target_branch,
+            (old_sha or "?")[:10],
+            (new_sha or "?")[:10],
+        )
+        return 0
 
     def _comment_on_issues(
         self, client: GitHubClient, full_name: str, task: Task, pr_number: int

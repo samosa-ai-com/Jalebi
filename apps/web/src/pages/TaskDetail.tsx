@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, taskEvents } from "../api/client";
 import { StatusBadge } from "../components/StatusBadge";
+import PublishDialog from "../components/PublishDialog";
 import type { Account, Artifact, CatalogAgent, Followup, Repo, Run, SseEvent, Task } from "../types";
 
 const TERMINAL = new Set(["done", "failed", "timed_out", "cancelled", "needs_approval", "interrupted"]);
@@ -46,6 +47,151 @@ function Action({ onClick, children, disabled }: { onClick: () => void; children
     <button onClick={onClick} disabled={disabled} className="btn-ghost disabled:opacity-40">
       {children}
     </button>
+  );
+}
+
+function canManualPublish(task: Task | null): boolean {
+  if (!task) return false;
+  // Show the new Publish button (with the three-mode picker) for any task in
+  // `done` — that's where freeform/screen_finding/triggered tasks land when
+  // auto-publish is off, and where issue_fix tasks land after auto-publish
+  // (showing the button here is harmless: the backend's no-op gate rejects
+  // "nothing to publish" with 409). The legacy Publish button for
+  // `needs_approval` has its own direct-click path and is rendered separately.
+  return task.status === "done";
+}
+
+function PublishButton({
+  task,
+  disabled,
+  onPick,
+}: {
+  task: Task;
+  disabled: boolean;
+  onPick: (opts: { mode: "new_pr" | "update_pr" | "push_branch"; branch?: string; pr_number?: number }) => void;
+}) {
+  const hasLinkedPr = task.prs && task.prs.length > 0;
+  const defaultPr = hasLinkedPr ? task.prs[0] : undefined;
+  // Smart default: if a PR was attached at creation time, default to
+  // update_pr so the owner lands the work on that PR. Otherwise new_pr.
+  const defaultMode: "new_pr" | "update_pr" = defaultPr !== undefined ? "update_pr" : "new_pr";
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [advancedMode, setAdvancedMode] = useState<"new_pr" | "update_pr" | "push_branch">(defaultMode);
+  const [advancedPr, setAdvancedPr] = useState<number | undefined>(defaultPr);
+  const [branchInput, setBranchInput] = useState<string>("");
+
+  const primaryLabel = defaultMode === "update_pr" && defaultPr !== undefined
+    ? `Push to PR #${defaultPr}`
+    : "Publish";
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <Action
+          onClick={() => {
+            if (defaultMode === "update_pr" && defaultPr !== undefined) {
+              onPick({ mode: "update_pr", pr_number: defaultPr });
+            } else {
+              onPick({ mode: "new_pr" });
+            }
+          }}
+          disabled={disabled}
+        >
+          {primaryLabel}
+        </Action>
+        <button
+          type="button"
+          onClick={() => setShowAdvanced((v) => !v)}
+          className="text-xs text-ink-500 underline-offset-2 hover:text-ink-300 hover:underline"
+          aria-expanded={showAdvanced}
+        >
+          {showAdvanced ? "Hide advanced" : "Advanced"}
+        </button>
+      </div>
+      {showAdvanced && (
+        <div className="surface-muted space-y-2 rounded-lg p-3 text-xs">
+          <div className="flex flex-col gap-1">
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                name={`publish-mode-${task.id}`}
+                checked={advancedMode === "new_pr"}
+                onChange={() => setAdvancedMode("new_pr")}
+              />
+              <span>Open a new PR (push <span className="font-mono">jalebi/{task.id}</span> → target)</span>
+            </label>
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                name={`publish-mode-${task.id}`}
+                checked={advancedMode === "update_pr"}
+                onChange={() => {
+                  setAdvancedMode("update_pr");
+                  if (advancedPr === undefined && defaultPr !== undefined) setAdvancedPr(defaultPr);
+                }}
+              />
+              <span>Update existing PR (push to its head branch)</span>
+            </label>
+            {advancedMode === "update_pr" && (
+              <select
+                className="select ml-6 w-fit"
+                value={advancedPr ?? ""}
+                onChange={(e) => setAdvancedPr(Number(e.target.value) || undefined)}
+              >
+                <option value="">— pick a PR —</option>
+                {hasLinkedPr ? (
+                  task.prs.map((n) => (
+                    <option key={n} value={n}>PR #{n}</option>
+                  ))
+                ) : (
+                  <option value="" disabled>
+                    no PRs linked to this task
+                  </option>
+                )}
+              </select>
+            )}
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                name={`publish-mode-${task.id}`}
+                checked={advancedMode === "push_branch"}
+                onChange={() => setAdvancedMode("push_branch")}
+              />
+              <span>Push to specific branch (no PR)</span>
+            </label>
+            {advancedMode === "push_branch" && (
+              <input
+                type="text"
+                className="input ml-6 w-fit"
+                placeholder="branch name"
+                value={branchInput}
+                onChange={(e) => setBranchInput(e.target.value)}
+              />
+            )}
+          </div>
+          <div className="flex justify-end">
+            <Action
+              disabled={
+                disabled ||
+                (advancedMode === "update_pr" && advancedPr === undefined) ||
+                (advancedMode === "push_branch" && !branchInput.trim())
+              }
+              onClick={() => {
+                if (advancedMode === "new_pr") {
+                  onPick({ mode: "new_pr" });
+                } else if (advancedMode === "update_pr") {
+                  onPick({ mode: "update_pr", pr_number: advancedPr });
+                } else {
+                  onPick({ mode: "push_branch", branch: branchInput.trim() });
+                }
+              }}
+            >
+              Run
+            </Action>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -564,6 +710,12 @@ export default function TaskDetail() {
   const [followScroll, setFollowScroll] = useState(true);
   const [actionBusy, setActionBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [publishDialogOpen, setPublishDialogOpen] = useState(false);
+  const [publishOptions, setPublishOptions] = useState<{
+    mode: "new_pr" | "update_pr" | "push_branch";
+    branch?: string;
+    pr_number?: number;
+  } | null>(null);
   const closePreview = useCallback(() => setPreview(null), []);
   const actionInFlightRef = useRef(false);
   const lastRunIdRef = useRef<number | null>(null);
@@ -857,11 +1009,24 @@ export default function TaskDetail() {
         )}
         {task.status === "needs_approval" && (
           <Action
-            onClick={() => runAction(() => api.publishTask(task.id))}
+            onClick={() => {
+              setPublishOptions({ mode: "new_pr" });
+              setPublishDialogOpen(true);
+            }}
             disabled={actionBusy}
           >
             Publish
           </Action>
+        )}
+        {canManualPublish(task) && (
+          <PublishButton
+            task={task}
+            disabled={actionBusy}
+            onPick={(opts) => {
+              setPublishOptions(opts);
+              setPublishDialogOpen(true);
+            }}
+          />
         )}
         <Action
           onClick={deleteTask}
@@ -1008,6 +1173,23 @@ export default function TaskDetail() {
           taskId={task.id}
           artifact={preview}
           onClose={closePreview}
+        />
+      )}
+
+      {publishDialogOpen && publishOptions && (
+        <PublishDialog
+          taskId={task.id}
+          options={publishOptions}
+          onClose={() => {
+            setPublishDialogOpen(false);
+            setPublishOptions(null);
+          }}
+          onPublished={() => {
+            runAction(async () => {
+              // Reload the task so the PR number / status reflect the publish.
+              await api.getTask(task.id).then((t) => setTask(t));
+            });
+          }}
         />
       )}
     </div>

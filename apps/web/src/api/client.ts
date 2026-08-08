@@ -199,8 +199,26 @@ export const api = {
   rerunTask: (id: number) => request<Task>(`/api/tasks/${id}/rerun`, { method: "POST" }),
   deleteTask: (id: number) =>
     request<{ deleted: number }>(`/api/tasks/${id}`, { method: "DELETE" }),
-  publishTask: (id: number) =>
-    request<{ pr_number: number }>(`/api/tasks/${id}/publish`, { method: "POST" }),
+  publishTask: (
+    id: number,
+    opts: {
+      mode?: "new_pr" | "update_pr" | "push_branch";
+      branch?: string;
+      pr_number?: number;
+    } = {},
+  ) => {
+    const body: Record<string, unknown> = {};
+    if (opts.mode) body.mode = opts.mode;
+    if (opts.branch) body.branch = opts.branch;
+    if (opts.pr_number !== undefined) body.pr_number = opts.pr_number;
+    return request<{ status: string; mode: string; pr_number?: number; branch?: string }>(
+      `/api/tasks/${id}/publish`,
+      {
+        method: "POST",
+        body: Object.keys(body).length ? JSON.stringify(body) : undefined,
+      },
+    );
+  },
   postFollowup: (id: number, prompt: string, opts?: { pat_name?: string; model?: string; include_reviews?: boolean }) =>
     request<Task>(`/api/tasks/${id}/followup`, {
       method: "POST",

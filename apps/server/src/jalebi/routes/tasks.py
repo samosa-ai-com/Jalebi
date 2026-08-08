@@ -15,7 +15,7 @@ from jalebi import artifacts, db, masking, prompts, reviews, secrets, settings, 
 from jalebi.catalog import agent_by_slug
 from jalebi.config import Config
 from jalebi.db import Artifact, Followup, Run, Task, utcnow
-from jalebi.git_workspace import GitWorkspace
+from jalebi.git_workspace import GitWorkspace, PushLeaseFailed
 from jalebi.github import GitHubClient, GitHubError
 from jalebi.queue import PublishConflict, PublishError, TaskQueue
 
@@ -367,15 +367,57 @@ def delete_task(task_id: int) -> ResponseReturnValue:
 
 @bp.post("/<int:task_id>/publish")
 def publish_task(task_id: int) -> ResponseReturnValue:
+    """Manually publish a task. Body: ``{mode, branch?, pr_number?}`` (all optional).
+
+    - ``mode="new_pr"`` (default) — push ``jalebi/<id>`` and open/reuse a PR.
+    - ``mode="update_pr"`` — push onto an existing PR's head branch (requires
+      ``pr_number``, or falls back to ``task.prs_json[0]``).
+    - ``mode="push_branch"`` — push onto ``branch`` directly (requires ``branch``).
+
+    Errors:
+    - 400 invalid mode / missing required field
+    - 404 task or repo not found
+    - 409 conflict (merge conflict / closed PR / no-op gate)
+    - 412 remote branch moved since last sync (``--force-with-lease`` refused)
+    - 502 anything else
+    """
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        return jsonify({"error": "expected JSON object body"}), 400
+    mode = payload.get("mode", "new_pr")
+    if mode not in ("new_pr", "update_pr", "push_branch"):
+        return jsonify({"error": f"unknown publish mode: {mode!r}"}), 400
+    target_branch = payload.get("branch")
+    if target_branch is not None and not isinstance(target_branch, str):
+        return jsonify({"error": "`branch` must be a string"}), 400
+    pr_number = payload.get("pr_number")
+    if pr_number is not None and not isinstance(pr_number, int):
+        return jsonify({"error": "`pr_number` must be an integer"}), 400
     try:
-        pr_number = _queue().publish_task(task_id)
+        result = _queue().publish_task(
+            task_id,
+            mode=mode,
+            target_branch=target_branch,
+            pr_number=pr_number,
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     except KeyError as exc:
         return jsonify({"error": str(exc)}), 404
-    except (PublishConflict, PublishError) as exc:
-        return jsonify({"error": str(exc)}), 409
-    except Exception as exc:
+    except PublishConflict as exc:
+        return jsonify({"error": str(exc), "kind": "conflict"}), 409
+    except PublishError as exc:
+        return jsonify({"error": str(exc), "kind": "publish"}), 409
+    except PushLeaseFailed as exc:
+        return jsonify({"error": str(exc), "kind": "lease_failed"}), 412
+    except Exception as exc:  # pragma: no cover - defensive
         return jsonify({"error": str(exc)}), 502
-    return jsonify({"pr_number": pr_number, "status": "done"})
+    body: dict[str, object] = {"status": "done", "mode": mode}
+    if mode == "push_branch":
+        body["branch"] = target_branch
+    else:
+        body["pr_number"] = result
+    return jsonify(body)
 
 
 @bp.post("/<int:task_id>/followup")

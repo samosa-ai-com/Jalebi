@@ -168,7 +168,17 @@
 
 1. [ ] Turn **Auto-publish off** in Settings; run a task that commits.
 2. [ ] Expect status `done` with **no PR**.
-3. [ ] Open the task → **Publish** button → click → PR created, status stays `done`, PR link appears.
+3. [ ] Open the task → **Publish** button → click → confirmation dialog opens → click **Confirm** → PR created, status stays `done`, PR link appears.
+
+### W4a — Publish modes (update_pr + push_branch)
+
+1. [ ] Create a freeform task with `pr_number` set to an existing **open** PR on the test repo (so `prs_json = [N]`).
+2. [ ] After the run completes → task is `done`; the **Publish** button reads **"Push to PR #N"** (smart default).
+3. [ ] Click it → confirmation dialog shows the PR number + a yellow force-update warning → click **Confirm** → assert the PR head SHA moved to include the agent's commits (no new PR opened; no `Closes #N` comment).
+4. [ ] Click **Advanced** under the Publish button → toggle to **"Push to specific branch"** → enter a real branch name → **Run** → confirm → assert the branch moved, no PR interaction.
+5. [ ] Conflict case: pre-modify the target branch with a conflicting commit, then publish → expect the timeline step to surface the conflict files, no push, status stays `done`.
+6. [ ] Closed-PR case: attach a closed PR's number via the creation form → click "Push to PR #N" → expect "PR #N is closed; cannot update" inline error.
+7. [ ] Empty branch case: Advanced → "Push to specific branch" with empty input → **Run** button is disabled.
 
 ### W5 — Needs-approval recovery
 

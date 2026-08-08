@@ -277,6 +277,11 @@ describe("TaskDetail", () => {
     const publish = await screen.findByRole("button", { name: "Publish" });
     await userEvent.click(publish);
 
+    // The publish action now goes through a confirmation dialog so the owner
+    // sees the target (PR #, branch) before the push.
+    const confirm = await screen.findByRole("button", { name: "Confirm" });
+    await userEvent.click(confirm);
+
     expect(await screen.findByText("PR create failed")).toBeInTheDocument();
     // The failure is shown inline; the page is NOT replaced by a full-page error.
     expect(screen.getByText("fix the bug")).toBeInTheDocument();
@@ -401,6 +406,147 @@ describe("TaskDetail", () => {
         reviewers: string[];
       };
       expect(body.reviewers).toEqual(["auditor-b"]);
+    });
+  });
+
+  describe("publish modes", () => {
+    function doneTask(overrides: Record<string, unknown> = {}) {
+      return {
+        ...TASK,
+        ...overrides,
+        status: "done",
+        run: { ...RUN, status: "done" },
+      };
+    }
+
+    function stubFetchWithPublish(task: Record<string, unknown>, publishResponse: unknown) {
+      const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === "POST" && url.includes("/publish")) {
+          return { ok: true, json: async () => publishResponse };
+        }
+        if (url.endsWith("/runs")) {
+          return { ok: true, json: async () => [task.run ?? RUN] };
+        }
+        if (url.includes("/api/tasks")) {
+          return { ok: true, json: async () => task };
+        }
+        if (url.includes("/api/github/tokens")) {
+          return { ok: true, json: async () => ({ accounts: [] }) };
+        }
+        if (url.includes("/api/models")) {
+          return { ok: true, json: async () => ({ cli: "opencode", models: ["m1"] }) };
+        }
+        return { ok: true, json: async () => REPOS };
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      return fetchMock;
+    }
+
+    it("shows 'Publish' when no PR is linked", async () => {
+      stubFetchWithPublish(doneTask({ prs: [] }), { status: "done", mode: "new_pr", pr_number: 42 });
+      renderDetail();
+      const btn = await screen.findByRole("button", { name: "Publish" });
+      await userEvent.click(btn);
+      const confirm = await screen.findByRole("button", { name: "Confirm" });
+      await userEvent.click(confirm);
+      await waitFor(() => {
+        const call = vi.mocked(fetch).mock.calls.find(
+          ([url, init]) =>
+            String(url).includes("/api/tasks/7/publish") && init?.method === "POST"
+        );
+        expect(call).toBeDefined();
+        const body = JSON.parse((call?.[1] as RequestInit).body as string) as {
+          mode?: string;
+        };
+        // Default mode is new_pr.
+        expect(body.mode).toBe("new_pr");
+      });
+    });
+
+    it("defaults to 'Push to PR #N' when a PR was attached at creation", async () => {
+      stubFetchWithPublish(
+        doneTask({ prs: [9] }),
+        { status: "done", mode: "update_pr", pr_number: 9 }
+      );
+      renderDetail();
+      const btn = await screen.findByRole("button", { name: "Push to PR #9" });
+      await userEvent.click(btn);
+      const confirm = await screen.findByRole("button", { name: "Confirm" });
+      await userEvent.click(confirm);
+      await waitFor(() => {
+        const call = vi.mocked(fetch).mock.calls.find(
+          ([url, init]) =>
+            String(url).includes("/api/tasks/7/publish") && init?.method === "POST"
+        );
+        expect(call).toBeDefined();
+        const body = JSON.parse((call?.[1] as RequestInit).body as string) as {
+          mode?: string;
+          pr_number?: number;
+        };
+        expect(body.mode).toBe("update_pr");
+        expect(body.pr_number).toBe(9);
+      });
+    });
+
+    it("Advanced disclosure exposes push_branch with a branch input", async () => {
+      stubFetchWithPublish(
+        doneTask({ prs: [] }),
+        { status: "done", mode: "push_branch", branch: "feature/manual" }
+      );
+      renderDetail();
+      await screen.findByRole("button", { name: "Publish" });
+      await userEvent.click(screen.getByRole("button", { name: "Advanced" }));
+      // Pick the "Push to branch" radio.
+      const radios = screen.getAllByRole("radio", { name: /Push to specific branch/ });
+      await userEvent.click(radios[0]);
+      // Fill the branch input.
+      const branchInput = screen.getByPlaceholderText("branch name");
+      await userEvent.type(branchInput, "feature/manual");
+      // Click "Run" inside the Advanced panel.
+      await userEvent.click(screen.getByRole("button", { name: "Run" }));
+      const confirm = await screen.findByRole("button", { name: "Confirm" });
+      await userEvent.click(confirm);
+      await waitFor(() => {
+        const call = vi.mocked(fetch).mock.calls.find(
+          ([url, init]) =>
+            String(url).includes("/api/tasks/7/publish") && init?.method === "POST"
+        );
+        expect(call).toBeDefined();
+        const body = JSON.parse((call?.[1] as RequestInit).body as string) as {
+          mode?: string;
+          branch?: string;
+        };
+        expect(body.mode).toBe("push_branch");
+        expect(body.branch).toBe("feature/manual");
+      });
+    });
+
+    it("surfaces a server error from publishTask inside the dialog", async () => {
+      const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === "POST" && url.includes("/publish")) {
+          return { ok: false, status: 409, json: async () => ({ error: "conflict" }) };
+        }
+        if (url.endsWith("/runs")) {
+          return { ok: true, json: async () => [RUN] };
+        }
+        if (url.includes("/api/tasks")) {
+          return { ok: true, json: async () => doneTask() };
+        }
+        if (url.includes("/api/github/tokens")) {
+          return { ok: true, json: async () => ({ accounts: [] }) };
+        }
+        if (url.includes("/api/models")) {
+          return { ok: true, json: async () => ({ cli: "opencode", models: ["m1"] }) };
+        }
+        return { ok: true, json: async () => REPOS };
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      renderDetail();
+      const publish = await screen.findByRole("button", { name: "Publish" });
+      await userEvent.click(publish);
+      const confirm = await screen.findByRole("button", { name: "Confirm" });
+      await userEvent.click(confirm);
+      expect(await screen.findByText("conflict")).toBeInTheDocument();
     });
   });
 });
