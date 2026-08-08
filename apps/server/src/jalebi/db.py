@@ -123,8 +123,12 @@ class Task(Base):
     status: Mapped[str] = mapped_column(
         Text, nullable=False, default="queued", server_default=sa.text("'queued'")
     )
+    # Python default is 60 (the ORM always supplies it); the DB-level
+    # server_default stays 30 because SQLite cannot alter a column default in
+    # place and the batch rebuild would violate FK constraints — compare_metadata
+    # ignores server_default, so this is a deliberate, harmless divergence.
     timeout_minutes: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=60, server_default=sa.text("60")
+        Integer, nullable=False, default=60, server_default=sa.text("30")
     )
     retry_count: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=sa.text("0")
