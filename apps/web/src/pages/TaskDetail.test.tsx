@@ -25,6 +25,7 @@ const TASK = {
   repo_full_name: "owner/repo",
   source_branch: "main",
   target_branch: "main",
+  agent_id: null,
   model: "m1",
   cli: null,
   pat_name: null,
@@ -39,6 +40,7 @@ const TASK = {
   updated_at: "2026-08-06T10:01:00",
   run: RUN,
   followups: [],
+  reviewers: [],
 };
 
 const REPOS = [
@@ -329,5 +331,76 @@ describe("TaskDetail", () => {
       () => expect(screen.getByText("running")).toBeInTheDocument(),
       { timeout: 5000 }
     );
+  });
+
+  it("shows assigned reviewers with status and can assign more", async () => {
+    const reviewerTask = {
+      ...TASK,
+      pr_number: 9,
+      prs: [9],
+      status: "done",
+      run: { ...RUN, status: "done" },
+      reviewers: [
+        {
+          id: 1,
+          task_id: 8,
+          agent_id: "auditor-a",
+          agent_name: "Auditor A",
+          run_id: 2,
+          pr_number: 9,
+          repo_id: 1,
+          status: "posted",
+          created_at: "2026-08-08T10:00:00",
+        },
+      ],
+    };
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/runs")) {
+        return { ok: true, json: async () => [reviewerTask.run] };
+      }
+      if (url.includes("/api/tasks") && init?.method === "POST") {
+        return { ok: true, json: async () => [] };
+      }
+      if (url.includes("/api/tasks")) {
+        return { ok: true, json: async () => reviewerTask };
+      }
+      if (url.includes("/api/agents")) {
+        return {
+          ok: true,
+          json: async () => [
+            { id: "auditor-a", name: "Auditor A", kind: "reviewer", skills: [], enabled: true },
+            { id: "auditor-b", name: "Auditor B", kind: "reviewer", skills: [], enabled: true },
+          ],
+        };
+      }
+      if (url.includes("/api/github/tokens")) {
+        return { ok: true, json: async () => ({ accounts: [] }) };
+      }
+      if (url.includes("/api/models")) {
+        return { ok: true, json: async () => ({ cli: "opencode", models: ["m1"] }) };
+      }
+      return { ok: true, json: async () => REPOS };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderDetail();
+    expect(await screen.findByText("Reviewers")).toBeInTheDocument();
+    expect(screen.getByText("Auditor A")).toBeInTheDocument();
+    expect(screen.getByText("posted")).toBeInTheDocument();
+    expect(screen.getByText(/1\/1 posted/)).toBeInTheDocument();
+
+    // Auditor A is already assigned, so only Auditor B is offered.
+    await userEvent.click(screen.getByRole("button", { name: /Auditor B/ }));
+    await waitFor(() => {
+      const assignCall = fetchMock.mock.calls.find(
+        ([url, init]) =>
+          String(url).includes("/api/tasks/7/reviewers") && init?.method === "POST"
+      );
+      expect(assignCall).toBeDefined();
+      const body = JSON.parse((assignCall?.[1] as RequestInit).body as string) as {
+        reviewers: string[];
+      };
+      expect(body.reviewers).toEqual(["auditor-b"]);
+    });
   });
 });

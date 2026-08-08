@@ -183,6 +183,7 @@ def task_to_dict(
     followups: list[Followup] | None = None,
     artifacts: list[Artifact] | None = None,
     repo_full_name: str | None = None,
+    reviewers: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     data: dict[str, object] = {
         "id": task.id,
@@ -217,5 +218,6 @@ def task_to_dict(
             }
             for f in (followups or [])
         ],
+        "reviewers": reviewers or [],
     }
     return data

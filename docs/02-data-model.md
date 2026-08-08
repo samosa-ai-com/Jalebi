@@ -125,6 +125,23 @@ Index: `run_id`.
 
 Unique: `(name, repo_id)`. Index: `repo_id`. See `docs/14-env-vars.md`.
 
+### `review_assignments` (Phase 1 — PRD F7)
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | int PK | |
+| `task_id` | int FK → tasks | the reviewer's own `pr_review` task |
+| `agent_id` | text | catalog agent slug (kind `reviewer`) |
+| `run_id` | int FK → runs, null | the reviewer run (set when it starts) |
+| `pr_number` | int | the PR under review |
+| `repo_id` | int FK → repos | |
+| `status` | text | `queued` \| `running` \| `posted` \| `failed` |
+| `created_at` | datetime | |
+
+Indexes: `task_id`, `pr_number`. Each reviewer runs as its own `pr_review`
+task; the assignment is a lightweight registry (task ↔ agent ↔ PR ↔ repo) so the
+PR card and the webhook flow can show posted status. See `docs/05` §6.
+
 ### `settings`
 
 | Column | Type | Notes |
@@ -156,7 +173,7 @@ time. Skill content lives in the DB and is materialized directly into the task
 worktree (`.claude/skills/<name>/SKILL.md`) at run time (see
 `docs/15-catalog.md`).
 
-## 3. Relationships (Phase 0 + Phase 1 catalog)
+## 3. Relationships (Phase 0 + Phase 1 catalog + reviewers)
 
 ```
 repos 1───* tasks
@@ -166,6 +183,9 @@ runs  1───* followups  (run_id nullable)
 runs  1───* artifacts
 repos 0───* env_vars   (repo_id nullable = global)
 tasks 0───1 catalog_agents  (agent_id slug, FK-less by design)
+repos 1───* review_assignments
+tasks 1───* review_assignments  (task_id = the reviewer's own pr_review task)
+runs  0───1 review_assignments  (run_id, set when the reviewer run starts)
 ```
 
 ## 4. Key invariants
@@ -179,4 +199,4 @@ tasks 0───1 catalog_agents  (agent_id slug, FK-less by design)
 
 ## 5. Not yet implemented (later phases)
 
-`review_assignments`, `trigger_rules`, `event_deliveries`, `check_runs`, `screenings`, `screening_runs`, `findings` — created by future migrations per PRD §10.
+`trigger_rules`, `event_deliveries`, `check_runs`, `screenings`, `screening_runs`, `findings` — created by future migrations per PRD §10.

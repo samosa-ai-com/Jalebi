@@ -36,6 +36,18 @@ export interface Followup {
   created_at: string;
 }
 
+export interface ReviewAssignment {
+  id: number;
+  task_id: number;
+  agent_id: string;
+  agent_name: string;
+  run_id: number | null;
+  pr_number: number;
+  repo_id: number;
+  status: string;
+  created_at: string;
+}
+
 export interface Task {
   id: number;
   type: string;
@@ -60,6 +72,7 @@ export interface Task {
   updated_at: string;
   run: Run | null;
   followups?: Followup[];
+  reviewers?: ReviewAssignment[];
 }
 
 export interface Repo {

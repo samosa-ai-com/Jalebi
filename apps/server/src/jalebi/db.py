@@ -249,6 +249,34 @@ class EnvVar(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
 
 
+class ReviewAssignment(Base):
+    """One reviewer (catalog agent of kind ``reviewer``) assigned to review a PR.
+
+    Each reviewer runs as its OWN ``pr_review`` task (``task_id`` = that task) —
+    reusing the existing review worktree + posting machinery, running in parallel
+    under the queue's concurrency. The assignment is a lightweight registry
+    (task ↔ agent ↔ PR ↔ repo ↔ status) so the PR card and the webhook flow can
+    show which reviewers have posted.
+    """
+
+    __tablename__ = "review_assignments"
+    __table_args__ = (
+        Index("ix_review_assignments_task_id", "task_id"),
+        Index("ix_review_assignments_pr_number", "pr_number"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id"), nullable=False)
+    agent_id: Mapped[str] = mapped_column(Text, nullable=False)
+    run_id: Mapped[int | None] = mapped_column(ForeignKey("runs.id"), nullable=True)
+    pr_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    repo_id: Mapped[int] = mapped_column(ForeignKey("repos.id"), nullable=False)
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, default="queued", server_default=sa.text("'queued'")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+
+
 class Setting(Base):
     __tablename__ = "settings"
 

@@ -16,7 +16,7 @@ from sqlalchemy import delete as sa_delete
 from sqlalchemy import select
 
 from jalebi import artifacts, db, secrets
-from jalebi.db import Artifact, Followup, Repo, Run, Task
+from jalebi.db import Artifact, Followup, Repo, ReviewAssignment, Run, Task
 from jalebi.git_workspace import GitWorkspace
 from jalebi.github import GitHubClient, GitHubError, TokenInfo
 
@@ -222,6 +222,13 @@ def delete_token(name: str) -> ResponseReturnValue:
     run_ids = [r.id for r in runs]
     if task_ids:
         session.execute(sa_delete(Followup).where(Followup.task_id.in_(task_ids)))
+        session.execute(sa_delete(ReviewAssignment).where(ReviewAssignment.task_id.in_(task_ids)))
+        # Assignments whose PR lives on a deleted repo but whose reviewer task is
+        # on another account would dangle — drop them too.
+        if repo_ids:
+            session.execute(
+                sa_delete(ReviewAssignment).where(ReviewAssignment.repo_id.in_(repo_ids))
+            )
     if run_ids:
         session.execute(sa_delete(Artifact).where(Artifact.run_id.in_(run_ids)))
         session.execute(sa_delete(Run).where(Run.id.in_(run_ids)))

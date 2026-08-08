@@ -45,6 +45,7 @@ export interface CreateTaskInput {
   issue_number?: number;
   pr_number?: number;
   publish_mode?: "auto" | "manual";
+  reviewers?: string[];
   env_vars?: string[];
 }
 
@@ -142,10 +143,15 @@ export const api = {
     request<{ deleted: number }>(`/api/tasks/${id}`, { method: "DELETE" }),
   publishTask: (id: number) =>
     request<{ pr_number: number }>(`/api/tasks/${id}/publish`, { method: "POST" }),
-  postFollowup: (id: number, prompt: string, opts?: { pat_name?: string; model?: string }) =>
+  postFollowup: (id: number, prompt: string, opts?: { pat_name?: string; model?: string; include_reviews?: boolean }) =>
     request<Task>(`/api/tasks/${id}/followup`, {
       method: "POST",
       body: JSON.stringify({ prompt, ...opts }),
+    }),
+  assignReviewers: (id: number, reviewers: string[]) =>
+    request<Task[]>(`/api/tasks/${id}/reviewers`, {
+      method: "POST",
+      body: JSON.stringify({ reviewers }),
     }),
   getRepos: () => request<Repo[]>("/api/repos"),
   connectRepo: (fullName: string, patName?: string) =>

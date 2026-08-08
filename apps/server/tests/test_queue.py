@@ -1698,3 +1698,146 @@ def test_catalog_agent_disabled_falls_back_to_defaults(q, session, repo_row, mon
     assert captured["prompt"] == "do it"
     wt = GitWorkspace.worktree_path(q.config.data_dir, task.id)
     assert "Be adversarial." not in (wt / "AGENTS.md").read_text()
+
+
+def test_review_assignment_status_tracks_lifecycle(
+    q, session, repo_row, monkeypatch, tmp_path,
+) -> None:
+    """A reviewer task's assignment goes queued → running → posted when the
+    review is posted (PRD F7.4 status tracking)."""
+    from jalebi import catalog, reviews
+
+    catalog.create_agent(
+        session,
+        id="auditor",
+        name="Auditor",
+        kind="reviewer",
+        personality_md="Review.",
+        enabled=True,
+    )
+    (task,) = reviews.assign_reviewers(session, repo_row, 3, ["auditor"])
+    wt = tmp_path / "review"
+    wt.mkdir(parents=True)
+    (wt / ".jalebi").mkdir(parents=True)
+    (wt / ".jalebi" / "review.md").write_text("LGTM.\n")
+
+    class ReviewGit:
+        def __init__(self, config):
+            self.config = config
+
+        def ensure_mirror(self, *a, **k):
+            return None
+
+        def create_review_worktree(self, *a, **k):
+            return wt
+
+    monkeypatch.setattr("jalebi.queue.GitWorkspace", ReviewGit)
+    monkeypatch.setattr("jalebi.queue.worktree_bootstrap.bootstrap_worktree", lambda *a, **k: None)
+
+    class RecordingClient:
+        def __init__(self, token: str):
+            self.posted = []
+
+        def post_pr_review(self, full_name, pr_number, body):
+            self.posted.append(pr_number)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("jalebi.queue.GitHubClient", RecordingClient)
+    _install_adapter(monkeypatch, FakeHandle([AgentEvent(type="done")]))
+
+    q._run_task(task.id)
+
+    fresh = _fresh_task(session, task.id)
+    assert fresh.status == "done"
+    assignment = reviews.assignment_by_task(session, task.id)
+    assert assignment is not None
+    assert assignment.status == "posted"
+    assert assignment.run_id is not None
+
+
+def test_review_assignment_failed_on_posting_error(
+    q, session, repo_row, monkeypatch, tmp_path
+) -> None:
+    """A review that fails to POST leaves the assignment failed, not stuck running."""
+    from jalebi import catalog, reviews
+
+    catalog.create_agent(
+        session, id="auditor", name="Auditor", kind="reviewer", enabled=True
+    )
+    (task,) = reviews.assign_reviewers(session, repo_row, 3, ["auditor"])
+    wt = tmp_path / "review"
+    wt.mkdir(parents=True)
+    (wt / ".jalebi").mkdir(parents=True)
+    (wt / ".jalebi" / "review.md").write_text("LGTM.\n")
+
+    class ReviewGit:
+        def __init__(self, config):
+            self.config = config
+
+        def ensure_mirror(self, *a, **k):
+            return None
+
+        def create_review_worktree(self, *a, **k):
+            return wt
+
+    monkeypatch.setattr("jalebi.queue.GitWorkspace", ReviewGit)
+    monkeypatch.setattr("jalebi.queue.worktree_bootstrap.bootstrap_worktree", lambda *a, **k: None)
+
+    class FailingClient:
+        def __init__(self, token: str):
+            pass
+
+        def post_pr_review(self, full_name, pr_number, body):
+            raise RuntimeError("post failed")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("jalebi.queue.GitHubClient", FailingClient)
+    _install_adapter(monkeypatch, FakeHandle([AgentEvent(type="done")]))
+    q._run_task(task.id)
+
+    assignment = reviews.assignment_by_task(session, task.id)
+    assert assignment is not None
+    assert assignment.status == "failed"
+
+
+def test_review_assignment_failed_on_non_done_run(
+    q, session, repo_row, monkeypatch, tmp_path,
+) -> None:
+    """A reviewer run that ends in an error (not done) must not leave the
+    assignment stuck 'running'."""
+    from jalebi import catalog, reviews
+
+    catalog.create_agent(
+        session, id="auditor", name="Auditor", kind="reviewer", enabled=True
+    )
+    (task,) = reviews.assign_reviewers(session, repo_row, 4, ["auditor"])
+    wt = tmp_path / "review"
+    wt.mkdir(parents=True)
+
+    class ReviewGit:
+        def __init__(self, config):
+            self.config = config
+
+        def ensure_mirror(self, *a, **k):
+            return None
+
+        def create_review_worktree(self, *a, **k):
+            return wt
+
+    monkeypatch.setattr("jalebi.queue.GitWorkspace", ReviewGit)
+    monkeypatch.setattr("jalebi.queue.worktree_bootstrap.bootstrap_worktree", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "jalebi.queue.GitHubClient",
+        lambda token: type("C", (), {"close": lambda self: None})(),
+    )
+    # The agent ends with an error event → run.status != done.
+    _install_adapter(monkeypatch, FakeHandle([AgentEvent(type="error", text="boom")]))
+    q._run_task(task.id)
+
+    assignment = reviews.assignment_by_task(session, task.id)
+    assert assignment is not None
+    assert assignment.status == "failed"

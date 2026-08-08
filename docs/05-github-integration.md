@@ -75,9 +75,11 @@ Implemented via the same client (Phase 0): issue/PR context fetch, publish (crea
 
 ## 6. Reviewer posting (PRD §F7)
 
-- On completion, the orchestrator posts the reviewer's output as a **PR review comment** on GitHub (e.g. `POST /repos/{owner}/{repo}/pulls/{n}/reviews` with `event: "COMMENT"` and body = the review).
+- **Assignment (Phase 1):** catalog agents of kind `reviewer` are assigned to a PR (via the task PR card or the new-task form's reviewer multi-select). Each reviewer runs as **its own `pr_review` task** (`reviews.assign_reviewers` creates one task per reviewer with the agent's pins + instructions and a `review_assignments` row linking task ↔ agent ↔ PR ↔ repo). They run in parallel under the queue's concurrency.
+- **Execution:** the reviewer's task runs in a detached review worktree at the PR head (see `docs/04`), reviews with its own personality/skills/model/CLI, and on success the orchestrator posts its output as a **PR review comment** (`POST /repos/{owner}/{repo}/pulls/{n}/reviews`, `event: "COMMENT"`).
 - The body is the agent's `.jalebi/review.md` (or the last assistant message as fallback), wrapped with a Jalebi header + CTA footer (`messaging.wrap_pr_review`). The body is masked for secrets **before** wrapping. The review event is `COMMENT` — Jalebi never approves/merges.
-- The UI tracks which reviewers have posted.
+- **Status tracking:** the assignment transitions `queued → running → posted` (on review posted) or `failed` (run error). The PR card shows which reviewers have posted, with links to each reviewer task.
+- **"Address the reviewers" follow-up (F7.6 / F11):** a follow-up with `include_reviews: true` fetches the PR's review comments (`github.list_pr_reviews`), masks them, embeds them into the prompt as UNTRUSTED DATA, and resumes the fixer (`prompts.build_address_reviewers_prompt`).
 - **Approval is manual** — Jalebi never approves/merges.
 
 ## 7. Publish (PRD §F9)

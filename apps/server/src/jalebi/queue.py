@@ -19,6 +19,7 @@ from jalebi import (
     messaging,
     notify,
     prompts,
+    reviews,
     secrets,
     settings,
     tasks,
@@ -774,6 +775,8 @@ class TaskQueue:
         session.commit()
 
         try:
+            # If this reviewer task has an assignment, mark it running (with the run).
+            reviews.set_assignment_status(session, task.id, "running", run_id=run.id)
             cli, agent_skills = self._agent_run_opts(session, task, cli)
             agent = self._catalog_agent(session, task)
             effective_model = task.model or (agent.model if agent is not None else None)
@@ -817,11 +820,19 @@ class TaskQueue:
             )
             session.commit()
 
-            if run.status == "done":
+            if run.status != "done":
+                # Any non-done terminal end (failed/timed_out/cancelled) must
+                # resolve the assignment — otherwise it would sit 'running' forever
+                # while the task shows the real terminal status.
+                reviews.set_assignment_status(session, task.id, "failed", run_id=run.id)
+            elif run.status == "done":
                 review_text = self._read_review(wt)
                 if not review_text:
                     review_text = self._last_message(session, task.id)
-                if review_text:
+                if not review_text:
+                    # A done run with no review content has nothing to post.
+                    reviews.set_assignment_status(session, task.id, "failed", run_id=run.id)
+                else:
                     review_text = masker(review_text)
                     review_body = messaging.wrap_pr_review(review_text)
                     try:
@@ -841,6 +852,7 @@ class TaskQueue:
                         )
                         run.steps_json = json.dumps(steps[-MAX_STEPS:])
                         session.commit()
+                        reviews.set_assignment_status(session, task.id, "posted", run_id=run.id)
                     except Exception as exc:
                         logger.warning("posting review for task %s failed: %s", task.id, exc)
                         steps = json.loads(run.steps_json or "[]")
@@ -854,6 +866,7 @@ class TaskQueue:
                         )
                         run.steps_json = json.dumps(steps[-MAX_STEPS:])
                         session.commit()
+                        reviews.set_assignment_status(session, task.id, "failed", run_id=run.id)
         except Exception:
             logger.exception("pr_review task %s failed", task.id)
             run_id = run.id
@@ -870,6 +883,7 @@ class TaskQueue:
                 task.status = "failed"
                 task.updated_at = utcnow()
             session.commit()
+            reviews.set_assignment_status(session, task.id, "failed", run_id=run_id)
         return run
 
     @staticmethod

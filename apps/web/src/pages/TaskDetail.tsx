@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, taskEvents } from "../api/client";
 import { StatusBadge } from "../components/StatusBadge";
-import type { Account, Artifact, Followup, Repo, Run, SseEvent, Task } from "../types";
+import type { Account, Artifact, CatalogAgent, Followup, Repo, Run, SseEvent, Task } from "../types";
 
 const TERMINAL = new Set(["done", "failed", "timed_out", "cancelled", "needs_approval", "interrupted"]);
 
@@ -146,6 +146,8 @@ function FollowUpComposer({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const hasPr = (task.prs?.length ?? 0) > 0 || task.pr_number != null;
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (busy) return;
@@ -154,6 +156,27 @@ function FollowUpComposer({
     setError(null);
     try {
       await api.postFollowup(task.id, text.trim(), {
+        pat_name: patName || undefined,
+        model: model || undefined,
+      });
+      setText("");
+      onSent();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "failed to send follow-up");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function addressReviewers() {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      // "Address the reviewers": resume the fixer with the PR's review comments
+      // fetched + embedded by the server (F7.6).
+      await api.postFollowup(task.id, "Address the reviewers' comments.", {
+        include_reviews: true,
         pat_name: patName || undefined,
         model: model || undefined,
       });
@@ -206,7 +229,18 @@ function FollowUpComposer({
           className="field resize-y"
         />
         {error && <p className="text-xs text-red-400">{error}</p>}
-        <div className="flex justify-end">
+        <div className="flex justify-end gap-2">
+          {hasPr && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={addressReviewers}
+              className="btn-ghost text-xs"
+              title="Resume the fixer with the PR's current review comments (fetched + embedded)"
+            >
+              {busy ? "Sending…" : "Address reviewers"}
+            </button>
+          )}
           <button type="submit" disabled={busy || !text.trim()} className="btn-primary">
             {busy ? "Sending…" : "Send follow-up"}
           </button>
@@ -224,6 +258,95 @@ function FollowUpComposer({
           ))}
         </ol>
       )}
+    </section>
+  );
+}
+
+const REVIEWER_STATUS_COLOR: Record<string, string> = {
+  queued: "text-ink-400",
+  running: "text-syrup-300",
+  posted: "text-green-400",
+  failed: "text-red-400",
+};
+
+function ReviewersCard({
+  task,
+  agents,
+  assigning,
+  assignError,
+  onAssign,
+}: {
+  task: Task;
+  agents: CatalogAgent[];
+  assigning: boolean;
+  assignError: string | null;
+  onAssign: (agentId: string) => void;
+}) {
+  const reviewers = task.reviewers ?? [];
+  const assigned = new Set(reviewers.map((r) => r.agent_id));
+  const available = agents.filter((a) => !assigned.has(a.id));
+
+  return (
+    <section className="surface p-5 animate-fade-up">
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <h2 className="panel-title">Reviewers</h2>
+        <span className="font-mono text-[11px] text-ink-500">
+          {reviewers.filter((r) => r.status === "posted").length}/{reviewers.length} posted
+        </span>
+      </div>
+
+      {reviewers.length > 0 ? (
+        <ul className="divide-y divide-ink-800/70">
+          {reviewers.map((r) => (
+            <li key={r.id} className="flex items-center gap-3 py-2 text-sm">
+              <span className={`font-mono ${REVIEWER_STATUS_COLOR[r.status] ?? "text-ink-400"}`}>
+                {r.agent_name}
+              </span>
+              <span className="rounded-full border border-ink-800 px-2 py-0.5 text-[11px] text-ink-500">
+                {r.status}
+              </span>
+              <span className="ml-auto flex items-center gap-2">
+                {r.status === "posted" && task.pr_number != null && (
+                  <a
+                    className="font-mono text-xs text-syrup-400 hover:text-syrup-300"
+                    href={`https://github.com/${task.repo_full_name ?? ""}/pull/${task.pr_number}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    PR #{task.pr_number} ↗
+                  </a>
+                )}
+                <Link
+                  to={`/tasks/${r.task_id}`}
+                  className="font-mono text-xs text-ink-500 hover:text-ink-300"
+                >
+                  task #{r.task_id}
+                </Link>
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mb-3 text-xs text-ink-500">
+          No reviewers assigned yet. Assign catalog reviewers (kind <code className="font-mono">reviewer</code>) to review this PR — each runs its own review task and posts its comments.
+        </p>
+      )}
+
+      {available.length > 0 && (
+        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-ink-800 pt-3">
+          {available.map((a) => (
+            <button
+              key={a.id}
+              disabled={assigning}
+              onClick={() => onAssign(a.id)}
+              className="btn-ghost !px-2.5 !py-1 text-xs"
+            >
+              + {a.name} ({a.id})
+            </button>
+          ))}
+        </div>
+      )}
+      {assignError && <p className="mt-2 text-xs text-red-400">{assignError}</p>}
     </section>
   );
 }
@@ -429,6 +552,9 @@ export default function TaskDetail() {
   const [repos, setRepos] = useState<Repo[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [models, setModels] = useState<string[]>([]);
+  const [agents, setAgents] = useState<CatalogAgent[]>([]);
+  const [assigning, setAssigning] = useState(false);
+  const [assignError, setAssignError] = useState<string | null>(null);
   const [live, setLive] = useState<SseEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [runsError, setRunsError] = useState<string | null>(null);
@@ -484,6 +610,10 @@ export default function TaskDetail() {
         });
       })
       .catch(() => setRunsError("Could not load run history."));
+    api
+      .getAgents(true)
+      .then((a) => setAgents(a.filter((x) => x.kind === "reviewer")))
+      .catch(() => {});
     api.getRepos().then(setRepos).catch(() => {});
     api.getTokens().then((t) => setAccounts(t.accounts ?? [])).catch(() => {});
     api.getModels().then((m) => setModels(m.models ?? [])).catch(() => {});
@@ -519,6 +649,20 @@ export default function TaskDetail() {
     }
     await api.deleteTask(task.id);
     window.location.assign("/");
+  }
+
+  async function assignReviewer(agentId: string) {
+    if (!task || !agentId || assigning) return;
+    setAssigning(true);
+    setAssignError(null);
+    try {
+      await api.assignReviewers(task.id, [agentId]);
+      load();
+    } catch (err) {
+      setAssignError(err instanceof Error ? err.message : "failed to assign reviewer");
+    } finally {
+      setAssigning(false);
+    }
   }
 
   const running = task !== null && !TERMINAL.has(task.status);
@@ -727,6 +871,16 @@ export default function TaskDetail() {
         </Action>
         {actionError && <p className="text-xs text-red-400">{actionError}</p>}
       </div>
+
+      {(task.prs?.length || task.pr_number) && (
+        <ReviewersCard
+          task={task}
+          agents={agents}
+          assigning={assigning}
+          assignError={assignError}
+          onAssign={assignReviewer}
+        />
+      )}
 
       {runs.some((r) => r.session_id) && TERMINAL.has(task.status) && (
         <FollowUpComposer

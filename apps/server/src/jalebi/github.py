@@ -265,6 +265,23 @@ class GitHubClient:
         if status not in (200, 201):
             raise GitHubError(f"failed to post review on PR #{pr_number}: HTTP {status}")
 
+    def list_pr_reviews(self, full_name: str, pr_number: int) -> list[dict[str, Any]]:
+        """List the PR's review comments (for "address the reviewers" follow-ups)."""
+        body = self._request_paginated(
+            f"/repos/{full_name}/pulls/{pr_number}/reviews", {"per_page": 100}
+        )
+        return [
+            {
+                "id": review.get("id"),
+                "body": review.get("body") or "",
+                "user": (review.get("user") or {}).get("login"),
+                "state": review.get("state"),
+                "submitted_at": review.get("submitted_at"),
+            }
+            for review in body
+            if isinstance(review, dict) and (review.get("body") or "").strip()
+        ]
+
     def list_branches(self, full_name: str) -> list[str]:
         """List the repo's branch names (paged)."""
         body = self._request_paginated(f"/repos/{full_name}/branches", {"per_page": 100})
