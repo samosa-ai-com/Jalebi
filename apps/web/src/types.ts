@@ -43,6 +43,7 @@ export interface Task {
   repo_full_name: string | null;
   source_branch: string;
   target_branch: string;
+  agent_id: string | null;
   model: string | null;
   cli: string | null;
   pat_name: string | null;
@@ -165,5 +166,23 @@ export interface EnvVar {
   masked: string;
   repo_id: number | null;
   repo_full_name: string | null;
+  created_at: string;
+}
+
+export interface CatalogSkill {
+  name: string;
+  content: string;
+}
+
+export interface CatalogAgent {
+  id: string;
+  name: string;
+  kind: "general" | "reviewer";
+  cli: string | null;
+  model: string | null;
+  personality_md: string;
+  skills: CatalogSkill[];
+  custom_instructions: string;
+  enabled: boolean;
   created_at: string;
 }

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, NavLink, Route, Routes } from "react-router-dom";
 import { api } from "./api/client";
 import { ComingSoon } from "./components/ComingSoon";
+import Agents from "./pages/Agents";
 import Github from "./pages/Github";
 import Repos from "./pages/Repos";
 import Settings from "./pages/Settings";
@@ -26,12 +27,12 @@ const NAV_ITEMS = [
   { to: "/", label: "Tasks", end: true },
   { to: "/repos", label: "Repos", end: false },
   { to: "/github", label: "GitHub", end: false },
+  { to: "/agents", label: "Agents", end: false },
   { to: "/settings", label: "Settings", end: false },
 ];
 
 const SOON_ITEMS = [
   { to: "/screenings", label: "Screenings" },
-  { to: "/agents", label: "Agents" },
   { to: "/triggers", label: "Triggers" },
 ];
 
@@ -114,9 +115,9 @@ function App() {
           <Route path="/tasks/:id" element={<TaskDetail />} />
           <Route path="/repos" element={<Repos />} />
           <Route path="/github" element={<Github />} />
+          <Route path="/agents" element={<Agents />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/screenings" element={<ComingSoon feature="Screenings" />} />
-          <Route path="/agents" element={<ComingSoon feature="Agents" />} />
           <Route path="/triggers" element={<ComingSoon feature="Triggers" />} />
           <Route
             path="*"

@@ -13,6 +13,7 @@ from sqlalchemy import func, select
 
 from jalebi import (
     artifacts,
+    catalog,
     envvars,
     masking,
     messaging,
@@ -26,7 +27,7 @@ from jalebi import (
 from jalebi.adapters import get_adapter
 from jalebi.adapters.types import AgentEvent
 from jalebi.config import Config
-from jalebi.db import Repo, Run, Session, Task, utcnow
+from jalebi.db import CatalogAgent, Repo, Run, Session, Task, utcnow
 from jalebi.events import TaskEvents
 from jalebi.git_workspace import GitWorkspace
 from jalebi.github import GitHubClient
@@ -355,6 +356,43 @@ class TaskQueue:
         env.update({k: v for k, v in task_env.items() if v is not None})
         return env
 
+    def _catalog_agent(self, session, task: Task) -> CatalogAgent | None:
+        """The enabled catalog agent backing ``task``, or ``None``.
+
+        ``tasks.agent_id`` is a plain slug (no FK). A task whose agent was
+        deleted or disabled after creation falls back to the default build agent
+        rather than failing the run — the task's stored ``model``/``cli`` (which
+        the route resolved from the agent at creation) still apply.
+        """
+        if not task.agent_id:
+            return None
+        agent = catalog.agent_by_slug(session, task.agent_id)
+        if agent is None or not agent.enabled:
+            logger.warning(
+                "task %s references missing/disabled catalog agent %s; using defaults",
+                task.id,
+                task.agent_id,
+            )
+            return None
+        return agent
+
+    def _agent_run_opts(
+        self, session, task: Task, cli: str
+    ) -> tuple[str, list[dict[str, str]] | None]:
+        """Resolve the effective CLI + skills for a catalog agent.
+
+        Returns ``(cli, skills)``. Precedence for the CLI is the same as for the
+        model everywhere else: **explicit task-level override > live agent pin >
+        default**. ``cli`` already carries the task's override + settings default,
+        so the agent's pinned ``cli`` applies only when the task didn't pin one.
+        ``skills`` is the agent's skill list for the bootstrap.
+        """
+        agent = self._catalog_agent(session, task)
+        if agent is None:
+            return cli, None
+        effective_cli = task.cli or agent.cli or cli
+        return effective_cli, catalog.skills(agent)
+
     def _prepare_run(self, session, task: Task, cli: str) -> Run:
         """Open a fresh run row and flip the task to ``running``."""
         seq = session.execute(
@@ -610,6 +648,12 @@ class TaskQueue:
                 patterns,
             )
             cli = str(task.cli or settings.get_setting(session, "agent_cli") or "opencode")
+            cli, agent_skills = self._agent_run_opts(session, task, cli)
+            agent = self._catalog_agent(session, task)
+            effective_model = task.model or (agent.model if agent is not None else None)
+            effective_prompt = task.prompt
+            if agent is not None and agent.custom_instructions:
+                effective_prompt = f"{task.prompt}\n\n{agent.custom_instructions}"
             timeout = self._resolve_timeout(session, task)
 
             # Register cancellation state BEFORE committing "running" so a cancel
@@ -654,16 +698,22 @@ class TaskQueue:
                 git.reset_branch_to_base(
                     task.id, repo.full_name, self._worktree_base(task)
                 )
-            worktree_bootstrap.bootstrap_worktree(wt, prompts.build_agent_md(task, repo))
+            worktree_bootstrap.bootstrap_worktree(
+                wt,
+                prompts.build_agent_md(task, repo, agent=agent),
+                cli=cli,
+                skills=agent_skills,
+            )
 
             adapter = get_adapter(cli)
             state.handle = adapter.start(
                 str(wt),
-                task.prompt,
-                model=task.model,
+                effective_prompt,
+                model=effective_model,
                 env=self._agent_env(session, task, repo, token),
             )
             run.pid = getattr(state.handle.proc, "pid", None)
+            run.model = effective_model  # record the effective (possibly agent-pinned) model
             session.commit()
             self._start_watchdog(task, state, timeout)
 
@@ -724,16 +774,28 @@ class TaskQueue:
         session.commit()
 
         try:
+            cli, agent_skills = self._agent_run_opts(session, task, cli)
+            agent = self._catalog_agent(session, task)
+            effective_model = task.model or (agent.model if agent is not None else None)
+            effective_prompt = task.prompt
+            if agent is not None and agent.custom_instructions:
+                effective_prompt = f"{task.prompt}\n\n{agent.custom_instructions}"
             git = GitWorkspace(self.config)
             git.ensure_mirror(repo.full_name, repo.clone_url, token)
             wt = git.create_review_worktree(task.id, repo.full_name, pr_number, token)
-            worktree_bootstrap.bootstrap_worktree(wt, prompts.build_agent_md(task, repo))
+            worktree_bootstrap.bootstrap_worktree(
+                wt,
+                prompts.build_agent_md(task, repo, agent=agent),
+                cli=cli,
+                skills=agent_skills,
+            )
 
             adapter = get_adapter(cli)
             state.handle = adapter.start(
-                str(wt), task.prompt, model=task.model, env=_build_agent_env(token)
+                str(wt), effective_prompt, model=effective_model, env=_build_agent_env(token)
             )
             run.pid = getattr(state.handle.proc, "pid", None)
+            run.model = effective_model  # record the effective (possibly agent-pinned) model
             session.commit()
             self._start_watchdog(task, state, timeout)
 
@@ -977,6 +1039,13 @@ class TaskQueue:
             timeout = self._resolve_timeout(session, task)
             effective_model = model or task.model or prev.model
 
+            cli, agent_skills = self._agent_run_opts(session, task, cli)
+            agent = self._catalog_agent(session, task)
+            if agent is not None and agent.model:
+                effective_model = effective_model or agent.model
+            if agent is not None and agent.custom_instructions:
+                body = f"{body}\n\n{agent.custom_instructions}"
+
             state = _RunState(None)
             with self._running_lock:
                 self._running[task.id] = state
@@ -1001,7 +1070,12 @@ class TaskQueue:
                 wt = git.create_worktree(
                     task.id, repo.full_name, self._worktree_base(task), token
                 )
-            worktree_bootstrap.bootstrap_worktree(wt, prompts.build_agent_md(task, repo))
+            worktree_bootstrap.bootstrap_worktree(
+                wt,
+                prompts.build_agent_md(task, repo, agent=agent),
+                cli=cli,
+                skills=agent_skills,
+            )
 
             adapter = get_adapter(cli)
             state.handle = adapter.resume(

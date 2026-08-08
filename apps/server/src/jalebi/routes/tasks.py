@@ -12,6 +12,7 @@ from flask.typing import ResponseReturnValue
 from sqlalchemy import delete as sa_delete
 
 from jalebi import artifacts, db, masking, secrets, settings, tasks
+from jalebi.catalog import agent_by_slug
 from jalebi.config import Config
 from jalebi.db import Artifact, Followup, Run, Task, utcnow
 from jalebi.git_workspace import GitWorkspace
@@ -113,9 +114,24 @@ def create_task() -> ResponseReturnValue:
     session = db.get_session()
     masker = _masker(session)
 
+    # Catalog agent selection: the slug is validated to exist + be enabled here;
+    # the task's OWN cli/model are explicit user overrides only (the agent's
+    # pinned cli/model apply at run time when the task has no override — see
+    # queue._agent_run_opts). Precedence: task override > live agent pin > default.
+    agent_id = payload.get("agent_id")
+    agent = None
+    if agent_id is not None:
+        agent = agent_by_slug(session, agent_id)
+        if agent is None:
+            return jsonify({"error": f"catalog agent not found: {agent_id}"}), 400
+        if not agent.enabled:
+            return jsonify({"error": f"catalog agent is disabled: {agent_id}"}), 400
+
     cli = payload.get("cli")
     if cli is not None and cli not in ("opencode",):
         return jsonify({"error": f"unsupported agent cli: {cli}"}), 400
+
+    model = payload.get("model")
 
     raw_timeout = payload.get("timeout_minutes")
     if isinstance(raw_timeout, int) and raw_timeout > 0:
@@ -184,7 +200,8 @@ def create_task() -> ResponseReturnValue:
             prompt=prompt,
             source_branch=str(source_branch),
             target_branch=str(target_branch),
-            model=payload.get("model"),
+            agent_id=agent_id,
+            model=model,
             cli=cli,
             pat_name=effective_pat,
             issues=[int(issue_number)] if issue_number is not None else None,

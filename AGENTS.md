@@ -106,6 +106,8 @@ This is critical and repeated: **all GitHub interaction in this project goes thr
 | `docs/12-ui-validation.md` | Manual UI QA checklist for every implemented feature. | Feature/UI behavior changes. |
 | `docs/13-phase0-review.md` | Comprehensive Phase 0 code review (logic, security, PRD compliance). | Post-review follow-up changes. |
 | `docs/14-env-vars.md` | Env-var store (global + per-repo), `/api/envvars`, `.env` import, agent injection + masking. | Env-var work. |
+| `docs/15-catalog.md` | Agent catalog (personality → `AGENTS.md`, skills → `@path`, cli/model pins). | Catalog agent work. |
+| `docs/16-triggers.md` | Webhook listener, delivery dedup, trigger rules, registration, replay. | Webhook/trigger work. |
 
 **If you add a doc file, add it to this table.**
 

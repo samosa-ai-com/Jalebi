@@ -1,4 +1,6 @@
 import type {
+  CatalogAgent,
+  CatalogSkill,
   EnvVar,
   GithubContext,
   GithubRepo,
@@ -36,6 +38,7 @@ export interface CreateTaskInput {
   prompt: string;
   source_branch?: string;
   target_branch?: string;
+  agent_id?: string;
   model?: string;
   cli?: string;
   pat_name?: string;
@@ -49,6 +52,41 @@ export const api = {
   getHealth: () => request<Health>("/api/health"),
   getSettings: () => request<SettingsMap>("/api/settings"),
   getModels: () => request<{ cli: string; models: string[] }>("/api/models"),
+  getAgents: (enabledOnly = false) =>
+    request<CatalogAgent[]>(`/api/agents${enabledOnly ? "?enabled=1" : ""}`),
+  createAgent: (input: {
+    id: string;
+    name: string;
+    kind: string;
+    cli?: string | null;
+    model?: string | null;
+    personality_md?: string;
+    skills?: CatalogSkill[];
+    custom_instructions?: string;
+    enabled?: boolean;
+  }) =>
+    request<CatalogAgent>("/api/agents", { method: "POST", body: JSON.stringify(input) }),
+  updateAgent: (
+    slug: string,
+    input: {
+      name?: string;
+      kind?: string;
+      cli?: string | null;
+      model?: string | null;
+      personality_md?: string;
+      skills?: CatalogSkill[];
+      custom_instructions?: string;
+      enabled?: boolean;
+    }
+  ) =>
+    request<CatalogAgent>(`/api/agents/${encodeURIComponent(slug)}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
+  deleteAgent: (slug: string) =>
+    request<{ deleted: string }>(`/api/agents/${encodeURIComponent(slug)}`, {
+      method: "DELETE",
+    }),
   updateSetting: (key: string, value: unknown) =>
     request<SettingsMap>(`/api/settings`, { method: "POST", body: JSON.stringify({ key, value }) }),
   testNotification: () =>

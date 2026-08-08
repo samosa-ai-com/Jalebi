@@ -110,6 +110,72 @@ def test_bootstrap_is_idempotent(tmp_path) -> None:
     assert _git(["config", "user.name"], tmp_path) == "Jalebi"
 
 
+def test_bootstrap_writes_agent_skills(tmp_path) -> None:
+    _init_repo(tmp_path)
+    skills = [
+        {"name": "secure-coding", "content": "# Secure coding\nNever eval."},
+        {"name": "owasp-top10", "content": "# OWASP\n"},
+    ]
+    worktree_bootstrap.bootstrap_worktree(tmp_path, skills=skills)
+    sk = tmp_path / ".claude" / "skills"
+    assert (sk / "secure-coding" / "SKILL.md").read_text() == "# Secure coding\nNever eval."
+    assert (sk / "owasp-top10" / "SKILL.md").read_text() == "# OWASP\n"
+
+
+def test_bootstrap_without_skills_clears_stale(tmp_path) -> None:
+    _init_repo(tmp_path)
+    worktree_bootstrap.bootstrap_worktree(tmp_path, skills=[{"name": "old", "content": "x"}])
+    assert (tmp_path / ".claude" / "skills" / "old" / "SKILL.md").is_file()
+    # A re-bootstrap without skills (task no longer uses a catalog agent) drops them.
+    worktree_bootstrap.bootstrap_worktree(tmp_path, skills=None)
+    assert not (tmp_path / ".claude" / "skills" / "old").exists()
+
+
+def test_bootstrap_removes_skills_removed_from_agent(tmp_path) -> None:
+    """A changed skill list prunes subdirs that are no longer referenced (a
+    rerun of the same worktree after the agent was edited must match the catalog)."""
+    _init_repo(tmp_path)
+    worktree_bootstrap.bootstrap_worktree(
+        tmp_path,
+        skills=[
+            {"name": "keep", "content": "k"},
+            {"name": "drop", "content": "d"},
+        ],
+    )
+    assert (tmp_path / ".claude" / "skills" / "drop" / "SKILL.md").is_file()
+    worktree_bootstrap.bootstrap_worktree(
+        tmp_path,
+        skills=[{"name": "keep", "content": "k2"}, {"name": "new", "content": "n"}],
+    )
+    assert not (tmp_path / ".claude" / "skills" / "drop").exists()
+    assert (tmp_path / ".claude" / "skills" / "keep" / "SKILL.md").read_text() == "k2"
+    assert (tmp_path / ".claude" / "skills" / "new" / "SKILL.md").is_file()
+
+
+def test_skills_excluded_from_git_add(tmp_path) -> None:
+    _init_repo(tmp_path)
+    worktree_bootstrap.bootstrap_worktree(
+        tmp_path, skills=[{"name": "secure-coding", "content": "# x\n"}]
+    )
+    _git(["add", "."], tmp_path)
+    staged = _git(["diff", "--cached", "--name-only"], tmp_path)
+    assert ".claude" not in staged
+    assert staged == ""  # bootstrap files (incl. skills) never get staged
+
+
+def test_remove_guard_removes_skills(tmp_path) -> None:
+    _init_repo(tmp_path)
+    worktree_bootstrap.bootstrap_worktree(
+        tmp_path, skills=[{"name": "secure-coding", "content": "# x\n"}]
+    )
+    assert (tmp_path / ".claude" / "skills").is_dir()
+    # A repo's own .claude content must be preserved — only Jalebi's skills dir goes.
+    (tmp_path / ".claude" / "settings.json").write_text("{}")
+    worktree_bootstrap.remove_guard(tmp_path)
+    assert not (tmp_path / ".claude" / "skills").exists()
+    assert (tmp_path / ".claude" / "settings.json").read_text() == "{}"
+
+
 def test_info_exclude_keeps_bootstrap_files_out(tmp_path) -> None:
     _init_repo(tmp_path)
     worktree_bootstrap.bootstrap_worktree(tmp_path)

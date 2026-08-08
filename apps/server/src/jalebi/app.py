@@ -12,6 +12,7 @@ from jalebi import artifacts, db, masking, notify, secrets, settings
 from jalebi.adapters import get_adapter
 from jalebi.config import Config, load_config, repo_root
 from jalebi.queue import TaskQueue
+from jalebi.routes.catalog import bp as catalog_bp
 from jalebi.routes.envvars import bp as envvars_bp
 from jalebi.routes.github import bp as github_bp
 from jalebi.routes.repos import bp as repos_bp
@@ -120,6 +121,7 @@ def create_app(config: Config | None = None) -> Flask:
     app.register_blueprint(repos_bp)
     app.register_blueprint(tasks_bp)
     app.register_blueprint(envvars_bp)
+    app.register_blueprint(catalog_bp)
 
     @app.teardown_appcontext
     def close_session(_exc) -> None:

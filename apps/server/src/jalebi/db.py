@@ -190,6 +190,42 @@ class Artifact(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
 
 
+class CatalogAgent(Base):
+    """A named, user-configured agent = personality + skills + optional overrides.
+
+    ``kind`` is ``general`` or ``reviewer`` (reviewers get the reviewer workflow).
+    The ``id`` is a user-chosen slug. ``personality_md`` is merged into the task
+    worktree's ``AGENTS.md``; ``skills_json`` holds ``[{name, content}]`` markdown
+    files materialized to ``.claude/skills/<name>/SKILL.md`` in the worktree so
+    the CLI auto-discovers them; ``custom_instructions`` is appended to the task
+    prompt when this agent is selected. ``cli``/``model`` override the task
+    defaults. ``tasks.agent_id`` references this table by slug but is deliberately
+    FK-less (a SQLite batch rebuild of the FK-referenced ``tasks`` parent is the
+    Step-37 migration hazard) — validity is enforced in the service layer.
+    """
+
+    __tablename__ = "catalog_agents"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(
+        Text, nullable=False, default="general", server_default=sa.text("'general'")
+    )
+    cli: Mapped[str | None] = mapped_column(Text, nullable=True)
+    model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    personality_md: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=sa.text("''")
+    )
+    skills_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    custom_instructions: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=sa.text("''")
+    )
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=sa.text("1")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+
+
 class EnvVar(Base):
     """A named environment variable injected into task agent subprocesses.
 

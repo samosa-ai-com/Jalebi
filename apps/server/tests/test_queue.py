@@ -1591,3 +1591,110 @@ def test_slow_but_live_stream_is_not_stalled(q, session, repo_row, monkeypatch) 
     assert not any("no output" in (s.get("text") or "") for s in json.loads(run.steps_json or "[]"))
     texts = [s.get("text") for s in json.loads(run.steps_json or "[]")]
     assert "tick 0" in texts and "tick 4" in texts
+
+
+def test_catalog_agent_applies_cli_model_custom_instructions(
+    q, session, repo_row, monkeypatch,
+) -> None:
+    """A task backed by a catalog agent gets its cli/model/custom_instructions
+    and its skills materialized into the worktree."""
+    from jalebi import catalog
+
+    catalog.create_agent(
+        session,
+        id="auditor",
+        name="Auditor",
+        kind="general",
+        cli="opencode",
+        model="openai/gpt-5.1",
+        personality_md="Be adversarial.",
+        skills=[{"name": "secure-coding", "content": "# Secure coding\n"}],
+        custom_instructions="Check auth, secrets, injection.",
+        enabled=True,
+    )
+    _no_publish(session)
+    task = tasks.create_task(
+        session,
+        type_="freeform",
+        repo_id=repo_row.id,
+        prompt="do it",
+        agent_id="auditor",
+    )
+    captured: dict = {}
+
+    class RecordingAdapter:
+        def start(self, cwd, prompt, model=None, env=None):
+            captured["cwd"] = cwd
+            captured["prompt"] = prompt
+            captured["model"] = model
+            return FakeHandle([AgentEvent(type="done")])
+
+        def resume(self, *args, **kwargs):
+            raise NotImplementedError
+
+        def list_models(self):
+            return []
+
+    monkeypatch.setattr("jalebi.queue.get_adapter", lambda cli: RecordingAdapter())
+    q._run_task(task.id)
+
+    assert _fresh_task(session, task.id).status == "done"
+    assert captured["prompt"] == "do it\n\nCheck auth, secrets, injection."
+    assert captured["model"] == "openai/gpt-5.1"
+    # Worktree has the personality + skills + @path references.
+    wt = GitWorkspace.worktree_path(q.config.data_dir, task.id)
+    skill = wt / ".claude" / "skills" / "secure-coding" / "SKILL.md"
+    assert skill.read_text() == "# Secure coding\n"
+    assert "Be adversarial." in (wt / "AGENTS.md").read_text()
+    assert "@.claude/skills/secure-coding/SKILL.md" in (wt / "AGENTS.md").read_text()
+
+
+def test_catalog_agent_disabled_falls_back_to_defaults(q, session, repo_row, monkeypatch) -> None:
+    """A task whose catalog agent was disabled/deleted still runs, falling back
+    to the default build agent (stored model/cli already on the task)."""
+    from jalebi import catalog
+
+    catalog.create_agent(
+        session,
+        id="auditor",
+        name="Auditor",
+        kind="general",
+        cli="opencode",
+        model="openai/gpt-5.1",
+        personality_md="Be adversarial.",
+        custom_instructions="Check auth.",
+        enabled=True,
+    )
+    _no_publish(session)
+    task = tasks.create_task(
+        session,
+        type_="freeform",
+        repo_id=repo_row.id,
+        prompt="do it",
+        agent_id="auditor",
+    )
+    # The agent is disabled between task creation and the run — the queue falls
+    # back to the default build agent instead of failing the run.
+    catalog.update_agent(session, "auditor", enabled=False)
+    captured: dict = {}
+
+    class RecordingAdapter:
+        def start(self, cwd, prompt, model=None, env=None):
+            captured["prompt"] = prompt
+            captured["model"] = model
+            return FakeHandle([AgentEvent(type="done")])
+
+        def resume(self, *args, **kwargs):
+            raise NotImplementedError
+
+        def list_models(self):
+            return []
+
+    monkeypatch.setattr("jalebi.queue.get_adapter", lambda cli: RecordingAdapter())
+    q._run_task(task.id)
+
+    assert _fresh_task(session, task.id).status == "done"
+    # custom_instructions NOT appended, no model override forced at run time
+    assert captured["prompt"] == "do it"
+    wt = GitWorkspace.worktree_path(q.config.data_dir, task.id)
+    assert "Be adversarial." not in (wt / "AGENTS.md").read_text()

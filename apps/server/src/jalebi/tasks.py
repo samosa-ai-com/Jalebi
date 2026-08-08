@@ -6,6 +6,7 @@ from collections.abc import Callable
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from jalebi.catalog import agent_by_slug
 from jalebi.db import TASK_TYPES, Artifact, Followup, Repo, Run, Task
 
 MAX_PROMPT_CHARS = 32_000  # prompts travel via argv; bound them to stay clear of ARG_MAX
@@ -19,6 +20,7 @@ def create_task(
     prompt: str,
     source_branch: str = "main",
     target_branch: str = "main",
+    agent_id: str | None = None,
     model: str | None = None,
     cli: str | None = None,
     pat_name: str | None = None,
@@ -46,6 +48,15 @@ def create_task(
         raise ValueError(
             f"prompt too long ({len(prompt)} chars; max {MAX_PROMPT_CHARS})"
         )
+    # The catalog agent is referenced by slug and validated here (FK-less by
+    # design — see db.CatalogAgent). A deleted/disabled agent is refused at
+    # creation; the queue re-validates at run time.
+    if agent_id is not None:
+        agent = agent_by_slug(session, agent_id)
+        if agent is None:
+            raise ValueError(f"catalog agent not found: {agent_id}")
+        if not agent.enabled:
+            raise ValueError(f"catalog agent is disabled: {agent_id}")
     # Every task runs as an explicit account: the selected one, else the account
     # bound to the repo at connect time. No default/fallback exists — a task
     # without an account is a config error.
@@ -59,6 +70,7 @@ def create_task(
         repo_id=repo_id,
         source_branch=source_branch,
         target_branch=target_branch,
+        agent_id=agent_id,
         model=model,
         cli=cli,
         pat_name=effective_pat,
@@ -179,6 +191,7 @@ def task_to_dict(
         "repo_full_name": repo_full_name,
         "source_branch": task.source_branch,
         "target_branch": task.target_branch,
+        "agent_id": task.agent_id,
         "model": task.model,
         "cli": task.cli,
         "pat_name": task.pat_name,

@@ -134,7 +134,29 @@ Unique: `(name, repo_id)`. Index: `repo_id`. See `docs/14-env-vars.md`.
 
 Settings keys (defaults in `jalebi/settings.py`): `concurrency` (4), `auto_publish` (true), `ntfy_topic` ("" — merged: bare topic **or** full URL), `default_timeout_minutes` (60), `retry_policy` (`{"auto_retry": false}`), `secret_patterns` (`[]`), `artifact_ttl_days` (7), `agent_cli` (`"opencode"`), `notify_on_done` (true), `notify_on_failed` (true), `notify_on_progress` (true), `notify_on_needs_approval` (true), `notify_progress_interval_minutes` (30). **Every key is materialized as a row at startup (`seed_defaults`)** — settings are persistent and never held in memory; stored values override the code default.
 
-## 3. Relationships (Phase 0)
+### `catalog_agents` (Phase 1 — PRD F6)
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | text PK | slug, e.g. `security-auditor` |
+| `name` | text | display name |
+| `kind` | text | `general` \| `reviewer` |
+| `cli` | text, null | backend override (opencode only today) |
+| `model` | text, null | pinned model |
+| `personality_md` | text | markdown merged into the worktree `AGENTS.md` |
+| `skills_json` | text, null | JSON list of `{name, content}` markdown files |
+| `custom_instructions` | text | appended to the task prompt |
+| `enabled` | bool | disabled agents aren't selectable on new tasks |
+| `created_at` | datetime | |
+
+`tasks.agent_id` references `catalog_agents.id` by slug but is **FK-less by
+design** (a SQLite batch rebuild of the FK-referenced `tasks` parent is the
+Step-37 migration hazard); validity is enforced in the service layer and at run
+time. Skill content lives in the DB and is materialized directly into the task
+worktree (`.claude/skills/<name>/SKILL.md`) at run time (see
+`docs/15-catalog.md`).
+
+## 3. Relationships (Phase 0 + Phase 1 catalog)
 
 ```
 repos 1───* tasks
@@ -143,6 +165,7 @@ tasks 1───* followups
 runs  1───* followups  (run_id nullable)
 runs  1───* artifacts
 repos 0───* env_vars   (repo_id nullable = global)
+tasks 0───1 catalog_agents  (agent_id slug, FK-less by design)
 ```
 
 ## 4. Key invariants
@@ -156,4 +179,4 @@ repos 0───* env_vars   (repo_id nullable = global)
 
 ## 5. Not yet implemented (later phases)
 
-`catalog_agents`, `review_assignments`, `trigger_rules`, `event_deliveries`, `check_runs`, `screenings`, `screening_runs`, `findings` — created by future migrations per PRD §10.
+`review_assignments`, `trigger_rules`, `event_deliveries`, `check_runs`, `screenings`, `screening_runs`, `findings` — created by future migrations per PRD §10.

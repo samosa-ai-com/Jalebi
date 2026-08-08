@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import { StatusBadge } from "../components/StatusBadge";
-import type { Account, GithubContext, Repo, Task } from "../types";
+import type { Account, CatalogAgent, GithubContext, Repo, Task } from "../types";
 
 function repoName(repos: Repo[], id: number): string {
   return repos.find((r) => r.id === id)?.full_name ?? `repo#${id}`;
@@ -85,6 +85,7 @@ function CreateTask({
   const [prompt, setPrompt] = useState("");
   const [sourceBranch, setSourceBranch] = useState("");
   const [targetBranch, setTargetBranch] = useState("");
+  const [agentId, setAgentId] = useState("");
   const [model, setModel] = useState("");
   const [patName, setPatName] = useState("");
   const [issueNumber, setIssueNumber] = useState("");
@@ -92,6 +93,7 @@ function CreateTask({
   const [publishMode, setPublishMode] = useState<"auto" | "manual" | "">("");
   const [context, setContext] = useState<GithubContext | null>(null);
   const [models, setModels] = useState<string[]>([]);
+  const [agents, setAgents] = useState<CatalogAgent[]>([]);
   const [envVars, setEnvVars] = useState<string[]>([]);
   const [availableEnvVars, setAvailableEnvVars] = useState<{ name: string; masked: string }[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -116,6 +118,10 @@ function CreateTask({
     api
       .getModels()
       .then((m) => setModels(m.models ?? []))
+      .catch(() => {});
+    api
+      .getAgents(true)
+      .then((a) => setAgents(a ?? []))
       .catch(() => {});
   }, []);
 
@@ -182,8 +188,8 @@ function CreateTask({
         prompt: prompt.trim(),
         source_branch: sourceBranch || undefined,
         target_branch: targetBranch || undefined,
+        agent_id: agentId || undefined,
         model: model || undefined,
-        cli: "opencode",
         pat_name: patName || undefined,
         issue_number: issueNumber ? Number(issueNumber) : undefined,
         pr_number: prNumber ? Number(prNumber) : undefined,
@@ -194,6 +200,7 @@ function CreateTask({
       setIssueNumber("");
       setPrNumber("");
       setEnvVars([]);
+      setAgentId("");
       onCreated();
     } catch (err) {
       setError(err instanceof Error ? err.message : "failed to create task");
@@ -338,8 +345,17 @@ function CreateTask({
       )}
 
       <div className="grid gap-4 sm:grid-cols-4">
-        <Select label="Agent" value="opencode" onChange={() => {}}>
-          <option value="opencode">opencode</option>
+        <Select
+          label="Agent"
+          value={agentId}
+          onChange={setAgentId}
+          placeholder="Default build agent"
+        >
+          {agents.map((a) => (
+            <option key={a.id} value={a.id}>
+              {a.name} ({a.id})
+            </option>
+          ))}
         </Select>
         <Select label="Model" value={model} onChange={setModel} placeholder="default model">
           {models.map((m) => (
