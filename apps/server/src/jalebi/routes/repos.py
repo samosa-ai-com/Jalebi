@@ -27,13 +27,15 @@ def connect_repo() -> ResponseReturnValue:
 
     config: Config = current_app.config["JALEBI_CONFIG"]
     pat_name = payload.get("pat_name") if isinstance(payload, dict) else None
-    if not pat_name:
-        pat_name = None  # normalize "" / missing → default account
-    elif pat_name != "default" and pat_name not in secrets.token_names(config):
-        return jsonify({"error": f"unknown account: {pat_name}"}), 400
-    token = secrets.resolve_token(config, None if pat_name in (None, "default") else pat_name)
+    # A repo MUST be bound to an explicit named account — no "default"/fallback.
+    if not pat_name or pat_name not in secrets.token_names(config):
+        return (
+            jsonify({"error": "an explicit account (pat_name) is required to connect a repo"}),
+            400,
+        )
+    token = secrets.resolve_token(config, pat_name)
     if not token:
-        return jsonify({"error": "no GitHub token configured"}), 409
+        return jsonify({"error": f"no token for account {pat_name}"}), 409
 
     client = GitHubClient(token)
     try:
@@ -51,7 +53,7 @@ def connect_repo() -> ResponseReturnValue:
         full_name=info["full_name"],
         default_branch=info["default_branch"] or "main",
         clone_url=info["clone_url"],
-        pat_name=None if pat_name in (None, "default") else pat_name,
+        pat_name=pat_name,
     )
     return jsonify(repos.repo_to_dict(row)), (201 if created else 200)
 
@@ -72,7 +74,7 @@ def disconnect_repo(repo_id: int) -> ResponseReturnValue:
 def reconnect_repo(repo_id: int) -> ResponseReturnValue:
     """Reconnect a previously disconnected repo (requires it to still exist).
 
-    Validates with the repo's own bound account (fallback: the primary).
+    Validates with the repo's own bound account (no fallback).
     """
     config: Config = current_app.config["JALEBI_CONFIG"]
     session = db.get_session()
@@ -82,7 +84,7 @@ def reconnect_repo(repo_id: int) -> ResponseReturnValue:
 
     token = secrets.resolve_token(config, row.pat_name)
     if not token:
-        return jsonify({"error": "no GitHub token configured"}), 409
+        return jsonify({"error": f"no token for this repo's account ({row.pat_name})"}), 409
 
     client = GitHubClient(token)
     try:
@@ -105,7 +107,7 @@ def reconnect_repo(repo_id: int) -> ResponseReturnValue:
 def prune_repos() -> ResponseReturnValue:
     """Soft-remove connected repos that no longer exist on GitHub (deleted upstream)."""
     config: Config = current_app.config["JALEBI_CONFIG"]
-    if secrets.resolve_token(config, None) is None and not secrets.token_names(config):
+    if not secrets.token_names(config):
         return jsonify({"error": "no GitHub token configured"}), 409
 
     session = db.get_session()
@@ -149,7 +151,7 @@ def branches(repo_id: int) -> ResponseReturnValue:
     config = current_app.config["JALEBI_CONFIG"]
     token = secrets.resolve_token(config, row.pat_name)
     if not token:
-        return jsonify({"error": "no GitHub token configured"}), 409
+        return jsonify({"error": f"no token for this repo's account ({row.pat_name})"}), 409
     git = GitWorkspace(config)
     try:
         # Fetch the mirror first so a newly-connected repo isn't served stale/empty.

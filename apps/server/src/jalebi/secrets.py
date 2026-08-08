@@ -1,4 +1,11 @@
-"""Encrypted-on-disk secrets store (``secrets.json`` with 0600 permissions)."""
+"""Encrypted-on-disk secrets store (``secrets.json`` with 0600 permissions).
+
+All PATs are **equal named accounts**. There is no primary/default token and no
+fallback: ``resolve_token(config, name)`` returns the token of the named account
+``name`` or ``None`` — never a different account. ``JALEBI_GITHUB_TOKEN`` and a
+legacy stored ``github_token`` are retained only as *masking* inputs (so a
+stray value never survives into logs) and are never used for resolution.
+"""
 
 import json
 import os
@@ -67,12 +74,12 @@ def list_github_tokens(config: Config) -> list[dict[str, str]]:
 def add_github_token(
     config: Config, name: str, token: str, meta: dict | None = None
 ) -> None:
-    """Add (or replace, by name) a named PAT, optionally with account metadata.
+    """Add (or replace, by name) a named PAT account.
 
-    ``"default"`` is reserved for the primary account and cannot be used here.
+    Every PAT is an equal named account — there is no reserved/default name.
     """
-    if name == "default":
-        raise ValueError('"default" is reserved for the primary account')
+    if not name or not name.strip():
+        raise ValueError("account name must not be empty")
     data = _load(config)
     tokens = data.get(GITHUB_TOKENS_KEY) or []
     if not isinstance(tokens, list):
@@ -113,34 +120,24 @@ def get_named_token(config: Config, name: str) -> str | None:
     return None
 
 
-def load_github_token(config: Config) -> str | None:
-    """Return the primary GitHub PAT: stored default wins, env is a test/bootstrap fallback.
-
-    The token the owner sets in the UI (``github_token`` in the secrets file) is the
-    source of truth (PRD F1). ``JALEBI_GITHUB_TOKEN`` remains a fallback so CI/tests and
-    a fresh setup without a stored token still work, but it never overrides a stored one.
-    """
-    stored = load_secret(config, GITHUB_TOKEN_KEY)
-    if stored:
-        return stored
-    env_token = os.environ.get(ENV_GITHUB_TOKEN)
-    if env_token:
-        return env_token
-    tokens = list_github_tokens(config)
-    return tokens[0]["token"] if tokens else None
-
-
 def resolve_token(config: Config, name: str | None) -> str | None:
-    """Resolve a named PAT, falling back to the primary token."""
-    if name:
-        token = get_named_token(config, name)
-        if token:
-            return token
-    return load_github_token(config)
+    """Return the token for the named account, or ``None``.
+
+    Strict: there is NO fallback to any "primary"/"default"/first vault entry.
+    ``None`` or an unknown name resolves to ``None`` — the caller surfaces it as
+    an explicit error, never as a silently-picked different account.
+    """
+    if not name:
+        return None
+    return get_named_token(config, name)
 
 
 def all_token_values(config: Config) -> list[str]:
-    """Every known PAT value (for masking)."""
+    """Every known PAT value (for masking only — never for resolution).
+
+    Includes the env/bootstrap token and any legacy stored ``github_token`` so a
+    stray value still gets redacted from logs, plus every named account.
+    """
     values: list[str] = []
     env_token = os.environ.get(ENV_GITHUB_TOKEN)
     if env_token:

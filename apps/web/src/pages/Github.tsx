@@ -17,11 +17,9 @@ function AccountStatus({ account }: { account: Account }) {
         <p className="text-xs text-ink-600">Account</p>
         <p className="mt-0.5 font-mono text-sm text-ink-100">
           {account.login ?? "—"}
-          {account.name !== "default" && (
-            <span className="ml-2 rounded bg-ink-850 px-1.5 py-0.5 font-mono text-[10px] text-ink-400">
-              {account.name}
-            </span>
-          )}
+          <span className="ml-2 rounded bg-ink-850 px-1.5 py-0.5 font-mono text-[10px] text-ink-400">
+            {account.name}
+          </span>
         </p>
       </div>
       <div>
@@ -37,56 +35,6 @@ function AccountStatus({ account }: { account: Account }) {
         </p>
       </div>
     </div>
-  );
-}
-
-function TokenForm({ onStored }: { onStored: () => void }) {
-  const [token, setToken] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!token.trim()) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await api.putGithubToken(token.trim());
-      setToken("");
-      onStored();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "failed to store token");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <form onSubmit={submit} className="surface space-y-4 p-6">
-      <div>
-        <h2 className="panel-title">Connect your default GitHub account</h2>
-        <p className="mt-1 text-sm text-ink-400">
-          Paste a personal access token with <code className="font-mono text-syrup-300">repo</code>{" "}
-          scope. Stored locally at <code className="font-mono text-ink-300">0600</code>; never
-          leaves this machine.
-        </p>
-      </div>
-      <input
-        type="password"
-        value={token}
-        onChange={(e) => setToken(e.target.value)}
-        placeholder="ghp_… / github_pat_…"
-        className="field font-mono"
-        autoComplete="off"
-        spellCheck={false}
-      />
-      {error && <p className="text-xs text-red-400">{error}</p>}
-      <div className="flex justify-end">
-        <button type="submit" disabled={busy || !token.trim()} className="btn-primary">
-          {busy ? "Validating…" : "Validate & store"}
-        </button>
-      </div>
-    </form>
   );
 }
 
@@ -116,10 +64,10 @@ function AddAccountForm({ onAdded }: { onAdded: () => void }) {
   return (
     <form onSubmit={add} className="surface space-y-3 p-6 animate-fade-up">
       <div>
-        <h2 className="panel-title">Add another GitHub account</h2>
+        <h2 className="panel-title">Add a GitHub account</h2>
         <p className="mt-1 text-sm text-ink-400">
-          Each saved PAT becomes its own account — its repos appear below and are selectable when
-          creating tasks.
+          Each saved PAT is its own account — its repos appear below and are selectable when
+          creating tasks. All accounts are equal; the one you pick for a task is the one used.
         </p>
       </div>
       <div className="grid gap-2 sm:grid-cols-[1fr_2fr_auto] sm:items-center">
@@ -177,7 +125,7 @@ export default function Github() {
   const reposByAccount = useMemo(() => {
     const map = new Map<string, GithubRepo[]>();
     for (const repo of repos) {
-      const key = repo.account ?? "default";
+      const key = repo.account ?? "";
       if (repo.error) continue; // per-account error is surfaced on the account card
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(repo);
@@ -185,12 +133,9 @@ export default function Github() {
     return map;
   }, [repos]);
 
-  const hasDefault = accounts.some((a) => a.is_default);
-  const defaultAccount = accounts.find((a) => a.is_default);
-
   async function connect(account: string, fullName: string) {
     try {
-      await api.connectRepo(fullName, account === "default" ? undefined : account);
+      await api.connectRepo(fullName, account);
       setConnected(await api.getRepos());
     } catch (e) {
       setError(e instanceof Error ? e.message : "failed to connect repo");
@@ -251,12 +196,6 @@ export default function Github() {
         </p>
       </header>
 
-      {(!hasDefault || (defaultAccount && !defaultAccount.valid)) && (
-        <div className="animate-fade-up">
-          <TokenForm onStored={load} />
-        </div>
-      )}
-
       {accounts.map((account) => (
         <section key={account.name} className="surface animate-fade-up">
           <div className="flex items-center gap-3 border-b border-ink-800 px-6 py-4">
@@ -265,20 +204,13 @@ export default function Github() {
             />
             <h2 className="panel-title">
               {account.login ?? account.name}
-              {account.is_default && (
-                <span className="ml-2 rounded bg-ink-850 px-1.5 py-0.5 font-mono text-[10px] text-ink-500">
-                  default
-                </span>
-              )}
             </h2>
-            {!account.is_default && (
-              <button
-                onClick={() => removeAccount(account.name)}
-                className="ml-auto text-[11px] text-ink-500 transition-colors hover:text-red-300"
-              >
-                remove
-              </button>
-            )}
+            <button
+              onClick={() => removeAccount(account.name)}
+              className="ml-auto text-[11px] text-ink-500 transition-colors hover:text-red-300"
+            >
+              remove
+            </button>
           </div>
           <div className="space-y-4 px-6 py-5">
             <AccountStatus account={account} />

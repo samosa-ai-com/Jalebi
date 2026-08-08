@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from jalebi import repos, settings, tasks
+from jalebi import repos, secrets, settings, tasks
 from jalebi.adapters.types import AgentEvent
 from jalebi.events import TaskEvents
 from jalebi.queue import TaskQueue
@@ -97,10 +97,8 @@ class _FakeAdapter:
 
 
 @pytest.fixture(autouse=True)
-def _fake_token(monkeypatch):
-    monkeypatch.setattr(
-        "jalebi.queue.secrets.load_github_token", lambda config: "ghp_test"
-    )
+def _fake_token(config, monkeypatch):
+    secrets.add_github_token(config, "test", "ghp_test")
 
 
 @pytest.fixture
@@ -138,7 +136,11 @@ def test_sse_streams_live_events_and_closes(
 ) -> None:
     settings.set_setting(session, "auto_publish", False)
     row, _ = repos.upsert_repo(
-        session, full_name=FULL_NAME, default_branch="main", clone_url=git_remote
+        session,
+        full_name=FULL_NAME,
+        default_branch="main",
+        clone_url=git_remote,
+        pat_name="test",
     )
     task = tasks.create_task(session, type_="freeform", repo_id=row.id, prompt="do it")
     session.commit()
@@ -190,7 +192,11 @@ def test_sse_immediate_close_for_terminal_task(
 ) -> None:
     settings.set_setting(session, "auto_publish", False)
     row, _ = repos.upsert_repo(
-        session, full_name=FULL_NAME, default_branch="main", clone_url=git_remote
+        session,
+        full_name=FULL_NAME,
+        default_branch="main",
+        clone_url=git_remote,
+        pat_name="test",
     )
     task = tasks.create_task(session, type_="freeform", repo_id=row.id, prompt="do it")
     handle = _FakeHandle([AgentEvent(type="done")])
@@ -219,7 +225,11 @@ def test_sse_after_seq_backfills_events_published_before_subscribe(
     """Events emitted before a subscriber attached are replayed, not lost (F4)."""
     settings.set_setting(session, "auto_publish", False)
     row, _ = repos.upsert_repo(
-        session, full_name=FULL_NAME, default_branch="main", clone_url=git_remote
+        session,
+        full_name=FULL_NAME,
+        default_branch="main",
+        clone_url=git_remote,
+        pat_name="test",
     )
     task = tasks.create_task(session, type_="freeform", repo_id=row.id, prompt="do it")
     session.commit()

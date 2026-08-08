@@ -25,14 +25,17 @@ def _binary() -> str:
 def _spawn(
     args: list[str], cwd: str | Path, env: dict[str, str | None] | None = None
 ) -> subprocess.Popen[str]:
-    full_env = os.environ.copy()
+    # Build the subprocess env FROM the passed env dict (which the queue derives
+    # from a filtered os.environ and pins itself). Never start from
+    # os.environ.copy() and overlay: that would re-inject keys the caller
+    # deliberately removed (e.g. an inherited JALEBI_GITHUB_TOKEN on a task that
+    # resolves a different account) — the exact leak that made task 2 act as the
+    # wrong account.
+    if env is None:
+        full_env = os.environ.copy()
+    else:
+        full_env = {k: v for k, v in env.items() if v is not None}
     full_env.setdefault("OPENCODE_DISABLE_AUTOUPDATE", "1")
-    if env:
-        for key, value in env.items():
-            if value is None:
-                full_env.pop(key, None)
-            else:
-                full_env[key] = value
     # Spawn through a shell: `opencode run --session` stalls when exec'd directly
     # (empty stream, agent loop exits immediately), but works via `sh -c`.
     cmd = "cd " + shlex.quote(str(cwd)) + " && exec " + " ".join(shlex.quote(a) for a in args)

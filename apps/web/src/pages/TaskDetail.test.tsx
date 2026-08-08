@@ -88,7 +88,7 @@ describe("TaskDetail", () => {
         return { ok: true, json: async () => task };
       }
       if (url.includes("/api/github/tokens")) {
-        return { ok: true, json: async () => ({ default: null, accounts: [] }) };
+        return { ok: true, json: async () => ({ accounts: [] }) };
       }
       if (url.includes("/api/models")) {
         return { ok: true, json: async () => ({ cli: "opencode", models: ["m1"] }) };
@@ -212,7 +212,7 @@ describe("TaskDetail", () => {
         return { ok: true, json: async () => withDiff };
       }
       if (url.includes("/api/github/tokens")) {
-        return { ok: true, json: async () => ({ default: null, accounts: [] }) };
+        return { ok: true, json: async () => ({ accounts: [] }) };
       }
       if (url.includes("/api/models")) {
         return { ok: true, json: async () => ({ cli: "opencode", models: ["m1"] }) };
@@ -262,7 +262,7 @@ describe("TaskDetail", () => {
         return { ok: true, json: async () => needsApproval };
       }
       if (url.includes("/api/github/tokens")) {
-        return { ok: true, json: async () => ({ default: null, accounts: [] }) };
+        return { ok: true, json: async () => ({ accounts: [] }) };
       }
       if (url.includes("/api/models")) {
         return { ok: true, json: async () => ({ cli: "opencode", models: ["m1"] }) };
@@ -302,7 +302,7 @@ describe("TaskDetail", () => {
         return { ok: true, json: async () => doneTask };
       }
       if (url.includes("/api/github/tokens")) {
-        return { ok: true, json: async () => ({ default: null, accounts: [] }) };
+        return { ok: true, json: async () => ({ accounts: [] }) };
       }
       if (url.includes("/api/models")) {
         return { ok: true, json: async () => ({ cli: "opencode", models: ["m1"] }) };

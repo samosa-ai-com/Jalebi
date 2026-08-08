@@ -1,13 +1,11 @@
 """GitHub integration routes: accounts (PATs), status, repo listing, context.
 
-Every stored PAT is a first-class **account**. The primary token
-(``JALEBI_GITHUB_TOKEN`` / ``github_token``) is the "default" account; each
-named vault token is its own account. Each account has its own live status and
-its own repository list. Removing an account deletes its connected repos and
-their tasks.
+Every stored PAT is a first-class **account** and all accounts are equal —
+there is no "default"/"primary" account and no fallback. Each account has its
+own live status and its own repository list. Removing an account deletes its
+connected repos and their tasks.
 """
 
-import os
 import shutil
 from dataclasses import asdict
 
@@ -27,10 +25,6 @@ bp = Blueprint("github", __name__, url_prefix="/api/github")
 
 def _config():
     return current_app.config["JALEBI_CONFIG"]
-
-
-def _token() -> str | None:
-    return secrets.load_github_token(_config())
 
 
 def _client(token: str) -> GitHubClient:
@@ -54,77 +48,31 @@ def _mask_token(token: str) -> str:
     return f"{token[:4]}…{token[-4:]}"
 
 
-def _account_dict(name: str, token: str, *, is_default: bool) -> dict:
+def _account_dict(name: str, token: str) -> dict:
     info, error = _validate(token)
     if error is not None:
-        return {"name": name, "is_default": is_default, "valid": False, "error": error}
+        return {"name": name, "valid": False, "error": error}
     assert info is not None
     base = asdict(info)
     base.update(
         {
             "name": name,
-            "is_default": is_default,
             "masked": _mask_token(token),
         }
     )
     return base
 
 
-@bp.get("/status")
-def status() -> ResponseReturnValue:
-    """Live status of the primary (default) account."""
-    token = _token()
-    if not token:
-        return jsonify({"valid": False, "error": "no GitHub token configured"}), 409
-    info, error = _validate(token)
-    if error is not None:
-        return jsonify({"valid": False, "error": error}), 502
-    assert info is not None
-    return jsonify(asdict(info))
-
-
-@bp.put("/token")
-def set_token() -> ResponseReturnValue:
-    """Replace the primary (default) account's token."""
-    config = _config()
-    payload = request.get_json(silent=True)
-    token = payload.get("token") if isinstance(payload, dict) else None
-    if not token:
-        return jsonify({"error": 'expected JSON body {"token": "<PAT>"}'}), 400
-
-    info, error = _validate(token)
-    if error is not None:
-        return jsonify({"valid": False, "error": error}), 502
-    assert info is not None
-    if not info.valid:
-        return jsonify({"stored": False, "detail": asdict(info)}), 400
-
-    secrets.store_secret(config, secrets.GITHUB_TOKEN_KEY, token)
-    return jsonify({"stored": True, "detail": asdict(info)})
-
-
-def _explicit_default_token() -> str | None:
-    """The primary token if explicitly configured (env or stored ``github_token``)."""
-    return os.environ.get(secrets.ENV_GITHUB_TOKEN) or secrets.load_secret(
-        _config(), secrets.GITHUB_TOKEN_KEY
-    )
-
-
-def _all_tokens() -> list[tuple[str, str, bool]]:
-    """[(name, token, is_default)] — explicit default account first, then named."""
-    entries: list[tuple[str, str, bool]] = []
-    default_token = _explicit_default_token()
-    if default_token:
-        entries.append(("default", default_token, True))
-    for item in secrets.list_github_tokens(_config()):
-        if item["name"] != "default":
-            entries.append((item["name"], item["token"], False))
-    return entries
+def _all_tokens() -> list[tuple[str, str]]:
+    """[(name, token)] for every named account — all equal, no default."""
+    return [
+        (item["name"], item["token"]) for item in secrets.list_github_tokens(_config())
+    ]
 
 
 @bp.get("/repos")
 def repos() -> ResponseReturnValue:
-    """List repositories across ALL accounts, each tagged with its account login.
+    """List repositories across ALL accounts, each tagged with its account name.
 
     ``?account=<name>`` filters to one account. A failing account contributes
     its repos as an error entry rather than failing the whole page.
@@ -139,7 +87,7 @@ def repos() -> ResponseReturnValue:
             return jsonify({"error": f"no such account: {account}"}), 404
 
     results: list[dict] = []
-    for name, token, _is_default in entries:
+    for name, token in entries:
         client = _client(token)
         try:
             items = client.list_repos()
@@ -157,7 +105,7 @@ def repos() -> ResponseReturnValue:
 def context() -> ResponseReturnValue:
     """Return open issues, open PRs and branches for a repo (task-form pickers).
 
-    Uses the account that owns the repo if known, else the default account.
+    Uses the named account that owns the repo — there is no default/fallback.
     """
     full_name = request.args.get("repo")
     if not full_name or "/" not in full_name:
@@ -165,7 +113,7 @@ def context() -> ResponseReturnValue:
     account = request.args.get("account")
     token = secrets.resolve_token(_config(), account)
     if not token:
-        return jsonify({"error": "no GitHub token configured"}), 409
+        return jsonify({"error": "no GitHub token configured for this account"}), 409
     client = _client(token)
     try:
         return jsonify(
@@ -183,13 +131,11 @@ def context() -> ResponseReturnValue:
 
 @bp.get("/tokens")
 def list_tokens() -> ResponseReturnValue:
-    """List all accounts (default + named) with live status. Never returns values."""
-    entries = _all_tokens()
-    default_name = "default" if _explicit_default_token() else (entries[0][0] if entries else None)
+    """List all accounts with live status. Never returns token values."""
     accounts = [
-        _account_dict(name, token, is_default=is_default) for name, token, is_default in entries
+        _account_dict(name, token) for name, token in _all_tokens()
     ]
-    return jsonify({"default": default_name, "accounts": accounts})
+    return jsonify({"accounts": accounts})
 
 
 @bp.post("/tokens")
@@ -204,8 +150,6 @@ def add_token() -> ResponseReturnValue:
     if not token:
         return jsonify({"error": 'expected {"name": "<label>", "token": "<PAT>"}'}), 400
     name = name.strip()
-    if name == "default":
-        return jsonify({"error": '"default" is reserved for the primary account'}), 400
 
     info, error = _validate(token)
     if error is not None:
@@ -238,8 +182,6 @@ def delete_token(name: str) -> ResponseReturnValue:
     the account are cancelled first.
     """
     config = _config()
-    if name == "default":
-        return jsonify({"error": "cannot remove the default account"}), 400
     if name not in secrets.token_names(config):
         return jsonify({"error": f"no such token: {name}"}), 404
 

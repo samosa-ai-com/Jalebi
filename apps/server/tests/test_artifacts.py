@@ -6,7 +6,7 @@ import subprocess
 import pytest
 from sqlalchemy import text
 
-from jalebi import artifacts, repos, settings, tasks
+from jalebi import artifacts, repos, secrets, settings, tasks
 from jalebi.adapters.types import AgentEvent
 from jalebi.db import Artifact, Run, utcnow
 from jalebi.git_workspace import GitWorkspace
@@ -45,10 +45,8 @@ class FakeHandle:
 
 
 @pytest.fixture(autouse=True)
-def _fake_token(monkeypatch):
-    monkeypatch.setattr(
-        "jalebi.queue.secrets.load_github_token", lambda config: "ghp_test"
-    )
+def _fake_token(config, monkeypatch):
+    secrets.add_github_token(config, "test", "ghp_test")
 
 
 @pytest.fixture
@@ -72,7 +70,11 @@ def git_remote(tmp_path) -> str:
 @pytest.fixture
 def repo_row(session, git_remote):
     row, _ = repos.upsert_repo(
-        session, full_name=FULL_NAME, default_branch="main", clone_url=git_remote
+        session,
+        full_name=FULL_NAME,
+        default_branch="main",
+        clone_url=git_remote,
+        pat_name="test",
     )
     return row
 
@@ -263,6 +265,7 @@ def test_capture_excludes_jalebi_internal(tmp_path, session) -> None:
         full_name=FULL_NAME,
         default_branch="main",
         clone_url="https://github.com/owner/repo.git",
+        pat_name="test",
     )
     task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="x")
     worktree_bootstrap.bootstrap_worktree(repo)

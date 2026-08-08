@@ -5,7 +5,7 @@ import subprocess
 
 import pytest
 
-from jalebi import repos, settings, tasks
+from jalebi import repos, secrets, settings, tasks
 from jalebi.adapters.types import AgentEvent
 from jalebi.db import Run, utcnow
 from jalebi.git_workspace import GitWorkspace
@@ -79,10 +79,8 @@ class FakeGitHubClient:
 
 
 @pytest.fixture(autouse=True)
-def _fake_token(monkeypatch):
-    monkeypatch.setattr(
-        "jalebi.queue.secrets.load_github_token", lambda config: "ghp_test"
-    )
+def _fake_token(config, monkeypatch):
+    secrets.add_github_token(config, "test", "ghp_test")
 
 
 @pytest.fixture
@@ -106,7 +104,11 @@ def git_remote(tmp_path) -> str:
 @pytest.fixture
 def repo_row(session, git_remote):
     row, _ = repos.upsert_repo(
-        session, full_name=FULL_NAME, default_branch="main", clone_url=git_remote
+        session,
+        full_name=FULL_NAME,
+        default_branch="main",
+        clone_url=git_remote,
+        pat_name="test",
     )
     return row
 
@@ -151,9 +153,6 @@ def _seed_commit(q, task_id: int, clone_url: str) -> None:
 
 
 def test_followup_route_enqueues_masked_body(app, session, repo_row, monkeypatch) -> None:
-    monkeypatch.setattr(
-        "jalebi.routes.tasks.secrets.load_github_token", lambda config: "ghp_test"
-    )
     settings.set_setting(session, "auto_publish", False)
     task = _done_task_with_session(session, repo_row.id)
     enqueued: list[tuple[int, str, str | None, str | None]] = []

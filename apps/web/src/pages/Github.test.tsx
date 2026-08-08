@@ -4,12 +4,9 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Github from "./Github";
 
-const NO_TOKENS = { default: null, accounts: [] };
-
-const DEFAULT_ACCOUNT = {
-  name: "default",
-  is_default: true,
-  login: "acct1",
+const ACCOUNT = (name: string, login: string, overrides: Record<string, unknown> = {}) => ({
+  name,
+  login,
   masked: "ghp_****",
   token_type: "classic",
   granted_scopes: ["repo"],
@@ -17,7 +14,10 @@ const DEFAULT_ACCOUNT = {
   note: null,
   valid: true,
   error: null,
-};
+  ...overrides,
+});
+
+const NO_TOKENS = { accounts: [] };
 
 function stubFetch(handlers: Record<string, unknown>) {
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
@@ -37,53 +37,25 @@ describe("Github", () => {
     vi.restoreAllMocks();
   });
 
-  it("shows the default-token form when no accounts are configured", async () => {
+  it("shows the add-account form when no accounts are configured", async () => {
     stubFetch({ "/api/github/tokens": NO_TOKENS });
     render(
       <MemoryRouter>
         <Github />
       </MemoryRouter>
     );
-    expect(await screen.findByText("Connect your default GitHub account")).toBeInTheDocument();
+    expect(await screen.findByText("Add a GitHub account")).toBeInTheDocument();
   });
 
-  it("shows the default-token form again when the default account is invalid", async () => {
-    const invalid = {
-      default: "default",
-      accounts: [
-        { ...DEFAULT_ACCOUNT, valid: false, error: "Bad credentials" },
-      ],
-    };
-    stubFetch({ "/api/github/tokens": invalid });
-    render(
-      <MemoryRouter>
-        <Github />
-      </MemoryRouter>
-    );
-    expect(await screen.findByText("Connect your default GitHub account")).toBeInTheDocument();
-  });
-
-  it("shows each account with its repos and connect uses the account name", async () => {
+  it("shows each equal account with its repos and connect uses the account name", async () => {
     const accounts = {
-      default: "default",
       accounts: [
-        DEFAULT_ACCOUNT,
-        {
-          name: "work",
-          is_default: false,
-          login: "acct2",
-          masked: "ghp_****",
-          token_type: "classic",
-          granted_scopes: ["repo"],
-          missing_scopes: [],
-          note: null,
-          valid: true,
-          error: null,
-        },
+        ACCOUNT("primary", "acct1"),
+        ACCOUNT("work", "acct2"),
       ],
     };
     const repos = [
-      { full_name: "acct1/hello", private: false, default_branch: "main", html_url: "h1", account: "default" },
+      { full_name: "acct1/hello", private: false, default_branch: "main", html_url: "h1", account: "primary" },
       { full_name: "acct2/other", private: true, default_branch: "main", html_url: "h2", account: "work" },
     ];
     const fetchMock = stubFetch({
@@ -121,13 +93,12 @@ describe("Github", () => {
     });
   });
 
-  it("surfaces the validation error from a rejected default-token PUT", async () => {
-    let putSeen = false;
+  it("surfaces the validation error from a rejected add-account POST", async () => {
+    let postSeen = false;
     stubFetch({
-      "/api/github/tokens": NO_TOKENS,
-      "/api/github/token": async (_url: string, init?: RequestInit) => {
-        if (init?.method === "PUT") {
-          putSeen = true;
+      "/api/github/tokens": async (_url: string, init?: RequestInit) => {
+        if (init?.method === "POST") {
+          postSeen = true;
           return {
             ok: false,
             status: 400,
@@ -143,14 +114,12 @@ describe("Github", () => {
         <Github />
       </MemoryRouter>
     );
-    await screen.findByText("Connect your default GitHub account");
-    await userEvent.type(
-      screen.getByPlaceholderText("ghp_… / github_pat_…"),
-      "ghp_bad"
-    );
-    await userEvent.click(screen.getByRole("button", { name: "Validate & store" }));
+    await screen.findByText("Add a GitHub account");
+    await userEvent.type(screen.getByPlaceholderText("label (e.g. work, personal)"), "work");
+    await userEvent.type(screen.getByPlaceholderText("ghp_…"), "ghp_bad");
+    await userEvent.click(screen.getByRole("button", { name: "Add account" }));
 
-    await waitFor(() => expect(putSeen).toBe(true));
+    await waitFor(() => expect(postSeen).toBe(true));
     expect(await screen.findByText("Bad credentials")).toBeInTheDocument();
   });
 });

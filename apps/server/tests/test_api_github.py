@@ -38,70 +38,39 @@ class FakeClient:
 
 
 @pytest.fixture(autouse=True)
-def _no_env_token(monkeypatch):
+def _no_env_token(monkeypatch, app):
     monkeypatch.delenv(secrets.ENV_GITHUB_TOKEN, raising=False)
+    secrets.add_github_token(app.config["JALEBI_CONFIG"], "test", "ghp_test")
 
 
 def _app_config(app) -> Config:
     return app.config["JALEBI_CONFIG"]
 
 
-def _store_token(app, token: str = "ghp_test") -> None:
-    secrets.store_secret(_app_config(app), secrets.GITHUB_TOKEN_KEY, token)
+def _store_token(app, name: str = "test", token: str = "ghp_test") -> None:
+    secrets.add_github_token(_app_config(app), name, token)
 
 
-def test_status_no_token(client: FlaskClient) -> None:
-    resp = client.get("/api/github/status")
-    assert resp.status_code == 409
-    assert resp.get_json()["valid"] is False
-
-
-def test_status_with_token(client: FlaskClient, app, monkeypatch) -> None:
-    _store_token(app)
+def test_tokens_list_account_with_status(client: FlaskClient, app, monkeypatch) -> None:
     monkeypatch.setattr(routes_github, "GitHubClient", FakeClient)
-    resp = client.get("/api/github/status")
-    assert resp.status_code == 200
-    body = resp.get_json()
-    assert body["valid"] is True
-    assert body["login"] == "octocat"
-    assert body["granted_scopes"] == ["repo"]
-    assert "ghp_test" not in resp.get_data(as_text=True)
+
+    listed = client.get("/api/github/tokens").get_json()
+    assert listed["accounts"][0]["name"] == "test"
+    assert listed["accounts"][0]["login"] == "octocat"
+    assert listed["accounts"][0]["valid"] is True
+    assert "ghp_test" not in client.get("/api/github/tokens").get_data(as_text=True)
 
 
-def test_put_token_stores_and_returns_detail(client: FlaskClient, app, monkeypatch) -> None:
-    monkeypatch.setattr(routes_github, "GitHubClient", FakeClient)
-    resp = client.put("/api/github/token", json={"token": "ghp_newtoken"})
-    assert resp.status_code == 200
-    body = resp.get_json()
-    assert body["stored"] is True
-    assert body["detail"]["login"] == "octocat"
-    assert "ghp_newtoken" not in resp.get_data(as_text=True)
-    assert secrets.load_secret(_app_config(app), secrets.GITHUB_TOKEN_KEY) == "ghp_newtoken"
+def test_put_token_endpoint_removed(client: FlaskClient) -> None:
+    """The primary-token setter is gone — every account is added by name."""
+    resp = client.put("/api/github/token", json={"token": "ghp_x"})
+    assert resp.status_code in (404, 405)
 
 
-def test_put_token_invalid_rejected(client: FlaskClient, monkeypatch) -> None:
-    class RejectingClient:
-        def __init__(self, token: str):
-            self.token = token
+def test_repos_no_token(client: FlaskClient, app) -> None:
+    from jalebi import secrets as sec
 
-        def validate_token(self) -> TokenInfo:
-            return TokenInfo(valid=False, error="Bad credentials")
-
-        def close(self) -> None:
-            pass
-
-    monkeypatch.setattr(routes_github, "GitHubClient", RejectingClient)
-    resp = client.put("/api/github/token", json={"token": "ghp_bad"})
-    assert resp.status_code == 400
-    assert resp.get_json()["stored"] is False
-
-
-def test_put_token_missing_body(client: FlaskClient) -> None:
-    resp = client.put("/api/github/token", json={})
-    assert resp.status_code == 400
-
-
-def test_repos_no_token(client: FlaskClient) -> None:
+    sec.remove_github_token(app.config["JALEBI_CONFIG"], "test")
     resp = client.get("/api/github/repos")
     assert resp.status_code == 409
 
@@ -135,13 +104,21 @@ def test_context_returns_issues_prs_branches(client: FlaskClient, app, monkeypat
             return ["main", "dev"]
 
     monkeypatch.setattr(routes_github, "GitHubClient", ContextClient)
-    resp = client.get("/api/github/context?repo=octocat/hello")
+    resp = client.get("/api/github/context?repo=octocat/hello&account=test")
     assert resp.status_code == 200
     body = resp.get_json()
     assert [i["number"] for i in body["issues"]] == [1]
     assert [p["number"] for p in body["prs"]] == [7]
     assert body["branches"] == ["main", "dev"]
     assert "ghp_test" not in resp.get_data(as_text=True)
+
+
+def test_context_requires_account(client: FlaskClient, app, monkeypatch) -> None:
+    """Context for a repo without an account is refused — no default."""
+    _store_token(app)
+    monkeypatch.setattr(routes_github, "GitHubClient", FakeClient)
+    resp = client.get("/api/github/context?repo=octocat/hello")
+    assert resp.status_code == 409
 
 
 def test_tokens_list_and_add_remove(client: FlaskClient, app, monkeypatch) -> None:
@@ -152,24 +129,29 @@ def test_tokens_list_and_add_remove(client: FlaskClient, app, monkeypatch) -> No
     assert resp.get_json()["stored"] is True
 
     listed = client.get("/api/github/tokens").get_json()
-    assert listed["accounts"][0]["name"] == "work"
+    names = [a["name"] for a in listed["accounts"]]
+    assert "work" in names
     assert listed["accounts"][0]["login"] == "octocat"
     assert listed["accounts"][0]["valid"] is True
     assert "ghp_work" not in client.get("/api/github/tokens").get_data(as_text=True)
 
     resp = client.delete("/api/github/tokens/work")
     assert resp.status_code == 200
-    assert client.get("/api/github/tokens").get_json()["accounts"] == []
+    names = [a["name"] for a in client.get("/api/github/tokens").get_json()["accounts"]]
+    assert "work" not in names
 
 
-def test_tokens_default_account_listed_first(client: FlaskClient, app, monkeypatch) -> None:
-    secrets.store_secret(app.config["JALEBI_CONFIG"], secrets.GITHUB_TOKEN_KEY, "ghp_default")
+def test_tokens_all_accounts_equal(client: FlaskClient, app, monkeypatch) -> None:
+    """All accounts are equal — no 'default'/'primary' account exists."""
+    secrets.add_github_token(app.config["JALEBI_CONFIG"], "work", "ghp_work")
     monkeypatch.setattr(routes_github, "GitHubClient", FakeClient)
 
     listed = client.get("/api/github/tokens").get_json()
-    assert listed["default"] == "default"
-    assert listed["accounts"][0]["name"] == "default"
-    assert listed["accounts"][0]["is_default"] is True
+    names = [a["name"] for a in listed["accounts"]]
+    assert "default" not in names
+    assert "is_default" not in listed["accounts"][0]
+    assert "test" in names
+    assert "work" in names
 
 
 def test_add_token_invalid_rejected(client: FlaskClient, monkeypatch) -> None:
@@ -195,7 +177,6 @@ def test_add_token_missing_fields(client: FlaskClient) -> None:
 
 
 def test_repos_tagged_by_account(client: FlaskClient, app, monkeypatch) -> None:
-    secrets.store_secret(app.config["JALEBI_CONFIG"], secrets.GITHUB_TOKEN_KEY, "ghp_default")
     secrets.add_github_token(app.config["JALEBI_CONFIG"], "work", "ghp_work")
 
     class MultiClient:
@@ -229,17 +210,18 @@ def test_repos_tagged_by_account(client: FlaskClient, app, monkeypatch) -> None:
     monkeypatch.setattr(routes_github, "GitHubClient", MultiClient)
     body = client.get("/api/github/repos").get_json()
     by_account = {r["full_name"]: r.get("account") for r in body}
-    assert by_account == {"acct1/hello": "default", "acct2/other": "work"}
+    assert by_account == {"acct1/hello": "test", "acct2/other": "work"}
 
     only_work = client.get("/api/github/repos?account=work").get_json()
     assert [r["full_name"] for r in only_work] == ["acct2/other"]
 
 
-def test_add_token_default_name_rejected(client: FlaskClient, monkeypatch) -> None:
+def test_add_token_default_name_allowed(client: FlaskClient, monkeypatch) -> None:
+    """'default' is not a reserved name — all accounts are equal."""
     monkeypatch.setattr(routes_github, "GitHubClient", FakeClient)
     resp = client.post("/api/github/tokens", json={"name": "default", "token": "ghp_x"})
-    assert resp.status_code == 400
-    assert "reserved" in resp.get_json()["error"]
+    assert resp.status_code == 200
+    assert resp.get_json()["stored"] is True
 
 
 def test_delete_token_reports_affected_repos_and_tasks(
@@ -295,6 +277,7 @@ def test_delete_token_deletes_tasks_on_repos_bound_to_account(
 
     monkeypatch.setattr(routes_github, "GitHubClient", FakeClient)
     client.post("/api/github/tokens", json={"name": "work", "token": "ghp_work"})
+    client.post("/api/github/tokens", json={"name": "other", "token": "ghp_other"})
     row, _ = repos.upsert_repo(
         session,
         full_name="octocat/hello",
@@ -302,8 +285,9 @@ def test_delete_token_deletes_tasks_on_repos_bound_to_account(
         clone_url="https://github.com/octocat/hello.git",
         pat_name="work",
     )
+    # Task explicitly bound to a DIFFERENT account on the same repo.
     task = tasks_svc.create_task(
-        session, type_="freeform", repo_id=row.id, prompt="x", pat_name=None
+        session, type_="freeform", repo_id=row.id, prompt="x", pat_name="other"
     )
     repo_id, task_id = row.id, task.id
 

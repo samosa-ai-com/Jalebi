@@ -11,13 +11,17 @@ def repo_id(session) -> int:
         full_name="owner/repo",
         default_branch="main",
         clone_url="https://github.com/owner/repo.git",
+        pat_name="test",
     )
     return row.id
 
 
 @pytest.fixture(autouse=True)
-def _no_env_token(monkeypatch):
+def _no_env_token(monkeypatch, app):
+    # Every account is a named account (no primary/env fallback). Tests run
+    # under named account "test".
     monkeypatch.delenv(secrets.ENV_GITHUB_TOKEN, raising=False)
+    secrets.add_github_token(app.config["JALEBI_CONFIG"], "test", "ghp_test")
 
 
 def test_create_task(client: FlaskClient, repo_id: int) -> None:
@@ -49,6 +53,7 @@ def test_create_task_disconnected_repo_rejected(client: FlaskClient, session) ->
         full_name="owner/disc",
         default_branch="main",
         clone_url="https://github.com/owner/disc.git",
+        pat_name="test",
     )
     client.delete(f"/api/repos/{row.id}")  # soft-disconnect
     resp = client.post("/api/tasks", json={"repo_id": row.id, "prompt": "x"})
@@ -229,7 +234,8 @@ def test_create_task_explicit_pat_overrides_repo(app, client, session) -> None:
     assert resp.get_json()["pat_name"] == "acct-c"
 
 
-def test_create_task_accepts_default_pat(app, client, session) -> None:
+def test_create_task_requires_account(app, client, session) -> None:
+    """A task without any account is a config error — there is no default."""
     from jalebi import repos
 
     row, _ = repos.upsert_repo(
@@ -237,16 +243,35 @@ def test_create_task_accepts_default_pat(app, client, session) -> None:
         full_name="owner/repo",
         default_branch="main",
         clone_url="https://github.com/owner/repo.git",
+        pat_name=None,
+    )
+    resp = client.post(
+        "/api/tasks",
+        json={"repo_id": row.id, "type": "freeform", "prompt": "do it"},
+    )
+    assert resp.status_code == 400
+    assert "account" in resp.get_json()["error"]
+
+
+def test_create_task_rejects_unknown_pat(app, client, session) -> None:
+    from jalebi import repos
+
+    row, _ = repos.upsert_repo(
+        session,
+        full_name="owner/repo",
+        default_branch="main",
+        clone_url="https://github.com/owner/repo.git",
+        pat_name="test",
     )
     resp = client.post(
         "/api/tasks",
         json={"repo_id": row.id, "type": "freeform", "prompt": "do it", "pat_name": "default"},
     )
-    assert resp.status_code == 201
-    assert resp.get_json()["pat_name"] == "default"
+    assert resp.status_code == 400
+    assert "unknown PAT" in resp.get_json()["error"]
 
 
-def test_followup_accepts_default_pat(app, client, session, monkeypatch) -> None:
+def test_followup_uses_task_account_by_default(app, client, session, monkeypatch) -> None:
     from jalebi import repos, tasks
 
     row, _ = repos.upsert_repo(
@@ -254,6 +279,7 @@ def test_followup_accepts_default_pat(app, client, session, monkeypatch) -> None
         full_name="owner/repo",
         default_branch="main",
         clone_url="https://github.com/owner/repo.git",
+        pat_name="test",
     )
     task = tasks.create_task(session, type_="freeform", repo_id=row.id, prompt="do it")
     from jalebi.db import Run, utcnow
@@ -272,14 +298,53 @@ def test_followup_accepts_default_pat(app, client, session, monkeypatch) -> None
     session.commit()
 
     q = app.config["JALEBI_QUEUE"]
+    enqueued: list = []
     monkeypatch.setattr(
-        q, "enqueue_followup", lambda tid, body, pat_name=None, model=None: None
+        q,
+        "enqueue_followup",
+        lambda tid, body, pat_name=None, model=None: enqueued.append((tid, body, pat_name)),
     )
+    resp = client.post(
+        f"/api/tasks/{task.id}/followup",
+        json={"prompt": "more"},
+    )
+    assert resp.status_code == 202
+    # No pat_name in the request → the follow-up inherits the task's account.
+    assert enqueued == [(task.id, "more", None)]
+
+
+def test_followup_rejects_unknown_pat(app, client, session, monkeypatch) -> None:
+    from jalebi import repos, tasks
+
+    row, _ = repos.upsert_repo(
+        session,
+        full_name="owner/repo",
+        default_branch="main",
+        clone_url="https://github.com/owner/repo.git",
+        pat_name="test",
+    )
+    task = tasks.create_task(session, type_="freeform", repo_id=row.id, prompt="do it")
+    from jalebi.db import Run, utcnow
+
+    run = Run(
+        task_id=task.id,
+        seq=1,
+        session_id="ses_1",
+        status="done",
+        started_at=utcnow(),
+        finished_at=utcnow(),
+    )
+    session.add(run)
+    session.commit()
+    task.status = "done"
+    session.commit()
+
     resp = client.post(
         f"/api/tasks/{task.id}/followup",
         json={"prompt": "more", "pat_name": "default"},
     )
-    assert resp.status_code == 202
+    assert resp.status_code == 400
+    assert "unknown PAT" in resp.get_json()["error"]
 
 
 def test_run_diff_endpoint(client: FlaskClient, session) -> None:
@@ -291,6 +356,7 @@ def test_run_diff_endpoint(client: FlaskClient, session) -> None:
         full_name="owner/diffrepo",
         default_branch="main",
         clone_url="https://github.com/owner/diffrepo.git",
+        pat_name="test",
     )
     task = tasks_svc.create_task(session, type_="freeform", repo_id=row.id, prompt="x")
     run = Run(task_id=task.id, seq=1, status="done", started_at=utcnow(), diff_text="+a\n-b\n")
@@ -348,6 +414,7 @@ def test_disconnected_repo_task_detail_keeps_repo_name(client, session) -> None:
         full_name="owner/disc",
         default_branch="main",
         clone_url="https://github.com/owner/disc.git",
+        pat_name="test",
     )
     task = tasks_svc.create_task(session, type_="freeform", repo_id=row.id, prompt="x")
     row.connected = False

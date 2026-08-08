@@ -137,10 +137,10 @@ class StaleRecordedPrGitHubClient(FakeGitHubClient):
 
 
 @pytest.fixture(autouse=True)
-def _fake_token(monkeypatch):
-    monkeypatch.setattr(
-        "jalebi.queue.secrets.load_github_token", lambda config: "ghp_test"
-    )
+def _fake_token(config, monkeypatch):
+    # Every account is a named account (no primary). Tests run under account
+    # "test" whose token is ghp_test.
+    secrets.add_github_token(config, "test", "ghp_test")
 
 
 @pytest.fixture
@@ -164,7 +164,7 @@ def git_remote(tmp_path) -> str:
 @pytest.fixture
 def repo_row(session, git_remote):
     row, _ = repos.upsert_repo(
-        session, full_name=FULL_NAME, default_branch="main", clone_url=git_remote
+        session, full_name=FULL_NAME, default_branch="main", clone_url=git_remote, pat_name="test"
     )
     return row
 
@@ -574,7 +574,7 @@ def test_manual_publish_uses_tasks_account(q, session, repo_row, monkeypatch) ->
 
 
 def test_agent_env_carries_resolved_token_and_strips_gh(q, session, repo_row, monkeypatch) -> None:
-    """Issue/review agents get the resolved account token in env and never auth gh."""
+    """Agents get the selected account's token in env and never auth gh."""
     secrets.add_github_token(q.config, "acct-b", "ghp_b")
     task = tasks.create_task(
         session,
@@ -607,13 +607,13 @@ def test_agent_env_carries_resolved_token_and_strips_gh(q, session, repo_row, mo
     assert env["GH_CONFIG_DIR"]
     assert env.get("GH_TOKEN") is None
     assert env.get("GITHUB_TOKEN") is None
-    # the git credential header embeds the resolved token (base64), not the primary
-    assert "ghp_b" not in (env.get("GIT_CONFIG_VALUE_0") or "")
+    # No git push credentials for the agent (Jalebi is the only pusher).
+    assert env.get("GIT_CONFIG_VALUE_0") is None
 
 
-def test_freeform_agent_env_is_token_free(q, session, repo_row, monkeypatch) -> None:
-    """Freeform agents must get NO GitHub token and NO git push credentials —
-    they commit locally; Jalebi pushes and publishes for them."""
+def test_freeform_agent_env_carries_selected_token(q, session, repo_row, monkeypatch) -> None:
+    """Freeform agents act as the SELECTED account: they get that account's PAT
+    in the env (for GitHub API use) but no git push credentials."""
     secrets.add_github_token(q.config, "acct-b", "ghp_b")
     task = tasks.create_task(
         session,
@@ -641,11 +641,12 @@ def test_freeform_agent_env_is_token_free(q, session, repo_row, monkeypatch) -> 
 
     env = captured["env"]
     assert env is not None
-    assert "JALEBI_GITHUB_TOKEN" not in env
-    assert "GIT_CONFIG_VALUE_0" not in env  # no http.extraHeader → cannot push
+    assert env["JALEBI_GITHUB_TOKEN"] == "ghp_b"
     assert env["GIT_AUTHOR_NAME"] == "Jalebi"
     assert env.get("GH_TOKEN") is None
     assert env.get("GITHUB_TOKEN") is None
+    # No git push credentials — the token is for the GitHub API, not git.
+    assert env.get("GIT_CONFIG_VALUE_0") is None
 
 
 def test_publish_masks_agent_written_pr_md(q, session, repo_row, monkeypatch) -> None:
@@ -844,13 +845,12 @@ def test_build_agent_env_strips_inherited_git_config(monkeypatch) -> None:
     # Jalebi's own config stays
     assert env["GIT_CONFIG_NOSYSTEM"] == "1"
     assert env["GIT_CONFIG_GLOBAL"]
-    assert env["GIT_CONFIG_COUNT"] == "1"
     assert env["JALEBI_GITHUB_TOKEN"] == "ghp_x"
 
 
-def test_build_agent_env_keeps_own_git_auth(monkeypatch) -> None:
-    import base64
-
+def test_build_agent_env_has_no_git_push_credentials(monkeypatch) -> None:
+    """The agent gets the selected PAT for the GitHub API but NO git push
+    credentials — Jalebi is the only pusher (auth_env is never applied)."""
     from jalebi.queue import _build_agent_env
 
     monkeypatch.setenv("GIT_CONFIG_COUNT", "3")
@@ -860,11 +860,12 @@ def test_build_agent_env_keeps_own_git_auth(monkeypatch) -> None:
     # inherited git state dropped…
     assert env.get("GIT_DIR") is None
     assert env.get("GIT_CONFIG_KEY_1") is None
-    # …but Jalebi's own auth config is present and correct.
-    assert env["GIT_CONFIG_COUNT"] == "1"
-    assert env["GIT_CONFIG_KEY_0"] == "http.extraHeader"
-    expected = base64.b64encode(b"x-access-token:ghp_x").decode()
-    assert expected in (env["GIT_CONFIG_VALUE_0"] or "")
+    # …and Jalebi does NOT give the agent git push credentials.
+    assert env.get("GIT_CONFIG_COUNT") is None
+    assert env.get("GIT_CONFIG_KEY_0") is None
+    assert env.get("GIT_CONFIG_VALUE_0") is None
+    # The selected PAT is still exposed for GitHub API use.
+    assert env["JALEBI_GITHUB_TOKEN"] == "ghp_x"
 
 
 def test_pr_title_and_body_closes_from_issues_json(q, session, repo_row) -> None:

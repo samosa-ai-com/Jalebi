@@ -57,7 +57,7 @@ const DEFAULT_HANDLERS = {
   "/api/repos": REPOS,
   "/api/models": { cli: "opencode", models: ["opencode-go/deepseek-v4-flash"] },
   "/api/github/tokens": {
-    default: null,
+
     accounts: [
       { name: "work", login: "acct2", masked: "ghp_****", token_type: "classic", granted_scopes: ["repo"], missing_scopes: [], note: null, valid: true, error: null },
     ],

@@ -15,7 +15,7 @@
 - PAT stored with `0600` permissions in `<data-dir>/secrets.json`.
 - Never logged, never sent to the browser, never passed to agent prompts.
 - **Git auth transport:** the PAT is passed to git via the `GIT_CONFIG_*` environment variables (`http.extraHeader: Authorization: basic base64(x-access-token:<PAT>)`) — it never appears in argv, URLs, or logs (GitHub requires Basic auth for git-over-HTTPS; Bearer works for the REST API only). Git subprocesses get a **hermetic env**: inherited `GIT_CONFIG_*`/`GIT_DIR` state is stripped and `GIT_CONFIG_NOSYSTEM=1`/`GIT_CONFIG_GLOBAL=/dev/null` pinned, so a parent-shell credential helper or `url.insteadOf` cannot hijack Jalebi's git (and agent git commands get the same treatment).
-- **Token precedence:** the **stored** token (`secrets.json`) is the source of truth (set via Settings); `JALEBI_GITHUB_TOKEN` is a test/bootstrap fallback and never overrides a stored token (PRD §F1).
+- **No primary token:** all PATs are equal named accounts (the vault). `JALEBI_GITHUB_TOKEN` / a legacy `github_token` are masking inputs only — never used to resolve which account runs a task (PRD §F1).
 - The token is the **only** credential (see `AGENTS.md` §3). The `gh` CLI is forbidden for testing; it is authorized only for local git operations on the Jalebi repo itself.
 
 ## 3. Secret masking in logs (PRD §F17)
@@ -29,8 +29,8 @@
 
 - Agents execute arbitrary shell code by design — each child process is scoped to its own worktree (cwd).
 - **Worktree-local confinement (config-level, no OS sandbox):** every worktree's `opencode.json` sets **`permission.external_directory: "deny"`** (deep-merged over the owner's global `external_directory: "allow"`). This blocks the built-in `read`/`edit`/`write`/`glob`/`grep` tools and path-bearing `bash` commands (e.g. `cat ~/.jalebi/secrets.json`) for anything outside the worktree, and `.env` files are denied by default. URL-based tools (`webfetch`/`websearch`, MCP URL tools) are unaffected, so the owner's MCP servers keep working.
-- **Token-free freeform agents:** freeform/screen_finding runs get **no** `JALEBI_GITHUB_TOKEN` and no git `http.extraHeader` credentials (`_agent_token_for`) — they commit locally and Jalebi pushes. There is no credential to exfiltrate and nothing to push with. Only `issue_fix`/`pr_review` agents receive the PAT (for GitHub reads).
-- **Honest limit (accepted tradeoff):** `external_directory: deny` is an opencode *pattern* gate, not an OS capability boundary. A determined agent obfuscating bash (`python3 -c "open(…)"`, env-var paths) could still reach host files. Combined with the token-free env there is little worth stealing; a true OS sandbox (e.g. `bwrap`/`firejail`) remains possible later but was intentionally **not** added (it would break the MCP servers the owner wants available).
+- **Selected-account agents:** every task runs as the account the owner picked; the agent's `JALEBI_GITHUB_TOKEN` is that account's PAT (GitHub API use only). The agent gets **no git push credentials** (`auth_env` is never applied to agent envs), so it structurally cannot push — Jalebi is the only pusher. There is no default/fallback: a task without an account is refused at creation.
+- **Honest limit (accepted tradeoff):** `external_directory: deny` is an opencode *pattern* gate, not an OS capability boundary. A determined agent obfuscating bash (`python3 -c "open(…)"`, env-var paths) could still reach host files. The agent holds the selected account's PAT (API use), so a fully malicious agent could read the token from its own env; a true OS sandbox (e.g. `bwrap`/`firejail`) remains possible later but was intentionally **not** added (it would break the MCP servers the owner wants available).
 
 ## 5. Publishing safety (PRD §F9, §14)
 
@@ -46,7 +46,7 @@
 
 - **Token leak:** if the token is suspected leaked (pasted into a committed file, chat log, etc.), tell the user immediately so it can be revoked. Token values only ever live in git-ignored files (`.env`, `~/.jalebi/secrets.json`).
 - **Exposure via tunnel:** a tunnel exposes the localhost app; require the UI password and document the risk.
-- **Agent code execution:** agents run arbitrary shell code by design; confined to the worktree via `external_directory: deny`; token-free for freeform. No OS-level sandbox (would break MCPs).
+- **Agent code execution:** agents run arbitrary shell code by design; confined to the worktree via `external_directory: deny`. The selected account's PAT is exposed for GitHub API use but **no git push credentials** are given — the agent cannot push.
 
 ## 8. Reference
 
@@ -56,7 +56,7 @@
 Layered defense — **all three must hold** for an agent run:
 
 1. **opencode permission deny** — every worktree gets an `opencode.json` whose `permission.bash` denies `gh`/`gh *`/full-path variants (`worktree_bootstrap.OPENCODE_GUARD`). Project config deep-merges over the user's global config, so the deny wins.
-2. **Env hygiene** — the agent env never has `GH_TOKEN`/`GITHUB_TOKEN` (inherited ones are stripped) or a leaked inherited `JALEBI_GITHUB_TOKEN`; `GH_CONFIG_DIR` points at a nonexistent dir. Only `issue_fix`/`pr_review` agents get `JALEBI_GITHUB_TOKEN` (used by curl for GitHub reads); freeform agents get **no** token and no git push credentials at all. Even a guard bypass cannot authenticate `gh`.
+2. **Env hygiene** — the agent env never has `GH_TOKEN`/`GITHUB_TOKEN` (inherited ones are stripped) or a leaked inherited `JALEBI_GITHUB_TOKEN` (set to `None`, and `_spawn` builds from the passed env so nothing from the server leaks in); `GH_CONFIG_DIR` points at a nonexistent dir. Every task's `JALEBI_GITHUB_TOKEN` is the **selected account's** PAT (GitHub API), and **no git push credentials** are given to any agent. Even a guard bypass cannot authenticate `gh`.
 3. **Instructions** — `AGENTS.md` + follow-up prompts say never to use `gh`/forks, and working git credentials remove any incentive.
 
 Remaining risk (documented): a hypothetical full-path `/usr/bin/gh` call inside a compound command could reach a shell, but it cannot act as the owner (no credentials). Jalebi itself never calls `gh`.

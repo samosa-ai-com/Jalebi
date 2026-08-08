@@ -17,7 +17,7 @@ from jalebi.adapters.types import AgentEvent
 from jalebi.config import Config
 from jalebi.db import Repo, Run, Session, Task, utcnow
 from jalebi.events import TaskEvents
-from jalebi.git_workspace import GitWorkspace, auth_env
+from jalebi.git_workspace import GitWorkspace
 from jalebi.github import GitHubClient
 
 logger = logging.getLogger(__name__)
@@ -46,27 +46,23 @@ _GIT_ENV_KEYS = (
 
 
 def _build_agent_env(token: str | None) -> dict[str, str | None]:
-    """Env for the agent subprocess: owner-PAT git creds + bot commit identity.
+    """Env for the agent subprocess: the selected account's PAT + bot identity.
 
-    ``gh`` is deliberately never authenticated: ``JALEBI_GITHUB_TOKEN`` is the
-    only token exposed, and any inherited ``GH_TOKEN``/``GITHUB_TOKEN`` are
-    stripped so even a guard bypass cannot act as the owner via gh. Inherited
-    ``GIT_CONFIG_*``/``GIT_DIR`` state is also stripped so the agent's git
+    ``gh`` is deliberately never authenticated: any inherited ``GH_TOKEN``/
+    ``GITHUB_TOKEN`` are stripped so even a guard bypass cannot act via gh.
+    Inherited ``GIT_CONFIG_*``/``GIT_DIR`` state is stripped so the agent's git
     commands cannot be redirected by the parent shell's environment.
 
-    ``token`` is the owner PAT to expose to the agent (used for GitHub reads by
-    issue/review agents). A ``None`` token (freeform/screen_finding) yields a
-    **token-free** environment: no ``JALEBI_GITHUB_TOKEN`` and no git
-    ``http.extraHeader`` credentials, so the agent structurally cannot push or
-    act on GitHub — Jalebi pushes and publishes for it.
+    The agent gets ``JALEBI_GITHUB_TOKEN`` = the **selected account's** PAT for
+    GitHub REST API use (curl), but NO git push credentials — ``auth_env`` is
+    deliberately not applied, so the agent structurally cannot ``git push``;
+    Jalebi is the only pusher. If ``token`` is None there is no token to expose.
     """
     env: dict[str, str | None] = {
         key: value
         for key, value in os.environ.items()
         if not key.startswith(_GIT_ENV_PREFIXES) and key not in _GIT_ENV_KEYS
     }
-    if token:
-        env.update(auth_env(token))
     env.update(
         {
             "GIT_CONFIG_NOSYSTEM": "1",
@@ -83,9 +79,9 @@ def _build_agent_env(token: str | None) -> dict[str, str | None]:
     if token:
         env["JALEBI_GITHUB_TOKEN"] = token
     else:
-        # Never leak an inherited JALEBI_GITHUB_TOKEN (e.g. from .env) into a
-        # token-free agent environment.
-        env.pop("JALEBI_GITHUB_TOKEN", None)
+        # Never leak an inherited JALEBI_GITHUB_TOKEN (e.g. from .env) into the
+        # agent environment.
+        env["JALEBI_GITHUB_TOKEN"] = None
     return env
 
 
@@ -298,17 +294,14 @@ class TaskQueue:
 
     @staticmethod
     def _agent_token_for(task: Task, token: str | None) -> str | None:
-        """Whether to expose the owner PAT to the agent subprocess.
+        """The token to expose to the agent subprocess.
 
-        Only issue/review agents get the token (they may need GitHub reads such
-        as fetching PR review comments). Freeform/screen_finding/triggered tasks
-        are **token-free** — no JALEBI_GITHUB_TOKEN, no git push credentials —
-        so the agent structurally cannot push or act on GitHub; Jalebi pushes
-        and publishes for it.
+        Every task type gets the **selected account's** token as
+        ``JALEBI_GITHUB_TOKEN`` — freeform included — so the agent acts as the
+        exact account the owner picked for the task. There is no default or
+        fallback: if resolution produced ``None`` there is no token to expose.
         """
-        if token is None:
-            return None
-        return token if task.type in ("issue_fix", "pr_review") else None
+        return token
 
     def _prepare_run(self, session, task: Task, cli: str) -> Run:
         """Open a fresh run row and flip the task to ``running``."""

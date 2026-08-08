@@ -128,7 +128,6 @@ export interface GithubContext {
 
 export interface Account {
   name: string;
-  is_default?: boolean;
   login: string | null;
   masked: string;
   token_type: string | null;
@@ -140,7 +139,6 @@ export interface Account {
 }
 
 export interface TokensResponse {
-  default: string | null;
   accounts: Account[];
 }
 

@@ -99,7 +99,7 @@ function CreateTask({
   const repo = repoById(repos, effectiveRepoId);
 
   function accountLabel(name: string | null | undefined): string {
-    if (!name) return "Default account";
+    if (!name) return "Unknown account";
     return accounts.find((a) => a.name === name)?.login ?? name;
   }
 
@@ -210,12 +210,12 @@ function CreateTask({
             {(() => {
               const groups = new Map<string, Repo[]>();
               for (const r of repos) {
-                const key = r.pat_name ?? "__default__";
+                const key = r.pat_name ?? "";
                 if (!groups.has(key)) groups.set(key, []);
                 groups.get(key)!.push(r);
               }
               return [...groups.entries()].map(([key, list]) => (
-                <optgroup key={key} label={accountLabel(key === "__default__" ? null : key)}>
+                <optgroup key={key} label={accountLabel(key || null)}>
                   {list.map((r) => (
                     <option key={r.id} value={r.id}>
                       {r.full_name}
@@ -312,14 +312,11 @@ function CreateTask({
           onChange={setPatName}
           placeholder="Inherit repo account"
         >
-          <option value="default">Default account (primary)</option>
-          {accounts
-            .filter((a) => !a.is_default)
-            .map((a) => (
-              <option key={a.name} value={a.name}>
-                {a.login ?? a.name} ({a.masked})
-              </option>
-            ))}
+          {accounts.map((a) => (
+            <option key={a.name} value={a.name}>
+              {a.login ?? a.name} ({a.masked})
+            </option>
+          ))}
         </Select>
         <Select
           label="Publish mode"

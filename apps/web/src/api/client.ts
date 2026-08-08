@@ -7,7 +7,6 @@ import type {
   SettingsMap,
   SseEvent,
   Task,
-  TokenInfo,
   TokensResponse,
 } from "../types";
 
@@ -50,11 +49,6 @@ export const api = {
   getModels: () => request<{ cli: string; models: string[] }>("/api/models"),
   updateSetting: (key: string, value: unknown) =>
     request<SettingsMap>(`/api/settings`, { method: "POST", body: JSON.stringify({ key, value }) }),
-  putGithubToken: (token: string) =>
-    request<{ stored: boolean; detail: TokenInfo }>("/api/github/token", {
-      method: "PUT",
-      body: JSON.stringify({ token }),
-    }),
   getGithubRepos: (account?: string) =>
     request<GithubRepo[]>(
       `/api/github/repos${account ? `?account=${encodeURIComponent(account)}` : ""}`

@@ -33,8 +33,8 @@ def _repo_name(session, repo_id: int) -> str | None:
 
 
 def _valid_pat(config, name: str | None) -> bool:
-    """A PAT/account name is valid if it's empty, the default account, or a named one."""
-    return name in (None, "", "default") or name in secrets.token_names(config)
+    """A PAT/account name is valid only if it's a stored named account."""
+    return name in secrets.token_names(config)
 
 
 def _masker(session) -> Callable[[str], str]:
@@ -42,9 +42,6 @@ def _masker(session) -> Callable[[str], str]:
     patterns = settings.get_setting(session, "secret_patterns") or []
     patterns = [str(p) for p in patterns] if isinstance(patterns, list) else []
     values = secrets.all_token_values(config)
-    active = secrets.resolve_token(config, None)
-    if active and active not in values:
-        values.append(active)
     return masking.build_masker(values, patterns)
 
 
@@ -147,7 +144,7 @@ def create_task() -> ResponseReturnValue:
         publish_mode = "auto" if type_ == "issue_fix" else "manual"
 
     pat_name = payload.get("pat_name")
-    if not _valid_pat(config, pat_name):
+    if pat_name is not None and not _valid_pat(config, pat_name):
         return jsonify({"error": f"unknown PAT: {pat_name}"}), 400
 
     source_branch = payload.get("source_branch")
@@ -158,8 +155,13 @@ def create_task() -> ResponseReturnValue:
     if target_branch is None or not str(target_branch):
         target_branch = repo.default_branch if repo else "main"
 
-    # A task inherits the account that owns the selected repo unless overridden.
+    # The account is explicit, never guessed: the user-selected one, else the
+    # account bound to the repo at connect time. No "default"/fallback exists.
     effective_pat = pat_name or (repo.pat_name if repo is not None else None)
+    if not effective_pat:
+        return jsonify({"error": "select an account (pat_name) for this task"}), 400
+    if not _valid_pat(config, effective_pat):
+        return jsonify({"error": f"unknown PAT: {effective_pat}"}), 400
 
     try:
         context = _fetch_context(
@@ -349,8 +351,10 @@ def followup_task(task_id: int) -> ResponseReturnValue:
     if prev is None:
         return jsonify({"error": "no resumable session for this task"}), 409
 
+    # Optional follow-up account override: when omitted, the follow-up resumes
+    # under the task's own account (no default/fallback exists).
     pat_name = payload.get("pat_name") if isinstance(payload, dict) else None
-    if not _valid_pat(config, pat_name):
+    if pat_name is not None and not _valid_pat(config, pat_name):
         return jsonify({"error": f"unknown PAT: {pat_name}"}), 400
     model = payload.get("model") if isinstance(payload, dict) else None
 

@@ -6,9 +6,9 @@
 
 ## 1. The only credential
 
-- **`JALEBI_GITHUB_TOKEN`** — the owner's GitHub personal access token, stored locally in the git-ignored `.env` (dev) or `<data-dir>/secrets.json` with `0600` permissions (runtime).
+- **All PATs are equal named accounts.** Every token lives in the `0600` secrets file (`secrets.json` → `github_tokens: [{name, token}]`). There is **no primary/default account and no fallback**: the account selected for a task is the account used, and nothing silently substitutes a different one.
 - **Python client (httpx):** `jalebi/github.py` — a thin REST wrapper (no PyGithub). The only component that talks to GitHub.
-- **Secrets flow (`jalebi/secrets.py`):** the **stored** token (`secrets.json` `github_token`, `0600`, written atomically via a temp file) is the **source of truth** — the token the owner sets via the Settings UI (`PUT /api/github/token`). `JALEBI_GITHUB_TOKEN` remains a **test/bootstrap fallback** when nothing is stored, but never overrides a stored token (PRD F1: "user supplies a PAT in Settings"). It is no longer mirrored into the store at startup.
+- **Secrets flow (`jalebi/secrets.py`):** `resolve_token(config, name)` returns the named account's token **or `None`** — never another account. `JALEBI_GITHUB_TOKEN` and a legacy stored `github_token` are used **only for masking** (so a stray value never survives into logs), never for resolution.
 - **The `gh` CLI is forbidden** (PRD §17.2). No other token/credential is ever used (see `AGENTS.md` §3). No endpoint ever returns or logs the token.
 
 ## 2. Required scopes & validation (PRD §F1)
@@ -90,11 +90,11 @@ Implemented via the same client (Phase 0): issue/PR context fetch, publish (crea
 - PRD §F1 (PAT), §F7 (reviewers), §F9 (publish), §F14 (webhooks), §F15 (check runs), §17.2 (no `gh` CLI).
 ## 9. Named PAT vault (multi-token)
 
-- Jalebi stores a list of **named PATs** in the `0600` secrets file (`secrets.json` → `github_tokens: [{name, token}]`), alongside the primary `github_token` (the **stored** value wins; `JALEBI_GITHUB_TOKEN` is only a bootstrap fallback).
+- Jalebi stores **named PATs** in the `0600` secrets file (`secrets.json` → `github_tokens: [{name, token}]`). Every PAT is an equal account — there is no primary/default and no fallback.
 - `GET/POST/DELETE /api/github/tokens` manage the vault; add validates first (`validate_token`), the UI sees only **masked** previews (never values).
-- Tasks and follow-ups carry a `pat_name`; the queue resolves the token via `secrets.resolve_token(config, name)` (fallback = primary) and uses it for git credentials, GitHub calls, the agent `JALEBI_GITHUB_TOKEN`, and masking. **All** known PATs are masked at ingest.
+- Tasks and follow-ups carry a `pat_name`; the queue resolves the token via `secrets.resolve_token(config, name)` (strict: named only, else `None` → an explicit error) and uses it for GitHub calls, the agent `JALEBI_GITHUB_TOKEN`, and masking. The agent env carries the selected PAT for GitHub **API** use but **no git push credentials** — Jalebi is the only pusher. **All** known PATs are masked at ingest.
 - New client methods (httpx): `list_issues`, `get_issue`, `comment_on_issue`, `list_prs`, `get_pr`, `post_pr_review` (event `COMMENT`), `list_branches`, `find_pr_by_head` (same-repo dedup).
-- `GET /api/github/context?repo=` returns open issues + open PRs + branches for the task-form pickers.
+- `GET /api/github/context?repo=&account=` returns open issues + open PRs + branches for the task-form pickers.
 
 ## 10. Publish dedup & PR accuracy
 
@@ -104,12 +104,12 @@ Implemented via the same client (Phase 0): issue/PR context fetch, publish (crea
 - PR title/body come from the agent-written `.jalebi/pr.md` (title + actual-implementation description), falling back to the prompt. `Closes #N` + Jalebi footer + `Co-authored-by` are appended. `issue_fix` tasks get an **issue comment** linking the PR.
 - GitHub PR review comments are posted with `event: "COMMENT"` only — Jalebi never approves or merges.
 
-## 11. Multi-account model (each PAT = an account)
+## 11. Multi-account model (each PAT = an account, all equal)
 
-- Every saved PAT is a first-class **account**. The primary token (`JALEBI_GITHUB_TOKEN` / `github_token`) is the **default** account; each named vault entry is its own account.
-- `GET /api/github/tokens` → `{default, accounts:[...]}` with **live validation** per account (`login`, `token_type`, scopes, valid/error) — one `/user` call each on load.
+- Every saved PAT is a first-class **account** and all are equal — there is no "default"/"primary" account.
+- `GET /api/github/tokens` → `{accounts:[...]}` with **live validation** per account (`login`, `token_type`, scopes, valid/error) — one `/user` call each on load.
 - `GET /api/github/repos` lists repos **across all accounts**, each tagged `account: <name>` (`?account=` filters). A failing account contributes an `{account, error}` entry, not a page failure.
-- `repos.pat_name` records which account owns a connected repo. `connect_repo` accepts `pat_name`; `prune`/`branches` resolve each repo's token from its `pat_name` (fallback = primary). Reconnecting a repo without a `pat_name` clears it back to the default account.
-- Task creation **inherits** the selected repo's account (`tasks.pat_name` defaults to `repo.pat_name`); the Credentials dropdown still overrides.
+- `repos.pat_name` records which account owns a connected repo. **Connecting a repo requires an explicit account** (`pat_name`); `prune`/`branches`/`reconnect` resolve each repo's token strictly from its `pat_name`.
+- Task creation **requires an account**: the user-selected one, else the repo's bound account — never a fallback to anything else. The Credentials dropdown overrides the repo's account.
 - Removing an account **deletes its repos (connected AND soft-disconnected) and the tasks on them** (runs, follow-ups, artifacts, worktrees, mirrors). Queued/running tasks for the account are cancelled first. `DELETE /api/github/tokens/<name>` returns `{removed, repos_affected, tasks_affected}` so the UI can confirm.
 - GitHub list endpoints (`list_repos`/`list_issues`/`list_prs`/`list_branches`) follow `Link: rel="next"` pagination (capped at 10 pages) — nothing silently drops past page 1.

@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from jalebi import repos, settings, tasks
+from jalebi import repos, secrets, settings, tasks
 from jalebi.adapters.types import AgentEvent
 from jalebi.db import Run, utcnow
 from jalebi.git_workspace import GitWorkspace
@@ -71,10 +71,8 @@ class FakeGitHubClient:
 
 
 @pytest.fixture(autouse=True)
-def _fake_token(monkeypatch):
-    monkeypatch.setattr(
-        "jalebi.queue.secrets.load_github_token", lambda config: "ghp_test"
-    )
+def _fake_token(config, monkeypatch):
+    secrets.add_github_token(config, "test", "ghp_test")
 
 
 @pytest.fixture
@@ -98,7 +96,11 @@ def git_remote(tmp_path) -> str:
 @pytest.fixture
 def repo_row(session, git_remote):
     row, _ = repos.upsert_repo(
-        session, full_name=FULL_NAME, default_branch="main", clone_url=git_remote
+        session,
+        full_name=FULL_NAME,
+        default_branch="main",
+        clone_url=git_remote,
+        pat_name="test",
     )
     return row
 
@@ -264,8 +266,12 @@ def test_publish_route_502_when_github_fails(app, session, repo_row, monkeypatch
 # -- github-unreachable 502 arms ------------------------------------------
 
 
-def test_github_status_502_when_unreachable(app, monkeypatch) -> None:
+def test_github_tokens_502_when_unreachable(app, monkeypatch) -> None:
     import httpx
+
+    from jalebi import secrets
+
+    secrets.add_github_token(app.config["JALEBI_CONFIG"], "test", "ghp_test")
 
     class BrokenClient:
         def __init__(self, token):
@@ -278,8 +284,13 @@ def test_github_status_502_when_unreachable(app, monkeypatch) -> None:
             pass
 
     monkeypatch.setattr("jalebi.routes.github.GitHubClient", BrokenClient)
-    resp = app.test_client().get("/api/github/status")
-    assert resp.status_code == 502
+    resp = app.test_client().get("/api/github/tokens")
+    # Per-account validation failures are surfaced as entries, not a hard 502.
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["accounts"][0]["name"] == "test"
+    assert body["accounts"][0]["valid"] is False
+    assert "unreachable" in body["accounts"][0]["error"]
 
 
 def test_github_repos_502_when_unreachable(app, monkeypatch) -> None:
@@ -468,12 +479,12 @@ def test_cancel_between_pickup_and_running_bails(q, session, repo_row, monkeypat
 
         with db.Session() as s2:
             t2 = s2.get(db.Task, task.id)
+            assert t2 is not None
             t2.status = "cancelled"
             s2.commit()
         return "ghp_test"
 
     monkeypatch.setattr("jalebi.queue.secrets.resolve_token", _resolve_and_cancel)
-    monkeypatch.setattr("jalebi.queue.secrets.load_github_token", lambda c: "ghp_test")
 
     q._run_task(task.id)
 

@@ -27,7 +27,7 @@
 | `default_branch` | text, default `'main'` | |
 | `clone_url` | text | never exposed via the API |
 | `pat_scope` | text null | granted scopes snapshot |
-| `pat_name` | text null | the account that owns this repo (`null` = default) |
+| `pat_name` | text null | the account that owns this repo (required at connect; no default) |
 | `connected` | bool, default 1 | soft-disconnect flag |
 | `webhook_registered` | bool, default 0 | |
 | `poll_fallback` | bool, default 0 | |
@@ -46,7 +46,7 @@
 | `agent_id` | text null | catalog agent slug — **no FK yet**; FK added in Phase 1 |
 | `model` | text null | |
 | `cli` | text null | backend override |
-| `pat_name` | text null | account override (`null`/`"default"` = default account) |
+| `pat_name` | text null | the **account** that runs this task (required at creation; no default) |
 | `issues_json` | text null | JSON list of linked issue numbers |
 | `prs_json` | text null | JSON list of PR numbers (review tasks) |
 | `context_json` | text null | masked issue/PR context embedded into the agent brief |

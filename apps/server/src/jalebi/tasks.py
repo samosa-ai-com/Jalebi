@@ -45,6 +45,12 @@ def create_task(
         raise ValueError(
             f"prompt too long ({len(prompt)} chars; max {MAX_PROMPT_CHARS})"
         )
+    # Every task runs as an explicit account: the selected one, else the account
+    # bound to the repo at connect time. No default/fallback exists — a task
+    # without an account is a config error.
+    effective_pat = pat_name or repo.pat_name
+    if not effective_pat:
+        raise ValueError(f"repo {repo.full_name} has no bound account; select one")
 
     masked_prompt = masker(prompt) if masker else prompt
     task = Task(
@@ -54,7 +60,7 @@ def create_task(
         target_branch=target_branch,
         model=model,
         cli=cli,
-        pat_name=pat_name,
+        pat_name=effective_pat,
         issues_json=json.dumps(issues) if issues else None,
         prs_json=json.dumps(prs) if prs else None,
         context_json=json.dumps(context) if context else None,

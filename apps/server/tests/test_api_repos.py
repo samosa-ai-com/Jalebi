@@ -27,8 +27,9 @@ class FakeGitHubClient:
 
 
 @pytest.fixture(autouse=True)
-def _no_env_token(monkeypatch):
+def _no_env_token(monkeypatch, app):
     monkeypatch.delenv(secrets.ENV_GITHUB_TOKEN, raising=False)
+    secrets.add_github_token(app.config["JALEBI_CONFIG"], "test", "ghp_test")
 
 
 def test_get_repos_empty(client: FlaskClient) -> None:
@@ -37,9 +38,10 @@ def test_get_repos_empty(client: FlaskClient) -> None:
     assert resp.get_json() == []
 
 
-def test_connect_requires_token(client: FlaskClient) -> None:
+def test_connect_requires_account(client: FlaskClient) -> None:
     resp = client.post("/api/repos", json={"full_name": "octocat/hello"})
-    assert resp.status_code == 409
+    assert resp.status_code == 400
+    assert "account" in resp.get_json()["error"]
 
 
 def test_connect_missing_full_name(client: FlaskClient) -> None:
@@ -48,17 +50,15 @@ def test_connect_missing_full_name(client: FlaskClient) -> None:
 
 
 def test_connect_not_found(client: FlaskClient, app, monkeypatch) -> None:
-    secrets.store_secret(app.config["JALEBI_CONFIG"], secrets.GITHUB_TOKEN_KEY, "ghp_test")
     monkeypatch.setattr(routes_repos, "GitHubClient", FakeGitHubClient)
-    resp = client.post("/api/repos", json={"full_name": "octocat/nope"})
+    resp = client.post("/api/repos", json={"full_name": "octocat/nope", "pat_name": "test"})
     assert resp.status_code == 404
 
 
 def test_connect_creates_and_lists(client: FlaskClient, app, monkeypatch) -> None:
-    secrets.store_secret(app.config["JALEBI_CONFIG"], secrets.GITHUB_TOKEN_KEY, "ghp_test")
     monkeypatch.setattr(routes_repos, "GitHubClient", FakeGitHubClient)
 
-    resp = client.post("/api/repos", json={"full_name": "octocat/hello"})
+    resp = client.post("/api/repos", json={"full_name": "octocat/hello", "pat_name": "test"})
     assert resp.status_code == 201
     body = resp.get_json()
     assert body["full_name"] == "octocat/hello"
@@ -71,19 +71,19 @@ def test_connect_creates_and_lists(client: FlaskClient, app, monkeypatch) -> Non
 
 
 def test_connect_update_returns_200(client: FlaskClient, app, monkeypatch) -> None:
-    secrets.store_secret(app.config["JALEBI_CONFIG"], secrets.GITHUB_TOKEN_KEY, "ghp_test")
     monkeypatch.setattr(routes_repos, "GitHubClient", FakeGitHubClient)
 
-    assert client.post("/api/repos", json={"full_name": "octocat/hello"}).status_code == 201
-    resp = client.post("/api/repos", json={"full_name": "octocat/hello"})
+    connect = {"full_name": "octocat/hello", "pat_name": "test"}
+    assert client.post("/api/repos", json=connect).status_code == 201
+    resp = client.post("/api/repos", json=connect)
     assert resp.status_code == 200
     assert len(client.get("/api/repos").get_json()) == 1
 
 
 def test_disconnect_repo(client: FlaskClient, app, monkeypatch, session) -> None:
-    secrets.store_secret(app.config["JALEBI_CONFIG"], secrets.GITHUB_TOKEN_KEY, "ghp_test")
     monkeypatch.setattr(routes_repos, "GitHubClient", FakeGitHubClient)
-    created = client.post("/api/repos", json={"full_name": "octocat/hello"}).get_json()
+    _CONNECT = {"full_name": "octocat/hello", "pat_name": "test"}
+    created = client.post("/api/repos", json=_CONNECT).get_json()
     assert client.get("/api/repos").get_json() != []
     resp = client.delete(f"/api/repos/{created['id']}")
     assert resp.status_code == 200
@@ -96,9 +96,8 @@ def test_disconnect_missing_repo(client: FlaskClient) -> None:
 
 
 def test_prune_removes_deleted_repos(client: FlaskClient, app, monkeypatch) -> None:
-    secrets.store_secret(app.config["JALEBI_CONFIG"], secrets.GITHUB_TOKEN_KEY, "ghp_test")
     monkeypatch.setattr(routes_repos, "GitHubClient", FakeGitHubClient)
-    client.post("/api/repos", json={"full_name": "octocat/hello"})
+    client.post("/api/repos", json={"full_name": "octocat/hello", "pat_name": "test"})
     # create a stale connected repo that no longer exists on GitHub
     app.app_context().push()
     from jalebi import db
@@ -106,7 +105,7 @@ def test_prune_removes_deleted_repos(client: FlaskClient, app, monkeypatch) -> N
     s = db.Session()
     from jalebi.db import Repo
 
-    s.add(Repo(full_name="octocat/gone", default_branch="main", clone_url="u"))
+    s.add(Repo(full_name="octocat/gone", default_branch="main", clone_url="u", pat_name="test"))
     s.commit()
     s.close()
     resp = client.post("/api/repos/prune")
@@ -115,15 +114,20 @@ def test_prune_removes_deleted_repos(client: FlaskClient, app, monkeypatch) -> N
     assert names == ["octocat/hello"]
 
 
-def test_prune_requires_token(client: FlaskClient) -> None:
+def test_prune_requires_token(client: FlaskClient, app) -> None:
+    """With no accounts at all, prune refuses."""
+    from jalebi import secrets as sec
+
+    # Remove the autouse account so there are zero tokens.
+    sec.remove_github_token(app.config["JALEBI_CONFIG"], "test")
     resp = client.post("/api/repos/prune")
     assert resp.status_code == 409
 
 
 def test_branches_for_connected_repo(client: FlaskClient, app, monkeypatch) -> None:
-    secrets.store_secret(app.config["JALEBI_CONFIG"], secrets.GITHUB_TOKEN_KEY, "ghp_test")
     monkeypatch.setattr(routes_repos, "GitHubClient", FakeGitHubClient)
-    created = client.post("/api/repos", json={"full_name": "octocat/hello"}).get_json()
+    _CONNECT = {"full_name": "octocat/hello", "pat_name": "test"}
+    created = client.post("/api/repos", json=_CONNECT).get_json()
     monkeypatch.setattr(
         routes_repos.GitWorkspace, "list_branches", lambda self, full_name: ["main", "dev"]
     )
@@ -136,9 +140,9 @@ def test_branches_for_connected_repo(client: FlaskClient, app, monkeypatch) -> N
 
 
 def test_disconnect_is_soft_and_hidden(client: FlaskClient, app, monkeypatch, session) -> None:
-    secrets.store_secret(app.config["JALEBI_CONFIG"], secrets.GITHUB_TOKEN_KEY, "ghp_test")
     monkeypatch.setattr(routes_repos, "GitHubClient", FakeGitHubClient)
-    created = client.post("/api/repos", json={"full_name": "octocat/hello"}).get_json()
+    _CONNECT = {"full_name": "octocat/hello", "pat_name": "test"}
+    created = client.post("/api/repos", json=_CONNECT).get_json()
 
     resp = client.delete(f"/api/repos/{created['id']}")
     assert resp.status_code == 200
@@ -153,9 +157,9 @@ def test_disconnect_is_soft_and_hidden(client: FlaskClient, app, monkeypatch, se
 
 
 def test_reconnect(client: FlaskClient, app, monkeypatch) -> None:
-    secrets.store_secret(app.config["JALEBI_CONFIG"], secrets.GITHUB_TOKEN_KEY, "ghp_test")
     monkeypatch.setattr(routes_repos, "GitHubClient", FakeGitHubClient)
-    created = client.post("/api/repos", json={"full_name": "octocat/hello"}).get_json()
+    _CONNECT = {"full_name": "octocat/hello", "pat_name": "test"}
+    created = client.post("/api/repos", json=_CONNECT).get_json()
     client.delete(f"/api/repos/{created['id']}")
 
     resp = client.post(f"/api/repos/{created['id']}/reconnect")
@@ -165,9 +169,9 @@ def test_reconnect(client: FlaskClient, app, monkeypatch) -> None:
 
 
 def test_reconnect_404_upstream(client: FlaskClient, app, monkeypatch) -> None:
-    secrets.store_secret(app.config["JALEBI_CONFIG"], secrets.GITHUB_TOKEN_KEY, "ghp_test")
     monkeypatch.setattr(routes_repos, "GitHubClient", FakeGitHubClient)
-    created = client.post("/api/repos", json={"full_name": "octocat/hello"}).get_json()
+    _CONNECT = {"full_name": "octocat/hello", "pat_name": "test"}
+    created = client.post("/api/repos", json=_CONNECT).get_json()
     client.delete(f"/api/repos/{created['id']}")
     # FakeGitHubClient only knows octocat/hello; reconnect succeeds for it, so use a
     # repo the client doesn't know to hit the 404 path.
@@ -178,7 +182,6 @@ def test_reconnect_404_upstream(client: FlaskClient, app, monkeypatch) -> None:
 def test_connect_with_pat_name(client: FlaskClient, app, monkeypatch) -> None:
     from jalebi import secrets as sec
 
-    sec.store_secret(app.config["JALEBI_CONFIG"], sec.GITHUB_TOKEN_KEY, "ghp_default")
     sec.add_github_token(app.config["JALEBI_CONFIG"], "work", "ghp_work")
     monkeypatch.setattr(routes_repos, "GitHubClient", FakeGitHubClient)
 
@@ -192,11 +195,9 @@ def test_connect_with_pat_name(client: FlaskClient, app, monkeypatch) -> None:
 
 
 def test_connect_unknown_pat_rejected(client: FlaskClient, app) -> None:
-    from jalebi import secrets as sec
-
-    sec.store_secret(app.config["JALEBI_CONFIG"], sec.GITHUB_TOKEN_KEY, "ghp_default")
     resp = client.post("/api/repos", json={"full_name": "octocat/hello", "pat_name": "nope"})
     assert resp.status_code == 400
+    assert "account" in resp.get_json()["error"]
 
 
 def test_prune_continues_on_transient_error(client, app, monkeypatch, session) -> None:
@@ -207,7 +208,6 @@ def test_prune_continues_on_transient_error(client, app, monkeypatch, session) -
     from jalebi import repos as repos_svc
     from jalebi.db import Repo
 
-    secrets.store_secret(app.config["JALEBI_CONFIG"], secrets.GITHUB_TOKEN_KEY, "ghp_test")
 
     class PartialClient:
         def __init__(self, token):
@@ -225,13 +225,13 @@ def test_prune_continues_on_transient_error(client, app, monkeypatch, session) -
 
     monkeypatch.setattr(routes_repos, "GitHubClient", PartialClient)
     repos_svc.upsert_repo(
-        session, full_name="octocat/deleted", default_branch="main", clone_url="x"
+        session, full_name="octocat/deleted", default_branch="main", clone_url="x", pat_name="test"
     )
     repos_svc.upsert_repo(
-        session, full_name="octocat/flaky", default_branch="main", clone_url="x"
+        session, full_name="octocat/flaky", default_branch="main", clone_url="x", pat_name="test"
     )
     repos_svc.upsert_repo(
-        session, full_name="octocat/hello", default_branch="main", clone_url="x"
+        session, full_name="octocat/hello", default_branch="main", clone_url="x", pat_name="test"
     )
 
     resp = client.post("/api/repos/prune")
@@ -248,11 +248,10 @@ def test_prune_continues_on_transient_error(client, app, monkeypatch, session) -
 
 
 def test_reconnect_uses_repo_bound_account(client, app, monkeypatch, session) -> None:
-    """Reconnecting a named-account repo resolves that account's token, not default."""
+    """Reconnecting a named-account repo resolves that account's token."""
     from jalebi import repos as repos_svc
     from jalebi import secrets as sec
 
-    sec.store_secret(app.config["JALEBI_CONFIG"], sec.GITHUB_TOKEN_KEY, "ghp_default")
     sec.add_github_token(app.config["JALEBI_CONFIG"], "work", "ghp_work")
 
     captured: list[str] = []
@@ -283,11 +282,10 @@ def test_reconnect_uses_repo_bound_account(client, app, monkeypatch, session) ->
     assert captured == ["ghp_work"]
 
 
-def test_connect_empty_pat_normalizes_to_default(client, app, monkeypatch) -> None:
-    """An explicit empty pat_name connects the repo to the default account (None)."""
-    secrets.store_secret(app.config["JALEBI_CONFIG"], secrets.GITHUB_TOKEN_KEY, "ghp_test")
+def test_connect_empty_pat_rejected(client, app, monkeypatch) -> None:
+    """An explicit empty pat_name is rejected — an account is required."""
     monkeypatch.setattr(routes_repos, "GitHubClient", FakeGitHubClient)
 
     resp = client.post("/api/repos", json={"full_name": "octocat/hello", "pat_name": ""})
-    assert resp.status_code == 201
-    assert resp.get_json()["pat_name"] is None
+    assert resp.status_code == 400
+    assert "account" in resp.get_json()["error"]

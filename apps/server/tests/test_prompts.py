@@ -26,7 +26,10 @@ def _task(
 
 def test_agent_md_issue_fix_embeds_issue(session) -> None:
     repo = Repo(
-        full_name="owner/repo", default_branch="main", clone_url="https://github.com/owner/repo.git"
+        full_name="owner/repo",
+        default_branch="main",
+        clone_url="https://github.com/owner/repo.git",
+        pat_name="test",
     )
     session.add(repo)
     session.commit()
@@ -53,7 +56,10 @@ def test_agent_md_issue_fix_embeds_issue(session) -> None:
 
 def test_agent_md_pr_review_embeds_pr(session) -> None:
     repo = Repo(
-        full_name="owner/repo", default_branch="main", clone_url="https://github.com/owner/repo.git"
+        full_name="owner/repo",
+        default_branch="main",
+        clone_url="https://github.com/owner/repo.git",
+        pat_name="test",
     )
     session.add(repo)
     session.commit()
@@ -87,7 +93,10 @@ def test_agent_md_pr_review_embeds_pr(session) -> None:
 
 def test_followup_prompt_includes_constraints(session) -> None:
     repo = Repo(
-        full_name="owner/repo", default_branch="main", clone_url="https://github.com/owner/repo.git"
+        full_name="owner/repo",
+        default_branch="main",
+        clone_url="https://github.com/owner/repo.git",
+        pat_name="test",
     )
     session.add(repo)
     session.commit()

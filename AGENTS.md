@@ -60,14 +60,12 @@ This is critical and repeated: **all GitHub interaction in this project goes thr
 
 ### 3.1 The credentials
 
-- **Primary PAT — `JALEBI_GITHUB_TOKEN`** (the owner's personal access token), stored **locally**:
-  - While developing/testing: in the git-ignored **`.env`** file at the repo root (see `.env.example` for the key name and required scopes).
-  - At runtime: the **stored** token in `<data-dir>/secrets.json` (`0600`) is the **source of truth** (PRD §F1: "user supplies a PAT in Settings") and all GitHub calls go through the thin httpx GitHub client using it. `JALEBI_GITHUB_TOKEN` is a **test/bootstrap fallback** — it never overrides a stored token and is no longer mirrored into the store at startup.
-- **Named PAT vault:** Jalebi also stores a list of **named PATs** in the same `0600` secrets file. Tasks and follow-ups can pick which PAT to use (default = the primary). All PATs are masked everywhere.
+- **All PATs are equal named accounts.** Every token is stored by name in the `0600` secrets file `<data-dir>/secrets.json` (`github_tokens: [{name, token}]`, added via the GitHub page UI). There is **no primary/default account and no fallback** — the account selected for a task/repo is the one used, and a task without an account is refused.
+- **`JALEBI_GITHUB_TOKEN`** is **masking-only** (so a stray value never survives into logs) — it is never used to resolve which account runs anything. While developing/testing it may also be set in the git-ignored **`.env`** file (see `.env.example` for required scopes). All PATs are masked everywhere.
 
 ### 3.2 How agents must use it
 
-- **Always authenticate to GitHub using the selected PAT** (from `.env`, the secrets file, or the named vault). This is the **only** credential for: repo list, issues, PRs, reviews, comments, refs, clone/push, webhook registration, check runs, and PAT-scope validation.
+- **Always authenticate to GitHub using the selected account's PAT** (from the secrets-file vault). This is the **only** credential for: repo list, issues, PRs, reviews, comments, refs, clone/push, webhook registration, check runs, and PAT-scope validation.
 - When running git commands that authenticate, use a credential helper or `Authorization: Bearer $JALEBI_GITHUB_TOKEN` — never embed the token in a URL or command that gets logged.
 - **The `gh` CLI is banned for agents.** Jalebi hard-blocks it three ways: a worktree `opencode.json` that denies `gh` via opencode permission rules (overrides the global config), an agent environment with no `gh` auth (`GH_CONFIG_DIR` empty, `GH_TOKEN`/`GITHUB_TOKEN` stripped), and an explicit AGENTS.md/prompt instruction. Working git credentials are provided so agents never need to improvise.
 
@@ -149,7 +147,7 @@ Jalebi/
 │   │   │   ├── config.py          # env → Config (host/port/data_dir/db_url)
 │   │   │   ├── db.py              # SQLAlchemy engine/session + Phase-0 models
 │   │   │   ├── migrations/        # Alembic env.py + versions/
-│   │   │   ├── secrets.py         # 0600 secrets.json (primary PAT + named PAT vault)
+│   │   │   ├── secrets.py         # 0600 secrets.json (named PAT vault; no primary)
 │   │   │   ├── github.py          # thin httpx GitHub client (validate/PR/repos/issues/review)
 │   │   │   ├── git_workspace.py   # bare mirrors + worktrees + review worktrees + token-authenticated push
 │   │   │   ├── prompts.py         # per-task-type AGENTS.md + follow-up prompt builders

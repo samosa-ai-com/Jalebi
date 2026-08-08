@@ -24,23 +24,6 @@ def test_load_secret_missing_file(cfg: Config) -> None:
     assert secrets.load_secret(cfg, "github_token") is None
 
 
-def test_stored_token_wins_over_env(cfg: Config, monkeypatch) -> None:
-    secrets.store_secret(cfg, "github_token", "stored")
-    monkeypatch.setenv(secrets.ENV_GITHUB_TOKEN, "env_token")
-    assert secrets.load_github_token(cfg) == "stored"
-
-
-def test_env_token_used_when_no_stored(cfg: Config, monkeypatch) -> None:
-    monkeypatch.setenv(secrets.ENV_GITHUB_TOKEN, "env_token")
-    assert secrets.load_github_token(cfg) == "env_token"
-
-
-def test_stored_token_used_when_no_env(cfg: Config, monkeypatch) -> None:
-    monkeypatch.delenv(secrets.ENV_GITHUB_TOKEN, raising=False)
-    secrets.store_secret(cfg, "github_token", "stored")
-    assert secrets.load_github_token(cfg) == "stored"
-
-
 def test_named_tokens_crud(cfg: Config) -> None:
     secrets.add_github_token(cfg, "work", "ghp_work")
     secrets.add_github_token(cfg, "personal", "ghp_personal")
@@ -58,15 +41,33 @@ def test_add_named_token_replaces_same_name(cfg: Config) -> None:
     assert secrets.get_named_token(cfg, "work") == "ghp_new"
 
 
-def test_resolve_named_then_primary(cfg: Config, monkeypatch) -> None:
+def test_resolve_named_token(cfg: Config, monkeypatch) -> None:
     monkeypatch.delenv(secrets.ENV_GITHUB_TOKEN, raising=False)
     secrets.add_github_token(cfg, "work", "ghp_work")
     assert secrets.resolve_token(cfg, "work") == "ghp_work"
-    # unknown name falls back to the primary (here: the first named token)
-    assert secrets.resolve_token(cfg, "missing") == "ghp_work"
+
+
+def test_resolve_unknown_or_none_is_none(cfg: Config, monkeypatch) -> None:
+    """Resolution is strict: an unknown or missing account never falls back to
+    any other token (no primary/default/first-vault)."""
+    monkeypatch.delenv(secrets.ENV_GITHUB_TOKEN, raising=False)
     secrets.store_secret(cfg, "github_token", "ghp_primary")
-    assert secrets.resolve_token(cfg, "missing") == "ghp_primary"
-    assert secrets.resolve_token(cfg, None) == "ghp_primary"
+    secrets.add_github_token(cfg, "work", "ghp_work")
+    # Unknown name → None (NOT the primary, NOT the first vault entry).
+    assert secrets.resolve_token(cfg, "missing") is None
+    # None/empty → None.
+    assert secrets.resolve_token(cfg, None) is None
+    assert secrets.resolve_token(cfg, "") is None
+    # The named token still resolves exactly.
+    assert secrets.resolve_token(cfg, "work") == "ghp_work"
+
+
+def test_resolve_ignores_env_token(cfg: Config, monkeypatch) -> None:
+    """The env/bootstrap token is masked but never used for resolution."""
+    monkeypatch.setenv(secrets.ENV_GITHUB_TOKEN, "ghp_env")
+    secrets.add_github_token(cfg, "work", "ghp_work")
+    assert secrets.resolve_token(cfg, "work") == "ghp_work"
+    assert secrets.resolve_token(cfg, None) is None
 
 
 def test_all_token_values_dedup(cfg: Config, monkeypatch) -> None:
@@ -93,6 +94,6 @@ def test_named_token_metadata(cfg: Config) -> None:
     assert entry["login"] == "octocat"
 
 
-def test_add_github_token_reserves_default_name(cfg: Config) -> None:
-    with pytest.raises(ValueError, match="reserved"):
-        secrets.add_github_token(cfg, "default", "ghp_x")
+def test_add_github_token_rejects_empty_name(cfg: Config) -> None:
+    with pytest.raises(ValueError, match="empty"):
+        secrets.add_github_token(cfg, " ", "ghp_x")

@@ -179,14 +179,11 @@ function FollowUpComposer({
             <span className="mb-1.5 block text-xs font-medium text-ink-400">Credentials</span>
             <select value={patName} onChange={(e) => setPatName(e.target.value)} className="field">
               <option value="">Reuse task account</option>
-              <option value="default">Default account (primary)</option>
-              {accounts
-                .filter((a) => !a.is_default)
-                .map((a) => (
-                  <option key={a.name} value={a.name}>
-                    {a.login ?? a.name} ({a.masked})
-                  </option>
-                ))}
+              {accounts.map((a) => (
+                <option key={a.name} value={a.name}>
+                  {a.login ?? a.name} ({a.masked})
+                </option>
+              ))}
             </select>
           </label>
           <label className="block">
