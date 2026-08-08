@@ -45,22 +45,28 @@ _GIT_ENV_KEYS = (
 )
 
 
-def _build_agent_env(token: str) -> dict[str, str | None]:
+def _build_agent_env(token: str | None) -> dict[str, str | None]:
     """Env for the agent subprocess: owner-PAT git creds + bot commit identity.
 
     ``gh`` is deliberately never authenticated: ``JALEBI_GITHUB_TOKEN`` is the
     only token exposed, and any inherited ``GH_TOKEN``/``GITHUB_TOKEN`` are
     stripped so even a guard bypass cannot act as the owner via gh. Inherited
     ``GIT_CONFIG_*``/``GIT_DIR`` state is also stripped so the agent's git
-    commands cannot be redirected by the parent shell's environment — then
-    Jalebi's own ``auth_env`` credentials are applied on top.
+    commands cannot be redirected by the parent shell's environment.
+
+    ``token`` is the owner PAT to expose to the agent (used for GitHub reads by
+    issue/review agents). A ``None`` token (freeform/screen_finding) yields a
+    **token-free** environment: no ``JALEBI_GITHUB_TOKEN`` and no git
+    ``http.extraHeader`` credentials, so the agent structurally cannot push or
+    act on GitHub — Jalebi pushes and publishes for it.
     """
     env: dict[str, str | None] = {
         key: value
         for key, value in os.environ.items()
         if not key.startswith(_GIT_ENV_PREFIXES) and key not in _GIT_ENV_KEYS
     }
-    env.update(auth_env(token))
+    if token:
+        env.update(auth_env(token))
     env.update(
         {
             "GIT_CONFIG_NOSYSTEM": "1",
@@ -69,12 +75,17 @@ def _build_agent_env(token: str) -> dict[str, str | None]:
             "GIT_AUTHOR_EMAIL": GIT_USER_EMAIL,
             "GIT_COMMITTER_NAME": GIT_USER_NAME,
             "GIT_COMMITTER_EMAIL": GIT_USER_EMAIL,
-            "JALEBI_GITHUB_TOKEN": token,
             "GH_CONFIG_DIR": "/nonexistent-jalebi-gh",
             "GH_TOKEN": None,  # None → removed from the inherited environ
             "GITHUB_TOKEN": None,
         }
     )
+    if token:
+        env["JALEBI_GITHUB_TOKEN"] = token
+    else:
+        # Never leak an inherited JALEBI_GITHUB_TOKEN (e.g. from .env) into a
+        # token-free agent environment.
+        env.pop("JALEBI_GITHUB_TOKEN", None)
     return env
 
 
@@ -285,6 +296,20 @@ class TaskQueue:
 
     # -- run lifecycle -----------------------------------------------------
 
+    @staticmethod
+    def _agent_token_for(task: Task, token: str | None) -> str | None:
+        """Whether to expose the owner PAT to the agent subprocess.
+
+        Only issue/review agents get the token (they may need GitHub reads such
+        as fetching PR review comments). Freeform/screen_finding/triggered tasks
+        are **token-free** — no JALEBI_GITHUB_TOKEN, no git push credentials —
+        so the agent structurally cannot push or act on GitHub; Jalebi pushes
+        and publishes for it.
+        """
+        if token is None:
+            return None
+        return token if task.type in ("issue_fix", "pr_review") else None
+
     def _prepare_run(self, session, task: Task, cli: str) -> Run:
         """Open a fresh run row and flip the task to ``running``."""
         seq = session.execute(
@@ -381,7 +406,11 @@ class TaskQueue:
         task.status = final_status
         task.updated_at = utcnow()
 
-        if publish and run.status == "done" and settings.get_setting(session, "auto_publish"):
+        if (
+            publish
+            and run.status == "done"
+            and self._should_auto_publish(session, task)
+        ):
             if self._branch_ahead(task, git):
                 try:
                     task.pr_number = self._publish(task, repo, token, git, masker=masker)
@@ -448,6 +477,48 @@ class TaskQueue:
             except Exception:
                 logger.debug("diff capture failed for task %s", task.id)
 
+        # Uncommitted-work visibility (flaw #1): a done run whose working tree is
+        # dirty must not silently look clean. Surface the uncommitted files as a
+        # timeline step; if the agent produced NO commits but left work behind,
+        # capture the working-tree diff so it is still visible in the diff viewer.
+        if run.status == "done" and task.type != "pr_review":
+            try:
+                dirty = git.working_tree_status(worktree)
+            except Exception:
+                dirty = []
+            if dirty:
+                # Porcelain lines are "<XY> <path>": drop the two status codes and
+                # any quoting, keep the path.
+                names = ", ".join(
+                    ln.split(None, 1)[1].strip() for ln in dirty[:10]
+                )
+                steps.append(
+                    {
+                        "type": "message",
+                        "phase": None,
+                        "text": (
+                            f"Agent left {len(dirty)} uncommitted file(s) in the "
+                            f"worktree: {names}."
+                        ),
+                        "ts": utcnow().isoformat(),
+                    }
+                )
+                if not run.diff_text:
+                    try:
+                        wd = git.diff_working_tree(worktree)
+                        if wd:
+                            masked = masker(wd)
+                            raw = masked.encode("utf-8", "ignore")
+                            if len(raw) > MAX_DIFF_BYTES:
+                                masked = (
+                                    raw[:MAX_DIFF_BYTES].decode("utf-8", "ignore")
+                                    + "\n… (diff truncated)"
+                                )
+                            run.diff_text = masked
+                    except Exception:
+                        logger.debug("working-tree diff capture failed for task %s", task.id)
+                run.steps_json = json.dumps(steps[-MAX_STEPS:])
+
     def _resolve_timeout(self, session, task: Task) -> int:
         if task.timeout_minutes is not None:
             return task.timeout_minutes
@@ -506,12 +577,25 @@ class TaskQueue:
 
             git = GitWorkspace(self.config)
             git.ensure_mirror(repo.full_name, repo.clone_url, token)
+            # A stale jalebi/<taskId> branch from a wiped/restored DB (or a mirror
+            # that survived a task delete) must never contaminate a fresh first
+            # run. We only reset when a stale branch pre-exists AND no worktree
+            # was already created for this task (tests and resumes create the
+            # worktree first and must keep their work). Reruns (seq > 1) resume.
+            stale_branch = git.branch_exists(task.id, repo.full_name)
+            wt_path = GitWorkspace.worktree_path(self.config.data_dir, task.id)
+            worktree_existed = (wt_path / ".git").is_file()
             wt = git.create_worktree(task.id, repo.full_name, task.source_branch, token)
+            if run.seq == 1 and stale_branch and not worktree_existed:
+                git.reset_branch_to_base(task.id, repo.full_name, task.source_branch)
             worktree_bootstrap.bootstrap_worktree(wt, prompts.build_agent_md(task, repo))
 
             adapter = get_adapter(cli)
             state.handle = adapter.start(
-                str(wt), task.prompt, model=task.model, env=_build_agent_env(token)
+                str(wt),
+                task.prompt,
+                model=task.model,
+                env=_build_agent_env(self._agent_token_for(task, token)),
             )
             run.pid = getattr(state.handle.proc, "pid", None)
             session.commit()
@@ -752,7 +836,7 @@ class TaskQueue:
                 prev_session_id,
                 prompts.build_followup_prompt(task, repo, body),
                 model=effective_model,
-                env=_build_agent_env(token),
+                env=_build_agent_env(self._agent_token_for(task, token)),
             )
             run.pid = getattr(state.handle.proc, "pid", None)
             session.commit()
@@ -915,6 +999,21 @@ class TaskQueue:
             return git.commits_ahead(worktree, task.target_branch) > 0
         except Exception:
             return False
+
+    @staticmethod
+    def _should_auto_publish(session, task: Task) -> bool:
+        """Whether a done run should auto-publish for this task.
+
+        Per-task ``publish_mode`` wins: "auto" → publish, "manual" → don't.
+        ``None`` (legacy/unset tasks) falls back to the global ``auto_publish``
+        setting.
+        """
+        mode = task.publish_mode
+        if mode == "auto":
+            return True
+        if mode == "manual":
+            return False
+        return bool(settings.get_setting(session, "auto_publish"))
 
     def _publish(
         self,

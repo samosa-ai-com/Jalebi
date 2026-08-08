@@ -28,12 +28,14 @@
 ## 4. Sandboxing (PRD §F13)
 
 - Agents execute arbitrary shell code by design — each child process is scoped to its own worktree (cwd).
-- A settings toggle can add a sandbox wrapper (e.g. `bwrap`/`firejail`) later.
+- **Worktree-local confinement (config-level, no OS sandbox):** every worktree's `opencode.json` sets **`permission.external_directory: "deny"`** (deep-merged over the owner's global `external_directory: "allow"`). This blocks the built-in `read`/`edit`/`write`/`glob`/`grep` tools and path-bearing `bash` commands (e.g. `cat ~/.jalebi/secrets.json`) for anything outside the worktree, and `.env` files are denied by default. URL-based tools (`webfetch`/`websearch`, MCP URL tools) are unaffected, so the owner's MCP servers keep working.
+- **Token-free freeform agents:** freeform/screen_finding runs get **no** `JALEBI_GITHUB_TOKEN` and no git `http.extraHeader` credentials (`_agent_token_for`) — they commit locally and Jalebi pushes. There is no credential to exfiltrate and nothing to push with. Only `issue_fix`/`pr_review` agents receive the PAT (for GitHub reads).
+- **Honest limit (accepted tradeoff):** `external_directory: deny` is an opencode *pattern* gate, not an OS capability boundary. A determined agent obfuscating bash (`python3 -c "open(…)"`, env-var paths) could still reach host files. Combined with the token-free env there is little worth stealing; a true OS sandbox (e.g. `bwrap`/`firejail`) remains possible later but was intentionally **not** added (it would break the MCP servers the owner wants available).
 
 ## 5. Publishing safety (PRD §F9, §14)
 
 - Publishing is idempotent; follow-ups only ever touch the task's own branch.
-- Default auto-publish means tasks push to GitHub unattended. Keep `auto_publish` toggle prominent; consider a per-repo "require approval" override for sensitive repos.
+- **Per-task `publish_mode`:** `issue_fix` defaults to `"auto"`, freeform/manual types to `"manual"` — a freeform task only becomes a PR when the owner clicks Publish (or opts in to auto). `None` falls back to the global `auto_publish` setting.
 
 ## 6. Webhook security (PRD §F14)
 
@@ -44,7 +46,7 @@
 
 - **Token leak:** if the token is suspected leaked (pasted into a committed file, chat log, etc.), tell the user immediately so it can be revoked. Token values only ever live in git-ignored files (`.env`, `~/.jalebi/secrets.json`).
 - **Exposure via tunnel:** a tunnel exposes the localhost app; require the UI password and document the risk.
-- **Agent code execution:** agents run arbitrary shell code by design; scoped to worktrees; optional sandbox wrapper later.
+- **Agent code execution:** agents run arbitrary shell code by design; confined to the worktree via `external_directory: deny`; token-free for freeform. No OS-level sandbox (would break MCPs).
 
 ## 8. Reference
 
@@ -54,7 +56,7 @@
 Layered defense — **all three must hold** for an agent run:
 
 1. **opencode permission deny** — every worktree gets an `opencode.json` whose `permission.bash` denies `gh`/`gh *`/full-path variants (`worktree_bootstrap.OPENCODE_GUARD`). Project config deep-merges over the user's global config, so the deny wins.
-2. **Env hygiene** — the agent env never has `GH_TOKEN`/`GITHUB_TOKEN` (inherited ones are stripped), `GH_CONFIG_DIR` points at a nonexistent dir, and the only token is `JALEBI_GITHUB_TOKEN` (used by git/curl). Even a guard bypass cannot authenticate `gh`.
+2. **Env hygiene** — the agent env never has `GH_TOKEN`/`GITHUB_TOKEN` (inherited ones are stripped) or a leaked inherited `JALEBI_GITHUB_TOKEN`; `GH_CONFIG_DIR` points at a nonexistent dir. Only `issue_fix`/`pr_review` agents get `JALEBI_GITHUB_TOKEN` (used by curl for GitHub reads); freeform agents get **no** token and no git push credentials at all. Even a guard bypass cannot authenticate `gh`.
 3. **Instructions** — `AGENTS.md` + follow-up prompts say never to use `gh`/forks, and working git credentials remove any incentive.
 
 Remaining risk (documented): a hypothetical full-path `/usr/bin/gh` call inside a compound command could reach a shell, but it cannot act as the owner (no credentials). Jalebi itself never calls `gh`.

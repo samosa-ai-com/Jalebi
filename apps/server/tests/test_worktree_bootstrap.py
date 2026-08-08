@@ -22,13 +22,16 @@ def _init_repo(path) -> None:
     _git(["commit", "-qm", "init"], path)
 
 
-def test_write_opencode_guard_denies_gh(tmp_path) -> None:
+def test_write_opencode_guard_denies_gh_and_external_dirs(tmp_path) -> None:
     worktree_bootstrap.write_opencode_guard(tmp_path)
     guard = json.loads((tmp_path / "opencode.json").read_text())
     bash = guard["permission"]["bash"]
     assert bash["gh *"] == "deny"
     assert bash["/usr/bin/gh*"] == "deny"
     assert bash["*"] == "allow"
+    # The agent must not be able to touch paths outside the worktree (overrides
+    # the owner's global external_directory: "allow" via config merge).
+    assert guard["permission"]["external_directory"] == "deny"
 
 
 def test_set_git_identity(tmp_path) -> None:

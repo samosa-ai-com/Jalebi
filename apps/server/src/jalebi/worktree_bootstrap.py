@@ -4,9 +4,12 @@ Jalebi never relies on the `gh` CLI — the agent must use the owner PAT via
 git/curl only. This module hardens that contract at the worktree level:
 
 - ``write_opencode_guard`` places an ``opencode.json`` in the worktree root whose
-  ``permission.bash`` rules DENY ``gh`` invocations. Project config overrides the
-  user's global opencode config, so the guard applies to any agent run in the
-  worktree.
+  ``permission.bash`` rules DENY ``gh`` invocations and whose
+  ``permission.external_directory`` is ``deny`` (blocks file-tool and bash-path
+  access outside the worktree; overrides the user's global ``"allow"``). Project
+  config overrides the user's global opencode config, so the guard applies to any
+  agent run in the worktree. The guard is adapter-specific: Codex/Claude get
+  their own guard file through the same ``bootstrap_worktree`` hook.
 - ``set_git_identity`` pins the worktree's commit author to Jalebi, so pushes
   are never authored by a stray local account.
 - ``write_agent_md`` writes the task's ``AGENTS.md`` (built by ``prompts``) that
@@ -29,9 +32,15 @@ GIT_TIMEOUT_SECONDS = 60
 
 # Permission rules are order-sensitive: opencode applies the LAST matching rule,
 # so the broad allow goes first and every gh variant is denied afterwards.
+# ``external_directory: "deny"`` blocks built-in read/edit/write/glob/grep and
+# bash commands that reference paths outside the worktree (opencode merges this
+# project config over the user's global ``external_directory: "allow"``). URL-
+# based tools (webfetch/websearch/MCP URL tools) are unaffected, so the user's
+# MCP servers keep working.
 OPENCODE_GUARD = {
     "$schema": "https://opencode.ai/config.json",
     "permission": {
+        "external_directory": "deny",
         "bash": {
             "*": "allow",
             "gh": "deny",
@@ -65,28 +74,31 @@ You are working inside a git worktree prepared by Jalebi.
 
 1. **Never use the `gh` CLI.** It is blocked. Use `git` (credentials are
    provided via the environment) or the GitHub REST API via `curl -H
-   "Authorization: Bearer $JALEBI_GITHUB_TOKEN"`.
-2. **Never create forks.** Push only to the `origin` remote, on the task branch.
-3. **Never open or edit pull requests through `gh` or the API** — Jalebi
-   handles publishing. Just commit to the branch.
-4. Commit messages: short imperative summary; reference the task where useful.
-5. When asked, write your PR title + description to `.jalebi/pr.md` as:
+   "Authorization: Bearer $JALEBI_GITHUB_TOKEN"` if that variable is set.
+2. **Never create forks.** Do not add git remotes pointing at another account.
+3. **Do not push.** Jalebi pushes your branch and handles PRs. Commit locally on
+   the task branch; for review tasks never modify files or push at all.
+4. **Work only inside this worktree.** Do not read, write, or run anything
+   outside the current directory (`~`, `/etc`, `/tmp`, other projects, Jalebi's
+   data dir) — it is blocked, and this is the rule that matters.
+5. Commit messages: short imperative summary; reference the task where useful.
+6. When asked, write your PR title + description to `.jalebi/pr.md` as:
    `# <title>` on the first line, then the description body. Jalebi uses this
    file for the PR it opens.
-6. For review tasks, write your review to `.jalebi/review.md` — Jalebi posts it.
-7. Use only the GitHub token provided in `JALEBI_GITHUB_TOKEN` for anything
-   GitHub-related. Do not use gh at all.
-8. **Never commit anything under `.jalebi/`** — it is Jalebi-internal (your PR
+7. For review tasks, write your review to `.jalebi/review.md` — Jalebi posts it.
+8. Use only the GitHub token provided in `JALEBI_GITHUB_TOKEN` (if set) for
+   anything GitHub-related. Do not use gh at all.
+9. **Never commit anything under `.jalebi/`** — it is Jalebi-internal (your PR
    description/review live there). If you staged `.jalebi/` files, unstage with
    `git reset HEAD .jalebi/`. A pre-commit hook rejects them otherwise.
-9. **Never commit this Jalebi AGENTS.md section** — the block delimited by the
-   two HTML-comment markers at the end of ``AGENTS.md``. It is Jalebi
-   infrastructure, not repository content. If you staged it, recover with:
-   `git restore --staged AGENTS.md && git restore AGENTS.md`. The pre-commit
-   hook rejects it otherwise.
-10. **Docs:** only update documentation that already exists and is kept in sync
-   (e.g. `CHANGELOG.md`, relevant `README.md` sections). Do NOT create new
-   documentation/changelog files unless the task explicitly asks for them.
+10. **Never commit this Jalebi AGENTS.md section** — the block delimited by the
+    two HTML-comment markers at the end of ``AGENTS.md``. It is Jalebi
+    infrastructure, not repository content. If you staged it, recover with:
+    `git restore --staged AGENTS.md && git restore AGENTS.md`. The pre-commit
+    hook rejects it otherwise.
+11. **Docs:** only update documentation that already exists and is kept in sync
+    (e.g. `CHANGELOG.md`, relevant `README.md` sections). Do NOT create new
+    documentation/changelog files unless the task explicitly asks for them.
 """
 
 # Patterns added to the repo's shared info/exclude so bootstrap files stay out of
@@ -246,13 +258,29 @@ def write_precommit_hook(worktree: Path) -> Path | None:
     return hook
 
 
-def bootstrap_worktree(worktree: Path, agent_md: str = DEFAULT_AGENT_MD) -> None:
+def _write_guard(worktree: Path, cli: str) -> None:
+    """Write the per-CLI guard file that confines the agent to the worktree.
+
+    Each adapter gets its own guard file through this hook so the isolation
+    contract (no gh, no access outside the worktree) survives a backend switch:
+    opencode → ``opencode.json`` today; codex/claude → their config files later.
+    """
+    if cli == "opencode":
+        write_opencode_guard(worktree)
+        return
+    # Future adapters write their own guard here; until then no guard is written
+    # (the env/prompt layers still apply).
+
+
+def bootstrap_worktree(
+    worktree: Path, agent_md: str = DEFAULT_AGENT_MD, cli: str = "opencode"
+) -> None:
     """Apply the full bootstrap: guard + identity + AGENTS.md + excludes.
 
     Idempotent.
     """
     worktree.mkdir(parents=True, exist_ok=True)
-    write_opencode_guard(worktree)
+    _write_guard(worktree, cli)
     set_git_identity(worktree)
     write_agent_md(worktree, agent_md)
     write_info_exclude(worktree)

@@ -125,6 +125,70 @@ def test_publish_not_found(client: FlaskClient) -> None:
     assert client.post("/api/tasks/999/publish").status_code == 404
 
 
+def test_create_task_publish_mode_defaults_by_type(
+    app, client: FlaskClient, repo_id: int, monkeypatch
+) -> None:
+    """issue_fix auto-publishes on done; freeform defaults to manual publish."""
+    secrets.add_github_token(app.config["JALEBI_CONFIG"], "acct-a", "ghp_a")
+
+    class FakeClient:
+        def __init__(self, token): ...
+        def get_issue(self, full_name, number):
+            return {"number": number, "title": "t", "body": "b", "html_url": "u"}
+        def close(self): ...
+
+    monkeypatch.setattr("jalebi.routes.tasks.GitHubClient", FakeClient)
+    fix = client.post(
+        "/api/tasks",
+        json={
+            "repo_id": repo_id,
+            "type": "issue_fix",
+            "prompt": "fix",
+            "issue_number": 1,
+            "pat_name": "acct-a",
+        },
+    )
+    assert fix.status_code == 201
+    assert fix.get_json()["publish_mode"] == "auto"
+
+    ff = client.post(
+        "/api/tasks",
+        json={"repo_id": repo_id, "type": "freeform", "prompt": "explore"},
+    )
+    assert ff.status_code == 201
+    assert ff.get_json()["publish_mode"] == "manual"
+
+
+def test_create_task_publish_mode_override(client: FlaskClient, repo_id: int) -> None:
+    """An explicit publish_mode always wins over the type default."""
+    resp = client.post(
+        "/api/tasks",
+        json={"repo_id": repo_id, "type": "freeform", "prompt": "x", "publish_mode": "auto"},
+    )
+    assert resp.status_code == 201
+    assert resp.get_json()["publish_mode"] == "auto"
+
+
+def test_create_task_rejects_huge_prompt(client: FlaskClient, repo_id: int) -> None:
+    """Prompts travel via argv; an oversized one must be refused, not truncated."""
+    resp = client.post(
+        "/api/tasks",
+        json={"repo_id": repo_id, "type": "freeform", "prompt": "x" * 40_000},
+    )
+    assert resp.status_code == 400
+    assert "too long" in resp.get_json()["error"]
+
+
+def test_delete_task(client: FlaskClient, repo_id: int) -> None:
+    task_id = client.post("/api/tasks", json={"repo_id": repo_id, "prompt": "x"}).get_json()["id"]
+    resp = client.delete(f"/api/tasks/{task_id}")
+    assert resp.status_code == 200
+    assert resp.get_json()["deleted"] == task_id
+    assert client.get(f"/api/tasks/{task_id}").status_code == 404
+    # Deleting twice is a clean 404.
+    assert client.delete(f"/api/tasks/{task_id}").status_code == 404
+
+
 def test_create_task_inherits_repo_pat(app, client, session) -> None:
     from jalebi import repos, secrets
 

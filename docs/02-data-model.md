@@ -55,6 +55,7 @@
 | `timeout_minutes` | int, default 30 | |
 | `retry_count` | int, default 0 | |
 | `pr_number` | int null | |
+| `publish_mode` | text null | `'auto'` \| `'manual'` \| NULL (fall back to the global `auto_publish` setting). `issue_fix` defaults to `auto`; freeform/manual types to `manual`. |
 | `check_run_id` | int null | **no FK yet**; check_runs table arrives in Phase 2 |
 | `created_at` | datetime | naive UTC |
 | `updated_at` | datetime | naive UTC |

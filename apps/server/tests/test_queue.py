@@ -574,11 +574,11 @@ def test_manual_publish_uses_tasks_account(q, session, repo_row, monkeypatch) ->
 
 
 def test_agent_env_carries_resolved_token_and_strips_gh(q, session, repo_row, monkeypatch) -> None:
-    """The agent env must use the resolved account token and never auth gh."""
+    """Issue/review agents get the resolved account token in env and never auth gh."""
     secrets.add_github_token(q.config, "acct-b", "ghp_b")
     task = tasks.create_task(
         session,
-        type_="freeform",
+        type_="issue_fix",
         repo_id=repo_row.id,
         prompt="do it",
         pat_name="acct-b",
@@ -609,6 +609,43 @@ def test_agent_env_carries_resolved_token_and_strips_gh(q, session, repo_row, mo
     assert env.get("GITHUB_TOKEN") is None
     # the git credential header embeds the resolved token (base64), not the primary
     assert "ghp_b" not in (env.get("GIT_CONFIG_VALUE_0") or "")
+
+
+def test_freeform_agent_env_is_token_free(q, session, repo_row, monkeypatch) -> None:
+    """Freeform agents must get NO GitHub token and NO git push credentials —
+    they commit locally; Jalebi pushes and publishes for them."""
+    secrets.add_github_token(q.config, "acct-b", "ghp_b")
+    task = tasks.create_task(
+        session,
+        type_="freeform",
+        repo_id=repo_row.id,
+        prompt="do it",
+        pat_name="acct-b",
+    )
+    captured: dict[str, dict[str, str | None] | None] = {}
+
+    class CapturingAdapter:
+        def start(self, cwd, prompt, model=None, env=None):
+            captured["env"] = env
+            return FakeHandle([AgentEvent(type="done")])
+
+        def resume(self, *a, **k):
+            raise NotImplementedError
+
+        def list_models(self):
+            return []
+
+    monkeypatch.setattr("jalebi.queue.get_adapter", lambda cli: CapturingAdapter())
+    _no_publish(session)
+    q._run_task(task.id)
+
+    env = captured["env"]
+    assert env is not None
+    assert "JALEBI_GITHUB_TOKEN" not in env
+    assert "GIT_CONFIG_VALUE_0" not in env  # no http.extraHeader → cannot push
+    assert env["GIT_AUTHOR_NAME"] == "Jalebi"
+    assert env.get("GH_TOKEN") is None
+    assert env.get("GITHUB_TOKEN") is None
 
 
 def test_publish_masks_agent_written_pr_md(q, session, repo_row, monkeypatch) -> None:
@@ -880,6 +917,82 @@ def test_run_captures_masked_diff(q, session, repo_row, monkeypatch) -> None:
     # The token value never survives; the diff is masked at ingest.
     assert "ghp_test" not in run.diff_text
     assert "***" in run.diff_text
+
+
+def test_done_run_with_uncommitted_changes_is_surfaced(
+    q, session, repo_row, monkeypatch
+) -> None:
+    """A done run whose working tree is dirty but which made NO commits must not
+    look clean: the uncommitted files are surfaced as a step and the working-tree
+    diff is captured (there is no committed diff to take precedence)."""
+    _no_publish(session)
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
+    git = GitWorkspace(q.config)
+    git.ensure_mirror(FULL_NAME, repo_row.clone_url)
+    wt = git.create_worktree(task.id, FULL_NAME, "main")
+    _git(["-C", str(wt), "config", "user.email", "t@example.com"])
+    _git(["-C", str(wt), "config", "user.name", "Test"])
+    # Dirty working tree, no commits: a modified tracked file AND an untracked
+    # file. The branch is not ahead, so nothing would be published.
+    (wt / "file.txt").write_text("hello\nchanged\n")
+    (wt / "scratch.txt").write_text("untracked\n")
+    _install_adapter(monkeypatch, FakeHandle([AgentEvent(type="done")]))
+
+    q._run_task(task.id)
+
+    session.expire_all()
+    run = _latest_run(session, task.id)
+    assert run.status == "done"
+    steps = json.loads(run.steps_json or "[]")
+    texts = " ".join(str(s.get("text") or "") for s in steps)
+    assert "uncommitted" in texts
+    assert "file.txt" in texts
+    assert "scratch.txt" in texts
+    assert run.diff_text is not None
+    assert "changed" in run.diff_text
+
+
+def test_manual_publish_mode_skips_autopublish(q, session, repo_row, monkeypatch) -> None:
+    """A task with publish_mode='manual' must NOT auto-publish even when the
+    global auto_publish setting is true."""
+    settings.set_setting(session, "auto_publish", True)
+    task = tasks.create_task(
+        session,
+        type_="freeform",
+        repo_id=repo_row.id,
+        prompt="do it",
+        publish_mode="manual",
+    )
+    _seed_commit(q, task.id, repo_row)
+    _install_adapter(monkeypatch, FakeHandle([AgentEvent(type="done")]))
+    monkeypatch.setattr("jalebi.queue.GitHubClient", FakeGitHubClient)
+
+    q._run_task(task.id)
+
+    fresh = _fresh_task(session, task.id)
+    assert fresh.status == "done"
+    assert fresh.pr_number is None  # never auto-published
+
+
+def test_auto_publish_mode_skips_when_setting_off(q, session, repo_row, monkeypatch) -> None:
+    """A task with publish_mode='auto' publishes even when the global setting is off."""
+    _no_publish(session)  # auto_publish = False
+    task = tasks.create_task(
+        session,
+        type_="freeform",
+        repo_id=repo_row.id,
+        prompt="do it",
+        publish_mode="auto",
+    )
+    _seed_commit(q, task.id, repo_row)
+    _install_adapter(monkeypatch, FakeHandle([AgentEvent(type="done")]))
+    monkeypatch.setattr("jalebi.queue.GitHubClient", FakeGitHubClient)
+
+    q._run_task(task.id)
+
+    fresh = _fresh_task(session, task.id)
+    assert fresh.status == "done"
+    assert fresh.pr_number == 42
 
 
 def test_review_run_has_no_diff(q, session, repo_row, monkeypatch, tmp_path) -> None:

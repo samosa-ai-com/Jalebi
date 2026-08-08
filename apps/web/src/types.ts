@@ -51,6 +51,7 @@ export interface Task {
   timeout_minutes: number;
   retry_count: number;
   pr_number: number | null;
+  publish_mode: "auto" | "manual" | null;
   issues: number[];
   prs: number[];
   created_at: string;

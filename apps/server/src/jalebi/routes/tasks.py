@@ -1,17 +1,20 @@
-"""Task routes: create, list, detail, cancel, rerun, publish, live events."""
+"""Task routes: create, list, detail, cancel, rerun, publish, delete, live events."""
 
 import json
 import queue as _queue_module
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 
 import httpx
 from flask import Blueprint, Response, current_app, jsonify, request, send_file
 from flask.typing import ResponseReturnValue
+from sqlalchemy import delete as sa_delete
 
 from jalebi import artifacts, db, masking, secrets, settings, tasks
 from jalebi.config import Config
-from jalebi.db import Artifact, Run, utcnow
+from jalebi.db import Artifact, Followup, Run, Task, utcnow
+from jalebi.git_workspace import GitWorkspace
 from jalebi.github import GitHubClient, GitHubError
 from jalebi.queue import TaskQueue
 
@@ -135,6 +138,14 @@ def create_task() -> ResponseReturnValue:
     if type_ == "pr_review" and pr_number is None:
         return jsonify({"error": "pr_number is required for pr_review tasks"}), 400
 
+    # Per-task publish mode: explicit override, else a type-based default
+    # (issue_fix auto-publishes on done; freeform/manual types default to manual
+    # publish so exploratory work isn't silently pushed as a PR). None falls
+    # back to the global auto_publish setting.
+    publish_mode = payload.get("publish_mode")
+    if publish_mode is None:
+        publish_mode = "auto" if type_ == "issue_fix" else "manual"
+
     pat_name = payload.get("pat_name")
     if not _valid_pat(config, pat_name):
         return jsonify({"error": f"unknown PAT: {pat_name}"}), 400
@@ -172,6 +183,7 @@ def create_task() -> ResponseReturnValue:
             prs=[int(pr_number)] if pr_number is not None else None,
             context=context,
             timeout_minutes=timeout_minutes,
+            publish_mode=publish_mode,
             masker=masker,
         )
     except ValueError as exc:
@@ -252,6 +264,49 @@ def rerun_task(task_id: int) -> ResponseReturnValue:
     session.commit()
     _queue().enqueue(task.id)
     return jsonify(tasks.task_to_dict(task, repo_full_name=_repo_name(session, task.repo_id)))
+
+
+@bp.delete("/<int:task_id>")
+def delete_task(task_id: int) -> ResponseReturnValue:
+    """Delete a task and everything tied to it (runs, follow-ups, artifacts,
+    worktree, branch). Running/queued tasks are cancelled first."""
+    session = db.get_session()
+    task = tasks.get_task(session, task_id)
+    if task is None:
+        return jsonify({"error": "task not found"}), 404
+
+    # Cancel first so no orphaned agent keeps working on data about to vanish.
+    if task.status == "running":
+        _queue().cancel(task_id)
+    if task.status in ("queued", "running"):
+        task.status = "cancelled"
+        session.commit()
+
+    runs = tasks.runs_for_task(session, task_id)
+    run_ids = [r.id for r in runs]
+    if task_id:
+        session.execute(
+            sa_delete(Followup).where(Followup.task_id == task_id)
+        )
+    if run_ids:
+        session.execute(sa_delete(Artifact).where(Artifact.run_id.in_(run_ids)))
+        session.execute(sa_delete(Run).where(Run.id.in_(run_ids)))
+    session.execute(sa_delete(Task).where(Task.id == task_id))
+    session.commit()
+
+    # Best-effort disk cleanup (outside the DB transaction).
+    config: Config = current_app.config["JALEBI_CONFIG"]
+    for run_id in run_ids:
+        shutil.rmtree(
+            artifacts.artifact_store_dir(config.data_dir) / str(run_id), ignore_errors=True
+        )
+    shutil.rmtree(
+        GitWorkspace.worktree_path(config.data_dir, task_id), ignore_errors=True
+    )
+    shutil.rmtree(
+        GitWorkspace.review_worktree_path(config.data_dir, task_id), ignore_errors=True
+    )
+    return jsonify({"deleted": task_id})
 
 
 @bp.post("/<int:task_id>/publish")

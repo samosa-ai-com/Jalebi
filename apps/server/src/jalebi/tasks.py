@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session
 
 from jalebi.db import TASK_TYPES, Artifact, Followup, Repo, Run, Task
 
+MAX_PROMPT_CHARS = 32_000  # prompts travel via argv; bound them to stay clear of ARG_MAX
+
 
 def create_task(
     session: Session,
@@ -24,11 +26,14 @@ def create_task(
     prs: list[int] | None = None,
     context: dict | None = None,
     timeout_minutes: int = 30,
+    publish_mode: str | None = None,
     masker: Callable[[str], str] | None = None,
 ) -> Task:
     """Validate and insert a new task, returning it (status = ``queued``)."""
     if type_ not in TASK_TYPES:
         raise ValueError(f"invalid task type: {type_}")
+    if publish_mode not in (None, "auto", "manual"):
+        raise ValueError("publish_mode must be 'auto', 'manual', or None")
     repo = session.get(Repo, repo_id)
     if repo is None:
         raise ValueError(f"repo {repo_id} not found")
@@ -36,6 +41,10 @@ def create_task(
         raise ValueError(f"repo {repo.full_name} is disconnected")
     if not prompt or not prompt.strip():
         raise ValueError("prompt must not be empty")
+    if len(prompt) > MAX_PROMPT_CHARS:
+        raise ValueError(
+            f"prompt too long ({len(prompt)} chars; max {MAX_PROMPT_CHARS})"
+        )
 
     masked_prompt = masker(prompt) if masker else prompt
     task = Task(
@@ -52,6 +61,7 @@ def create_task(
         prompt=masked_prompt,
         status="queued",
         timeout_minutes=timeout_minutes,
+        publish_mode=publish_mode,
     )
     session.add(task)
     session.commit()
@@ -169,6 +179,7 @@ def task_to_dict(
         "timeout_minutes": task.timeout_minutes,
         "retry_count": task.retry_count,
         "pr_number": task.pr_number,
+        "publish_mode": task.publish_mode,
         "issues": json.loads(task.issues_json) if task.issues_json else [],
         "prs": json.loads(task.prs_json) if task.prs_json else [],
         "created_at": task.created_at.isoformat(),

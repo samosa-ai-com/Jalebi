@@ -514,6 +514,16 @@ export default function TaskDetail() {
       });
   }
 
+  // Delete: confirmed, then leave to the tasks list (this task no longer exists).
+  async function deleteTask() {
+    if (!task) return;
+    if (!window.confirm(`Delete task ${task.id}? This removes its runs, artifacts and worktree.`)) {
+      return;
+    }
+    await api.deleteTask(task.id);
+    window.location.assign("/");
+  }
+
   const running = task !== null && !TERMINAL.has(task.status);
   const isLatest = selectedRunId === null || selectedRunId === task?.run?.id;
 
@@ -661,6 +671,16 @@ export default function TaskDetail() {
             <dd className="mt-0.5 font-mono text-ink-300">{task.type}</dd>
           </div>
           <div>
+            <dt className="text-ink-600">Publish</dt>
+            <dd className="mt-0.5 font-mono text-ink-300">
+              {task.publish_mode === "auto"
+                ? "auto"
+                : task.publish_mode === "manual"
+                  ? "manual"
+                  : "setting"}
+            </dd>
+          </div>
+          <div>
             <dt className="text-ink-600">Branch</dt>
             <dd className="mt-0.5 font-mono text-ink-300">
               {task.target_branch || "—"} ← {task.source_branch || "default"}
@@ -702,6 +722,12 @@ export default function TaskDetail() {
             Publish
           </Action>
         )}
+        <Action
+          onClick={deleteTask}
+          disabled={actionBusy}
+        >
+          Delete
+        </Action>
         {actionError && <p className="text-xs text-red-400">{actionError}</p>}
       </div>
 

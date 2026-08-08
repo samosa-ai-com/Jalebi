@@ -126,6 +126,13 @@ class GitWorkspace:
         )
         return out.splitlines()
 
+    def branch_exists(self, task_id: int, full_name: str) -> bool:
+        """True if ``jalebi/<taskId>`` already exists as a local mirror branch."""
+        mirror = self.mirror_path(self.config.data_dir, full_name)
+        if not mirror.exists():
+            return False
+        return self.task_branch(task_id) in self._list_local_heads(mirror)
+
     def ensure_mirror(self, full_name: str, clone_url: str, token: str | None = None) -> Path:
         """Clone (or fetch) the bare mirror for ``full_name``. Returns the mirror path.
 
@@ -235,6 +242,30 @@ class GitWorkspace:
             if branch in branches:
                 _run_git(["-C", str(mirror), "branch", "-D", branch])
 
+    def reset_branch_to_base(self, task_id: int, full_name: str, base_branch: str) -> None:
+        """Reset the task branch to the *current* ``origin/<base_branch>``.
+
+        Used before the FIRST run of a task so a stale ``jalebi/<taskId>`` branch
+        (reused after a DB wipe/restore, or a mirror that survived a task delete)
+        can never contaminate a fresh run. Safe when the branch was just created
+        fresh (a reset to the same commit is a no-op). Only the first run does
+        this — reruns and follow-ups deliberately resume the accumulated work.
+        """
+        mirror = self.mirror_path(self.config.data_dir, full_name)
+        ws = self.worktree_path(self.config.data_dir, task_id)
+        branch = self.task_branch(task_id)
+        with self._lock_for(full_name):
+            if not mirror.exists() or not (ws / ".git").is_file():
+                return  # nothing to reset; create_worktree will base it fresh
+            # Fetch first so origin/<base> reflects the current remote state.
+            _run_git(["-C", str(mirror), "fetch", "origin", "--prune"])
+            # `checkout -B` (run inside the worktree, not the mirror) force-moves
+            # the checked-out branch and updates the working tree to the current
+            # base; then drop any stale untracked files so the first run starts
+            # from a clean tree.
+            _run_git(["-C", str(ws), "checkout", "-B", branch, f"origin/{base_branch}"])
+            _run_git(["-C", str(ws), "clean", "-fd"])
+
     def create_review_worktree(
         self,
         task_id: int,
@@ -316,6 +347,27 @@ class GitWorkspace:
             ["-C", str(worktree), "rev-list", "--count", f"origin/{base_branch}..HEAD"]
         )
         return int(out or "0")
+
+    def working_tree_status(self, worktree: Path) -> list[str]:
+        """Porcelain status lines: dirty (modified/staged/untracked) paths.
+
+        Empty list = clean working tree. Used at run end to surface agent work
+        that was never committed (a `done` run must not silently look clean).
+        """
+        out = _run_git(["-C", str(worktree), "status", "--porcelain"])
+        return [ln for ln in out.splitlines() if ln.strip()]
+
+    def diff_working_tree(self, worktree: Path) -> str:
+        """Diff of uncommitted changes (working tree + staged) vs HEAD.
+
+        Covers modified/staged tracked files; untracked files are not included
+        (they are surfaced by name via ``working_tree_status``). Raises
+        ``GitWorkspaceError`` when the worktree has no commits yet.
+        """
+        try:
+            return _run_git(["-C", str(worktree), "diff", "HEAD"])
+        except GitWorkspaceError:
+            return _run_git(["-C", str(worktree), "diff", "--cached"])
 
     def diff_against_target(self, worktree: Path, target_branch: str) -> str:
         """Unified diff of the worktree's committed work vs ``origin/<target>``.

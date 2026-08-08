@@ -41,6 +41,7 @@ export interface CreateTaskInput {
   pat_name?: string;
   issue_number?: number;
   pr_number?: number;
+  publish_mode?: "auto" | "manual";
 }
 
 export const api = {
@@ -85,6 +86,8 @@ export const api = {
   cancelTask: (id: number) =>
     request<{ status: string }>(`/api/tasks/${id}/cancel`, { method: "POST" }),
   rerunTask: (id: number) => request<Task>(`/api/tasks/${id}/rerun`, { method: "POST" }),
+  deleteTask: (id: number) =>
+    request<{ deleted: number }>(`/api/tasks/${id}`, { method: "DELETE" }),
   publishTask: (id: number) =>
     request<{ pr_number: number }>(`/api/tasks/${id}/publish`, { method: "POST" }),
   postFollowup: (id: number, prompt: string, opts?: { pat_name?: string; model?: string }) =>

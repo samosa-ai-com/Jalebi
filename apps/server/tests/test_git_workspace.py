@@ -110,6 +110,38 @@ def test_worktree_create_and_resume(ws: GitWorkspace, remote: str) -> None:
     assert again == wt
 
 
+def test_branch_exists(ws: GitWorkspace, remote: str) -> None:
+    assert ws.branch_exists(1, FULL_NAME) is False
+    ws.ensure_mirror(FULL_NAME, remote)
+    ws.create_worktree(1, FULL_NAME, "main")
+    assert ws.branch_exists(1, FULL_NAME) is True
+    ws.remove_worktree(1, FULL_NAME)
+    assert ws.branch_exists(1, FULL_NAME) is False
+
+
+def test_reset_branch_to_base_discards_stale_work(ws: GitWorkspace, remote: str) -> None:
+    """A stale jalebi/<id> branch (left by a wiped/restored DB) must be reset to
+    the CURRENT origin/<base> before a fresh first run — stale work must never
+    contaminate a new task that reuses the same task id."""
+    ws.ensure_mirror(FULL_NAME, remote)
+    wt = ws.create_worktree(1, FULL_NAME, "main")
+    _add_commit(wt, "stale work")
+    # Simulate a stale branch surviving a DB wipe: drop the worktree but keep the
+    # mirror branch (as if the task's DB row was deleted while the mirror lived).
+    mirror = ws.mirror_path(ws.config.data_dir, FULL_NAME)
+    _git(["-C", str(mirror), "worktree", "remove", "--force", str(wt)])
+    assert ws.branch_exists(1, FULL_NAME) is True
+
+    # A fresh run reuses the stale branch, then must be reset to origin/main.
+    wt2 = ws.create_worktree(1, FULL_NAME, "main")
+    ws.reset_branch_to_base(1, FULL_NAME, "main")
+
+    # The stale commit is gone; the worktree is back on the base content.
+    assert _git(["-C", str(wt2), "log", "--format=%s"]) == "initial"
+    assert (wt2 / "file.txt").read_text() == "hello\n"
+    assert not _git(["-C", str(wt2), "status", "--porcelain"]).strip()
+
+
 def test_worktree_requires_mirror(ws: GitWorkspace) -> None:
     with pytest.raises(GitWorkspaceError):
         ws.create_worktree(1, FULL_NAME, "main")

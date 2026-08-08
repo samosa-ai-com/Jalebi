@@ -89,6 +89,7 @@ function CreateTask({
   const [patName, setPatName] = useState("");
   const [issueNumber, setIssueNumber] = useState("");
   const [prNumber, setPrNumber] = useState("");
+  const [publishMode, setPublishMode] = useState<"auto" | "manual" | "">("");
   const [context, setContext] = useState<GithubContext | null>(null);
   const [models, setModels] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -163,6 +164,7 @@ function CreateTask({
         pat_name: patName || undefined,
         issue_number: issueNumber ? Number(issueNumber) : undefined,
         pr_number: prNumber ? Number(prNumber) : undefined,
+        publish_mode: publishMode === "" ? undefined : publishMode,
       });
       setPrompt("");
       setIssueNumber("");
@@ -293,7 +295,7 @@ function CreateTask({
         </Select>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-3">
+      <div className="grid gap-4 sm:grid-cols-4">
         <Select label="Agent" value="opencode" onChange={() => {}}>
           <option value="opencode">opencode</option>
         </Select>
@@ -318,6 +320,15 @@ function CreateTask({
                 {a.login ?? a.name} ({a.masked})
               </option>
             ))}
+        </Select>
+        <Select
+          label="Publish mode"
+          value={publishMode}
+          onChange={(v) => setPublishMode(v as "auto" | "manual" | "")}
+          placeholder="Auto (by type)"
+        >
+          <option value="auto">Auto — publish when done</option>
+          <option value="manual">Manual — I publish</option>
         </Select>
       </div>
 

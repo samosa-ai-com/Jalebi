@@ -129,6 +129,9 @@ class Task(Base):
     )
     pr_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     check_run_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # FK in Phase 2
+    # "auto" | "manual" | None (None → fall back to the global auto_publish setting).
+    # issue_fix defaults to "auto"; freeform/screen_finding/triggered default to "manual".
+    publish_mode: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
 
