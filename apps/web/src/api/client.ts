@@ -49,7 +49,6 @@ export const api = {
   getModels: () => request<{ cli: string; models: string[] }>("/api/models"),
   updateSetting: (key: string, value: unknown) =>
     request<SettingsMap>(`/api/settings`, { method: "POST", body: JSON.stringify({ key, value }) }),
-  getGithubStatus: () => request<TokenInfo>("/api/github/status"),
   putGithubToken: (token: string) =>
     request<{ stored: boolean; detail: TokenInfo }>("/api/github/token", {
       method: "PUT",
@@ -103,8 +102,6 @@ export const api = {
     request<{ disconnected: string }>(`/api/repos/${id}`, { method: "DELETE" }),
   pruneRepos: () =>
     request<{ removed: string[] }>("/api/repos/prune", { method: "POST" }),
-  getBranches: (id: number) =>
-    request<{ full_name: string; branches: string[] }>(`/api/repos/${id}/branches`),
   artifactUrl: (taskId: number, artifactId: number) =>
     `/api/tasks/${taskId}/artifacts/${artifactId}/download`,
   artifactContentUrl: (taskId: number, artifactId: number) =>
@@ -115,13 +112,17 @@ export const api = {
 export function taskEvents(
   taskId: number,
   onEvent: (event: SseEvent) => void,
-  onEnd: () => void
+  onEnd: () => void,
+  afterSeq?: number
 ): () => void {
   // Native EventSource cannot send custom headers: when JALEBI_PASSWORD is set,
   // this relies on the browser's cached Basic credentials (from the initial
   // prompt) being attached to the same-origin request. If creds are missing, the
   // stream 401s and closes — reload the page to re-prompt.
-  const source = new EventSource(`/api/tasks/${taskId}/events`);
+  const url = `/api/tasks/${taskId}/events${
+    typeof afterSeq === "number" ? `?after_seq=${afterSeq}` : ""
+  }`;
+  const source = new EventSource(url);
   source.onmessage = (message) => {
     let event: SseEvent;
     try {

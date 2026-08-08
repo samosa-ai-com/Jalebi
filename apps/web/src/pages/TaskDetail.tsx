@@ -242,28 +242,54 @@ function ArtifactPreview({
 }) {
   const [content, setContent] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
   const ext = extOf(artifact.path);
   const isImage = IMAGE_EXTENSIONS.has(ext);
   const isText = TEXT_EXTENSIONS.has(ext);
 
   useEffect(() => {
     if (!isText) return;
+    let cancelled = false;
     fetch(api.artifactContentUrl(taskId, artifact.id))
       .then((r) => (r.ok ? r.text() : Promise.reject(new Error(String(r.status)))))
       .then((t) => {
+        if (cancelled) return;
         if (t.includes("\u0000")) {
           setFailed(true);
         } else {
           setContent(t);
         }
       })
-      .catch(() => setFailed(true));
+      .catch(() => !cancelled && setFailed(true));
+    return () => {
+      cancelled = true;
+    };
   }, [taskId, artifact.id, isText]);
 
+  useEffect(() => {
+    // Focus the dialog and close on Escape. The listener is registered once
+    // because onClose is a stable useCallback.
+    const node = dialogRef.current;
+    node?.focus();
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink-950/80 p-4" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-ink-950/80 p-4"
+      onClick={onClose}
+    >
       <div
-        className="surface flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden"
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={artifact.path}
+        tabIndex={-1}
+        className="surface flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden outline-none"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-3 border-b border-ink-800 px-5 py-3">
@@ -408,14 +434,17 @@ export default function TaskDetail() {
   const [models, setModels] = useState<string[]>([]);
   const [live, setLive] = useState<SseEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [runsError, setRunsError] = useState<string | null>(null);
   const [followUpPending, setFollowUpPending] = useState(false);
   const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
   const [preview, setPreview] = useState<Artifact | null>(null);
   const [followScroll, setFollowScroll] = useState(true);
   const [actionBusy, setActionBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const closePreview = useCallback(() => setPreview(null), []);
   const actionInFlightRef = useRef(false);
   const lastRunIdRef = useRef<number | null>(null);
+  const lastSeqRef = useRef(0);
 
   const load = useCallback(() => {
     api
@@ -426,12 +455,22 @@ export default function TaskDetail() {
           const prior = lastRunIdRef.current;
           setLive([]);
           lastRunIdRef.current = runId;
+          // New run → fresh per-run seq watermark (server scopes seq per run),
+          // so a stale high watermark from an earlier run/process can't discard
+          // this run's events (SSE backfill, F4).
+          lastSeqRef.current = 0;
           // Auto-follow the latest run unless the user hand-picked an older one
           // (stale-closure + auto-advance fix, F8/M1). A selection that is null
           // (first load) or the PREVIOUS latest (watching the live stream) follows
           // the new run; a genuinely pinned older run stays put.
           setSelectedRunId((cur) => (cur === null || cur === prior ? runId : cur));
         }
+        // After any run change, sync the watermark to persisted steps (run-end
+        // reload) so replayed buffer events can't duplicate what we already have.
+        lastSeqRef.current = Math.max(
+          lastSeqRef.current,
+          ...(t.run?.steps ?? []).map((s) => s.seq ?? 0)
+        );
         setTask(t);
       })
       .catch((e) => setError(e.message));
@@ -439,6 +478,7 @@ export default function TaskDetail() {
       .getRuns(taskId)
       .then((rs) => {
         setRuns(rs);
+        setRunsError(null);
         setSelectedRunId((cur) => {
           if (cur === null || !rs.some((r) => r.id === cur)) {
             return rs.length > 0 ? rs[rs.length - 1].id : null;
@@ -446,7 +486,7 @@ export default function TaskDetail() {
           return cur;
         });
       })
-      .catch(() => {});
+      .catch(() => setRunsError("Could not load run history."));
     api.getRepos().then(setRepos).catch(() => {});
     api.getTokens().then((t) => setAccounts(t.accounts ?? [])).catch(() => {});
     api.getModels().then((m) => setModels(m.models ?? [])).catch(() => {});
@@ -459,8 +499,7 @@ export default function TaskDetail() {
   // Cancel / Re-run / Publish: serialized, with errors surfaced inline instead of
   // silently swallowed (D-4). The ref check is synchronous so two clicks in the
   // same tick (before React re-renders) cannot double-fire.
-  function runAction(fn: () => Promise<unknown>) {
-    if (actionInFlightRef.current) return;
+  function runAction(fn: () => Promise<unknown>) {    if (actionInFlightRef.current) return;
     actionInFlightRef.current = true;
     setActionBusy(true);
     setActionError(null);
@@ -483,15 +522,23 @@ export default function TaskDetail() {
     if (!task || !running || !isLatest) return;
     const unsubscribe = taskEvents(
       taskId,
-      (event) =>
+      (event) => {
+        // Dedupe replayed/re-delivered events (after_seq backfill + EventSource
+        // auto-reconnect): anything at or below the last seq we've seen is old.
+        if (typeof event.seq === "number") {
+          if (event.seq <= lastSeqRef.current) return;
+          lastSeqRef.current = event.seq;
+        }
         setLive((l) =>
           // Bound the live buffer (backend persists only the last 500 steps).
           l.length >= MAX_LIVE ? [...l.slice(l.length - MAX_LIVE + 1), event] : [...l, event]
-        ),
+        );
+      },
       () => {
         setLive([]);
         load();
-      }
+      },
+      lastSeqRef.current
     );
     return unsubscribe;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -514,12 +561,13 @@ export default function TaskDetail() {
           if (runId !== lastRunIdRef.current) {
             lastRunIdRef.current = runId;
             setLive([]);
+            lastSeqRef.current = 0; // new run → fresh per-run watermark
             setTask(t);
             setSelectedRunId(runId);
             setFollowUpPending(false);
           }
         })
-        .catch(() => {});
+        .catch(() => {}); // poll failures just retry on the next tick
     }, 1500);
     return () => clearInterval(timer);
   }, [followUpPending, taskId]);
@@ -716,7 +764,7 @@ export default function TaskDetail() {
             {timeline.length === 0 && <li className="text-ink-600">No steps yet.</li>}
             {timeline.map((step, i) => (
               <TimelineItem
-                key={`${step.ts ?? "?"}-${step.type}`}
+                key={step.seq ?? `${step.ts ?? "?"}-${step.type}`}
                 step={step}
                 index={i}
               />
@@ -733,7 +781,7 @@ export default function TaskDetail() {
           <pre ref={consoleRef} className="flex-1 overflow-y-auto whitespace-pre-wrap pr-2 font-mono text-xs leading-relaxed text-ink-300">
             {consoleLines.length === 0 ? "No output yet." : ""}
             {consoleLines.map((line) => (
-              <div key={`${line.ts ?? "?"}-${line.type}`} className="flex gap-2">
+              <div key={line.seq ?? `${line.ts ?? "?"}-${line.type}`} className="flex gap-2">
                 <span
                   className={`shrink-0 select-none ${
                     line.type === "tool_call" ? "text-chai-500" : "text-ink-700"
@@ -774,10 +822,17 @@ export default function TaskDetail() {
           <p className="text-xs text-ink-500">
             Viewing run #{selectedRun?.seq ?? "?"} logs above. The live stream follows the latest run.
           </p>
+          {runsError && <p className="mt-2 text-xs text-red-400">{runsError}</p>}
         </section>
       )}
 
-      {preview && <ArtifactPreview taskId={task.id} artifact={preview} onClose={() => setPreview(null)} />}
+      {preview && (
+        <ArtifactPreview
+          taskId={task.id}
+          artifact={preview}
+          onClose={closePreview}
+        />
+      )}
     </div>
   );
 }

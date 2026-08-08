@@ -1,5 +1,6 @@
 import json
 import threading
+import time
 
 import pytest
 
@@ -15,9 +16,27 @@ def test_task_events_publish_subscribe_close() -> None:
     bus = TaskEvents()
     q = bus.subscribe(7)
     bus.publish(7, {"type": "message", "text": "hi"})
-    assert q.get(timeout=1) == {"type": "message", "text": "hi"}
+    item = q.get(timeout=1)
+    assert item["type"] == "message"
+    assert item["text"] == "hi"
+    assert item["seq"] == 1
+    bus.publish(7, {"type": "message", "text": "again"})
+    assert q.get(timeout=1)["seq"] == 2
     bus.close(7)
     assert q.get(timeout=1) is None
+
+
+def test_task_events_seq_monotonic_and_buffered() -> None:
+    bus = TaskEvents()
+    for i in range(3):
+        bus.publish(7, {"type": "message", "text": str(i)})
+    # A subscriber connecting later with no after_seq sees nothing already sent…
+    q = bus.subscribe(7)
+    assert q.empty()
+    # …and after_seq backfills only newer events.
+    q2 = bus.subscribe(7, after_seq=1)
+    assert [item["seq"] for item in [q2.get(timeout=1), q2.get(timeout=1)]] == [2, 3]
+    assert q2.empty()
 
 
 def test_task_events_unsubscribe() -> None:
@@ -190,6 +209,77 @@ def test_sse_immediate_close_for_terminal_task(
         if line.startswith("data: ")
     ]
     assert payloads == [{"type": "connected"}, {"type": "stream_end"}]
+
+
+def test_sse_after_seq_backfills_events_published_before_subscribe(
+    q: TaskQueue, app, session, git_remote, monkeypatch
+) -> None:
+    """Events emitted before a subscriber attached are replayed, not lost (F4)."""
+    settings.set_setting(session, "auto_publish", False)
+    row, _ = repos.upsert_repo(
+        session, full_name=FULL_NAME, default_branch="main", clone_url=git_remote
+    )
+    task = tasks.create_task(session, type_="freeform", repo_id=row.id, prompt="do it")
+    session.commit()
+    task_id = task.id
+
+    class _GatedHandle:
+        def __init__(self, events):
+            self._events = list(events)
+            self.release = threading.Event()
+            self.session_id = "ses_g"
+            self.proc = _FakeProc()
+
+        def events(self):
+            for ev in self._events:
+                yield ev
+                if not self.release.wait(timeout=10):
+                    break
+                self.release.clear()
+
+    handle = _GatedHandle(
+        [
+            AgentEvent(type="message", text="early"),
+            AgentEvent(type="message", text="working"),
+            AgentEvent(type="done"),
+        ]
+    )
+    monkeypatch.setattr("jalebi.queue.get_adapter", lambda cli: _FakeAdapter(handle))
+
+    runner = threading.Thread(target=q._run_task, args=(task_id,))
+    runner.start()
+
+    # Wait until the run has published its first event (seq 1), then attach a
+    # late subscriber that must backfill it from the replay buffer.
+    deadline = time.monotonic() + 10
+    while q.events._seq.get(task_id, 0) < 1 and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    client = app.test_client()
+    stream_resp = client.get(f"/api/tasks/{task_id}/events?after_seq=0", buffered=False)
+    lines: list[str] = []
+
+    def read_stream():
+        for chunk in stream_resp.response:
+            lines.append(chunk.decode())
+
+    reader = threading.Thread(target=read_stream)
+    reader.start()
+
+    handle.release.set()  # let the rest of the run flow
+    runner.join(timeout=10)
+    reader.join(timeout=5)
+
+    payloads = []
+    for line in "".join(lines).splitlines():
+        if line.startswith("data: "):
+            payloads.append(json.loads(line[6:]))
+    texts = [(p.get("type"), p.get("text"), p.get("seq")) for p in payloads]
+    assert texts[0][0] == "connected"
+    # The pre-subscribe event was replayed from the buffer (seq 1), then live.
+    assert ("message", "early", 1) in texts
+    assert ("message", "working", 2) in texts
+    assert texts[-1] == ("stream_end", None, None)
 
 
 def test_sse_not_found(app) -> None:

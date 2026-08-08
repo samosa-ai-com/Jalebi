@@ -386,7 +386,8 @@ def task_events(task_id: int) -> ResponseReturnValue:
     run = tasks.latest_run(session, task_id)
     terminal = run is not None and run.status in TERMINAL_STATUSES
     events = _queue().events
-    q = events.subscribe(task_id)
+    after_seq = request.args.get("after_seq", type=int)
+    q = events.subscribe(task_id, after_seq=after_seq)
 
     def generate():
         try:

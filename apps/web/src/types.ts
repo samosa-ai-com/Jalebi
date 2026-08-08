@@ -3,6 +3,7 @@ export interface Step {
   phase?: string | null;
   text?: string | null;
   ts: string;
+  seq?: number;
 }
 
 export interface Artifact {
@@ -75,6 +76,7 @@ export interface SseEvent {
   phase?: string | null;
   text?: string | null;
   ts?: string;
+  seq?: number;
 }
 
 export interface Health {

@@ -304,6 +304,9 @@ class TaskQueue:
         task.updated_at = utcnow()
         session.commit()
         session.refresh(run)
+        # Each run gets a fresh seq + replay buffer so a stale subscriber's seq
+        # watermark can't discard the new run's events (SSE backfill, F4).
+        self.events.reset(task.id)
         return run
 
     def _stream_and_finish(

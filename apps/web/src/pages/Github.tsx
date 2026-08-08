@@ -153,6 +153,7 @@ export default function Github() {
   const [repos, setRepos] = useState<GithubRepo[]>([]);
   const [connected, setConnected] = useState<Repo[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const load = useCallback(() => {
     api
@@ -223,10 +224,19 @@ export default function Github() {
   }
 
   async function prune() {
+    setNotice(null);
+    setError(null);
     try {
       const res = await api.pruneRepos();
       setConnected(await api.getRepos());
-      if (res.removed.length === 0) setError("No deleted repos found — all connected repos still exist.");
+      if (res.removed.length === 0) {
+        // A successful no-op is informational, not an error (F11).
+        setNotice("No deleted repos found — all connected repos still exist.");
+      } else if (res.removed.length === 1) {
+        setNotice(`Removed ${res.removed.length} repo that no longer exists upstream.`);
+      } else {
+        setNotice(`Removed ${res.removed.length} repos that no longer exist upstream.`);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "failed to prune repos");
     }
@@ -366,6 +376,7 @@ export default function Github() {
       )}
 
       {error && <p className="text-sm text-red-400">{error}</p>}
+      {notice && <p className="text-sm text-ink-400">{notice}</p>}
 
       <AddAccountForm onAdded={load} />
     </div>
