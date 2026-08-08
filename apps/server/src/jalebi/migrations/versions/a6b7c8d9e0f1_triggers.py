@@ -19,7 +19,12 @@ def upgrade() -> None:
     op.create_table(
         "trigger_rules",
         sa.Column("id", sa.Integer(), primary_key=True),
-        sa.Column("repo_id", sa.Integer(), sa.ForeignKey("repos.id"), nullable=False),
+        sa.Column(
+            "repo_id",
+            sa.Integer(),
+            sa.ForeignKey("repos.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
         sa.Column("event", sa.Text(), nullable=False),  # e.g. "pull_request.opened"
         sa.Column("action", sa.Text(), nullable=False),  # start_review | triage_issue | create_task
         sa.Column("branch_filter", sa.Text(), nullable=True),
@@ -38,12 +43,19 @@ def upgrade() -> None:
         sa.Column("github_delivery_id", sa.Text(), nullable=False, unique=True),
         sa.Column("event", sa.Text(), nullable=False),  # e.g. "pull_request"
         sa.Column("action", sa.Text(), nullable=True),  # e.g. "opened"
-        sa.Column("repo_id", sa.Integer(), sa.ForeignKey("repos.id"), nullable=True),
+        sa.Column(
+            "repo_id",
+            sa.Integer(),
+            sa.ForeignKey("repos.id", ondelete="SET NULL"),
+            nullable=True,
+        ),
         sa.Column("repo_full_name", sa.Text(), nullable=True),
         sa.Column("payload_json", sa.Text(), nullable=False),
         sa.Column("received_at", sa.DateTime(), nullable=False),
         sa.Column(
-            "matched_rule_id", sa.Integer(), sa.ForeignKey("trigger_rules.id"),
+            "matched_rule_id",
+            sa.Integer(),
+            sa.ForeignKey("trigger_rules.id", ondelete="SET NULL"),
             nullable=True,
         ),
         sa.Column("status", sa.Text(), nullable=False, server_default=sa.text("'received'")),

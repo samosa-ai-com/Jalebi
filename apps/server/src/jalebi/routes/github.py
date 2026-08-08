@@ -16,7 +16,16 @@ from sqlalchemy import delete as sa_delete
 from sqlalchemy import select
 
 from jalebi import artifacts, db, secrets
-from jalebi.db import Artifact, Followup, Repo, ReviewAssignment, Run, Task
+from jalebi.db import (
+    Artifact,
+    EventDelivery,
+    Followup,
+    Repo,
+    ReviewAssignment,
+    Run,
+    Task,
+    TriggerRule,
+)
 from jalebi.git_workspace import GitWorkspace
 from jalebi.github import GitHubClient, GitHubError, TokenInfo
 
@@ -235,6 +244,12 @@ def delete_token(name: str) -> ResponseReturnValue:
     if task_ids:
         session.execute(sa_delete(Task).where(Task.id.in_(task_ids)))
     if repo_ids:
+        # Webhook artifacts of the repo: delete deliveries first (they reference
+        # both the repo and the rules), then the rules, then the repo.
+        session.execute(
+            sa_delete(EventDelivery).where(EventDelivery.repo_id.in_(repo_ids))
+        )
+        session.execute(sa_delete(TriggerRule).where(TriggerRule.repo_id.in_(repo_ids)))
         session.execute(sa_delete(Repo).where(Repo.id.in_(repo_ids)))
 
     secrets.remove_github_token(config, name)

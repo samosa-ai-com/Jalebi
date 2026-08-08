@@ -20,6 +20,7 @@ import hashlib
 import hmac
 import json
 
+import sqlalchemy as sa
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -214,6 +215,14 @@ def delete_rule(session: Session, rule_id: int) -> bool:
     row = rule_by_id(session, rule_id)
     if row is None:
         return False
+    # Clear the link from any delivery that matched this rule so deletion isn't
+    # blocked by the FK (SQLite defaults to RESTRICT; ON DELETE SET NULL covers
+    # fresh DBs, this covers the rest).
+    session.execute(
+        sa.update(EventDelivery)
+        .where(EventDelivery.matched_rule_id == rule_id)
+        .values(matched_rule_id=None)
+    )
     session.delete(row)
     session.commit()
     return True

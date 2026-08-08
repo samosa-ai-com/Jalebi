@@ -292,7 +292,9 @@ class TriggerRule(Base):
     __table_args__ = (Index("ix_trigger_rules_repo_id", "repo_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    repo_id: Mapped[int] = mapped_column(ForeignKey("repos.id"), nullable=False)
+    repo_id: Mapped[int] = mapped_column(
+        ForeignKey("repos.id", ondelete="CASCADE"), nullable=False
+    )
     event: Mapped[str] = mapped_column(Text, nullable=False)
     action: Mapped[str] = mapped_column(Text, nullable=False)
     branch_filter: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -321,12 +323,14 @@ class EventDelivery(Base):
     github_delivery_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     event: Mapped[str] = mapped_column(Text, nullable=False)
     action: Mapped[str | None] = mapped_column(Text, nullable=True)
-    repo_id: Mapped[int | None] = mapped_column(ForeignKey("repos.id"), nullable=True)
+    repo_id: Mapped[int | None] = mapped_column(
+        ForeignKey("repos.id", ondelete="SET NULL"), nullable=True
+    )
     repo_full_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     payload_json: Mapped[str] = mapped_column(Text, nullable=False)
     received_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
     matched_rule_id: Mapped[int | None] = mapped_column(
-        ForeignKey("trigger_rules.id"), nullable=True
+        ForeignKey("trigger_rules.id", ondelete="SET NULL"), nullable=True
     )
     status: Mapped[str] = mapped_column(
         Text, nullable=False, default="received", server_default=sa.text("'received'")

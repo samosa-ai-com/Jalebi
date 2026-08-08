@@ -108,6 +108,7 @@ This is critical and repeated: **all GitHub interaction in this project goes thr
 | `docs/14-env-vars.md` | Env-var store (global + per-repo), `/api/envvars`, `.env` import, agent injection + masking. | Env-var work. |
 | `docs/15-catalog.md` | Agent catalog (personality → `AGENTS.md`, skills → `@path`, cli/model pins). | Catalog agent work. |
 | `docs/16-triggers.md` | Webhook listener, delivery dedup, trigger rules, registration, replay. | Webhook/trigger work. |
+| `docs/17-phase1-validation.md` | Manual UI QA checklist for every Phase 1 feature. | Feature/UI behavior changes. |
 
 **If you add a doc file, add it to this table.**
 
@@ -140,7 +141,11 @@ Jalebi/
 │   ├── 10-security.md
 │   ├── 11-reliability.md
 │   ├── 12-ui-validation.md
-│   └── 13-phase0-review.md
+│   ├── 13-phase0-review.md
+│   ├── 14-env-vars.md
+│   ├── 15-catalog.md
+│   ├── 16-triggers.md
+│   └── 17-phase1-validation.md
 ├── apps/
 │   ├── server/                    # Flask orchestrator (Python 3.13, uv)
 │   │   ├── pyproject.toml         # uv project; `jalebi` console script → jalebi.app:main
