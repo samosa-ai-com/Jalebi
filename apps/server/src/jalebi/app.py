@@ -104,6 +104,16 @@ def create_app(config: Config | None = None) -> Flask:
     db.init_db(config.db_url)
     db.run_migrations(config.db_url)
 
+    # Persist every settings default that has no stored row yet, so all
+    # configurations are explicit in the DB and survive restarts (PRD goal:
+    # nothing is held in memory). Existing user values are never overwritten.
+    with app.app_context():
+        session = db.get_session()
+        try:
+            settings.seed_defaults(session)
+        finally:
+            session.close()
+
     app.config["JALEBI_QUEUE"] = TaskQueue(config)
 
     app.register_blueprint(github_bp)

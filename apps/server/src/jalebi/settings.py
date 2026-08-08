@@ -1,4 +1,11 @@
-"""Key-value settings stored in the ``settings`` table, with code-side defaults."""
+"""Key-value settings stored in the ``settings`` table, with code-side defaults.
+
+Every configuration key is materialized as a row in the ``settings`` table
+(``seed_defaults`` runs at startup), so settings are **persistent** — they
+survive restarts and are never held in memory. ``get_setting`` falls back to the
+code default only when a key has no stored row (e.g. a brand-new key added by a
+code update before the next restart).
+"""
 
 import json
 
@@ -26,6 +33,28 @@ DEFAULTS: dict[str, object] = {
 }
 
 SETTING_KEYS = tuple(DEFAULTS)
+
+
+def seed_defaults(session: Session) -> int:
+    """Persist every default that has no stored row yet. Returns the count added.
+
+    Runs at startup so the ``settings`` table always contains every
+    configuration key — settings are explicit, inspectable, and survive
+    restarts. Existing (user-modified) values are never overwritten, and a key
+    added by a later code update gets seeded on the next startup.
+    """
+    existing = {
+        row.key
+        for row in session.execute(select(Setting)).scalars()
+    }
+    added = 0
+    for key, value in DEFAULTS.items():
+        if key not in existing:
+            session.add(Setting(key=key, value=json.dumps(value)))
+            added += 1
+    if added:
+        session.commit()
+    return added
 
 
 def get_setting(session: Session, key: str) -> object:

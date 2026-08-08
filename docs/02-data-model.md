@@ -132,7 +132,7 @@ Unique: `(name, repo_id)`. Index: `repo_id`. See `docs/14-env-vars.md`.
 | `key` | text PK | |
 | `value` | text | JSON-encoded |
 
-Settings keys (defaults in `jalebi/settings.py`): `concurrency` (4), `auto_publish` (true), `ntfy_topic` ("" — merged: bare topic **or** full URL), `default_timeout_minutes` (60), `retry_policy` (`{"auto_retry": false}`), `secret_patterns` (`[]`), `artifact_ttl_days` (7), `agent_cli` (`"opencode"`), `notify_on_done` (true), `notify_on_failed` (true), `notify_on_progress` (true), `notify_on_needs_approval` (true), `notify_progress_interval_minutes` (30). Missing keys fall back to the code defaults; stored values override.
+Settings keys (defaults in `jalebi/settings.py`): `concurrency` (4), `auto_publish` (true), `ntfy_topic` ("" — merged: bare topic **or** full URL), `default_timeout_minutes` (60), `retry_policy` (`{"auto_retry": false}`), `secret_patterns` (`[]`), `artifact_ttl_days` (7), `agent_cli` (`"opencode"`), `notify_on_done` (true), `notify_on_failed` (true), `notify_on_progress` (true), `notify_on_needs_approval` (true), `notify_progress_interval_minutes` (30). **Every key is materialized as a row at startup (`seed_defaults`)** — settings are persistent and never held in memory; stored values override the code default.
 
 ## 3. Relationships (Phase 0)
 

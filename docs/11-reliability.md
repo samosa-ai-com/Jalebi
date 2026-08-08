@@ -30,6 +30,14 @@ At startup `main()` calls `TaskQueue.recover()`, which:
 
 ## 3. Settings: live vs startup
 
+**Persistence:** every setting is stored as a row in the SQLite `settings` table
+(JSON-encoded values, written with an explicit commit) — nothing is held in
+memory. `settings.seed_defaults()` runs at **app startup** (`create_app`) and
+inserts a row for every default that has no stored value yet, so all
+configurations are explicit, inspectable, and survive restarts. User-modified
+values are **never overwritten** by seeding. `get_setting` falls back to the code
+default only for a key added by a code update before the next restart.
+
 | Setting | Applies |
 |---|---|
 | `concurrency` | **live** (pool resizes immediately) |
