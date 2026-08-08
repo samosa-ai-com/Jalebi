@@ -64,11 +64,17 @@ def import_env_file() -> ResponseReturnValue:
     if repo_id is not None and not isinstance(repo_id, int):
         return jsonify({"error": "repo_id must be an integer or null"}), 400
     try:
-        imported = envvars.import_env_file(session, payload["content"], repo_id=repo_id)
+        imported, skipped = envvars.import_env_file(session, payload["content"], repo_id=repo_id)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     rows = envvars.list_env_vars(session, repo_id=repo_id)
-    return jsonify({"imported": imported, "env_vars": _list_payload(session, rows)})
+    return jsonify(
+        {
+            "imported": imported,
+            "skipped": skipped,
+            "env_vars": _list_payload(session, rows),
+        }
+    )
 
 
 @bp.delete("/<int:env_var_id>")

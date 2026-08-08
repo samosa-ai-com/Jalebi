@@ -67,14 +67,43 @@ def test_import_env_file(session) -> None:
         'QUOTED="hi"\n'
         "BROKEN LINE\n"
         "KEY==val\n"
+        "=novalue\n"
     )
-    imported = envvars.import_env_file(session, content)
+    imported, skipped = envvars.import_env_file(session, content)
     assert imported == 4
+    assert skipped == ["BROKEN LINE", "=novalue"]
     rows = {r.name: r.value for r in envvars.list_env_vars(session)}
     assert rows["FOO"] == "bar"
     assert rows["SPACED"] == "a b c"
     assert rows["QUOTED"] == "hi"
     assert rows["KEY"] == "=val"
+
+
+def test_import_env_file_empty_and_multiline_values(session) -> None:
+    """Empty values import as empty; a line with no '=' becomes an empty value;
+    multiline values keep their literal text (v1 does not interpret \n escapes
+    — documented behavior)."""
+    content = (
+        "EMPTY=\n"
+        'QUOTED="hello world"\n'
+        'ML="line1\\nline2"\n'
+        "NOEQUALS\n"
+    )
+    imported, skipped = envvars.import_env_file(session, content)
+    assert imported == 4
+    assert skipped == []
+    rows = {r.name: r.value for r in envvars.list_env_vars(session)}
+    assert rows["EMPTY"] == ""
+    assert rows["NOEQUALS"] == ""
+    assert rows["QUOTED"] == "hello world"
+    assert rows["ML"] == "line1\\nline2"  # literal backslash-n, not a newline
+
+
+def test_import_env_file_skips_bad_lines_and_reports(session) -> None:
+    content = "GOOD=1\nINVALID KEY=x\n=novalue\nCOMMENT # not a key\n"
+    imported, skipped = envvars.import_env_file(session, content)
+    assert imported == 1
+    assert skipped == ["INVALID KEY=x", "=novalue", "COMMENT # not a key"]
 
 
 def test_env_var_to_dict_never_leaks_value(app, session) -> None:

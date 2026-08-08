@@ -289,6 +289,52 @@ def test_terminal_notification_skipped_when_topic_unset(q, session, repo_row, mo
     assert called is False
 
 
+def test_terminal_notification_masks_env_var_values(
+    q, session, repo_row, monkeypatch
+) -> None:
+    """An env-var value echoed by the agent in its final message must be masked
+    in the ntfy push (regression: notification masker must include env vars)."""
+    from jalebi import envvars
+
+    settings.set_setting(session, "ntfy_topic", "room")
+    settings.set_setting(session, "notify_on_done", True)
+    envvars.upsert_env_var(session, name="API_KEY", value="ghp_echoed_secret", repo_id=None)
+    task = tasks.create_task(
+        session,
+        type_="freeform",
+        repo_id=repo_row.id,
+        prompt="do it",
+        env_vars=["API_KEY"],
+    )
+    _install_adapter(
+        monkeypatch,
+        FakeHandle(
+            [
+                AgentEvent(type="message", text="done, key is ghp_echoed_secret"),
+                AgentEvent(type="done"),
+            ]
+        ),
+    )
+
+    sent: list[dict] = []
+
+    class FakeResp:
+        status_code = 200
+
+    def fake_post(url, json=None, timeout=None):
+        sent.append({"url": url, "json": json})
+        return FakeResp()
+
+    monkeypatch.setattr("jalebi.notify.httpx.post", fake_post)
+    q._run_task(task.id)
+
+    assert _fresh_task(session, task.id).status == "done"
+    assert sent
+    body = sent[0]["json"]
+    assert "ghp_echoed_secret" not in str(body)
+    assert "***" in body["message"]
+
+
 def test_failure_notification_gated_by_toggle(q, session, repo_row, monkeypatch) -> None:
     """A failed run does NOT notify when notify_on_failed is off."""
     settings.set_setting(session, "ntfy_topic", "room")

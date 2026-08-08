@@ -124,7 +124,7 @@ class Task(Base):
         Text, nullable=False, default="queued", server_default=sa.text("'queued'")
     )
     timeout_minutes: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=30, server_default=sa.text("30")
+        Integer, nullable=False, default=60, server_default=sa.text("60")
     )
     retry_count: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=sa.text("0")

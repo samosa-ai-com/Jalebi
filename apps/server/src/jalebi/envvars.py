@@ -57,23 +57,32 @@ def delete_env_var(session: Session, env_var_id: int) -> bool:
     return True
 
 
-def import_env_file(session: Session, content: str, repo_id: int | None = None) -> int:
-    """Parse ``KEY=VALUE`` lines (a .env file) and upsert each. Returns the count."""
+def import_env_file(
+    session: Session, content: str, repo_id: int | None = None
+) -> tuple[int, list[str]]:
+    """Parse ``KEY=VALUE`` lines (a .env file) and upsert each.
+
+    Returns ``(imported_count, skipped_lines)`` — lines with an invalid key
+    (empty, or containing ``=``/whitespace) or no ``=`` are reported so the
+    caller can tell the user what was ignored.
+    """
     imported = 0
+    skipped: list[str] = []
     for line in content.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
             continue
-        if line.startswith("export "):
-            line = line[7:].strip()
-        key, _, value = line.partition("=")
+        if stripped.startswith("export "):
+            stripped = stripped[7:].strip()
+        key, _, value = stripped.partition("=")
         key = key.strip()
         if not key or re.search(r"[=\s]", key):
+            skipped.append(line.strip())
             continue
         value = value.strip().strip("'\"")
         upsert_env_var(session, name=key, value=value, repo_id=repo_id)
         imported += 1
-    return imported
+    return imported, skipped
 
 
 def task_env_names(task) -> list[str]:
@@ -107,10 +116,17 @@ def values_for_names(session: Session, repo_id: int, names: list[str]) -> dict[s
 
 def env_var_to_dict(row: EnvVar, repo_full_name: str | None = None) -> dict[str, object]:
     """API shape — the value is NEVER returned in full, only a masked preview."""
+    value = row.value
+    if not value:
+        masked = "***"
+    elif len(value) > 8:
+        masked = value[:4] + "***" + value[-2:]
+    else:
+        masked = "***"
     return {
         "id": row.id,
         "name": row.name,
-        "masked": row.value[:4] + "***" + row.value[-2:] if len(row.value) > 8 else "***",
+        "masked": masked,
         "repo_id": row.repo_id,
         "repo_full_name": repo_full_name,
         "created_at": row.created_at.isoformat(),

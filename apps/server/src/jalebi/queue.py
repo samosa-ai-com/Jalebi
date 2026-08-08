@@ -477,8 +477,10 @@ class TaskQueue:
                     run.steps_json = json.dumps(steps[-MAX_STEPS:])
 
         # Push a terminal notification (done/failed/timed_out/cancelled or a
-        # needs_approval publish failure), with the agent's final message.
-        self._notify_terminal(session, task, repo, state)
+        # needs_approval publish failure), with the agent's final message. The
+        # run-level masker already includes the env-var values + token, so a
+        # value the agent echoed is redacted in the push too.
+        self._notify_terminal(session, task, repo, state, masker=masker)
 
         # Capture agent-produced (untracked) files from the worktree (PRD F18).
         # Text files are masked at ingest; files containing a known secret value
@@ -872,14 +874,22 @@ class TaskQueue:
     def _notify_tags(status: str) -> str | None:
         if status == "done":
             return notify.TAGS_OK
-        if status in ("failed", "timed_out", "cancelled"):
+        if status == "timed_out":
+            return notify.TAGS_CLOCK
+        if status in ("failed", "cancelled"):
             return notify.TAGS_FAIL
         if status == "needs_approval":
             return notify.TAGS_APPROVE
         return notify.TAGS_CLOCK
 
-    def _notify_terminal(self, session, task: Task, repo: Repo, state: _RunState) -> None:
-        """Send the terminal-status notification when the matching toggle is on."""
+    def _notify_terminal(
+        self, session, task: Task, repo: Repo, state: _RunState, *, masker=None
+    ) -> None:
+        """Send the terminal-status notification when the matching toggle is on.
+
+        ``masker`` is the run-level masker (PATs + env-var values + secret
+        patterns); when omitted a best-effort masker is built from settings.
+        """
         status = task.status
         key = {
             "done": "notify_on_done",
@@ -890,15 +900,23 @@ class TaskQueue:
         }.get(status)
         if key is None or not self._notify_enabled(session, key):
             return
-        masker = self._build_masker(session)
+        if masker is None:
+            masker = self._build_masker(session)
         self._notify(session, task, repo.full_name, state, masker=masker)
 
-    def _build_masker(self, session):
-        """Masker for notification text (PATs + secret patterns)."""
+    def _build_masker(self, session, secret_values: list[str] | None = None):
+        """Masker for notification text (PATs + env-var values + secret patterns).
+
+        ``secret_values`` are extra values to redact (e.g. a task's env vars),
+        so a value the agent echoed can never reach the push channel.
+        """
         config = self.config
         raw_patterns = settings.get_setting(session, "secret_patterns") or []
         patterns = [str(p) for p in raw_patterns] if isinstance(raw_patterns, list) else []
-        return masking.build_masker(secrets.all_token_values(config), patterns)
+        values = list(secrets.all_token_values(config))
+        if secret_values:
+            values += [v for v in secret_values if v]
+        return masking.build_masker(values, patterns)
 
     def _run_followup(
         self,
@@ -1134,25 +1152,30 @@ class TaskQueue:
 
         Fires every ``notify_progress_interval_minutes`` (default 30), starting
         at the first interval mark, with elapsed time + the agent's latest
-        message. Reads settings live so the interval/toggle apply immediately;
-        best-effort (a disabled/unconfigured topic is a silent no-op).
+        message. The toggle and interval are re-read every loop so a live
+        settings change applies on the next ping; best-effort (a
+        disabled/unconfigured topic is a silent no-op).
         """
         session = Session()
         try:
-            raw_interval = settings.get_setting(session, "notify_progress_interval_minutes")
-            interval = raw_interval if isinstance(raw_interval, int) and raw_interval > 0 else 30
-            if not self._notify_enabled(session, "notify_on_progress"):
-                return
-            masker = self._build_masker(session)
             repo = session.get(Repo, task.repo_id)
             if repo is None:
                 return
+            # Include the task's env-var values so a value the agent echoed is
+            # redacted in the progress ping too.
+            task_env = envvars.values_for_names(session, repo.id, envvars.task_env_names(task))
+            masker = self._build_masker(session, secret_values=list(task_env.values()))
             started = time.monotonic()
             while True:
                 if state.handle.proc.poll() is not None:
                     return
+                raw_interval = settings.get_setting(session, "notify_progress_interval_minutes")
+                interval = (
+                    raw_interval if isinstance(raw_interval, int) and raw_interval > 0 else 30
+                )
+                enabled = self._notify_enabled(session, "notify_on_progress")
                 elapsed = time.monotonic() - started
-                if elapsed >= interval * 60:
+                if enabled and elapsed >= interval * 60:
                     started = time.monotonic()  # next ping after another interval
                     elapsed_min = int(elapsed // 60)
                     state.last_step_text = state.last_step_text or "agent is still working"
