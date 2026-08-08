@@ -188,6 +188,40 @@ def test_worktree_remove_noop(ws: GitWorkspace) -> None:
     ws.remove_worktree(99, FULL_NAME)
 
 
+def test_create_worktree_prunes_missing_but_registered(ws: GitWorkspace, remote: str) -> None:
+    """A task whose worktree directory was deleted WITHOUT unregistering it (e.g.
+    task-delete cleanup) leaves the mirror listing it as 'missing but already
+    registered' — create_worktree must prune that so a reused task id gets a
+    clean worktree instead of failing."""
+    import shutil
+
+    ws.ensure_mirror(FULL_NAME, remote)
+    wt = ws.create_worktree(1, FULL_NAME, "main")
+    # Simulate a delete that removed the directory but not the registration:
+    # delete the worktree dir as the task-delete route would, WITHOUT pruning.
+    shutil.rmtree(wt, ignore_errors=True)
+    assert not (wt / ".git").exists()
+
+    # Recreating the same task id must succeed (prune clears the registration).
+    wt2 = ws.create_worktree(1, FULL_NAME, "main")
+    assert (wt2 / ".git").is_file()
+    assert wt2 == wt
+
+
+def test_remove_worktree_with_missing_dir_prunes(ws: GitWorkspace, remote: str) -> None:
+    """remove_worktree on an already-deleted directory must still clear the
+    mirror registration so the task id can be reused."""
+    import shutil
+
+    ws.ensure_mirror(FULL_NAME, remote)
+    wt = ws.create_worktree(1, FULL_NAME, "main")
+    shutil.rmtree(wt, ignore_errors=True)
+    ws.remove_worktree(1, FULL_NAME)  # dir already gone — must prune, not crash
+    # The stale registration is gone: recreating the worktree succeeds.
+    wt2 = ws.create_worktree(1, FULL_NAME, "main")
+    assert (wt2 / ".git").is_file()
+
+
 def test_clean_git_env_strips_inherited_state(monkeypatch) -> None:
     from jalebi.git_workspace import _clean_git_env
 

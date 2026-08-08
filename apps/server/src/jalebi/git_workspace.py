@@ -208,6 +208,12 @@ class GitWorkspace:
             if not mirror.exists():
                 raise GitWorkspaceError(f"mirror missing for {full_name}; call ensure_mirror first")
             _run_git(["-C", str(mirror), "fetch", "origin", "--prune"], auth_env=auth)
+            # Prune stale worktree registrations: a task whose worktree directory
+            # was deleted without being unregistered (e.g. task-delete cleanup)
+            # leaves the mirror listing it as "missing but already registered",
+            # which makes `worktree add` fail for a reused task id. Pruning first
+            # clears those so a fresh task always gets a clean worktree.
+            _run_git(["-C", str(mirror), "worktree", "prune"], auth_env=auth)
             branches = self._list_local_heads(mirror)
             if branch in branches:
                 _run_git(["-C", str(mirror), "worktree", "add", str(ws), branch])
@@ -236,6 +242,10 @@ class GitWorkspace:
                 return
             if (ws / ".git").is_file():
                 _run_git(["-C", str(mirror), "worktree", "remove", "--force", str(ws)])
+            else:
+                # Directory already gone — clear any stale registration so the
+                # task id can be reused later.
+                _run_git(["-C", str(mirror), "worktree", "prune"])
             branches = _run_git(
                 ["-C", str(mirror), "branch", "--format=%(refname:short)"]
             ).splitlines()

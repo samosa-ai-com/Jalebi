@@ -275,6 +275,9 @@ def delete_task(task_id: int) -> ResponseReturnValue:
     if task is None:
         return jsonify({"error": "task not found"}), 404
 
+    repo = session.get(db.Repo, task.repo_id)
+    full_name = repo.full_name if repo is not None else None
+
     # Cancel first so no orphaned agent keeps working on data about to vanish.
     if task.status == "running":
         _queue().cancel(task_id)
@@ -294,18 +297,25 @@ def delete_task(task_id: int) -> ResponseReturnValue:
     session.execute(sa_delete(Task).where(Task.id == task_id))
     session.commit()
 
-    # Best-effort disk cleanup (outside the DB transaction).
+    # Best-effort disk cleanup (outside the DB transaction). The worktree is
+    # removed via GitWorkspace so the mirror's registration is also cleared —
+    # leaving a "missing but already registered" worktree behind would break a
+    # future task that reuses this task id (GitWorkspaceError on worktree add).
     config: Config = current_app.config["JALEBI_CONFIG"]
     for run_id in run_ids:
         shutil.rmtree(
             artifacts.artifact_store_dir(config.data_dir) / str(run_id), ignore_errors=True
         )
     shutil.rmtree(
-        GitWorkspace.worktree_path(config.data_dir, task_id), ignore_errors=True
-    )
-    shutil.rmtree(
         GitWorkspace.review_worktree_path(config.data_dir, task_id), ignore_errors=True
     )
+    if full_name is not None:
+        git = GitWorkspace(config)
+        git.remove_worktree(task_id, full_name)
+    else:
+        shutil.rmtree(
+            GitWorkspace.worktree_path(config.data_dir, task_id), ignore_errors=True
+        )
     return jsonify({"deleted": task_id})
 
 
