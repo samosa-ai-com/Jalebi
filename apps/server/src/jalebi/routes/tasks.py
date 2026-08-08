@@ -121,9 +121,9 @@ def create_task() -> ResponseReturnValue:
     if isinstance(raw_timeout, int) and raw_timeout > 0:
         timeout_minutes = raw_timeout
     else:
-        raw_default = settings.get_setting(session, "default_timeout_minutes") or 30
+        raw_default = settings.get_setting(session, "default_timeout_minutes") or 60
         timeout_minutes = (
-            raw_default if isinstance(raw_default, int) and raw_default > 0 else 30
+            raw_default if isinstance(raw_default, int) and raw_default > 0 else 60
         )
 
     type_ = payload.get("type", "freeform")
@@ -134,6 +134,12 @@ def create_task() -> ResponseReturnValue:
         return jsonify({"error": "issue_number is required for issue_fix tasks"}), 400
     if type_ == "pr_review" and pr_number is None:
         return jsonify({"error": "pr_number is required for pr_review tasks"}), 400
+
+    env_vars = payload.get("env_vars")
+    if env_vars is not None and (
+        not isinstance(env_vars, list) or not all(isinstance(n, str) for n in env_vars)
+    ):
+        return jsonify({"error": "env_vars must be a list of names"}), 400
 
     # Per-task publish mode: explicit override, else a type-based default
     # (issue_fix auto-publishes on done; freeform/manual types default to manual
@@ -184,6 +190,7 @@ def create_task() -> ResponseReturnValue:
             issues=[int(issue_number)] if issue_number is not None else None,
             prs=[int(pr_number)] if pr_number is not None else None,
             context=context,
+            env_vars=env_vars,
             timeout_minutes=timeout_minutes,
             publish_mode=publish_mode,
             masker=masker,

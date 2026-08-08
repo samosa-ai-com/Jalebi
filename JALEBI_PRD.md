@@ -391,7 +391,7 @@ Mirrors GitHub Actions' ability to gate merges on agent results.
 
 ### F16. Timeouts & retries
 
-- **Per-task timeout (enforced):** each task has a timeout (default **30 minutes**, mirroring the Chanakya workflow's `timeout-minutes: 30`), configurable per task and per repo. On expiry the child process is killed (SIGTERM → SIGKILL), the task marked `failed`/`timed-out`, and the check run (if any) completed with `failure`.
+- **Per-task timeout (enforced):** each task has a timeout (default **60 minutes**; revised from 30 to suit longer agent runs), configurable per task and per repo. On expiry the child process is killed (SIGTERM → SIGKILL), the task marked `failed`/`timed-out`, and the check run (if any) completed with `failure`.
 - **Retries:** a failed/timed-out task can be **re-run** (UI action) — a fresh `run` reusing the same worktree/session where sensible, or a new run when the CLI requires it (e.g. a fresh `opencode run`). Retry count is tracked; auto-retry on transient failures (e.g. network) is configurable (default off for publishing tasks, on for pure-review tasks).
 - Interrupted runs remain resumable via follow-up (F11).
 
@@ -406,6 +406,20 @@ Mirrors GitHub Actions' ability to gate merges on agent results.
 - Runs may emit **artifacts**: files the agent produced (logs, test reports, coverage, screenshots) captured from the worktree.
 - An **artifact store** keeps them per run (uploaded from the worktree at completion), with retention TTL (default 7 days, matching worktree cleanup; configurable).
 - UI: artifact list on the task detail page with download links.
+
+### F19. Notifications
+
+- **Channel:** ntfy push (self-hosted or `ntfy.sh`). The endpoint is a **single merged setting** — either a bare topic name (default `https://ntfy.sh` server) or a full URL to a self-hosted server.
+- **Events (each a toggle, defaults on):** task **done** (final agent message + summary), task **failed/timed out/cancelled**, task **needs approval** (publish failed / pending manual publish), and **progress** — a periodic "still running" ping every `notify_progress_interval_minutes` (default 30) with elapsed time and the agent's latest message.
+- **Test:** a "Send test notification" button validates the endpoint (`POST /api/notify/test`).
+- **Masking:** notification title/body are run through the secret masker before send, so a stray PAT/env-var value can never reach the push channel. Sending is **best-effort** — a dead ntfy server never fails a task.
+
+### F20. Environment variables for agents
+
+- Owners store named **environment variables** that task agents need to build/test/develop (DB URLs, API keys, tokens), scoped **globally or per-repo**.
+- Values are **secrets**: never returned in full by the API (masked previews), added to the secret masker so an agent echoing them is redacted, and injected into the agent subprocess env **on top of** Jalebi's pinned env (they cannot override the token/identity/git hygiene).
+- Tasks **select** which variables to inject (checkbox chips on the new-task form); the selection is stored on the task and applied to runs and follow-ups.
+- `.env` files can be **imported** (paste → parse `KEY=VALUE` → upsert) in Settings.
 
 ---
 
@@ -496,15 +510,18 @@ check_runs(id, task_id, run_id, repo_id, head_sha, name, status, conclusion)
 screenings(id, repo_id, name, system_prompt, cadence_cron, scope_branch, enabled, notify_ntfy)
 screening_runs(id, screening_id, head_sha, status, started_at, finished_at, findings_json)
 artifacts(id, run_id, path, size, created_at)
-settings(key, value)   -- concurrency, auto_publish, ntfy_topic, default_timeout_minutes,
-                          retry_policy, secret_patterns_json, artifact_ttl_days, etc.
+settings(key, value)   -- concurrency, auto_publish, ntfy_topic (merged endpoint),
+                          default_timeout_minutes, retry_policy, secret_patterns_json,
+                          artifact_ttl_days, notify_on_* toggles, etc.
+env_vars(id, name, value, repo_id NULL=global, created_at, updated_at)  -- agent env vars (masked at API)
+tasks.env_vars_json     -- selected env-var names injected into the agent subprocess env
 ```
 
 ---
 
 ## 11. Screens & flows (UI summary)
 
-1. **Settings:** PAT (validate + show granted scopes), concurrency (default 4), publish policy (default auto), ntfy topic, data-dir path, **default timeout (30 min) + retry policy**, **secret patterns**, **tunnel/webhook setup status**.
+1. **Settings:** PAT (validate + show granted scopes), concurrency (default 4), publish policy (default auto), **notifications (ntfy endpoint + per-event toggles + progress interval + test button)**, **environment variables (global + per-repo, `.env` import, masked)**, data-dir path, **default timeout (60 min) + retry policy**, **secret patterns**, **tunnel/webhook setup status**.
 2. **Agents:** catalog list; create/edit agent (name, kind, cli, model, personality, skills, custom instructions). Skills come from a library of markdown files the user uploads or references by path.
 3. **New Task modal:** repo → type → source/target branches → agent (default build agent or catalog agent) → model → instructions (issue #, PR #, or free text). For screenings, an explicit "run screen now" action.
 4. **Task detail:** timeline, console (with **masked secrets**), diff, **artifacts**, PR card (publish status, reviewers, assign reviewers, **check-run status**), follow-up composer, **Re-run** action.
@@ -523,7 +540,7 @@ settings(key, value)   -- concurrency, auto_publish, ntfy_topic, default_timeout
 - AgentAdapter interface + **opencode adapter** (`--format json`, `--dir`, `--model`, `--session`).
 - Task queue with default concurrency 4 (configurable); run lifecycle; cancellation.
 - GitHub publish (auto by default; manual override) + `Closes #N`.
-- **Timeouts (default 30 min) + re-run/retry; secret masking in logs; artifact capture + retention.**
+- **Timeouts (default 60 min) + re-run/retry; secret masking in logs; artifact capture + retention; ntfy notifications; env vars for agents.**
 - Minimal-but-Jules-like UI: queue, task detail (timeline + console + diff), follow-up composer.
 - Follow-up via `opencode run --session <id>` (openCode resume).
 
@@ -554,7 +571,7 @@ settings(key, value)   -- concurrency, auto_publish, ntfy_topic, default_timeout
 
 - **Latency:** SSE events render in the UI in near-real-time; console streams without buffering delays. Webhook → task-start latency should be sub-second (validation + dedup only; no slow processing on the webhook path).
 - **Reliability:** runs + sessions persisted; interrupted runs resumable; follow-ups work after restart; webhook deliveries **idempotent** (re-delivery never double-runs); check-run conclusions converge to the final task state.
-- **Resource safety:** worktree cleanup TTL; cap on concurrent children (== configured concurrency); process kill on abort with timeout then SIGKILL; per-task timeout (default 30 min) prevents runaway agents.
+- **Resource safety:** worktree cleanup TTL; cap on concurrent children (== configured concurrency); process kill on abort with timeout then SIGKILL; per-task timeout (default 60 min) prevents runaway agents.
 - **Security:** localhost bind; 0600 secrets; PAT never logged/leaked; no secrets interpolated into prompts; optional UI password; **automatic secret masking in logs/console**; webhook signature verification when a secret is configured.
 - **Testability:** adapters unit-tested with mocked CLI output; queue tested with fake agents; Octokit interactions mocked (e.g. via `nock`); screening scheduler tested with fake clocks; webhook handler tested with fixture payloads + delivery-id dedup.
 - **Portability:** must run on Linux and macOS (dev may build on any machine); document Node version + CLI install requirements per adapter.

@@ -24,6 +24,8 @@
 - Implemented at the **ingest layer** (before events are broadcast/persisted), not as a display-only filter.
 - Optional user-supplied extra secret patterns (regex) to mask beyond the PAT; patterns are **validated at submission** (an invalid regex is rejected with a 400 instead of silently ignored), and step text is **capped before masking** so a pathological pattern cannot backtrack over unbounded input.
 - **Artifacts are masked too:** captured text files are run through the masker at write time; binary files that contain any known token value are dropped (not stored); a per-file 10 MB cap bounds a runaway agent. The run-end diff snapshot (`runs.diff_text`) is masked **before** truncation so a secret straddling the size boundary can't survive.
+- **Env vars are secrets:** the `env_vars` store's values are **never returned in full** by the API (masked previews only), and the selected values are added to the masker at run start so an agent that echoes them is redacted in steps/artifacts/diffs. They're injected into the agent env on top of the pinned env — they can never override `JALEBI_GITHUB_TOKEN`/git identity/gh hygiene.
+- **Notifications are masked too:** ntfy pushes run the title/message through the masker before send, so a secret can't leak to the push channel.
 
 ## 4. Sandboxing (PRD §F13)
 

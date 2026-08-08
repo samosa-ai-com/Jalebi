@@ -26,10 +26,44 @@ def test_secret_patterns_reject_invalid_regex(client: FlaskClient) -> None:
     assert resp.status_code == 200
 
 
-def test_ntfy_url_rejects_non_http(client: FlaskClient) -> None:
-    resp = client.post("/api/settings", json={"key": "ntfy_url", "value": "htp:/ntfy.sh"})
+def test_ntfy_topic_accepts_topic_or_url(client: FlaskClient) -> None:
+    """The merged ntfy endpoint accepts a bare topic or an http(s) URL."""
+    # Bare topic is valid.
+    resp = client.post("/api/settings", json={"key": "ntfy_topic", "value": "my-jalebi"})
+    assert resp.status_code == 200
+    # Full URL is valid.
+    resp = client.post("/api/settings", json={"key": "ntfy_topic", "value": "https://ntfy.sh/room"})
+    assert resp.status_code == 200
+    # Empty clears it.
+    resp = client.post("/api/settings", json={"key": "ntfy_topic", "value": ""})
+    assert resp.status_code == 200
+    # A topic must not smuggle a path or spaces.
+    resp = client.post("/api/settings", json={"key": "ntfy_topic", "value": "a b"})
     assert resp.status_code == 400
+    resp = client.post("/api/settings", json={"key": "ntfy_topic", "value": "jalebi/room"})
+    assert resp.status_code == 400
+
+
+def test_ntfy_url_no_longer_valid(client: FlaskClient) -> None:
+    """ntfy_url was merged into ntfy_topic — the old key is rejected."""
     resp = client.post("/api/settings", json={"key": "ntfy_url", "value": "https://ntfy.sh"})
+    assert resp.status_code == 400
+
+
+def test_notify_settings_validators(client: FlaskClient) -> None:
+    toggles = (
+        "notify_on_done",
+        "notify_on_failed",
+        "notify_on_progress",
+        "notify_on_needs_approval",
+    )
+    for key in toggles:
+        resp = client.post("/api/settings", json={"key": key, "value": True})
+        assert resp.status_code == 200
+        resp = client.post("/api/settings", json={"key": key, "value": "yes"})
+        assert resp.status_code == 400
+    interval = "notify_progress_interval_minutes"
+    resp = client.post("/api/settings", json={"key": interval, "value": 15})
     assert resp.status_code == 200
-    resp = client.post("/api/settings", json={"key": "ntfy_url", "value": ""})
-    assert resp.status_code == 200
+    resp = client.post("/api/settings", json={"key": interval, "value": 0})
+    assert resp.status_code == 400

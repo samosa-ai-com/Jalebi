@@ -11,7 +11,17 @@ from pathlib import Path
 
 from sqlalchemy import func, select
 
-from jalebi import artifacts, masking, prompts, secrets, settings, tasks, worktree_bootstrap
+from jalebi import (
+    artifacts,
+    envvars,
+    masking,
+    notify,
+    prompts,
+    secrets,
+    settings,
+    tasks,
+    worktree_bootstrap,
+)
 from jalebi.adapters import get_adapter
 from jalebi.adapters.types import AgentEvent
 from jalebi.config import Config
@@ -27,7 +37,7 @@ MAX_STEP_TEXT = 2000
 MAX_DIFF_BYTES = 512 * 1024
 KILL_GRACE_SECONDS = 5
 MAX_AUTO_RETRIES = 1
-DEFAULT_TIMEOUT_MINUTES = 30
+DEFAULT_TIMEOUT_MINUTES = 60
 STALL_TIMEOUT_SECONDS = 300  # no agent output for this long ⇒ the process is hung
 
 GIT_USER_NAME = "Jalebi"
@@ -100,6 +110,11 @@ class _RunState:
         self.handle = handle
         self.reason: str | None = None  # "timeout" | "cancelled" | "stalled"
         self.last_event = time.monotonic()  # updated as agent events stream in
+        # Last agent message text seen (for progress notifications), updated by
+        # the event loop in _stream_and_finish.
+        self.last_step_text: str | None = None
+        self.last_phase: str | None = None
+        self.last_progress_notify = time.monotonic()
 
 
 def _kill_group(pid: int, sig: int = signal.SIGTERM) -> None:
@@ -324,6 +339,21 @@ class TaskQueue:
         """
         return token
 
+    def _agent_env(
+        self, session, task: Task, repo: Repo, token: str | None
+    ) -> dict[str, str | None]:
+        """The agent subprocess env: base env + the task's selected env vars.
+
+        Env vars are merged on top of the Jalebi-built env (never the other way
+        around), so a task cannot override the token/identity/git hygiene the
+        queue pins. Values are already masked at ingest via the masker built
+        with them as secrets.
+        """
+        env = _build_agent_env(self._agent_token_for(task, token))
+        task_env = envvars.values_for_names(session, repo.id, envvars.task_env_names(task))
+        env.update({k: v for k, v in task_env.items() if v is not None})
+        return env
+
     def _prepare_run(self, session, task: Task, cli: str) -> Run:
         """Open a fresh run row and flip the task to ``running``."""
         seq = session.execute(
@@ -380,6 +410,11 @@ class TaskQueue:
                 steps.append(entry)
                 if event.type in ("step", "message", "done", "error"):
                     last_event_type = event.type
+                # Track the latest message text/phase for progress notifications.
+                if event.type in ("message", "tool_call") and entry.get("text"):
+                    state.last_step_text = str(entry["text"])
+                    phase = entry.get("phase")
+                    state.last_phase = str(phase) if phase is not None else None
             if event.type in ("done", "error"):
                 break
 
@@ -440,6 +475,10 @@ class TaskQueue:
                         }
                     )
                     run.steps_json = json.dumps(steps[-MAX_STEPS:])
+
+        # Push a terminal notification (done/failed/timed_out/cancelled or a
+        # needs_approval publish failure), with the agent's final message.
+        self._notify_terminal(session, task, repo, state)
 
         # Capture agent-produced (untracked) files from the worktree (PRD F18).
         # Text files are masked at ingest; files containing a known secret value
@@ -560,7 +599,13 @@ class TaskQueue:
                 raise RuntimeError("no GitHub token configured")
             raw_patterns = settings.get_setting(session, "secret_patterns") or []
             patterns = [str(p) for p in raw_patterns] if isinstance(raw_patterns, list) else []
-            masker = masking.build_masker(secrets.all_token_values(self.config) + [token], patterns)
+            # The task's selected env vars are secret values too: they are added
+            # to the masker so the agent's output never leaks them.
+            task_env = envvars.values_for_names(session, repo.id, envvars.task_env_names(task))
+            masker = masking.build_masker(
+                secrets.all_token_values(self.config) + [token] + list(task_env.values()),
+                patterns,
+            )
             cli = str(task.cli or settings.get_setting(session, "agent_cli") or "opencode")
             timeout = self._resolve_timeout(session, task)
 
@@ -613,7 +658,7 @@ class TaskQueue:
                 str(wt),
                 task.prompt,
                 model=task.model,
-                env=_build_agent_env(self._agent_token_for(task, token)),
+                env=self._agent_env(session, task, repo, token),
             )
             run.pid = getattr(state.handle.proc, "pid", None)
             session.commit()
@@ -787,6 +832,74 @@ class TaskQueue:
                 return step["text"]
         return ""
 
+    def _notify_enabled(self, session, key: str) -> bool:
+        """Whether notifications are configured AND this event type is on."""
+        if not str(settings.get_setting(session, "ntfy_topic") or "").strip():
+            return False
+        return bool(settings.get_setting(session, key))
+
+    def _notify(
+        self, session, task: Task, repo_full_name: str, state: _RunState, *, masker
+    ) -> None:
+        """Best-effort push for a terminal/progress notification (never raises)."""
+        try:
+            notify.send(
+                session,
+                title=(
+                    f"Task #{task.id} {task.status} — {repo_full_name}"
+                ),
+                message=self._notify_message(task, repo_full_name, state),
+                tags=self._notify_tags(task.status),
+                masker=masker,
+            )
+        except Exception:
+            logger.warning("notification for task %s failed", task.id, exc_info=True)
+
+    @staticmethod
+    def _notify_message(task: Task, repo_full_name: str, state: _RunState) -> str:
+        parts = [
+            f"Task #{task.id} · {task.type} · {task.status}",
+            f"Repo: {repo_full_name}",
+        ]
+        if task.pr_number:
+            parts.append(f"PR: #{task.pr_number}")
+        if state.last_step_text:
+            text = state.last_step_text.strip()
+            parts.append(f"Last: {text[:200]}")
+        return "\n".join(parts)
+
+    @staticmethod
+    def _notify_tags(status: str) -> str | None:
+        if status == "done":
+            return notify.TAGS_OK
+        if status in ("failed", "timed_out", "cancelled"):
+            return notify.TAGS_FAIL
+        if status == "needs_approval":
+            return notify.TAGS_APPROVE
+        return notify.TAGS_CLOCK
+
+    def _notify_terminal(self, session, task: Task, repo: Repo, state: _RunState) -> None:
+        """Send the terminal-status notification when the matching toggle is on."""
+        status = task.status
+        key = {
+            "done": "notify_on_done",
+            "failed": "notify_on_failed",
+            "timed_out": "notify_on_failed",
+            "cancelled": "notify_on_failed",
+            "needs_approval": "notify_on_needs_approval",
+        }.get(status)
+        if key is None or not self._notify_enabled(session, key):
+            return
+        masker = self._build_masker(session)
+        self._notify(session, task, repo.full_name, state, masker=masker)
+
+    def _build_masker(self, session):
+        """Masker for notification text (PATs + secret patterns)."""
+        config = self.config
+        raw_patterns = settings.get_setting(session, "secret_patterns") or []
+        patterns = [str(p) for p in raw_patterns] if isinstance(raw_patterns, list) else []
+        return masking.build_masker(secrets.all_token_values(config), patterns)
+
     def _run_followup(
         self,
         task_id: int,
@@ -817,7 +930,11 @@ class TaskQueue:
                 raise RuntimeError("no GitHub token configured")
             raw_patterns = settings.get_setting(session, "secret_patterns") or []
             patterns = [str(p) for p in raw_patterns] if isinstance(raw_patterns, list) else []
-            masker = masking.build_masker(secrets.all_token_values(self.config) + [token], patterns)
+            task_env = envvars.values_for_names(session, repo.id, envvars.task_env_names(task))
+            masker = masking.build_masker(
+                secrets.all_token_values(self.config) + [token] + list(task_env.values()),
+                patterns,
+            )
             cli = str(
                 task.cli or prev.cli or settings.get_setting(session, "agent_cli") or "opencode"
             )
@@ -856,7 +973,7 @@ class TaskQueue:
                 prev_session_id,
                 prompts.build_followup_prompt(task, repo, body),
                 model=effective_model,
-                env=_build_agent_env(self._agent_token_for(task, token)),
+                env=self._agent_env(session, task, repo, token),
             )
             run.pid = getattr(state.handle.proc, "pid", None)
             session.commit()
@@ -959,6 +1076,13 @@ class TaskQueue:
             name=f"stall-{task.id}",
         )
         stall.start()
+        progress = threading.Thread(
+            target=self._progress_notify_loop,
+            args=(task, state),
+            daemon=True,
+            name=f"progress-{task.id}",
+        )
+        progress.start()
 
     def _maybe_retry(self, session, task: Task, run: Run) -> None:
         """Auto-retry a failed run once if ``retry_policy.auto_retry`` is set."""
@@ -1004,6 +1128,53 @@ class TaskQueue:
                 _kill_proc(state.handle.proc)
                 return
             time.sleep(0.5)
+
+    def _progress_notify_loop(self, task: Task, state: _RunState) -> None:
+        """Push a periodic 'still running' notification while the agent is alive.
+
+        Fires every ``notify_progress_interval_minutes`` (default 30), starting
+        at the first interval mark, with elapsed time + the agent's latest
+        message. Reads settings live so the interval/toggle apply immediately;
+        best-effort (a disabled/unconfigured topic is a silent no-op).
+        """
+        session = Session()
+        try:
+            raw_interval = settings.get_setting(session, "notify_progress_interval_minutes")
+            interval = raw_interval if isinstance(raw_interval, int) and raw_interval > 0 else 30
+            if not self._notify_enabled(session, "notify_on_progress"):
+                return
+            masker = self._build_masker(session)
+            repo = session.get(Repo, task.repo_id)
+            if repo is None:
+                return
+            started = time.monotonic()
+            while True:
+                if state.handle.proc.poll() is not None:
+                    return
+                elapsed = time.monotonic() - started
+                if elapsed >= interval * 60:
+                    started = time.monotonic()  # next ping after another interval
+                    elapsed_min = int(elapsed // 60)
+                    state.last_step_text = state.last_step_text or "agent is still working"
+                    try:
+                        notify.send(
+                            session,
+                            title=f"Task #{task.id} still running — {repo.full_name}",
+                            message=(
+                                f"Task #{task.id} has been running for {elapsed_min}m.\n"
+                                f"Repo: {repo.full_name}\n"
+                                f"Last: {state.last_step_text[:200]}"
+                            ),
+                            tags=notify.TAGS_CLOCK,
+                            masker=masker,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "progress notification for task %s failed", task.id, exc_info=True
+                        )
+                time.sleep(min(5.0, max(1.0, interval * 60)))
+        finally:
+            session.close()
 
     def _step_from_event(self, event: AgentEvent, masker) -> dict[str, object]:
         text = event.text or (json.dumps(event.data) if event.data else None)

@@ -1,4 +1,5 @@
 import type {
+  EnvVar,
   GithubContext,
   GithubRepo,
   Health,
@@ -41,6 +42,7 @@ export interface CreateTaskInput {
   issue_number?: number;
   pr_number?: number;
   publish_mode?: "auto" | "manual";
+  env_vars?: string[];
 }
 
 export const api = {
@@ -49,6 +51,24 @@ export const api = {
   getModels: () => request<{ cli: string; models: string[] }>("/api/models"),
   updateSetting: (key: string, value: unknown) =>
     request<SettingsMap>(`/api/settings`, { method: "POST", body: JSON.stringify({ key, value }) }),
+  testNotification: () =>
+    request<{ ok: boolean }>(`/api/notify/test`, { method: "POST" }),
+  getEnvVars: (repoId?: number) =>
+    request<EnvVar[]>(
+      `/api/envvars${repoId ? `?repo_id=${repoId}` : ""}`
+    ),
+  upsertEnvVar: (name: string, value: string, repoId?: number | null) =>
+    request<EnvVar>(`/api/envvars`, {
+      method: "POST",
+      body: JSON.stringify({ name, value, repo_id: repoId ?? null }),
+    }),
+  deleteEnvVar: (id: number) =>
+    request<{ deleted: number }>(`/api/envvars/${id}`, { method: "DELETE" }),
+  importEnvVars: (content: string, repoId?: number | null) =>
+    request<{ imported: number; env_vars: EnvVar[] }>(`/api/envvars/import`, {
+      method: "POST",
+      body: JSON.stringify({ content, repo_id: repoId ?? null }),
+    }),
   getGithubRepos: (account?: string) =>
     request<GithubRepo[]>(
       `/api/github/repos${account ? `?account=${encodeURIComponent(account)}` : ""}`

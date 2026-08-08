@@ -39,10 +39,11 @@ At startup `main()` calls `TaskQueue.recover()`, which:
 | `default_timeout_minutes` | live (used for new tasks / watchdog fallback) |
 | `retry_policy.auto_retry` | live (per run) |
 | `artifact_ttl_days` | **startup only** (artifact prune runs once at boot) |
-| `ntfy_topic` | reserved for Phase 2 (screening notifications) |
-| `ntfy_url` | reserved for Phase 2 (screening notifications) |
+| `ntfy_topic` | live (per notification; merged endpoint — bare topic or full URL) |
+| `notify_on_done` / `notify_on_failed` / `notify_on_progress` / `notify_on_needs_approval` | live (per run/progress ping) |
+| `notify_progress_interval_minutes` | live (progress watchdog reads it each loop) |
 
-Settings values are **type-validated** on `POST /api/settings` (rejects `"false"` for a bool, non-integers for numbers, non-list `secret_patterns`, unsupported `agent_cli`); `secret_patterns` must be compilable regexes and `ntfy_url` must be empty or `http(s)://`. Only the `opencode` CLI is currently supported.
+Settings values are **type-validated** on `POST /api/settings` (rejects `"false"` for a bool, non-integers for numbers, non-list `secret_patterns`, unsupported `agent_cli`); `secret_patterns` must be compilable regexes; `ntfy_topic` must be empty, a bare topic, or an `http(s)://` URL. Only the `opencode` CLI is currently supported.
 
 ## 4. Security hardening
 

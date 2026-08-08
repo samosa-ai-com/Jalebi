@@ -238,6 +238,150 @@ def test_success_marks_done_and_persists_run(q, session, repo_row, monkeypatch) 
     assert step_types[-1] == "done"
 
 
+def test_terminal_notification_sent_on_done(q, session, repo_row, monkeypatch) -> None:
+    """A done run sends an ntfy notification with the final agent message when
+    notify_on_done is on and an ntfy topic is configured."""
+    settings.set_setting(session, "ntfy_topic", "room")
+    settings.set_setting(session, "notify_on_done", True)
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
+    _install_adapter(
+        monkeypatch,
+        FakeHandle([AgentEvent(type="message", text="finished the work"), AgentEvent(type="done")]),
+    )
+
+    sent: list[dict] = []
+
+    class FakeResp:
+        status_code = 200
+
+    def fake_post(url, json=None, timeout=None):
+        sent.append({"url": url, "json": json})
+        return FakeResp()
+
+    monkeypatch.setattr("jalebi.notify.httpx.post", fake_post)
+    q._run_task(task.id)
+
+    assert _fresh_task(session, task.id).status == "done"
+    assert sent, "expected a notification to be sent"
+    body = sent[0]["json"]
+    assert "Task #" in body["title"]
+    assert "finished the work" in body["message"]
+    assert sent[0]["url"] == "https://ntfy.sh/room"
+
+
+def test_terminal_notification_skipped_when_topic_unset(q, session, repo_row, monkeypatch) -> None:
+    """No notification is attempted when no ntfy topic is configured."""
+    settings.set_setting(session, "ntfy_topic", "")
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
+    _install_adapter(monkeypatch, FakeHandle([AgentEvent(type="done")]))
+
+    called = False
+
+    def fake_post(*a, **k):
+        nonlocal called
+        called = True
+        return None
+
+    monkeypatch.setattr("jalebi.notify.httpx.post", fake_post)
+    q._run_task(task.id)
+
+    assert _fresh_task(session, task.id).status == "done"
+    assert called is False
+
+
+def test_failure_notification_gated_by_toggle(q, session, repo_row, monkeypatch) -> None:
+    """A failed run does NOT notify when notify_on_failed is off."""
+    settings.set_setting(session, "ntfy_topic", "room")
+    settings.set_setting(session, "notify_on_failed", False)
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
+    _install_adapter(
+        monkeypatch,
+        FakeHandle(
+            [
+                AgentEvent(type="message", text="oops"),
+                AgentEvent(type="error", text="boom"),
+            ]
+        ),
+    )
+
+    called = False
+
+    def fake_post(*a, **k):
+        nonlocal called
+        called = True
+        return None
+
+    monkeypatch.setattr("jalebi.notify.httpx.post", fake_post)
+    q._run_task(task.id)
+
+    assert _fresh_task(session, task.id).status == "failed"
+    assert called is False
+
+
+def test_progress_notification_fires_on_interval(q, session, repo_row, monkeypatch) -> None:
+    """A still-running task gets a progress ping at the configured interval with
+    the latest agent message."""
+    from jalebi.queue import _RunState
+
+    settings.set_setting(session, "ntfy_topic", "room")
+    settings.set_setting(session, "notify_on_progress", True)
+    settings.set_setting(session, "notify_progress_interval_minutes", 1)
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
+
+    class LiveProc(FakeProc):
+        def __init__(self):
+            super().__init__()
+            self.dead = False
+
+        def poll(self):  # type: ignore[override]
+            return 1 if self.dead else None
+
+    proc = LiveProc()
+    state = _RunState(FakeHandle([], session_id="ses_fake"))
+    state.handle.proc = proc
+    state.last_step_text = "compiling"
+
+    # A fake clock that jumps a minute per call + no real sleeping, so the loop's
+    # interval check fires almost immediately without waiting real minutes. We
+    # patch `jalebi.queue.time` (the module-global name), NOT the real `time`
+    # module, so the test's own _wait_until keeps working.
+    class FakeTime:
+        def __init__(self):
+            self.now = 0.0
+
+        def monotonic(self):
+            self.now += 60.0
+            return self.now
+
+        def sleep(self, _s):
+            return None
+
+    fake_time = FakeTime()
+    monkeypatch.setattr("jalebi.queue.time", fake_time)
+
+    sent: list[dict] = []
+
+    class FakeResp:
+        status_code = 200
+
+    def fake_post(url, json=None, timeout=None):
+        sent.append({"url": url, "json": json})
+        return FakeResp()
+
+    monkeypatch.setattr("jalebi.notify.httpx.post", fake_post)
+
+    thread = threading.Thread(target=q._progress_notify_loop, args=(task, state))
+    thread.start()
+    assert _wait_until(lambda: any("still running" in (s["json"].get("title") or "") for s in sent))
+    proc.dead = True
+    thread.join(timeout=5)
+    assert not thread.is_alive()
+    progress = [s for s in sent if "still running" in s["json"]["title"]]
+    assert progress
+    assert "compiling" in progress[0]["json"]["message"]
+    assert sent[0]["url"] == "https://ntfy.sh/room"
+
+
 def test_failure_marks_failed(q, session, repo_row, monkeypatch) -> None:
     _no_publish(session)
     task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
@@ -647,6 +791,104 @@ def test_freeform_agent_env_carries_selected_token(q, session, repo_row, monkeyp
     assert env.get("GITHUB_TOKEN") is None
     # No git push credentials — the token is for the GitHub API, not git.
     assert env.get("GIT_CONFIG_VALUE_0") is None
+
+
+def test_agent_env_injects_selected_env_vars(q, session, repo_row, monkeypatch) -> None:
+    """A task's selected env vars are injected into the agent subprocess env."""
+    from jalebi import envvars
+
+    envvars.upsert_env_var(session, name="DATABASE_URL", value="postgres://secret", repo_id=None)
+    envvars.upsert_env_var(session, name="API_KEY", value="sk-secret-value", repo_id=None)
+    task = tasks.create_task(
+        session,
+        type_="freeform",
+        repo_id=repo_row.id,
+        prompt="do it",
+        env_vars=["DATABASE_URL", "API_KEY"],
+    )
+    captured: dict[str, dict[str, str | None] | None] = {}
+
+    class CapturingAdapter:
+        def start(self, cwd, prompt, model=None, env=None):
+            captured["env"] = env
+            return FakeHandle([AgentEvent(type="done")])
+
+        def resume(self, *a, **k):
+            raise NotImplementedError
+
+        def list_models(self):
+            return []
+
+    monkeypatch.setattr("jalebi.queue.get_adapter", lambda cli: CapturingAdapter())
+    _no_publish(session)
+    q._run_task(task.id)
+
+    env = captured["env"]
+    assert env is not None
+    assert env["DATABASE_URL"] == "postgres://secret"
+    assert env["API_KEY"] == "sk-secret-value"
+    # The Jalebi-pinned token/identity are not overridable by the env vars.
+    assert env["JALEBI_GITHUB_TOKEN"] is not None
+
+
+def test_agent_env_does_not_inject_unselected_env_vars(q, session, repo_row, monkeypatch) -> None:
+    """Only the task's selected env vars reach the agent; others stay out."""
+    from jalebi import envvars
+
+    envvars.upsert_env_var(session, name="SECRET_A", value="aaa", repo_id=None)
+    task = tasks.create_task(
+        session, type_="freeform", repo_id=repo_row.id, prompt="do it", env_vars=[]
+    )
+    captured: dict[str, dict[str, str | None] | None] = {}
+
+    class CapturingAdapter:
+        def start(self, cwd, prompt, model=None, env=None):
+            captured["env"] = env
+            return FakeHandle([AgentEvent(type="done")])
+
+        def resume(self, *a, **k):
+            raise NotImplementedError
+
+        def list_models(self):
+            return []
+
+    monkeypatch.setattr("jalebi.queue.get_adapter", lambda cli: CapturingAdapter())
+    _no_publish(session)
+    q._run_task(task.id)
+
+    env = captured["env"]
+    assert env is not None
+    assert env.get("SECRET_A") is None
+
+
+def test_env_var_value_is_masked_in_stored_steps(q, session, repo_row, monkeypatch) -> None:
+    """An env-var value echoed by the agent must be redacted in stored steps."""
+    from jalebi import envvars
+
+    envvars.upsert_env_var(session, name="API_KEY", value="ghp_env_secret", repo_id=None)
+    task = tasks.create_task(
+        session,
+        type_="freeform",
+        repo_id=repo_row.id,
+        prompt="do it",
+        env_vars=["API_KEY"],
+    )
+    _install_adapter(
+        monkeypatch,
+        FakeHandle(
+            [
+                AgentEvent(type="message", text="the key is ghp_env_secret here"),
+                AgentEvent(type="done"),
+            ]
+        ),
+    )
+    _no_publish(session)
+    q._run_task(task.id)
+
+    run = _latest_run(session, task.id)
+    steps_json = json.dumps(json.loads(run.steps_json or "[]"))
+    assert "ghp_env_secret" not in steps_json
+    assert "***" in steps_json
 
 
 def test_publish_masks_agent_written_pr_md(q, session, repo_row, monkeypatch) -> None:

@@ -7,7 +7,7 @@ from jalebi.settings import DEFAULTS, get_setting, set_setting
 def test_defaults_returned_when_unset(session: OrmSession) -> None:
     assert get_setting(session, "concurrency") == 4
     assert get_setting(session, "auto_publish") is True
-    assert get_setting(session, "default_timeout_minutes") == 30
+    assert get_setting(session, "default_timeout_minutes") == 60
     assert get_setting(session, "artifact_ttl_days") == 7
     assert get_setting(session, "ntfy_topic") == ""
     assert get_setting(session, "secret_patterns") == []

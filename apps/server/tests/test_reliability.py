@@ -557,7 +557,7 @@ def test_watchdog_resolves_task_timeout_override(q, session, repo_row) -> None:
     test_create_task_uses_default_timeout_setting)."""
     settings.set_setting(session, "default_timeout_minutes", 7)
     task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="x")
-    assert q._resolve_timeout(session, task) == 30  # create_task default
+    assert q._resolve_timeout(session, task) == 60  # create_task default
 
     task.timeout_minutes = 3
     session.commit()

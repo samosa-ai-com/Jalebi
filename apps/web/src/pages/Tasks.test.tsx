@@ -188,4 +188,35 @@ describe("Tasks", () => {
     expect(await screen.findByLabelText("Source branch")).toBeInTheDocument();
     expect(screen.getByLabelText("Target branch (PR base)")).toBeInTheDocument();
   });
+
+  it("shows env-var chips and sends selected env_vars on create", async () => {
+    const fetchMock = stubFetch({
+      ...DEFAULT_HANDLERS,
+      "/api/envvars": [
+        { id: 1, name: "DATABASE_URL", masked: "post***", repo_id: null, repo_full_name: null, created_at: "2026-08-08T00:00:00" },
+        { id: 2, name: "API_KEY", masked: "sk-***", repo_id: 1, repo_full_name: "owner/repo", created_at: "2026-08-08T00:00:00" },
+      ],
+    });
+
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    await screen.findByText("New task");
+
+    expect(await screen.findByText("DATABASE_URL")).toBeInTheDocument();
+    await userEvent.click(screen.getByText("DATABASE_URL"));
+    await userEvent.type(screen.getByPlaceholderText("Instructions…"), "do it");
+    await userEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      const postCall = fetchMock.mock.calls.find(
+        (call) => call[0] === "/api/tasks" && call[1]?.method === "POST"
+      );
+      expect(postCall).toBeTruthy();
+      const body = JSON.parse(postCall![1]!.body as string) as Record<string, unknown>;
+      expect(body.env_vars).toEqual(["DATABASE_URL"]);
+    });
+  });
 });

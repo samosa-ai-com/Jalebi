@@ -50,9 +50,10 @@
 | `issues_json` | text null | JSON list of linked issue numbers |
 | `prs_json` | text null | JSON list of PR numbers (review tasks) |
 | `context_json` | text null | masked issue/PR context embedded into the agent brief |
+| `env_vars_json` | text null | JSON list of env-var **names** injected into the agent subprocess env |
 | `prompt` | text | instructions |
 | `status` | text CHECK, default `'queued'` | `queued` \| `running` \| `waiting_review` \| `needs_approval` \| `done` \| `failed` \| `timed_out` \| `interrupted` \| `cancelled` |
-| `timeout_minutes` | int, default 30 | |
+| `timeout_minutes` | int, default 60 | |
 | `retry_count` | int, default 0 | |
 | `pr_number` | int null | |
 | `publish_mode` | text null | `'auto'` \| `'manual'` \| NULL (fall back to the global `auto_publish` setting). `issue_fix` defaults to `auto`; freeform/manual types to `manual`. |
@@ -111,6 +112,19 @@ Index: `run_id`.
 
 **Store:** artifact files live at `<data-dir>/artifacts/<run_id>/<relative path>` (copied from the worktree at run completion). `runs.artifacts_json` caches `[{path, size}]` refs. Pruned per `artifact_ttl_days` at startup.
 
+### `env_vars`
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | int PK | |
+| `name` | text | env var name |
+| `value` | text | **secret** — never returned in full by the API; masked if echoed by an agent |
+| `repo_id` | int FK → repos, null | NULL = global; non-NULL = scoped to one repo |
+| `created_at` | datetime | |
+| `updated_at` | datetime | |
+
+Unique: `(name, repo_id)`. Index: `repo_id`. See `docs/14-env-vars.md`.
+
 ### `settings`
 
 | Column | Type | Notes |
@@ -118,7 +132,7 @@ Index: `run_id`.
 | `key` | text PK | |
 | `value` | text | JSON-encoded |
 
-Settings keys (defaults in `jalebi/settings.py`): `concurrency` (4), `auto_publish` (true), `ntfy_topic` (""), `ntfy_url` (""), `default_timeout_minutes` (30), `retry_policy` (`{"auto_retry": false}`), `secret_patterns` (`[]`), `artifact_ttl_days` (7), `agent_cli` (`"opencode"`). Missing keys fall back to the code defaults; stored values override.
+Settings keys (defaults in `jalebi/settings.py`): `concurrency` (4), `auto_publish` (true), `ntfy_topic` ("" — merged: bare topic **or** full URL), `default_timeout_minutes` (60), `retry_policy` (`{"auto_retry": false}`), `secret_patterns` (`[]`), `artifact_ttl_days` (7), `agent_cli` (`"opencode"`), `notify_on_done` (true), `notify_on_failed` (true), `notify_on_progress` (true), `notify_on_needs_approval` (true), `notify_progress_interval_minutes` (30). Missing keys fall back to the code defaults; stored values override.
 
 ## 3. Relationships (Phase 0)
 
@@ -128,6 +142,7 @@ tasks 1───* runs
 tasks 1───* followups
 runs  1───* followups  (run_id nullable)
 runs  1───* artifacts
+repos 0───* env_vars   (repo_id nullable = global)
 ```
 
 ## 4. Key invariants

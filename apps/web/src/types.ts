@@ -54,6 +54,7 @@ export interface Task {
   publish_mode: "auto" | "manual" | null;
   issues: number[];
   prs: number[];
+  env_vars: string[];
   created_at: string;
   updated_at: string;
   run: Run | null;
@@ -146,10 +147,23 @@ export interface SettingsMap {
   concurrency: number;
   auto_publish: boolean;
   ntfy_topic: string;
-  ntfy_url: string;
   default_timeout_minutes: number;
   retry_policy: { auto_retry: boolean };
   secret_patterns: string[];
   artifact_ttl_days: number;
   agent_cli: string;
+  notify_on_done: boolean;
+  notify_on_failed: boolean;
+  notify_on_progress: boolean;
+  notify_on_needs_approval: boolean;
+  notify_progress_interval_minutes: number;
+}
+
+export interface EnvVar {
+  id: number;
+  name: string;
+  masked: string;
+  repo_id: number | null;
+  repo_full_name: string | null;
+  created_at: string;
 }

@@ -8,10 +8,11 @@ from pathlib import Path
 from flask import Flask, Response, current_app, g, jsonify, request, send_from_directory
 from flask.typing import ResponseReturnValue
 
-from jalebi import artifacts, db, settings
+from jalebi import artifacts, db, masking, notify, secrets, settings
 from jalebi.adapters import get_adapter
 from jalebi.config import Config, load_config, repo_root
 from jalebi.queue import TaskQueue
+from jalebi.routes.envvars import bp as envvars_bp
 from jalebi.routes.github import bp as github_bp
 from jalebi.routes.repos import bp as repos_bp
 from jalebi.routes.tasks import bp as tasks_bp
@@ -39,14 +40,19 @@ _SETTING_VALIDATORS = {
     "concurrency": lambda v: isinstance(v, int) and 0 <= v <= 64,
     "auto_publish": lambda v: isinstance(v, bool),
     "default_timeout_minutes": lambda v: isinstance(v, int) and v >= 1,
-    "ntfy_topic": lambda v: isinstance(v, str),
-    "ntfy_url": lambda v: isinstance(v, str) and (
-        v == "" or v.startswith(("http://", "https://"))
+    # Merged ntfy endpoint: bare topic or an http(s) URL. ntfy_url is gone.
+    "ntfy_topic": lambda v: isinstance(v, str) and (
+        v == "" or v.startswith(("http://", "https://")) or ("/" not in v and " " not in v)
     ),
     "retry_policy": lambda v: isinstance(v, dict) and isinstance(v.get("auto_retry"), bool),
     "secret_patterns": _valid_secret_patterns,
     "artifact_ttl_days": lambda v: isinstance(v, int) and v >= 1,
     "agent_cli": lambda v: v in ALLOWED_AGENT_CLIS,
+    "notify_on_done": lambda v: isinstance(v, bool),
+    "notify_on_failed": lambda v: isinstance(v, bool),
+    "notify_on_progress": lambda v: isinstance(v, bool),
+    "notify_on_needs_approval": lambda v: isinstance(v, bool),
+    "notify_progress_interval_minutes": lambda v: isinstance(v, int) and v >= 1,
 }
 
 
@@ -103,6 +109,7 @@ def create_app(config: Config | None = None) -> Flask:
     app.register_blueprint(github_bp)
     app.register_blueprint(repos_bp)
     app.register_blueprint(tasks_bp)
+    app.register_blueprint(envvars_bp)
 
     @app.teardown_appcontext
     def close_session(_exc) -> None:
@@ -149,6 +156,26 @@ def create_app(config: Config | None = None) -> Flask:
         if key == "concurrency" and isinstance(value, int):
             current_app.config["JALEBI_QUEUE"].set_concurrency(value)
         return jsonify({key: settings.get_setting(session, key)}), 200
+
+    @app.post("/api/notify/test")
+    def notify_test() -> ResponseReturnValue:
+        """Send a test push to the configured ntfy topic; returns ok/error."""
+        session = db.get_session()
+        raw_patterns = settings.get_setting(session, "secret_patterns") or []
+        patterns = [str(p) for p in raw_patterns] if isinstance(raw_patterns, list) else []
+        masker = masking.build_masker(
+            secrets.all_token_values(current_app.config["JALEBI_CONFIG"]), patterns
+        )
+        ok, error = notify.send(
+            session,
+            "Jalebi test notification",
+            "If you can read this, your ntfy configuration works.",
+            tags=notify.TAGS_OK,
+            masker=masker,
+        )
+        if not ok:
+            return jsonify({"ok": False, "error": error or "notification failed"}), 400
+        return jsonify({"ok": True})
 
     # SPA: serve the built React app (index.html + assets) so the UI lives on the
     # same origin as the API. Werkzeug prioritizes the literal /api routes above

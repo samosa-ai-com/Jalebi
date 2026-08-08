@@ -92,6 +92,8 @@ function CreateTask({
   const [publishMode, setPublishMode] = useState<"auto" | "manual" | "">("");
   const [context, setContext] = useState<GithubContext | null>(null);
   const [models, setModels] = useState<string[]>([]);
+  const [envVars, setEnvVars] = useState<string[]>([]);
+  const [availableEnvVars, setAvailableEnvVars] = useState<{ name: string; masked: string }[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -107,6 +109,7 @@ function CreateTask({
     setRepoId(id);
     const r = repoById(repos, id);
     setPatName(r?.pat_name ?? "");
+    setEnvVars([]);
   }
 
   useEffect(() => {
@@ -115,6 +118,26 @@ function CreateTask({
       .then((m) => setModels(m.models ?? []))
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (!repo) return;
+    let cancelled = false;
+    api
+      .getEnvVars(repo.id)
+      .then((vars) => {
+        if (cancelled) return;
+        setAvailableEnvVars(
+          vars
+            .filter((v) => v.repo_id === null || v.repo_id === repo.id)
+            .map((v) => ({ name: v.name, masked: v.masked }))
+        );
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveRepoId, repo?.full_name]);
 
   useEffect(() => {
     if (!repo) return;
@@ -165,10 +188,12 @@ function CreateTask({
         issue_number: issueNumber ? Number(issueNumber) : undefined,
         pr_number: prNumber ? Number(prNumber) : undefined,
         publish_mode: publishMode === "" ? undefined : publishMode,
+        env_vars: envVars,
       });
       setPrompt("");
       setIssueNumber("");
       setPrNumber("");
+      setEnvVars([]);
       onCreated();
     } catch (err) {
       setError(err instanceof Error ? err.message : "failed to create task");
@@ -345,6 +370,44 @@ function CreateTask({
           <option value="manual">Manual — I publish</option>
         </Select>
       </div>
+
+      {availableEnvVars.length > 0 && (
+        <fieldset>
+          <legend className="mb-1.5 block text-xs font-medium text-ink-400">
+            Environment variables
+          </legend>
+          <div className="flex flex-wrap gap-2">
+            {availableEnvVars.map((v) => {
+              const checked = envVars.includes(v.name);
+              return (
+                <label
+                  key={v.name}
+                  className={`inline-flex cursor-pointer items-center gap-1.5 rounded-full border px-3 py-1 font-mono text-xs transition-colors ${
+                    checked
+                      ? "border-syrup-500/60 bg-syrup-500/10 text-syrup-300"
+                      : "border-ink-800 text-ink-400 hover:border-ink-600"
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() =>
+                      setEnvVars((prev) =>
+                        checked ? prev.filter((n) => n !== v.name) : [...prev, v.name]
+                      )
+                    }
+                    className="hidden"
+                  />
+                  {v.name}
+                </label>
+              );
+            })}
+          </div>
+          <p className="mt-1.5 text-[11px] text-ink-500">
+            These variables are injected into the agent&apos;s environment for this task.
+          </p>
+        </fieldset>
+      )}
 
       <label className="block">
         <span className="mb-1.5 block text-xs font-medium text-ink-400">Instructions</span>

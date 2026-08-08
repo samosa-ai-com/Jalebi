@@ -10,13 +10,19 @@ from jalebi.db import Setting
 DEFAULTS: dict[str, object] = {
     "concurrency": 4,
     "auto_publish": True,
+    # Merged ntfy endpoint: a bare topic ("my-jalebi") or a full URL
+    # ("https://ntfy.example.com/room"). ntfy_url was folded into this.
     "ntfy_topic": "",
-    "ntfy_url": "",
-    "default_timeout_minutes": 30,
+    "default_timeout_minutes": 60,
     "retry_policy": {"auto_retry": False},
     "secret_patterns": [],
     "artifact_ttl_days": 7,
     "agent_cli": "opencode",
+    "notify_on_done": True,
+    "notify_on_failed": True,
+    "notify_on_progress": True,
+    "notify_on_needs_approval": True,
+    "notify_progress_interval_minutes": 30,
 }
 
 SETTING_KEYS = tuple(DEFAULTS)

@@ -34,7 +34,7 @@ def test_create_task(client: FlaskClient, repo_id: int) -> None:
     assert body["status"] == "queued"
     assert body["prompt"] == "implement x"
     assert body["model"] == "m1"
-    assert body["timeout_minutes"] == 30
+    assert body["timeout_minutes"] == 60
 
 
 def test_create_task_requires_repo(client: FlaskClient) -> None:
@@ -76,7 +76,7 @@ def test_create_task_bad_timeout(client: FlaskClient, repo_id: int) -> None:
         "/api/tasks", json={"repo_id": repo_id, "prompt": "x", "timeout_minutes": "ten"}
     )
     assert resp.status_code == 201
-    assert resp.get_json()["timeout_minutes"] == 30
+    assert resp.get_json()["timeout_minutes"] == 60
 
 
 def test_list_and_detail(client: FlaskClient, repo_id: int) -> None:
@@ -172,6 +172,30 @@ def test_create_task_publish_mode_override(client: FlaskClient, repo_id: int) ->
     )
     assert resp.status_code == 201
     assert resp.get_json()["publish_mode"] == "auto"
+
+
+def test_create_task_with_env_vars(client: FlaskClient, repo_id: int) -> None:
+    """A task stores its selected env-var names; the API reflects them."""
+    resp = client.post(
+        "/api/tasks",
+        json={
+            "repo_id": repo_id,
+            "type": "freeform",
+            "prompt": "x",
+            "env_vars": ["DATABASE_URL", "API_KEY"],
+        },
+    )
+    assert resp.status_code == 201
+    body = resp.get_json()
+    assert body["env_vars"] == ["DATABASE_URL", "API_KEY"]
+
+
+def test_create_task_rejects_bad_env_vars(client: FlaskClient, repo_id: int) -> None:
+    resp = client.post(
+        "/api/tasks",
+        json={"repo_id": repo_id, "type": "freeform", "prompt": "x", "env_vars": "not-a-list"},
+    )
+    assert resp.status_code == 400
 
 
 def test_create_task_rejects_huge_prompt(client: FlaskClient, repo_id: int) -> None:

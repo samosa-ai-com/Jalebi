@@ -105,6 +105,7 @@ This is critical and repeated: **all GitHub interaction in this project goes thr
 | `docs/11-reliability.md` | Restart recovery, live concurrency, settings live-vs-startup, hardening. | Reliability/ops changes. |
 | `docs/12-ui-validation.md` | Manual UI QA checklist for every implemented feature. | Feature/UI behavior changes. |
 | `docs/13-phase0-review.md` | Comprehensive Phase 0 code review (logic, security, PRD compliance). | Post-review follow-up changes. |
+| `docs/14-env-vars.md` | Env-var store (global + per-repo), `/api/envvars`, `.env` import, agent injection + masking. | Env-var work. |
 
 **If you add a doc file, add it to this table.**
 

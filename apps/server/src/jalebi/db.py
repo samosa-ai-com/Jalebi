@@ -118,6 +118,8 @@ class Task(Base):
     prs_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     # JSON dict of fetched context used to build the worktree AGENTS.md
     context_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # JSON list of env-var names injected into the agent subprocess env
+    env_vars_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(
         Text, nullable=False, default="queued", server_default=sa.text("'queued'")
     )
@@ -182,6 +184,29 @@ class Artifact(Base):
         Integer, nullable=False, default=0, server_default=sa.text("0")
     )
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+
+
+class EnvVar(Base):
+    """A named environment variable injected into task agent subprocesses.
+
+    ``repo_id`` NULL means the variable applies to every repo; a non-NULL value
+    scopes it to one repo. Values are secrets: they are never returned in full
+    by the API, and they are added to the masker so they are redacted if the
+    agent echoes them.
+    """
+
+    __tablename__ = "env_vars"
+    __table_args__ = (
+        Index("ix_env_vars_repo_id", "repo_id"),
+        sa.UniqueConstraint("name", "repo_id", name="uq_env_vars_name_repo"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    repo_id: Mapped[int | None] = mapped_column(ForeignKey("repos.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
 
 
 class Setting(Base):
