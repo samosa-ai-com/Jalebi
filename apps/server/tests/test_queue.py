@@ -68,6 +68,9 @@ class FakeGitHubClient:
     def create_pr(self, full_name, *, title, body, head, base) -> int:
         return 42
 
+    def get_pr(self, full_name, number) -> dict:
+        return {"number": number, "state": "open"}
+
     def close(self) -> None:
         pass
 
@@ -89,6 +92,48 @@ class ReusingGitHubClient(FakeGitHubClient):
     def create_pr(self, full_name, *, title, body, head, base) -> int:
         self.create_pr_calls += 1
         raise AssertionError("create_pr must not be called when a PR exists")
+
+
+class ClosedPrGitHubClient(FakeGitHubClient):
+    """find_pr_by_head returns a PR number, but that PR is closed — the publish
+    must NOT reuse it and must fall through to create_pr."""
+
+    def __init__(self, token: str):
+        super().__init__(token)
+        self.create_pr_calls = 0
+
+    def find_pr_by_head(self, full_name, head) -> int | None:
+        self.find_pr_calls += 1
+        return 99
+
+    def get_pr(self, full_name, number) -> dict:
+        return {"number": number, "state": "closed"}
+
+    def create_pr(self, full_name, *, title, body, head, base) -> int:
+        self.create_pr_calls += 1
+        return 42
+
+
+class StaleRecordedPrGitHubClient(FakeGitHubClient):
+    """The task already has a recorded pr_number, but that PR is closed and no
+    other open PR exists for the head — publish must create a fresh PR."""
+
+    def __init__(self, token: str):
+        super().__init__(token)
+        self.create_pr_calls = 0
+        self.get_pr_calls = []
+
+    def get_pr(self, full_name, number) -> dict:
+        self.get_pr_calls.append(number)
+        return {"number": number, "state": "closed"}
+
+    def find_pr_by_head(self, full_name, head) -> int | None:
+        self.find_pr_calls += 1
+        return None
+
+    def create_pr(self, full_name, *, title, body, head, base) -> int:
+        self.create_pr_calls += 1
+        return 42
 
 
 @pytest.fixture(autouse=True)
@@ -349,6 +394,50 @@ def test_publish_reuses_existing_pr_for_head(q, session, repo_row, monkeypatch) 
     fresh = _fresh_task(session, task.id)
     assert fresh.status == "done"
     assert fresh.pr_number == 99
+
+
+def test_publish_creates_new_pr_when_existing_head_pr_is_closed(
+    q, session, repo_row, monkeypatch
+) -> None:
+    """A closed/merged PR reusing the jalebi/<taskId> head must NOT be reused —
+    publish must open a fresh PR instead (regression: task 3 re-published onto a
+    stale closed PR)."""
+    settings.set_setting(session, "auto_publish", True)
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
+    _seed_commit(q, task.id, repo_row)
+    _install_adapter(monkeypatch, FakeHandle([AgentEvent(type="done")]))
+    client = ClosedPrGitHubClient("t")
+    monkeypatch.setattr("jalebi.queue.GitHubClient", lambda token: client)
+
+    q._run_task(task.id)
+
+    fresh = _fresh_task(session, task.id)
+    assert fresh.status == "done"
+    assert fresh.pr_number == 42
+    assert client.create_pr_calls == 1
+
+
+def test_publish_creates_new_pr_when_recorded_pr_is_closed(
+    q, session, repo_row, monkeypatch
+) -> None:
+    """A task whose stored pr_number points at a now-closed PR must not return
+    it — publish must drop the stale number and open a fresh PR."""
+    settings.set_setting(session, "auto_publish", True)
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
+    task.pr_number = 99
+    session.commit()
+    _seed_commit(q, task.id, repo_row)
+    _install_adapter(monkeypatch, FakeHandle([AgentEvent(type="done")]))
+    client = StaleRecordedPrGitHubClient("t")
+    monkeypatch.setattr("jalebi.queue.GitHubClient", lambda token: client)
+
+    q._run_task(task.id)
+
+    fresh = _fresh_task(session, task.id)
+    assert fresh.status == "done"
+    assert fresh.pr_number == 42
+    assert client.create_pr_calls == 1
+    assert client.get_pr_calls == [99]
 
 
 def test_publish_uses_agent_written_pr_md(q, session, repo_row, monkeypatch) -> None:

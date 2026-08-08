@@ -930,14 +930,29 @@ class TaskQueue:
         git.push_branch(task.id, repo.full_name, token)
         if task.pr_number:
             # A PR already exists for jalebi/<taskId>; the push just updated it.
-            return task.pr_number
+            # Only reuse it while it is still open — a closed/merged PR must not
+            # swallow a fresh publish (the jalebi/<taskId> branch name can be
+            # reused across sessions, leaving a stale closed PR behind).
+            client = GitHubClient(token)
+            try:
+                existing = client.get_pr(repo.full_name, task.pr_number)
+            finally:
+                client.close()
+            if existing.get("state") == "open":
+                return task.pr_number
+            task.pr_number = None
         client = GitHubClient(token)
         try:
             head = f"jalebi/{task.id}"
             existing = client.find_pr_by_head(repo.full_name, head)
             if existing:
                 # An agent-created PR already exists for this head — reuse it
-                # instead of opening a duplicate.
+                # instead of opening a duplicate. find_pr_by_head only matches
+                # open PRs, but verify defensively before reusing.
+                existing_pr = client.get_pr(repo.full_name, existing)
+                if existing_pr.get("state") != "open":
+                    existing = None
+            if existing:
                 pr_number = existing
             else:
                 title, body = self._pr_title_and_body(task, masker=masker)

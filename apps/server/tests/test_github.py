@@ -142,21 +142,47 @@ def test_create_pr_error(monkeypatch) -> None:
 def test_find_pr_by_head_found(monkeypatch) -> None:
     client = make_client()
     body = [
-        {"number": 3, "head": {"ref": "jalebi/7"}},
-        {"number": 4, "head": {"ref": "other"}},
+        {"number": 3, "state": "open", "head": {"ref": "jalebi/7"}},
+        {"number": 4, "state": "open", "head": {"ref": "other"}},
     ]
 
     def fake_request(method, path, **kwargs):
         assert kwargs["params"]["head"] == "octocat:jalebi/7"
+        assert kwargs["params"]["state"] == "open"
         return (200, body, {})
 
     monkeypatch.setattr(client, "_request", fake_request)
     assert client.find_pr_by_head("octocat/hello", "jalebi/7") == 3
 
 
+def test_find_pr_by_head_ignores_closed_and_merged(monkeypatch) -> None:
+    """A stale closed/merged PR reusing the head ref must never be matched."""
+    client = make_client()
+    body = [
+        {"number": 1, "state": "closed", "head": {"ref": "jalebi/7"}},
+        {"number": 2, "state": "merged", "head": {"ref": "jalebi/7"}},
+        {"number": 5, "state": "open", "head": {"ref": "jalebi/7"}},
+    ]
+
+    def fake_request(method, path, **kwargs):
+        assert kwargs["params"]["state"] == "open"
+        return (200, body, {})
+
+    monkeypatch.setattr(client, "_request", fake_request)
+    assert client.find_pr_by_head("octocat/hello", "jalebi/7") == 5
+
+
 def test_find_pr_by_head_none(monkeypatch) -> None:
     client = make_client()
-    monkeypatch.setattr(client, "_request", lambda method, path, **kw: (200, [], {}))
+    body = [
+        {"number": 1, "state": "closed", "head": {"ref": "jalebi/7"}},
+    ]
+
+    def fake_request(method, path, **kwargs):
+        assert kwargs["params"]["state"] == "open"
+        return (200, body, {})
+
+    monkeypatch.setattr(client, "_request", fake_request)
     assert client.find_pr_by_head("octocat/hello", "jalebi/7") is None
 
 

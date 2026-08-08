@@ -71,6 +71,9 @@ class FakeGitHubClient:
     def create_pr(self, full_name, *, title, body, head, base) -> int:
         return 77
 
+    def get_pr(self, full_name, number) -> dict:
+        return {"number": number, "state": "open"}
+
     def close(self) -> None:
         pass
 

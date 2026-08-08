@@ -156,22 +156,28 @@ class GitHubClient:
         return payload["number"]
 
     def find_pr_by_head(self, full_name: str, head: str) -> int | None:
-        """Return the number of an existing PR whose head ref is ``head``, if any.
+        """Return the number of an existing **open** PR whose head ref is ``head``.
 
         ``head`` is matched same-repo as ``{owner}:{head}`` (cross-repo PRs from
         forks are intentionally ignored so an agent-created fork PR can never
-        be mistaken for the task's own PR).
+        be mistaken for the task's own PR). Closed/merged PRs are never matched:
+        a stale PR reusing a ``jalebi/<task_id>`` branch name must not short-
+        circuit publishing a fresh run.
         """
         owner = full_name.split("/", 1)[0]
         status, body, _ = self._request(
             "GET",
             f"/repos/{full_name}/pulls",
-            params={"state": "all", "head": f"{owner}:{head}", "per_page": 100},
+            params={"state": "open", "head": f"{owner}:{head}", "per_page": 100},
         )
         if status != 200 or not isinstance(body, list):
             raise GitHubError(f"failed to list PRs: HTTP {status}")
         for pr in body:
-            if isinstance(pr, dict) and pr.get("head", {}).get("ref") == head:
+            if (
+                isinstance(pr, dict)
+                and pr.get("state") == "open"
+                and pr.get("head", {}).get("ref") == head
+            ):
                 return pr.get("number")
         return None
 

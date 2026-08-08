@@ -99,7 +99,7 @@ Implemented via the same client (Phase 0): issue/PR context fetch, publish (crea
 ## 10. Publish dedup & PR accuracy
 
 - `_publish` **recreates the worktree** from the mirror branch if it was cleaned (fixes "Publish on an old task did nothing").
-- Before `create_pr`, Jalebi calls `find_pr_by_head(full_name, "jalebi/<taskId>")` (state=all, same-repo head) and **reuses** any existing PR — so an agent-created PR can never produce a duplicate, and cross-repo fork PRs (e.g. the personal-account fork that caused task #14's duplicate) are ignored.
+- Before `create_pr`, Jalebi calls `find_pr_by_head(full_name, "jalebi/<taskId>")` and **reuses** any existing **open** PR — so an agent-created PR can never produce a duplicate, and cross-repo fork PRs (e.g. the personal-account fork that caused task #14's duplicate) are ignored. `find_pr_by_head` queries `state=open` only and also checks each result's `state`; a **closed/merged PR** reusing the `jalebi/<taskId>` branch name (e.g. across a wipe/reconfigure) is never reused — publish falls through and opens a fresh PR. The same guard applies to a task whose stored `pr_number` already points at a now-closed PR.
 - PR title/body come from the agent-written `.jalebi/pr.md` (title + actual-implementation description), falling back to the prompt. `Closes #N` + Jalebi footer + `Co-authored-by` are appended. `issue_fix` tasks get an **issue comment** linking the PR.
 - GitHub PR review comments are posted with `event: "COMMENT"` only — Jalebi never approves or merges.
 
