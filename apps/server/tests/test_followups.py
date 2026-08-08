@@ -408,3 +408,27 @@ def test_followup_no_model_uses_task_model(q, session, repo_row, monkeypatch) ->
     q._run_followup(task.id, "keep model")
 
     assert adapter.resume_calls[0]["model"] == "opencode-go/m1"
+
+
+def test_chained_sequential_followups(q, session, repo_row, monkeypatch) -> None:
+    """Two follow-ups in a row each resume the latest resumable run (T-10)."""
+    settings.set_setting(session, "auto_publish", False)
+    task = _done_task_with_session(session, repo_row.id, session_id="ses_orig")
+
+    for body in ("first follow-up", "second follow-up"):
+        handle = FakeHandle(
+            [AgentEvent(type="message", text=body), AgentEvent(type="done")],
+            session_id="ses_orig",
+        )
+        adapter = ResumeAdapter(handle)
+        monkeypatch.setattr("jalebi.queue.get_adapter", lambda cli, a=adapter: a)
+        q._run_followup(task.id, body)
+
+    session.expire_all()
+    runs = tasks.runs_for_task(session, task.id)
+    assert len(runs) == 3  # original + two follow-ups
+    assert [r.status for r in runs] == ["done", "done", "done"]
+    fups = tasks.list_followups(session, task.id)
+    assert [f.body for f in fups] == ["first follow-up", "second follow-up"]
+    # each follow-up resumed the immediately-previous run
+    assert [f.run_id for f in fups] == [runs[0].id, runs[1].id]

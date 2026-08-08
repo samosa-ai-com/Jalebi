@@ -170,7 +170,9 @@ def test_sse_streams_live_events_and_closes(
     runner = threading.Thread(target=q._run_task, args=(task_id,))
     runner.start()
     runner.join(timeout=10)
-    reader.join(timeout=5)
+    assert not runner.is_alive()
+    reader.join(timeout=10)
+    assert not reader.is_alive()
 
     payloads = []
     for line in "".join(lines).splitlines():
@@ -231,11 +233,13 @@ def test_sse_after_seq_backfills_events_published_before_subscribe(
             self.proc = _FakeProc()
 
         def events(self):
-            for ev in self._events:
+            last = len(self._events) - 1
+            for i, ev in enumerate(self._events):
                 yield ev
-                if not self.release.wait(timeout=10):
+                if i < last and not self.release.wait(timeout=10):
                     break
-                self.release.clear()
+                if i < last:
+                    self.release.clear()
 
     handle = _GatedHandle(
         [
@@ -266,9 +270,15 @@ def test_sse_after_seq_backfills_events_published_before_subscribe(
     reader = threading.Thread(target=read_stream)
     reader.start()
 
-    handle.release.set()  # let the rest of the run flow
+    handle.release.set()  # let "working" flow; wait for it, then release the tail
+    deadline = time.monotonic() + 10
+    while q.events._seq.get(task_id, 0) < 2 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    handle.release.set()
     runner.join(timeout=10)
-    reader.join(timeout=5)
+    assert not runner.is_alive()
+    reader.join(timeout=10)
+    assert not reader.is_alive()
 
     payloads = []
     for line in "".join(lines).splitlines():

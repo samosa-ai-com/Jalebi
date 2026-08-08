@@ -273,3 +273,22 @@ def test_rerun_interrupted(client: FlaskClient, session, repo_id: int) -> None:
     resp = client.post(f"/api/tasks/{task_id}/rerun")
     assert resp.status_code == 200
     assert resp.get_json()["status"] == "queued"
+
+
+def test_disconnected_repo_task_detail_keeps_repo_name(client, session) -> None:
+    """A task on a soft-disconnected repo still shows repo_full_name in detail (T-11)."""
+    from jalebi import tasks as tasks_svc
+
+    row, _ = repos.upsert_repo(
+        session,
+        full_name="owner/disc",
+        default_branch="main",
+        clone_url="https://github.com/owner/disc.git",
+    )
+    task = tasks_svc.create_task(session, type_="freeform", repo_id=row.id, prompt="x")
+    row.connected = False
+    session.commit()
+
+    resp = client.get(f"/api/tasks/{task.id}")
+    assert resp.status_code == 200
+    assert resp.get_json()["repo_full_name"] == "owner/disc"

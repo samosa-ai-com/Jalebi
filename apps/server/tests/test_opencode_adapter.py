@@ -186,3 +186,32 @@ def test_unknown_cli_rejected() -> None:
     with pytest.raises(ValueError):
         get_adapter("codex")
     assert get_adapter("opencode").id == "opencode"
+
+
+def test_spawn_wraps_command_in_bash_dash_c(monkeypatch) -> None:
+    """The /bin/bash -c 'cd <ws> && exec opencode …' wrapper (T-4) + session."""
+    from jalebi.adapters import opencode as oc
+
+    captured: dict = {}
+
+    class FakeProc:
+        stdout = None
+        stderr = None
+
+        def __init__(self, **kw):
+            captured.update(kw)
+
+    def fake_popen(args, **kwargs):
+        captured["args"] = args
+        return FakeProc(**kwargs)
+
+    monkeypatch.setattr(oc.subprocess, "Popen", fake_popen)
+    oc._spawn(["opencode", "run", "--format", "json", "do it"], "/tmp/ws", {"A": "1"})
+
+    args = captured["args"]
+    assert args[0] == "/bin/bash"
+    assert args[1] == "-c"
+    cmd = args[2]
+    assert cmd.startswith("cd /tmp/ws && exec opencode run --format json")
+    assert "do it" in cmd
+    assert captured.get("start_new_session") is True

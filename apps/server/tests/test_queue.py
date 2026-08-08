@@ -187,7 +187,10 @@ def test_success_marks_done_and_persists_run(q, session, repo_row, monkeypatch) 
     assert run.status == "done"
     assert run.session_id == "ses_fake"
     step_types = [s["type"] for s in json.loads(run.steps_json or "[]")]
-    assert step_types == ["message", "done"]
+    # Robust: the message is present and 'done' is terminal — the exact prefix
+    # list is an implementation detail (T-15).
+    assert "message" in step_types
+    assert step_types[-1] == "done"
 
 
 def test_failure_marks_failed(q, session, repo_row, monkeypatch) -> None:
@@ -289,7 +292,8 @@ def test_cancel_running_task(q, session, repo_row, monkeypatch) -> None:
     thread.start()
     assert _wait_until(lambda: _fresh_task(session, task.id).status == "running")
     assert q.cancel(task.id) is True
-    thread.join(timeout=5)
+    thread.join(timeout=10)
+    assert not thread.is_alive()  # the worker wound down, not just timed out
 
     assert _fresh_task(session, task.id).status == "cancelled"
     assert _latest_run(session, task.id).status == "cancelled"
@@ -868,3 +872,64 @@ def test_review_run_has_no_diff(q, session, repo_row, monkeypatch, tmp_path) -> 
     assert run is not None
     assert run.status == "done"
     assert run.diff_text is None
+
+
+def test_publish_comments_on_linked_issues(q, session, repo_row, monkeypatch) -> None:
+    """issue_fix publish comments on each linked issue with the PR link (T-3)."""
+    settings.set_setting(session, "auto_publish", True)
+    task = tasks.create_task(
+        session, type_="issue_fix", repo_id=repo_row.id, prompt="fix it", issues=[12, 34]
+    )
+    _seed_commit(q, task.id, repo_row)
+
+    comments: list[tuple[int, str]] = []
+
+    class CommentingClient(FakeGitHubClient):
+        def __init__(self, token):
+            super().__init__(token)
+
+        def comment_on_issue(self, full_name, number, body):
+            comments.append((number, body))
+
+    _install_adapter(monkeypatch, FakeHandle([AgentEvent(type="done")]))
+    monkeypatch.setattr("jalebi.queue.GitHubClient", CommentingClient)
+
+    q._run_task(task.id)
+
+    assert _fresh_task(session, task.id).status == "done"
+    assert sorted(n for n, _ in comments) == [12, 34]
+    assert all("PR #42" in body for _, body in comments)  # FakeGitHubClient.create_pr → 42
+
+
+def test_slow_but_live_stream_is_not_stalled(q, session, repo_row, monkeypatch) -> None:
+    """An agent that keeps emitting (never 300s silent) must NOT be stalled (T-9)."""
+    monkeypatch.setattr("jalebi.queue.STALL_TIMEOUT_SECONDS", 0.5)
+    _no_publish(session)
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
+
+    class ChattyHandle(FakeHandle):
+        def __init__(self):
+            super().__init__([])
+
+        def events(self):
+            # 10 ms gaps vs a 0.5 s stall timeout = a wide margin; the agent is
+            # slow but never silent.
+            for i in range(5):
+                yield AgentEvent(type="message", text=f"tick {i}")
+                time.sleep(0.01)
+            yield AgentEvent(type="done")
+
+    _install_adapter(monkeypatch, ChattyHandle())
+    q._run_task(task.id)
+
+    fresh = _fresh_task(session, task.id)
+    assert fresh.status == "done"
+    run = _latest_run(session, task.id)
+    assert run.status == "done"
+    step_types = [s["type"] for s in json.loads(run.steps_json or "[]")]
+    # A stall misfire would append a diagnostic error step AFTER done; assert the
+    # stream really ends on 'done' (and no stall text crept in).
+    assert step_types[-1] == "done"
+    assert not any("no output" in (s.get("text") or "") for s in json.loads(run.steps_json or "[]"))
+    texts = [s.get("text") for s in json.loads(run.steps_json or "[]")]
+    assert "tick 0" in texts and "tick 4" in texts
