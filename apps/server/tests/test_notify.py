@@ -5,18 +5,22 @@ import httpx
 from jalebi import notify, settings
 
 
-def test_endpoint_bare_topic_defaults_to_ntfy_sh() -> None:
-    assert notify.endpoint("my-jalebi") == "https://ntfy.sh/my-jalebi"
+def test_resolve_bare_topic_defaults_to_ntfy_sh() -> None:
+    assert notify.resolve("my-jalebi") == ("https://ntfy.sh", "my-jalebi")
 
 
-def test_endpoint_full_url_passthrough() -> None:
-    assert notify.endpoint("https://ntfy.example.com/room") == "https://ntfy.example.com/room"
+def test_resolve_full_url_splits_base_and_topic() -> None:
+    assert notify.resolve("https://ntfy.example.com/room") == (
+        "https://ntfy.example.com",
+        "room",
+    )
+    assert notify.resolve("https://ntfy.example.com") is None  # no topic
 
 
-def test_endpoint_empty_is_none() -> None:
-    assert notify.endpoint("") is None
-    assert notify.endpoint("   ") is None
-    assert notify.endpoint(None) is None
+def test_resolve_empty_is_none() -> None:
+    assert notify.resolve("") is None
+    assert notify.resolve("   ") is None
+    assert notify.resolve(None) is None
 
 
 def test_send_unconfigured_returns_error(session) -> None:
@@ -26,7 +30,9 @@ def test_send_unconfigured_returns_error(session) -> None:
     assert "not configured" in (error or "")
 
 
-def test_send_posts_to_endpoint(session, monkeypatch) -> None:
+def test_send_posts_json_to_server_root(session, monkeypatch) -> None:
+    """JSON publishing: POST to the server ROOT with topic in the body (not to
+    /topic — that would render the raw JSON as the message)."""
     settings.set_setting(session, "ntfy_topic", "jalebi-room")
     captured: dict = {}
 
@@ -39,12 +45,43 @@ def test_send_posts_to_endpoint(session, monkeypatch) -> None:
         return FakeResp()
 
     monkeypatch.setattr("jalebi.notify.httpx.post", fake_post)
-    ok, error = notify.send(session, "Task done", "all good", tags=notify.TAGS_OK)
+    ok, error = notify.send(
+        session,
+        "Task done",
+        "all good",
+        tags=notify.TAGS_OK,
+        click="http://127.0.0.1:3456/tasks/3",
+        actions=[{"action": "view", "label": "Open task", "url": "http://127.0.0.1:3456/tasks/3"}],
+    )
     assert ok is True and error is None
-    assert captured["url"] == "https://ntfy.sh/jalebi-room"
-    assert captured["json"]["title"] == "Task done"
-    assert captured["json"]["message"] == "all good"
-    assert captured["json"]["tags"] == ["white_check_mark"]
+    assert captured["url"] == "https://ntfy.sh"  # server root, not /jalebi-room
+    body = captured["json"]
+    assert body["topic"] == "jalebi-room"
+    assert body["title"] == "Task done"
+    assert body["message"] == "all good"
+    assert body["markdown"] is True
+    assert body["tags"] == ["white_check_mark"]
+    assert body["click"] == "http://127.0.0.1:3456/tasks/3"
+    assert body["actions"][0]["label"] == "Open task"
+
+
+def test_send_posts_to_self_hosted_root(session, monkeypatch) -> None:
+    settings.set_setting(session, "ntfy_topic", "https://ntfy.example.com/room")
+    captured: dict = {}
+
+    class FakeResp:
+        status_code = 200
+
+    def fake_post(url, json=None, timeout=None):
+        captured["url"] = url
+        captured["json"] = json
+        return FakeResp()
+
+    monkeypatch.setattr("jalebi.notify.httpx.post", fake_post)
+    ok, _ = notify.send(session, "t", "m")
+    assert ok is True
+    assert captured["url"] == "https://ntfy.example.com"
+    assert captured["json"]["topic"] == "room"
 
 
 def test_send_masks_before_posting(session, monkeypatch) -> None:

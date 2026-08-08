@@ -266,7 +266,10 @@ def test_terminal_notification_sent_on_done(q, session, repo_row, monkeypatch) -
     body = sent[0]["json"]
     assert "Task #" in body["title"]
     assert "finished the work" in body["message"]
-    assert sent[0]["url"] == "https://ntfy.sh/room"
+    assert sent[0]["url"] == "https://ntfy.sh"  # JSON publishing → server root
+    assert body["topic"] == "room"
+    assert body["markdown"] is True
+    assert body["click"] == f"http://127.0.0.1:3456/tasks/{task.id}"
 
 
 def test_terminal_notification_skipped_when_topic_unset(q, session, repo_row, monkeypatch) -> None:
@@ -425,7 +428,9 @@ def test_progress_notification_fires_on_interval(q, session, repo_row, monkeypat
     progress = [s for s in sent if "still running" in s["json"]["title"]]
     assert progress
     assert "compiling" in progress[0]["json"]["message"]
-    assert sent[0]["url"] == "https://ntfy.sh/room"
+    assert sent[0]["url"] == "https://ntfy.sh"
+    assert progress[0]["json"]["topic"] == "room"
+    assert progress[0]["json"]["markdown"] is True
 
 
 def test_failure_marks_failed(q, session, repo_row, monkeypatch) -> None:

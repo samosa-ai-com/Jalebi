@@ -410,6 +410,7 @@ Mirrors GitHub Actions' ability to gate merges on agent results.
 ### F19. Notifications
 
 - **Channel:** ntfy push (self-hosted or `ntfy.sh`). The endpoint is a **single merged setting** — either a bare topic name (default `https://ntfy.sh` server) or a full URL to a self-hosted server.
+- **Rendering (JSON publishing, docs.ntfy.sh/publish/):** notifications POST a JSON body to the **server root** with `topic` inside it — never to `/topic` (that would show raw JSON as the message). Messages are **Markdown**, carry tags, an optional priority, a **click action** and a **"Open task" action button** deep-linking to the Jalebi task page.
 - **Events (each a toggle, defaults on):** task **done** (final agent message + summary), task **failed/timed out/cancelled**, task **needs approval** (publish failed / pending manual publish), and **progress** — a periodic "still running" ping every `notify_progress_interval_minutes` (default 30) with elapsed time and the agent's latest message.
 - **Test:** a "Send test notification" button validates the endpoint (`POST /api/notify/test`).
 - **Masking:** notification title/body are run through the secret masker before send, so a stray PAT/env-var value can never reach the push channel. Sending is **best-effort** — a dead ntfy server never fails a task.

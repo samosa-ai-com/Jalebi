@@ -148,30 +148,32 @@ function EnvVarsSection({ repos }: { repos: Repo[] }) {
         </div>
       </form>
 
-      <form onSubmit={importEnv} className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center">
+      <form onSubmit={importEnv} className="mb-4 space-y-2">
         <textarea
           value={importText}
           onChange={(e) => setImportText(e.target.value)}
-          rows={2}
+          rows={4}
           placeholder={"Paste a .env file…\nKEY=VALUE per line"}
-          className="field flex-1 resize-y font-mono"
+          className="field w-full resize-y font-mono leading-relaxed"
         />
-        <select
-          value={importScope}
-          onChange={(e) => setImportScope(e.target.value)}
-          className="field w-40"
-          aria-label="Import scope"
-        >
-          <option value="">global</option>
-          {repos.map((r) => (
-            <option key={r.id} value={r.id}>
-              {r.full_name}
-            </option>
-          ))}
-        </select>
-        <button type="submit" disabled={busy || !importText.trim()} className="btn-ghost">
-          Import .env
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            value={importScope}
+            onChange={(e) => setImportScope(e.target.value)}
+            className="field w-40"
+            aria-label="Import scope"
+          >
+            <option value="">global</option>
+            {repos.map((r) => (
+              <option key={r.id} value={r.id}>
+                {r.full_name}
+              </option>
+            ))}
+          </select>
+          <button type="submit" disabled={busy || !importText.trim()} className="btn-ghost">
+            Import .env
+          </button>
+        </div>
       </form>
 
       {msg && (

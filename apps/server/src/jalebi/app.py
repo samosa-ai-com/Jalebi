@@ -169,8 +169,17 @@ def create_app(config: Config | None = None) -> Flask:
         ok, error = notify.send(
             session,
             "Jalebi test notification",
-            "If you can read this, your ntfy configuration works.",
+            "**If you can read this**, your ntfy configuration works.\n\n"
+            "Markdown, priorities, tags and a tap-action are enabled.",
             tags=notify.TAGS_OK,
+            click="http://127.0.0.1:3456/",
+            actions=[
+                {
+                    "action": "view",
+                    "label": "Open Jalebi",
+                    "url": "http://127.0.0.1:3456/",
+                }
+            ],
             masker=masker,
         )
         if not ok:

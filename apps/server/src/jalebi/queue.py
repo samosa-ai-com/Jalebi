@@ -852,23 +852,39 @@ class TaskQueue:
                 ),
                 message=self._notify_message(task, repo_full_name, state),
                 tags=self._notify_tags(task.status),
+                click=self._notify_click(task.id),
+                actions=[self._notify_open_action(task.id)],
                 masker=masker,
             )
         except Exception:
             logger.warning("notification for task %s failed", task.id, exc_info=True)
 
     @staticmethod
+    def _notify_click(task_id: int) -> str:
+        """The URL to open when the notification is tapped (the Jalebi task page)."""
+        return f"http://127.0.0.1:3456/tasks/{task_id}"
+
+    @staticmethod
+    def _notify_open_action(task_id: int) -> dict[str, object]:
+        """A 'view' action button that opens the Jalebi task page."""
+        return {
+            "action": "view",
+            "label": "Open task",
+            "url": f"http://127.0.0.1:3456/tasks/{task_id}",
+        }
+
+    @staticmethod
     def _notify_message(task: Task, repo_full_name: str, state: _RunState) -> str:
-        parts = [
-            f"Task #{task.id} · {task.type} · {task.status}",
-            f"Repo: {repo_full_name}",
-        ]
+        """Markdown body for the push (rendered by ntfy when `markdown: true`)."""
+        status_label = task.status.replace("_", " ")
+        lines = [f"**{task.type}** task in `{repo_full_name}` **{status_label}**."]
         if task.pr_number:
-            parts.append(f"PR: #{task.pr_number}")
+            lines.append(f"PR: #{task.pr_number}")
         if state.last_step_text:
             text = state.last_step_text.strip()
-            parts.append(f"Last: {text[:200]}")
-        return "\n".join(parts)
+            lines.append("")
+            lines.append(f"> {text[:300]}")
+        return "\n".join(lines)
 
     @staticmethod
     def _notify_tags(status: str) -> str | None:
@@ -1184,11 +1200,13 @@ class TaskQueue:
                             session,
                             title=f"Task #{task.id} still running — {repo.full_name}",
                             message=(
-                                f"Task #{task.id} has been running for {elapsed_min}m.\n"
-                                f"Repo: {repo.full_name}\n"
-                                f"Last: {state.last_step_text[:200]}"
+                                f"**{task.type}** task in `{repo.full_name}` has been "
+                                f"running for **{elapsed_min}m**.\n\n"
+                                f"> {state.last_step_text[:300]}"
                             ),
                             tags=notify.TAGS_CLOCK,
+                            click=self._notify_click(task.id),
+                            actions=[self._notify_open_action(task.id)],
                             masker=masker,
                         )
                     except Exception:
