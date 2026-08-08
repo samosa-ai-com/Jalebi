@@ -30,9 +30,20 @@ DEFAULTS: dict[str, object] = {
     "notify_on_progress": True,
     "notify_on_needs_approval": True,
     "notify_progress_interval_minutes": 30,
+    # Public base URL GitHub can reach to deliver webhooks (e.g. a tunnel such
+    # as cloudflared/ngrok). Empty = not exposed → webhooks can't be delivered.
+    "webhook_url": "",
+    # Optional HMAC secret verified against X-Hub-Signature-256 on POST /webhook.
+    # Empty = signature check disabled (only safe on a localhost-only install).
+    "webhook_secret": "",
 }
 
 SETTING_KEYS = tuple(DEFAULTS)
+
+# Sentinel returned by GET /api/settings for write-only secrets (webhook_secret):
+# the value is never exposed, only a placeholder that the UI treats as
+# "unchanged" on save (an empty string clears it).
+SECRET_MASK = "••••••••"
 
 
 def seed_defaults(session: Session) -> int:

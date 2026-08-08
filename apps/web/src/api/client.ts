@@ -2,6 +2,7 @@ import type {
   CatalogAgent,
   CatalogSkill,
   EnvVar,
+  EventDelivery,
   GithubContext,
   GithubRepo,
   Health,
@@ -11,6 +12,8 @@ import type {
   SseEvent,
   Task,
   TokensResponse,
+  TriggerRule,
+  WebhookStatus,
 } from "../types";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -88,6 +91,61 @@ export const api = {
     request<{ deleted: string }>(`/api/agents/${encodeURIComponent(slug)}`, {
       method: "DELETE",
     }),
+  getWebhookStatus: () => request<WebhookStatus>("/api/webhook/status"),
+  getTriggerRules: (repoId?: number) =>
+    request<TriggerRule[]>(
+      `/api/triggers${repoId ? `?repo_id=${repoId}` : ""}`
+    ),
+  createTriggerRule: (input: {
+    repo_id: number;
+    event: string;
+    action: string;
+    branch_filter?: string;
+    label_filter?: string[];
+    author_filter?: string;
+    agent_ids?: string[];
+    custom_instructions?: string;
+    enabled?: boolean;
+  }) =>
+    request<TriggerRule>("/api/triggers", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  updateTriggerRule: (
+    id: number,
+    input: {
+      event?: string;
+      action?: string;
+      branch_filter?: string | null;
+      label_filter?: string[];
+      author_filter?: string | null;
+      agent_ids?: string[];
+      custom_instructions?: string | null;
+      enabled?: boolean;
+    }
+  ) =>
+    request<TriggerRule>(`/api/triggers/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
+  deleteTriggerRule: (id: number) =>
+    request<{ deleted: number }>(`/api/triggers/${id}`, { method: "DELETE" }),
+  getDeliveries: () => request<EventDelivery[]>("/api/webhooks/deliveries"),
+  replayDelivery: (id: number) =>
+    request<{ matched: number; results: unknown[] }>(
+      `/api/webhooks/deliveries/${id}/replay`,
+      { method: "POST" }
+    ),
+  registerWebhook: (repoId: number) =>
+    request<{ full_name: string; webhook_url: string; registered: boolean }>(
+      `/api/repos/${repoId}/webhook`,
+      { method: "POST" }
+    ),
+  unregisterWebhook: (repoId: number) =>
+    request<{ full_name: string; removed: number; registered: boolean }>(
+      `/api/repos/${repoId}/webhook`,
+      { method: "DELETE" }
+    ),
   updateSetting: (key: string, value: unknown) =>
     request<SettingsMap>(`/api/settings`, { method: "POST", body: JSON.stringify({ key, value }) }),
   testNotification: () =>

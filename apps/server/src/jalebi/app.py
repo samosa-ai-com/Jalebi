@@ -17,6 +17,8 @@ from jalebi.routes.envvars import bp as envvars_bp
 from jalebi.routes.github import bp as github_bp
 from jalebi.routes.repos import bp as repos_bp
 from jalebi.routes.tasks import bp as tasks_bp
+from jalebi.routes.triggers import bp as triggers_bp
+from jalebi.routes.webhooks import bp as webhooks_bp
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +56,10 @@ _SETTING_VALIDATORS = {
     "notify_on_progress": lambda v: isinstance(v, bool),
     "notify_on_needs_approval": lambda v: isinstance(v, bool),
     "notify_progress_interval_minutes": lambda v: isinstance(v, int) and v >= 1,
+    "webhook_url": lambda v: isinstance(v, str) and (
+        v == "" or v.startswith(("http://", "https://"))
+    ),
+    "webhook_secret": lambda v: isinstance(v, str),
 }
 
 
@@ -78,6 +84,12 @@ def _basic_auth_gate() -> ResponseReturnValue | None:
     if not password:
         return None
     if request.path == "/api/health":
+        return None
+    # GitHub webhooks cannot send Basic auth — the X-Hub-Signature-256 secret is
+    # the webhook's own authentication (verified in routes/webhooks.py). Exempt
+    # the listener so a password-protected (possibly tunneled) install still
+    # receives deliveries.
+    if request.method == "POST" and request.path == "/webhook":
         return None
     auth = request.authorization
     if (
@@ -122,6 +134,8 @@ def create_app(config: Config | None = None) -> Flask:
     app.register_blueprint(tasks_bp)
     app.register_blueprint(envvars_bp)
     app.register_blueprint(catalog_bp)
+    app.register_blueprint(triggers_bp)
+    app.register_blueprint(webhooks_bp)
 
     @app.teardown_appcontext
     def close_session(_exc) -> None:
@@ -138,7 +152,12 @@ def create_app(config: Config | None = None) -> Flask:
     @app.get("/api/settings")
     def get_settings() -> Response:
         session = db.get_session()
-        return jsonify({key: settings.get_setting(session, key) for key in settings.SETTING_KEYS})
+        values = {key: settings.get_setting(session, key) for key in settings.SETTING_KEYS}
+        # The webhook HMAC secret is write-only: never return the value, only
+        # whether one is set (the UI renders it as a masked placeholder).
+        if values.get("webhook_secret"):
+            values["webhook_secret"] = settings.SECRET_MASK
+        return jsonify(values)
 
     @app.get("/api/models")
     def list_models() -> ResponseReturnValue:
@@ -164,10 +183,15 @@ def create_app(config: Config | None = None) -> Flask:
         if validator is not None and not validator(value):
             return jsonify({"error": f"invalid value for {key}"}), 400
         session = db.get_session()
+        # A write-only secret that was fetched masked and re-submitted unchanged
+        # must not clobber the stored value; empty clears it.
+        if key == "webhook_secret" and value == settings.SECRET_MASK:
+            value = settings.get_setting(session, "webhook_secret")
         settings.set_setting(session, key, value)
         if key == "concurrency" and isinstance(value, int):
             current_app.config["JALEBI_QUEUE"].set_concurrency(value)
-        return jsonify({key: settings.get_setting(session, key)}), 200
+        response_value = settings.SECRET_MASK if key == "webhook_secret" and value else value
+        return jsonify({key: response_value}), 200
 
     @app.post("/api/notify/test")
     def notify_test() -> ResponseReturnValue:

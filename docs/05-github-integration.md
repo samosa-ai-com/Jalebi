@@ -50,21 +50,21 @@ Connected-repo registry (`jalebi/routes/repos.py`, `/api/repos`):
 
 Implemented via the same client (Phase 0): issue/PR context fetch, publish (create/reuse PR), issue comments, PR review comments, paginated listing. **Planned (later phases):** webhook registration/management, commit statuses/check runs.
 
-## 4. Webhooks (PRD §F14) — Phase 1, NOT implemented
+## 4. Webhooks (PRD §F14) — implemented (Phase 1)
 
-- **Planned:** Jalebi registers repo webhooks via the API targeting its local listener (URL + optional secret for signature verification). Not implemented in Phase 0; the trigger/task-queue doc (`docs/06`) keeps webhooks/triggers out of scope until Phase 1.
-- For a localhost-only install, GitHub cannot reach the machine — the listener must be exposed via a **tunnel (e.g. `cloudflared`/`ngrok`)** or the webhook URL points at a small reverse proxy.
-- The app detects an unreachable webhook via a diagnostic status endpoint (`GET /api/webhook/status`) and warns in the UI, offering the **polling fallback**.
-- **Idempotency:** deliveries are deduped on `X-GitHub-Delivery` / `X-GitHub-Event` headers, so re-deliveries never double-run a task.
-- **Replay:** the UI offers "replay last delivery" for any event.
+- Jalebi registers repo webhooks via the API (`POST /api/repos/<id>/webhook`, using the repo's account — `github.create_hook`), targeting `<webhook_url>/webhook` with an optional HMAC secret. `DELETE /api/repos/<id>/webhook` unregisters. Registration is refused with a clear error when `webhook_url` is unset.
+- For a localhost-only install, GitHub cannot reach the machine — the listener must be exposed via a **tunnel (e.g. `cloudflared`/`ngrok`)**; the owner sets the public base URL in Settings (webhook_url). The app detects an unreachable webhook (`GET /api/webhook/status`) and warns in the Triggers page UI.
+- **Idempotency:** deliveries are deduped on `X-GitHub-Delivery`, so re-deliveries never double-run a task.
+- **Replay:** the Triggers page offers "replay" for any logged delivery.
+- **Full flow, rule matching, and dispatch:** see `docs/16-triggers.md`.
 
 ### Webhook listener flow
 
 1. GitHub delivers a repo webhook event to the local listener (`POST /webhook`).
 2. Listener validates (optional `X-Hub-Signature-256` secret) and **idempotently** dedups the delivery.
-3. Matches the event against the user's **trigger rules**.
+3. Matches the event against the user's **trigger rules** (`/api/triggers`).
 4. A matching rule creates and enqueues task(s) immediately (e.g. PR opened ⇒ assigned reviewers auto-start).
-5. Runs proceed like manual tasks and report back via **check runs** on the PR head commit when configured.
+5. Runs proceed exactly like manual tasks (timeline, logs, diffs). **Check runs** arrive in Phase 2.
 
 ## 5. Check runs & merge gating (PRD §F15) — Phase 2, NOT implemented
 

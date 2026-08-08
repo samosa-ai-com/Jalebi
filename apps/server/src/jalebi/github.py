@@ -302,3 +302,37 @@ class GitHubClient:
             }
             for repo in body
         ]
+
+    def create_hook(
+        self, full_name: str, url: str, secret: str, events: list[str] | None = None
+    ) -> dict[str, Any]:
+        """Register a webhook on ``full_name`` (type web, JSON, HMAC secret)."""
+        payload = {
+            "name": "web",
+            "active": True,
+            "events": events or ["pull_request", "issues", "push", "pull_request_review"],
+            "config": {"url": url, "content_type": "json", "secret": secret or ""},
+        }
+        status, body, _ = self._request("POST", f"/repos/{full_name}/hooks", json=payload)
+        if status != 201 or not isinstance(body, dict):
+            raise GitHubError(f"failed to create webhook: HTTP {status}")
+        return {"id": body.get("id"), "url": body.get("config", {}).get("url")}
+
+    def list_hooks(self, full_name: str) -> list[dict[str, Any]]:
+        """List the repo's webhooks (id, active, config url)."""
+        body = self._request_paginated(f"/repos/{full_name}/hooks", {"per_page": 100})
+        return [
+            {
+                "id": hook.get("id"),
+                "active": hook.get("active"),
+                "url": (hook.get("config") or {}).get("url"),
+                "events": hook.get("events") or [],
+            }
+            for hook in body
+            if isinstance(hook, dict)
+        ]
+
+    def delete_hook(self, full_name: str, hook_id: int) -> None:
+        status, _, _ = self._request("DELETE", f"/repos/{full_name}/hooks/{hook_id}")
+        if status != 204:
+            raise GitHubError(f"failed to delete webhook: HTTP {status}")

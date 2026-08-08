@@ -277,6 +277,62 @@ class ReviewAssignment(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
 
 
+class TriggerRule(Base):
+    """A per-repo webhook trigger rule (PRD F14).
+
+    ``event`` is the full event key, e.g. ``pull_request.opened`` (from the
+    ``X-GitHub-Event`` header + the payload's ``action``). ``action`` is what to
+    do: ``start_review`` (reviewer tasks per ``agent_ids_json``), ``triage_issue``
+    (issue_fix task), ``create_task`` (freeform task with custom_instructions),
+    or ``rerun_review`` (re-enqueue the PR's existing reviewer tasks). Optional
+    scope filters narrow when a rule fires.
+    """
+
+    __tablename__ = "trigger_rules"
+    __table_args__ = (Index("ix_trigger_rules_repo_id", "repo_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    repo_id: Mapped[int] = mapped_column(ForeignKey("repos.id"), nullable=False)
+    event: Mapped[str] = mapped_column(Text, nullable=False)
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    branch_filter: Mapped[str | None] = mapped_column(Text, nullable=True)
+    label_filter: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON list
+    author_filter: Mapped[str | None] = mapped_column(Text, nullable=True)
+    agent_ids_json: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON list
+    custom_instructions: Mapped[str | None] = mapped_column(Text, nullable=True)
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=sa.text("1")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+
+
+class EventDelivery(Base):
+    """One received webhook delivery (idempotency + replay log, PRD F14).
+
+    ``github_delivery_id`` is UNIQUE (the ``X-GitHub-Delivery`` header), so a
+    GitHub re-delivery is detected and skipped. ``payload_json`` is the raw body
+    so a delivery can be replayed later; ``result`` records what the rule did.
+    """
+
+    __tablename__ = "event_deliveries"
+    __table_args__ = (Index("ix_event_deliveries_repo_id", "repo_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    github_delivery_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    event: Mapped[str] = mapped_column(Text, nullable=False)
+    action: Mapped[str | None] = mapped_column(Text, nullable=True)
+    repo_id: Mapped[int | None] = mapped_column(ForeignKey("repos.id"), nullable=True)
+    repo_full_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False)
+    received_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+    matched_rule_id: Mapped[int | None] = mapped_column(
+        ForeignKey("trigger_rules.id"), nullable=True
+    )
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, default="received", server_default=sa.text("'received'")
+    )
+    result: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON summary
+
 class Setting(Base):
     __tablename__ = "settings"
 

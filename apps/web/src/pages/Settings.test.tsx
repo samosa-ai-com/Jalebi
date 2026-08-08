@@ -17,6 +17,8 @@ const SETTINGS = {
   notify_on_progress: true,
   notify_on_needs_approval: true,
   notify_progress_interval_minutes: 30,
+  webhook_url: "",
+  webhook_secret: "",
 };
 
 function makeFetchMock() {

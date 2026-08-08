@@ -171,6 +171,8 @@ export interface SettingsMap {
   notify_on_progress: boolean;
   notify_on_needs_approval: boolean;
   notify_progress_interval_minutes: number;
+  webhook_url: string;
+  webhook_secret: string;
 }
 
 export interface EnvVar {
@@ -198,4 +200,43 @@ export interface CatalogAgent {
   custom_instructions: string;
   enabled: boolean;
   created_at: string;
+}
+
+export interface TriggerRule {
+  id: number;
+  repo_id: number;
+  event: string;
+  action: string;
+  branch_filter: string | null;
+  label_filter: string[];
+  author_filter: string | null;
+  agent_ids: string[];
+  custom_instructions: string | null;
+  enabled: boolean;
+  created_at: string;
+}
+
+export interface EventDelivery {
+  id: number;
+  github_delivery_id: string;
+  event: string;
+  action: string | null;
+  repo_id: number | null;
+  repo_full_name: string | null;
+  received_at: string;
+  matched_rule_id: number | null;
+  status: string;
+  result: unknown;
+}
+
+export interface WebhookStatus {
+  url: string;
+  secret_set: boolean;
+  reachable: boolean;
+  repos: {
+    id: number;
+    full_name: string;
+    webhook_registered: boolean;
+    poll_fallback: boolean;
+  }[];
 }

@@ -8,6 +8,7 @@ import Repos from "./pages/Repos";
 import Settings from "./pages/Settings";
 import TaskDetail from "./pages/TaskDetail";
 import Tasks from "./pages/Tasks";
+import Triggers from "./pages/Triggers";
 
 function JalebiMark({ className }: { className?: string }) {
   return (
@@ -28,13 +29,11 @@ const NAV_ITEMS = [
   { to: "/repos", label: "Repos", end: false },
   { to: "/github", label: "GitHub", end: false },
   { to: "/agents", label: "Agents", end: false },
+  { to: "/triggers", label: "Triggers", end: false },
   { to: "/settings", label: "Settings", end: false },
 ];
 
-const SOON_ITEMS = [
-  { to: "/screenings", label: "Screenings" },
-  { to: "/triggers", label: "Triggers" },
-];
+const SOON_ITEMS = [{ to: "/screenings", label: "Screenings" }];
 
 function navClass({ isActive }: { isActive: boolean }): string {
   return `relative rounded-lg px-3 py-1.5 text-sm transition-colors ${
@@ -116,9 +115,9 @@ function App() {
           <Route path="/repos" element={<Repos />} />
           <Route path="/github" element={<Github />} />
           <Route path="/agents" element={<Agents />} />
+          <Route path="/triggers" element={<Triggers />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/screenings" element={<ComingSoon feature="Screenings" />} />
-          <Route path="/triggers" element={<ComingSoon feature="Triggers" />} />
           <Route
             path="*"
             element={

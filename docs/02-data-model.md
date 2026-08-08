@@ -142,6 +142,43 @@ Indexes: `task_id`, `pr_number`. Each reviewer runs as its own `pr_review`
 task; the assignment is a lightweight registry (task ↔ agent ↔ PR ↔ repo) so the
 PR card and the webhook flow can show posted status. See `docs/05` §6.
 
+### `trigger_rules` (Phase 1 — PRD F14)
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | int PK | |
+| `repo_id` | int FK → repos | |
+| `event` | text | e.g. `pull_request.opened`, `issues.opened`, `push` |
+| `action` | text | `start_review` \| `triage_issue` \| `create_task` \| `rerun_review` |
+| `branch_filter` | text, null | match head OR base ref |
+| `label_filter` | text, null | JSON list — all must be present |
+| `author_filter` | text, null | match PR/issue author login |
+| `agent_ids_json` | text, null | JSON list of catalog agent ids |
+| `custom_instructions` | text, null | task prompt for triage/create_task |
+| `enabled` | bool | disabled rules never fire |
+| `created_at` | datetime | |
+
+Index: `repo_id`. See `docs/16-triggers.md`.
+
+### `event_deliveries` (Phase 1 — PRD F14)
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | int PK | |
+| `github_delivery_id` | text UNIQUE | `X-GitHub-Delivery` — idempotency |
+| `event` | text | `X-GitHub-Event` |
+| `action` | text, null | payload `action` |
+| `repo_id` | int FK → repos, null | |
+| `repo_full_name` | text, null | |
+| `payload_json` | text | raw body (for replay) |
+| `received_at` | datetime | |
+| `matched_rule_id` | int FK → trigger_rules, null | |
+| `status` | text | `received` \| `matched` \| `ignored` \| `failed` |
+| `result` | text, null | JSON summary of what the rule did |
+
+Index: `repo_id`. The UNIQUE `github_delivery_id` makes re-deliveries no-ops;
+the stored payload enables replay.
+
 ### `settings`
 
 | Column | Type | Notes |
@@ -199,4 +236,4 @@ runs  0───1 review_assignments  (run_id, set when the reviewer run starts)
 
 ## 5. Not yet implemented (later phases)
 
-`trigger_rules`, `event_deliveries`, `check_runs`, `screenings`, `screening_runs`, `findings` — created by future migrations per PRD §10.
+`check_runs`, `screenings`, `screening_runs`, `findings` — created by future migrations per PRD §10.

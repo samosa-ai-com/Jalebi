@@ -4,7 +4,7 @@ import httpx
 from flask import Blueprint, current_app, jsonify, request
 from flask.typing import ResponseReturnValue
 
-from jalebi import db, repos, secrets
+from jalebi import db, repos, secrets, settings
 from jalebi.config import Config
 from jalebi.git_workspace import GitWorkspace
 from jalebi.github import GitHubClient, GitHubError, GitHubNotFound
@@ -160,3 +160,94 @@ def branches(repo_id: int) -> ResponseReturnValue:
     except Exception as exc:
         return jsonify({"error": str(exc)}), 502
     return jsonify({"full_name": row.full_name, "branches": names})
+
+
+@bp.post("/<int:repo_id>/webhook")
+def register_webhook(repo_id: int) -> ResponseReturnValue:
+    """Register a repo webhook targeting Jalebi's listener (PRD F14).
+
+    Uses the repo's own account. The webhook URL is the ``webhook_url`` setting
+    (a public base the tunnel exposes) + ``/webhook``; the configured
+    ``webhook_secret`` signs deliveries. If no webhook_url is set, the app can't
+    be reached by GitHub and registration is refused with a clear error.
+    """
+    session = db.get_session()
+    row = session.get(db.Repo, repo_id)
+    if row is None:
+        return jsonify({"error": "repo not found"}), 404
+
+    config = current_app.config["JALEBI_CONFIG"]
+    base_url = str(settings.get_setting(session, "webhook_url") or "")
+    if not base_url:
+        return jsonify(
+            {"error": "webhook_url is not set — expose Jalebi via a tunnel "
+             "(e.g. cloudflared/ngrok) and set the URL in Settings first"}
+        ), 409
+    secret = str(settings.get_setting(session, "webhook_secret") or "")
+
+    token = secrets.resolve_token(config, row.pat_name)
+    if not token:
+        return jsonify({"error": f"no token for this repo's account ({row.pat_name})"}), 409
+
+    url = f"{base_url.rstrip('/')}/webhook"
+    # No-op when already registered: registering twice creates two GitHub hooks,
+    # which would deliver each event twice with different delivery ids (bypassing
+    # dedup) → duplicate tasks.
+    if row.webhook_registered:
+        return jsonify(
+            {"full_name": row.full_name, "webhook_url": url, "registered": True}
+        )
+
+    client = GitHubClient(token)
+    try:
+        client.create_hook(row.full_name, url, secret)
+    except (httpx.HTTPError, GitHubError) as exc:
+        return jsonify({"error": str(exc)}), 502
+    finally:
+        client.close()
+
+    row.webhook_registered = True
+    session.commit()
+    return jsonify({"full_name": row.full_name, "webhook_url": url, "registered": True})
+
+
+@bp.delete("/<int:repo_id>/webhook")
+def unregister_webhook(repo_id: int) -> ResponseReturnValue:
+    """Remove Jalebi's webhook(s) from the repo (best-effort; clears the flag)."""
+    session = db.get_session()
+    row = session.get(db.Repo, repo_id)
+    if row is None:
+        return jsonify({"error": "repo not found"}), 404
+    config = current_app.config["JALEBI_CONFIG"]
+    token = secrets.resolve_token(config, row.pat_name)
+    if not token:
+        return jsonify({"error": f"no token for this repo's account ({row.pat_name})"}), 409
+
+    base_url = str(settings.get_setting(session, "webhook_url") or "")
+    expected_url = f"{base_url.rstrip('/')}/webhook" if base_url else None
+
+    client = GitHubClient(token)
+    removed = 0
+    try:
+        hooks = client.list_hooks(row.full_name)
+        for hook in hooks:
+            url = (hook.get("url") or "").rstrip("/")
+            # Match the exact expected URL (never another integration's hook).
+            if expected_url is not None and url != expected_url:
+                continue
+            if url.endswith("/webhook"):
+                client.delete_hook(row.full_name, hook["id"])
+                removed += 1
+    except (httpx.HTTPError, GitHubError):
+        removed = 0
+    finally:
+        client.close()
+
+    # Only clear the flag when we actually removed hooks; a failed/live orphan
+    # must keep its registration state so the UI still shows it.
+    if removed:
+        row.webhook_registered = False
+        session.commit()
+    return jsonify(
+        {"full_name": row.full_name, "removed": removed, "registered": row.webhook_registered}
+    )

@@ -394,6 +394,47 @@ export default function Settings() {
 
       {error && <p className="text-sm text-red-400">{error}</p>}
 
+      <section className="surface p-5 animate-fade-up" style={{ animationDelay: "0.02s" }}>
+        <h2 className="panel-title mb-1">Webhooks</h2>
+        <p className="mb-4 text-xs leading-relaxed text-ink-500">
+          Event-driven triggers are delivered by GitHub to the local listener. For a
+          localhost install, expose Jalebi via a tunnel (cloudflared/ngrok) and set the
+          public URL here; the optional secret signs deliveries
+          (<span className="font-mono">X-Hub-Signature-256</span>).
+        </p>
+        <div className="grid gap-4 md:grid-cols-2">
+          <label className="block">
+            <span className="mb-1.5 block text-xs font-medium text-ink-400">
+              Public webhook URL (tunnel base)
+            </span>
+            <input
+              defaultValue={settings.webhook_url}
+              onBlur={(e) => save("webhook_url", e.target.value.trim())}
+              placeholder="https://jalebi.example.tunnel"
+              className="field font-mono"
+            />
+            <span className="mt-1 block text-[11px] text-ink-500">
+              GitHub posts to <span className="font-mono">{settings.webhook_url ? `${settings.webhook_url.replace(/\/$/, "")}/webhook` : "<url>/webhook"}</span>
+            </span>
+          </label>
+          <label className="block">
+            <span className="mb-1.5 block text-xs font-medium text-ink-400">
+              Webhook secret (optional)
+            </span>
+            <input
+              type="password"
+              defaultValue={settings.webhook_secret}
+              onBlur={(e) => save("webhook_secret", e.target.value)}
+              placeholder="••••••••"
+              className="field font-mono"
+            />
+            <span className="mt-1 block text-[11px] text-ink-500">
+              When set, deliveries are verified against this HMAC secret.
+            </span>
+          </label>
+        </div>
+      </section>
+
       <section className="surface p-5 animate-fade-up" style={{ animationDelay: "0.03s" }}>
         <h2 className="panel-title mb-1">Notifications</h2>
         <p className="mb-4 text-xs leading-relaxed text-ink-500">
