@@ -35,10 +35,12 @@ def test_write_opencode_guard_denies_gh_and_external_dirs(tmp_path) -> None:
 
 
 def test_set_git_identity(tmp_path) -> None:
+    from jalebi import messaging
+
     _init_repo(tmp_path)
     worktree_bootstrap.set_git_identity(tmp_path)
-    assert _git(["config", "user.name"], tmp_path) == "Jalebi"
-    assert _git(["config", "user.email"], tmp_path) == "jalebi@localhost"
+    assert _git(["config", "user.name"], tmp_path) == messaging.CO_AUTHOR_NAME
+    assert _git(["config", "user.email"], tmp_path) == messaging.CO_AUTHOR_EMAIL
 
 
 def test_write_agent_md(tmp_path) -> None:

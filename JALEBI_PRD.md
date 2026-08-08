@@ -320,7 +320,7 @@ The orchestrator creates the worktree from **source**, opens the PR with **base 
 
 ### F9. PR publishing policy
 
-- **Default: auto-publish** — on task completion the orchestrator pushes the branch and opens a PR (auto title = agent summary; body includes task instructions + `Closes #N` when an issue was referenced; footer with a link to the Jalebi task and `Co-authored-by` attribution for opencode, mirroring the Chanakya handler).
+- **Default: auto-publish** — on task completion the orchestrator pushes the branch and opens a PR. Title = agent's `.jalebi/pr.md` first `# <title>` line (fallback: `🦦 Jalebi: <first prompt line>` / `🦦 Jalebi task`); body includes the agent-written `.jalebi/pr.md` body (or raw prompt as fallback) + `Closes #N` when an issue was referenced + the Jalebi brand footer (`🦦 Opened by [Jalebi](https://github.com/samosa-ai-com/jalebi) — your self-hosted AI coding agent by [Samosa AI](https://github.com/samosa-ai-com).`) + `Co-authored-by: Jalebi <jalebi@samosa-ai.com>`. External posts must not contain task IDs, `localhost`, internal URLs, or any other owner-only info — see `docs/14-messaging-strategy.md` for the templates and invariants (supersedes the earlier "link to the Jalebi task" mandate).
 - **Configurable:** per-task or global setting `auto_publish: true|false`; when `false`, the UI shows a **"Publish"** button (push + open PR) that the user clicks, and a "push-only" option.
 - **PR updates on follow-ups:** follow-ups amend the same branch; existing PR is force-updated (new commit pushed) — never a second PR for the same task.
 

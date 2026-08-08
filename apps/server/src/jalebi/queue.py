@@ -15,6 +15,7 @@ from jalebi import (
     artifacts,
     envvars,
     masking,
+    messaging,
     notify,
     prompts,
     secrets,
@@ -760,10 +761,11 @@ class TaskQueue:
                     review_text = self._last_message(session, task.id)
                 if review_text:
                     review_text = masker(review_text)
+                    review_body = messaging.wrap_pr_review(review_text)
                     try:
                         client = GitHubClient(token)
                         try:
-                            client.post_pr_review(repo.full_name, pr_number, review_text)
+                            client.post_pr_review(repo.full_name, pr_number, review_body)
                         finally:
                             client.close()
                         steps = json.loads(run.steps_json or "[]")
@@ -1339,15 +1341,11 @@ class TaskQueue:
             issue_numbers = json.loads(task.issues_json) if task.issues_json else []
         except (ValueError, TypeError):
             issue_numbers = []
+        pr_url = f"https://github.com/{full_name}/pull/{pr_number}"
+        body = messaging.issue_comment_for_pr(pr_number, pr_url)
         for number in issue_numbers:
             try:
-                client.comment_on_issue(
-                    full_name,
-                    int(number),
-                    f"Jalebi opened a pull request for this issue — "
-                    f"[task {task.id}](http://127.0.0.1:3456/tasks/{task.id}), "
-                    f"PR #{pr_number}.",
-                )
+                client.comment_on_issue(full_name, int(number), body)
             except Exception as exc:
                 logger.warning("commenting on issue #%s failed: %s", number, exc)
 
@@ -1355,8 +1353,9 @@ class TaskQueue:
         """PR title/body from the agent-written ``.jalebi/pr.md`` when present.
 
         Falls back to the prompt when the agent didn't write one. The Jalebi
-        footer is always appended; ``Closes #N`` is added for referenced issues.
-        The agent-written content is masked before it can be posted to GitHub.
+        footer (brand line + ``Co-authored-by``) is always appended;
+        ``Closes #N`` is added for referenced issues. The agent-written
+        content is masked before it can be posted to GitHub.
         """
         title, body = "", ""
         pr_md = GitWorkspace.worktree_path(self.config.data_dir, task.id) / ".jalebi" / "pr.md"
@@ -1364,29 +1363,28 @@ class TaskQueue:
             raw = pr_md.read_text() or ""
             lines = raw.splitlines()
             if lines and lines[0].startswith("# "):
-                title = lines[0][2:].strip()[:80]
+                title = lines[0][2:].strip()[:messaging.PR_TITLE_MAX]
             body = "\n".join(lines[1:]).strip()
         if not title:
-            first = task.prompt.strip().splitlines()[0][:80] if task.prompt.strip() else ""
-            title = f"[Jalebi] {first}".strip() or "Jalebi task"
+            first = task.prompt.strip().splitlines()[0] if task.prompt.strip() else ""
+            title = messaging.pr_title(first)
         if not body:
             body = task.prompt
         if masker is not None:
             title = masker(title)
             body = masker(body)
 
-        parts = [body]
+        closes: list[int] = []
         if task.type == "issue_fix":
             try:
                 numbers = json.loads(task.issues_json) if task.issues_json else []
             except (ValueError, TypeError):
                 numbers = []
-            if numbers:
-                closes = " ".join(f"#{int(n)}" for n in numbers)
-                if f"Closes {closes}" not in body:
-                    parts.append(f"Closes {closes}")
-        parts.append(
-            f"_Automated by Jalebi — [task {task.id}](http://127.0.0.1:3456/tasks/{task.id})_\n"
-            "Co-authored-by: Jalebi <jalebi@localhost>"
-        )
+            closes = [int(n) for n in numbers if str(n).strip()]
+            if closes:
+                closes_str = " ".join(f"#{n}" for n in closes)
+                if f"Closes {closes_str}" in body:
+                    closes = []
+
+        parts = [body, *messaging.pr_footer_parts(closes=closes)]
         return title, "\n\n".join(parts)

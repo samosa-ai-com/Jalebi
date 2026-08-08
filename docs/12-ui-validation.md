@@ -150,7 +150,7 @@
 1. [ ] Create a task: pick the test repo, prompt *"Append the line 'QA check' to README.md and commit with message 'qa check'."*
 2. [ ] Expect the task row to show `queued` → `running` (amber pulse), then `done` (green).
 3. [ ] While running: open the task → timeline and console stream live (no refresh).
-4. [ ] After done: an auto-PR is created (PR cell links to GitHub); PR body contains the prompt + a `Co-authored-by` footer and a link to the Jalebi task.
+4. [ ] After done: an auto-PR is created (PR cell links to GitHub); PR body contains the prompt + `Closes #N` (if applicable) + the Jalebi brand footer (`🦦 Opened by [Jalebi](https://github.com/samosa-ai-com/jalebi) — your self-hosted AI coding agent by [Samosa AI](https://github.com/samosa-ai-com).`) + `Co-authored-by: Jalebi <jalebi@samosa-ai.com>`. No `127.0.0.1`, no `task <id>`, no internal URLs — see `docs/14-messaging-strategy.md`.
 5. [ ] Reload the detail page → timeline/console/artifacts still present (persisted).
 
 ### W2 — Follow-up

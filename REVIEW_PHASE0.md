@@ -67,7 +67,7 @@ The worker reads `task.status` from its own session snapshot (still `queued`) be
 - **L2 — Kill only reaches the direct child** (`queue.py:69-81`): `_kill_proc` terminates the opencode process, not its process group; grandchildren (MCP servers, git, model subprocesses) can be orphaned on cancel/timeout.
 - **L3 — Stall guard 120s** (`queue.py:31`): kills any agent silent for 120s — legitimate long model/API turns are terminated as "stalled".
 - **L4 — Hard-coded default model in the UI** (`Tasks.tsx:46`): `opencode-go/deepseek-v4-flash` is a hard default — deviation from PRD F5 ("no hard-coded model; default = adapter's configured default").
-- **L5 — Localhost task URL posted to GitHub** (`queue.py:849-852,887-890`): every PR body and issue comment contains `http://127.0.0.1:3456/tasks/{id}` and a `Co-authored-by: Jalebi <jalebi@localhost>` footer. Per PRD (F9), but on a **public** repo this advertises the local setup and task IDs.
+- **L5 — Localhost task URL posted to GitHub** (`queue.py:849-852,887-890`): every PR body and issue comment contained `http://127.0.0.1:3456/tasks/{id}` and a `Co-authored-by: Jalebi <jalebi@localhost>` footer. **RESOLVED** — templates moved to `apps/server/src/jalebi/messaging.py`; the new footer is `🦦 Opened by [Jalebi](https://github.com/samosa-ai-com/jalebi) — your self-hosted AI coding agent by [Samosa AI](https://github.com/samosa-ai-com).` and `Co-authored-by: Jalebi <jalebi@samosa-ai.com>`. Issue comments and PR reviews now link to the public Jalebi repo, not `127.0.0.1`. See `docs/14-messaging-strategy.md`.
 - **L6 — Composer visibility mismatch** (`TaskDetail.tsx:527` vs `tasks.py:74-80`): the UI shows the follow-up composer only when the *latest* run has a `session_id`; the backend resumes the *latest resumable* run. If the latest run has no session but an older one does, the composer is hidden even though a follow-up is possible.
 - **L7 — Misc**: UI concurrency caps at 16 while the API allows 64 (`Settings.tsx:87` vs `app.py:24`); `config.py:46-48` does a bare `int()` on `JALEBI_PORT` (crashes on junk) and the sqlite URL is not escaped for special chars in `JALEBI_DATA_DIR`; `recover()` return count omits interrupted *tasks* without a running run row (`queue.py:236`); manual `rerun` increments `retry_count`, which consumes the auto-retry budget.
 
@@ -90,7 +90,7 @@ The worker reads `task.status` from its own session snapshot (still `queued`) be
 5. **M3** — Account deletion cascades to disconnected repos (drop the `connected=True` filter).
 6. **M4** — Register `_RunState` first in the worker; queued-cancel also calls `queue.cancel`.
 7. **L1–L7** — SSE re-check after subscribe; `start_new_session` + `killpg`; stall guard 300s; remove hard-coded model; composer condition `runs.some(r => r.session_id)`; concurrency max 64; config port/db_url robustness; `recover()` count.
-8. **L5** — Default: keep PRD-mandated footer/link as-is (owner may override to strip the localhost link from issue comments).
+8. **L5** — ✅ **RESOLVED** — replaced PRD-mandated footer with the new template (`docs/14-messaging-strategy.md`); the `127.0.0.1` URL and `task <id>` are gone from external posts; `Co-authored-by` upgraded to `jalebi@samosa-ai.com`.
 
 Files to touch: `secrets.py`, `app.py`, `routes/github.py`, `routes/tasks.py`, `queue.py`, `adapters/types.py`, `adapters/opencode.py`, `prompts.py`, `worktree_bootstrap.py`, `config.py`, `Tasks.tsx`, `TaskDetail.tsx`, `Settings.tsx`, plus tests and docs (`03/04/05/06/08/10/11/12`, `AGENTS.md` §3.1, `.env.example`, `HANDOFF.md`).
 

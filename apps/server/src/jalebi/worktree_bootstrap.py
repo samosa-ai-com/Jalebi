@@ -28,6 +28,8 @@ import json
 import subprocess
 from pathlib import Path
 
+from jalebi import messaging
+
 GIT_TIMEOUT_SECONDS = 60
 
 # Permission rules are order-sensitive: opencode applies the LAST matching rule,
@@ -59,8 +61,8 @@ OPENCODE_GUARD = {
     },
 }
 
-GIT_USER_NAME = "Jalebi"
-GIT_USER_EMAIL = "jalebi@localhost"
+GIT_USER_NAME = messaging.CO_AUTHOR_NAME
+GIT_USER_EMAIL = messaging.CO_AUTHOR_EMAIL
 
 JALEBI_MD_START = "<!-- jalebi:start -->"
 JALEBI_MD_END = "<!-- jalebi:end -->"
