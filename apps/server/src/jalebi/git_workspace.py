@@ -438,16 +438,27 @@ class GitWorkspace:
             )
             if proc.returncode == 0:
                 return []
-            # Merge failed — likely a conflict. Capture the unmerged paths, then
-            # abort so the worktree is restored for the agent/follow-up instead of
-            # being left in a conflicted state.
+            # Merge failed. We deliberately run `git merge` via subprocess (not
+            # _run_git) because its non-zero exit is meaningful: it is a conflict,
+            # not an error to raise. If a merge is actually in progress
+            # (MERGE_HEAD exists), abort it so the worktree is restored for the
+            # agent/follow-up — never leave a conflicted or half-merged state.
+            # Failures that never started a merge (unrelated histories, local
+            # changes would be overwritten) leave no MERGE_HEAD and a clean
+            # worktree, so there is nothing to abort.
+            try:
+                _run_git(
+                    ["-C", str(worktree), "rev-parse", "--verify", "-q", "MERGE_HEAD"]
+                )
+            except GitWorkspaceError:
+                raise GitWorkspaceError(
+                    f"git merge failed: {(proc.stderr or '').strip()}"
+                ) from None
             try:
                 conflicts = _run_git(
                     ["-C", str(worktree), "diff", "--name-only", "--diff-filter=U"]
                 ).splitlines()
             except GitWorkspaceError:
                 conflicts = []
-            if conflicts:
-                _run_git(["-C", str(worktree), "merge", "--abort"])
-                return conflicts
-            raise GitWorkspaceError(f"git merge failed: {(proc.stderr or '').strip()}")
+            _run_git(["-C", str(worktree), "merge", "--abort"])
+            return conflicts

@@ -220,6 +220,37 @@ def test_merge_origin_into_conflict_aborts_and_reports(
     assert _git(["-C", str(wt), "status", "--porcelain"]).strip() == ""
 
 
+def test_merge_origin_into_failure_without_merge_raises(
+    ws: GitWorkspace, remote: str, monkeypatch
+) -> None:
+    """A merge failure that never started a merge (no MERGE_HEAD — e.g. unrelated
+    histories) must NOT run `merge --abort` (it would itself fail) and must raise
+    GitWorkspaceError with the git stderr surfaced. The worktree stays clean."""
+    ws.ensure_mirror(FULL_NAME, remote)
+    wt = ws.create_worktree(1, FULL_NAME, "main")
+
+    calls: list[list[str]] = []
+
+    import subprocess as _sp
+
+    original_run = _sp.run
+
+    def fake_subprocess_run(args, **kwargs):
+        calls.append(args)
+        # Only the merge itself fails; fetch/rev-parse/abort pass through.
+        if args[:3] == ["git", "-C", str(wt)] and "merge" in args and "--abort" not in args:
+            return _sp.CompletedProcess(
+                args, 128, "", "fatal: refusing to merge unrelated histories"
+            )
+        return original_run(args, **kwargs)
+
+    monkeypatch.setattr("jalebi.git_workspace.subprocess.run", fake_subprocess_run)
+    with pytest.raises(GitWorkspaceError, match="unrelated histories"):
+        ws.merge_origin_into(wt, FULL_NAME, "main")
+
+    # merge --abort must never be attempted when no merge is in progress.
+    assert not any("--abort" in a for a in calls)
+
 
 def test_push_auth_env(ws: GitWorkspace, monkeypatch) -> None:
     captured: dict = {}
