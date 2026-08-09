@@ -189,6 +189,31 @@ describe("Tasks", () => {
     expect(screen.getByLabelText("Target branch (PR base)")).toBeInTheDocument();
   });
 
+  it("freeform can link a PR (e.g. to implement its review comments)", async () => {
+    stubFetch({
+      ...DEFAULT_HANDLERS,
+      "/api/github/context": {
+        issues: [],
+        prs: [
+          { number: 1, title: "Phase 1", html_url: "u", state: "open", base: "main", head: "phase-1", author: "me" },
+        ],
+        branches: ["main", "dev"],
+      },
+    });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+
+    await screen.findByText("New task");
+    const picker = await screen.findByLabelText("Link PR (optional)");
+    expect(screen.getByRole("option", { name: /#1 — Phase 1/ })).toBeInTheDocument();
+
+    await userEvent.selectOptions(picker, "1");
+    expect(picker).toHaveValue("1");
+  });
+
   it("shows env-var chips and sends selected env_vars on create", async () => {
     const fetchMock = stubFetch({
       ...DEFAULT_HANDLERS,

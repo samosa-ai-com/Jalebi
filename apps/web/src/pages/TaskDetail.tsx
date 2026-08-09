@@ -3,7 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { api, taskEvents } from "../api/client";
 import { StatusBadge } from "../components/StatusBadge";
 import PublishDialog from "../components/PublishDialog";
-import type { Account, Artifact, CatalogAgent, Followup, Repo, Run, SseEvent, Task } from "../types";
+import type { Account, Artifact, CatalogAgent, Followup, GithubPr, Repo, Run, SseEvent, Task } from "../types";
 
 const TERMINAL = new Set(["done", "failed", "timed_out", "cancelled", "needs_approval", "interrupted"]);
 
@@ -72,25 +72,79 @@ function PublishButton({
 }) {
   const hasLinkedPr = task.prs && task.prs.length > 0;
   const defaultPr = hasLinkedPr ? task.prs[0] : undefined;
-  // Smart default: if a PR was attached at creation time, default to
-  // update_pr so the owner lands the work on that PR. Otherwise new_pr.
-  const defaultMode: "new_pr" | "update_pr" = defaultPr !== undefined ? "update_pr" : "new_pr";
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [advancedMode, setAdvancedMode] = useState<"new_pr" | "update_pr" | "push_branch">(defaultMode);
-  const [advancedPr, setAdvancedPr] = useState<number | undefined>(defaultPr);
+  // Explicit mode choice in the Advanced panel (null = not chosen → smart default).
+  const [advancedModeChoice, setAdvancedModeChoice] = useState<"new_pr" | "update_pr" | "push_branch" | null>(null);
+  // Explicit pick in the update_pr dropdown ("" = not picked → smart default).
+  const [pickedPr, setPickedPr] = useState<number | "">("");
   const [branchInput, setBranchInput] = useState<string>("");
+  // The repo's open PRs, fetched so the update_pr picker is not limited to PRs
+  // that happened to be linked at task creation (null = still loading).
+  const [openPrs, setOpenPrs] = useState<GithubPr[] | null>(null);
+  const [prsLoadFailed, setPrsLoadFailed] = useState(false);
+  const prsLoadedRef = useRef(false);
 
-  const primaryLabel = defaultMode === "update_pr" && defaultPr !== undefined
-    ? `Push to PR #${defaultPr}`
+  useEffect(() => {
+    if (prsLoadedRef.current) return;
+    const repo = task.repo_full_name;
+    const account = task.pat_name ?? undefined;
+    prsLoadedRef.current = true;
+    let cancelled = false;
+    // Without a resolvable account there is nothing to fetch — resolve empty so
+    // the picker just shows linked PRs (state updates only in async callbacks).
+    const load: Promise<GithubPr[]> =
+      repo && account
+        ? api.getGithubContext(repo, account).then((ctx) => ctx.prs ?? [])
+        : Promise.resolve([]);
+    load
+      .then((prs) => {
+        if (!cancelled) setOpenPrs(prs);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setOpenPrs([]);
+          setPrsLoadFailed(true);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [task.repo_full_name, task.pat_name]);
+
+  const linkedNumbers = new Set(task.prs ?? []);
+  // Smart default: if a PR was attached at creation time, land the work on it.
+  // Otherwise, fall back to the first open PR whose head is the branch this
+  // task builds on (e.g. a review-fix task working from the PR's head), so the
+  // primary action updates that PR instead of silently opening a new one.
+  const matchingOpenPr = (openPrs ?? []).find(
+    (p) => p.head === task.source_branch && !linkedNumbers.has(p.number)
+  );
+  const effectiveDefaultPr = defaultPr ?? matchingOpenPr?.number;
+  const defaultMode: "new_pr" | "update_pr" = effectiveDefaultPr !== undefined ? "update_pr" : "new_pr";
+  const advancedMode: "new_pr" | "update_pr" | "push_branch" =
+    advancedModeChoice ?? (defaultMode === "update_pr" ? "update_pr" : "new_pr");
+  const advancedPr: number | undefined = pickedPr === "" ? effectiveDefaultPr : pickedPr;
+
+  const primaryLabel = defaultMode === "update_pr" && effectiveDefaultPr !== undefined
+    ? `Push to PR #${effectiveDefaultPr}`
     : "Publish";
+
+  // Selectable PRs: linked PRs first (labeled by number), then the repo's open
+  // PRs with title + head→base so the owner can pick any PR to update.
+  const prOptions: { number: number; label: string }[] = [];
+  for (const n of task.prs ?? []) prOptions.push({ number: n, label: `PR #${n}` });
+  for (const p of openPrs ?? []) {
+    if (linkedNumbers.has(p.number)) continue;
+    prOptions.push({ number: p.number, label: `#${p.number} — ${p.title} (${p.head} → ${p.base})` });
+  }
 
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2">
         <Action
           onClick={() => {
-            if (defaultMode === "update_pr" && defaultPr !== undefined) {
-              onPick({ mode: "update_pr", pr_number: defaultPr });
+            if (defaultMode === "update_pr" && effectiveDefaultPr !== undefined) {
+              onPick({ mode: "update_pr", pr_number: effectiveDefaultPr });
             } else {
               onPick({ mode: "new_pr" });
             }
@@ -116,7 +170,7 @@ function PublishButton({
                 type="radio"
                 name={`publish-mode-${task.id}`}
                 checked={advancedMode === "new_pr"}
-                onChange={() => setAdvancedMode("new_pr")}
+                onChange={() => setAdvancedModeChoice("new_pr")}
               />
               <span>Open a new PR (push <span className="font-mono">jalebi/{task.id}</span> → target)</span>
             </label>
@@ -125,28 +179,31 @@ function PublishButton({
                 type="radio"
                 name={`publish-mode-${task.id}`}
                 checked={advancedMode === "update_pr"}
-                onChange={() => {
-                  setAdvancedMode("update_pr");
-                  if (advancedPr === undefined && defaultPr !== undefined) setAdvancedPr(defaultPr);
-                }}
+                onChange={() => setAdvancedModeChoice("update_pr")}
               />
               <span>Update existing PR (push to its head branch)</span>
             </label>
             {advancedMode === "update_pr" && (
               <select
+                aria-label="Pull request to update"
                 className="select ml-6 w-fit"
                 value={advancedPr ?? ""}
-                onChange={(e) => setAdvancedPr(Number(e.target.value) || undefined)}
+                onChange={(e) => setPickedPr(e.target.value === "" ? "" : Number(e.target.value))}
               >
                 <option value="">— pick a PR —</option>
-                {hasLinkedPr ? (
-                  task.prs.map((n) => (
-                    <option key={n} value={n}>PR #{n}</option>
-                  ))
-                ) : (
-                  <option value="" disabled>
-                    no PRs linked to this task
+                {prOptions.map((o) => (
+                  <option key={o.number} value={o.number}>
+                    {o.label}
                   </option>
+                ))}
+                {openPrs === null && prOptions.length === 0 && (
+                  <option value="" disabled>loading PRs…</option>
+                )}
+                {prsLoadFailed && (
+                  <option value="" disabled>couldn't load PRs</option>
+                )}
+                {openPrs !== null && !prsLoadFailed && prOptions.length === 0 && (
+                  <option value="" disabled>no open PRs in this repo</option>
                 )}
               </select>
             )}
@@ -155,7 +212,7 @@ function PublishButton({
                 type="radio"
                 name={`publish-mode-${task.id}`}
                 checked={advancedMode === "push_branch"}
-                onChange={() => setAdvancedMode("push_branch")}
+                onChange={() => setAdvancedModeChoice("push_branch")}
               />
               <span>Push to specific branch (no PR)</span>
             </label>

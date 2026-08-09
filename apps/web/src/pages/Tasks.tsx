@@ -270,7 +270,7 @@ function CreateTask({
         </Select>
       </div>
 
-      {(type === "issue_fix" || type === "pr_review") && context && (
+      {(type === "issue_fix" || type === "pr_review" || type === "freeform") && context && (
         <div className="grid gap-4 sm:grid-cols-2">
           {type === "issue_fix" && (
             <Select
@@ -286,9 +286,9 @@ function CreateTask({
               ))}
             </Select>
           )}
-          {type === "pr_review" && (
+          {type !== "issue_fix" && (
             <Select
-              label="Pull request"
+              label={type === "pr_review" ? "Pull request" : "Link PR (optional)"}
               value={prNumber}
               onChange={setPrNumber}
               placeholder={context.prs.length ? "Select a PR…" : "No open PRs"}
