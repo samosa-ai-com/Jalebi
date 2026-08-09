@@ -3,6 +3,8 @@
 import hmac
 import logging
 import re
+import threading
+import time
 from pathlib import Path
 
 from flask import Flask, Response, current_app, g, jsonify, request, send_from_directory
@@ -79,6 +81,9 @@ def _basic_auth_gate() -> ResponseReturnValue | None:
     is ever exposed via a tunnel. Localhost-only installs leave it unset → no gate.
     The username is ignored (any user with the password passes); the password is
     compared in constant time to avoid a timing side channel.
+
+    Wrong-password attempts are pushed to the configured ntfy topic (throttled
+    per client so a brute-force scan can't flood the channel).
     """
     password = current_app.config["JALEBI_CONFIG"].password
     if not password:
@@ -98,11 +103,78 @@ def _basic_auth_gate() -> ResponseReturnValue | None:
         and hmac.compare_digest(auth.password.encode(), password.encode())
     ):
         return None
+    _notify_failed_login()
     return (
         jsonify({"error": "authentication required"}),
         401,
         {"WWW-Authenticate": 'Basic realm="Jalebi"'},
     )
+
+
+# -- failed-login ntfy push (throttled) -----------------------------------
+
+# One push per client per window, so a brute-force scan can't spam the channel.
+_FAILED_LOGIN_WINDOW_SECONDS = 60
+_failed_login_pushes: dict[str, float] = {}
+_failed_login_lock = threading.Lock()
+
+
+def _notify_failed_login() -> None:
+    """Best-effort ntfy push for a wrong-password attempt (never blocks or raises).
+
+    Runs on a daemon thread so a dead/slow ntfy server can never delay the 401
+    response (or let a scan tie up request threads); the push is dropped if the
+    thread is skipped. The attempted username is attacker-controlled input, so it
+    is masked before sending; the client is identified by IP (X-Forwarded-For is
+    not trusted — anyone can set it, and only the tunnel edge sees the real peer).
+    """
+    config: Config = current_app.config["JALEBI_CONFIG"]
+    if not config.password:
+        return
+    client = request.remote_addr or "unknown"
+    now = time.monotonic()
+    with _failed_login_lock:
+        last = _failed_login_pushes.get(client)
+        if last is not None and now - last < _FAILED_LOGIN_WINDOW_SECONDS:
+            return
+        _failed_login_pushes[client] = now
+        # Bound the map: a tunneled install sees few distinct peers, but a scan
+        # can fake many; drop stale entries once we exceed a sane size.
+        if len(_failed_login_pushes) > 512:
+            expired = [
+                k
+                for k, t in _failed_login_pushes.items()
+                if now - t >= _FAILED_LOGIN_WINDOW_SECONDS
+            ]
+            for k in expired:
+                _failed_login_pushes.pop(k, None)
+
+    attempted_user = (request.authorization.username if request.authorization else "") or ""
+    app = current_app._get_current_object()
+
+    def _push() -> None:
+        with app.app_context():
+            try:
+                session = db.get_session()
+                raw_patterns = settings.get_setting(session, "secret_patterns") or []
+                patterns = (
+                    [str(p) for p in raw_patterns] if isinstance(raw_patterns, list) else []
+                )
+                masker = masking.build_masker(secrets.all_token_values(config), patterns)
+                username = masker(attempted_user) if attempted_user else "(none)"
+                notify.send(
+                    session,
+                    "Jalebi: failed login attempt",
+                    f"Wrong password received from **{client}** (attempted user: `{username}`).",
+                    tags="warning",
+                    priority=3,
+                    click=f"http://127.0.0.1:{config.port}/",
+                    masker=masker,
+                )
+            except Exception:
+                logger.exception("failed-login ntfy push errored")  # pragma: no cover
+
+    threading.Thread(target=_push, daemon=True).start()
 
 
 def create_app(config: Config | None = None) -> Flask:
