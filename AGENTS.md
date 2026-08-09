@@ -109,6 +109,7 @@ This is critical and repeated: **all GitHub interaction in this project goes thr
 | `docs/15-catalog.md` | Agent catalog (personality → `AGENTS.md`, skills → `@path`, cli/model pins). | Catalog agent work. |
 | `docs/16-triggers.md` | Webhook listener, delivery dedup, trigger rules, registration, replay. | Webhook/trigger work. |
 | `docs/17-phase1-validation.md` | Manual UI QA checklist for every Phase 1 feature. | Feature/UI behavior changes. |
+| `docs/18-cast-workflows-grid.md` | Design-only plan for per-thread cast, reusable workflows, the Inbox-as-helm dashboard, the 4×4 dynamic grid, and future multi-agent orchestration. **Not approved for implementation** — subject to change. | Design discussions only. |
 
 **If you add a doc file, add it to this table.**
 
