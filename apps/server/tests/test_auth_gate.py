@@ -89,3 +89,28 @@ def test_failed_login_never_ships_real_token_username(
     assert len(sent) == 1
     title, message = sent[0]
     assert "ghp_AKIA0123456789ABCDEFSECRET" not in message
+
+
+def test_no_credentials_reports_unauthenticated_request(
+    client, app, config, session, monkeypatch
+) -> None:
+    """A request with no Basic auth is reported as unauthorized, not 'wrong
+    password' (the latter implies credentials were actually supplied)."""
+    _pw_app(app, config)
+    settings.set_setting(session, "ntfy_topic", "my-jalebi")
+
+    sent: list[tuple[str, str]] = []
+
+    def fake_send(session, title, message, **kwargs):
+        sent.append((title, message))
+        return True, None
+
+    from jalebi.app import _failed_login_pushes
+
+    monkeypatch.setattr("jalebi.app.notify.send", fake_send)
+    _failed_login_pushes.clear()
+    client.get("/api/settings")  # no Authorization header
+    _wait_for(sent)
+    title, message = sent[0]
+    assert "unauthorized request" in message.lower()
+    assert "no credentials supplied" in message.lower()

@@ -105,6 +105,16 @@ def test_create_agent_empty_string_pins_mean_no_override(session) -> None:
     assert agent.model is None
 
 
+def test_create_agent_non_string_pins_rejected(session) -> None:
+    """A non-string cli/model (e.g. a number from a malformed client) must be a
+    clean error, not an AttributeError crash (the route passes untrusted JSON
+    straight through to create_agent)."""
+    with pytest.raises(CatalogError, match="cli must be a string"):
+        catalog.create_agent(session, id="a", name="A", cli=123)  # type: ignore[arg-type]
+    with pytest.raises(CatalogError, match="model must be a string"):
+        catalog.create_agent(session, id="b", name="B", model=456)  # type: ignore[arg-type]
+
+
 
 def test_update_agent_rejects_invalid_skill_name(session) -> None:
     """PUT-path skills are validated the same as create — a poisoned name (e.g.

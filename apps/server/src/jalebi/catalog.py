@@ -83,8 +83,12 @@ def validate_definition(
         raise CatalogError("name is required")
     if kind not in AGENT_KINDS:
         raise CatalogError(f"kind must be one of {AGENT_KINDS}")
+    if cli is not None and not isinstance(cli, str):
+        raise CatalogError("cli must be a string or null")
     if cli is not None and cli not in ALLOWED_CLIS:
         raise CatalogError(f"unsupported agent cli: {cli}")
+    if model is not None and not isinstance(model, str):
+        raise CatalogError("model must be a string or null")
     if model is not None and not model.strip():
         raise CatalogError("model must be a non-empty string or null")
     if len(custom_instructions) > MAX_INSTRUCTION_CHARS:

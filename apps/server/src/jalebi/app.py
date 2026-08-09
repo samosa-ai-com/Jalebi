@@ -150,6 +150,9 @@ def _notify_failed_login() -> None:
                 _failed_login_pushes.pop(k, None)
 
     attempted_user = (request.authorization.username if request.authorization else "") or ""
+    has_credentials = (
+        request.authorization is not None and request.authorization.password is not None
+    )
     app = current_app._get_current_object()
 
     def _push() -> None:
@@ -161,11 +164,21 @@ def _notify_failed_login() -> None:
                     [str(p) for p in raw_patterns] if isinstance(raw_patterns, list) else []
                 )
                 masker = masking.build_masker(secrets.all_token_values(config), patterns)
-                username = masker(attempted_user) if attempted_user else "(none)"
+                if has_credentials:
+                    username = masker(attempted_user) if attempted_user else "(none)"
+                    detail = (
+                        f"Wrong password received from **{client}** "
+                        f"(attempted user: `{username}`)."
+                    )
+                else:
+                    detail = (
+                        f"Unauthorized request from **{client}** "
+                        "(no credentials supplied)."
+                    )
                 notify.send(
                     session,
                     "Jalebi: failed login attempt",
-                    f"Wrong password received from **{client}** (attempted user: `{username}`).",
+                    detail,
                     tags="warning",
                     priority=3,
                     click=f"http://127.0.0.1:{config.port}/",

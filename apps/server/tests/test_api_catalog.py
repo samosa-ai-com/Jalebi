@@ -54,6 +54,13 @@ def test_create_validates(client) -> None:
     assert res.status_code == 400
 
 
+def test_create_rejects_non_string_model(client) -> None:
+    """A non-string model pin (malformed JSON) is a clean 400, never a 500."""
+    res = client.post("/api/agents", json=_agent_payload(model=123))
+    assert res.status_code == 400
+    assert "model must be a string" in res.get_json()["error"]
+
+
 def test_get_update_delete(client) -> None:
     client.post("/api/agents", json=_agent_payload())
     res = client.get("/api/agents/security-auditor")
