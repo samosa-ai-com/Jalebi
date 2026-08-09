@@ -212,11 +212,26 @@
 
 ## 9. Known limitations (do NOT expect these yet)
 
-- Screenings/triggers/agents pages, webhooks, and check-run gating — later phases.
+- Triggers/check-run gating — later phases.
 - **Artifacts only capture untracked files** — a task that commits all its output shows no artifacts.
 - **Worktree cleanup** (deleting done-task worktrees after N days) is not implemented.
 - `interrupted` tasks are resumable via **Re-run** (fresh session) or **Follow-up** (if a session survived).
 - Single localhost port, no HTTPS — don't expose the server without the optional `JALEBI_PASSWORD` Basic-auth gate.
+
+---
+
+## 9a. Screenings manual QA (Phase 2)
+
+Run against a connected repo with a PAT bound (or the whole flow fails with a clear error):
+
+1. **Templates** — `/screenings` → **New screen** → pick a starter template → name/cron/prompt pre-fill.
+2. **Create + validation** — create a screen with a bad cron (e.g. `bogus`) → 400 "invalid cadence_cron". Create with a valid cron on a connected repo → card appears.
+3. **Run now** — click **Run now** → the card's History expands with a `running` → `done` run (the audit actually runs against the repo HEAD).
+4. **Findings** — a run with findings shows severity chips, titles, file:line, detail, recommendation. Empty findings show "No findings."
+5. **New task from finding** — click it → a `screen_finding` task appears in the queue (default manual publish).
+6. **Baseline dedup** — run the screen twice with no new commits on the audited branch → the second tick does not create a new run (only `Run now` forces).
+7. **Delete** — confirm → the screen (and its runs) disappears.
+8. **ntfy** — with `ntfy_topic` set and `notify_ntfy` on, a findings run pushes a "N finding(s)" notification.
 
 ---
 

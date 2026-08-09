@@ -18,9 +18,11 @@ from jalebi.routes.catalog import bp as catalog_bp
 from jalebi.routes.envvars import bp as envvars_bp
 from jalebi.routes.github import bp as github_bp
 from jalebi.routes.repos import bp as repos_bp
+from jalebi.routes.screening import bp as screening_bp
 from jalebi.routes.tasks import bp as tasks_bp
 from jalebi.routes.triggers import bp as triggers_bp
 from jalebi.routes.webhooks import bp as webhooks_bp
+from jalebi.screening import ScreeningScheduler
 
 logger = logging.getLogger(__name__)
 
@@ -237,6 +239,7 @@ def create_app(config: Config | None = None) -> Flask:
             session.close()
 
     app.config["JALEBI_QUEUE"] = TaskQueue(config)
+    app.config["JALEBI_SCREENING"] = ScreeningScheduler(config)
 
     app.register_blueprint(github_bp)
     app.register_blueprint(repos_bp)
@@ -245,6 +248,7 @@ def create_app(config: Config | None = None) -> Flask:
     app.register_blueprint(catalog_bp)
     app.register_blueprint(triggers_bp)
     app.register_blueprint(webhooks_bp)
+    app.register_blueprint(screening_bp)
 
     @app.teardown_appcontext
     def close_session(_exc) -> None:
@@ -371,6 +375,9 @@ def main() -> None:
     if recovered:
         logger.info("queue recovery: %s interrupted/requeued item(s)", recovered)
     queue.start(concurrency)
+    scheduler = app.config["JALEBI_SCREENING"]
+    scheduler.start()
+    logger.info("screening scheduler started")
     app.run(host=config.host, port=config.port, threaded=True)
 
 

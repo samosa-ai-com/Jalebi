@@ -99,7 +99,7 @@ This is critical and repeated: **all GitHub interaction in this project goes thr
 | `docs/04-git-workspace.md` | Bare mirrors, worktrees, branch naming, push w/ token. | Git workspace manager changes. |
 | `docs/05-github-integration.md` | GitHub client (httpx), PAT scopes, webhooks, check runs. | GitHub client/webhook/check-run work. |
 | `docs/06-task-queue.md` | Queue, worker pool, run lifecycle, timeouts, retries, publish. | Queue/runner/publish changes. |
-| `docs/07-screening.md` | Screening engine, cron, baseline dedup, findings, ntfy. | Screening work. |
+| `docs/07-screening.md` | Screening engine: starter catalog, cron scheduler, baseline dedup, findings JSON, ntfy, UI. | Screening work. |
 | `docs/08-ui.md` | React app structure, pages, components, SSE consumption. | UI changes. |
 | `docs/09-testing.md` | Test strategy per layer, how to run tests, fixtures. | Test infra changes. |
 | `docs/10-security.md` | Localhost binding, secrets, masking, sandboxing, threat notes. | Security-related changes. |
@@ -171,11 +171,13 @@ Jalebi/
 │   │   │   ├── queue.py           # TaskQueue: workers, run lifecycle, timeout/cancel, publish, review posting
 │   │   │   ├── repos.py           # connected-repo registry service
 │   │   │   ├── tasks.py           # task service (create/list/detail)
-│   │   │   └── routes/            # github.py, repos.py, tasks.py (Flask blueprints)
+│   │   │   ├── screening.py       # ScreeningEngine + ScreeningScheduler (cron, read-only audits)
+│   │   │   ├── cron.py            # minimal 5-field cron matcher for the scheduler
+│   │   │   └── routes/            # github.py, repos.py, tasks.py, screening.py (Flask blueprints)
 │   │   └── tests/                 # pytest (+ conftest)
 │   └── web/                       # React + Vite + Tailwind (built → served by Flask)
 │       └── src/
-│           ├── pages/             # Tasks, TaskDetail
+│           ├── pages/             # Tasks, TaskDetail, Screenings
 │           ├── api/               # REST + SSE client
 │           └── types.ts
 ```

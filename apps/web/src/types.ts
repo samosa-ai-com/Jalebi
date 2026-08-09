@@ -241,9 +241,49 @@ export interface WebhookStatus {
   secret_set: boolean;
   reachable: boolean;
   repos: {
-    id: number;
-    full_name: string;
+    id: number;    full_name: string;
     webhook_registered: boolean;
     poll_fallback: boolean;
   }[];
+}
+
+export interface Finding {
+  severity: "critical" | "high" | "medium" | "low";
+  title: string;
+  file: string | null;
+  line: number | null;
+  detail: string | null;
+  recommendation: string | null;
+}
+
+export interface ScreeningRun {
+  id: number;
+  screening_id: number;
+  head_sha: string | null;
+  status: "queued" | "running" | "done" | "failed";
+  started_at: string | null;
+  finished_at: string | null;
+  findings: Finding[];
+  output: { message?: string } | null;
+  error: string | null;
+}
+
+export interface Screen {
+  id: number;
+  repo_id: number;
+  name: string;
+  system_prompt: string;
+  cadence_cron: string;
+  scope_branch: string | null;
+  enabled: boolean;
+  notify_ntfy: boolean;
+  created_at: string;
+  updated_at: string;
+  latest_run?: ScreeningRun | null;
+}
+
+export interface ScreenTemplate {
+  name: string;
+  cadence_cron: string;
+  system_prompt: string;
 }

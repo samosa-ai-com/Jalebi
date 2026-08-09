@@ -54,8 +54,8 @@
 | **Adapters** | Translate a CLI into the `AgentAdapter` interface (`adapters/types.py`): start/resume/list_models/parse. Only component that knows the CLI binary. | opencode implemented |
 | **Git workspace mgr** | Bare mirrors (`--bare`, refs under `origin/*`), per-task worktrees (`jalebi/<taskId>`), token-authenticated push via `GIT_CONFIG_*` env. | implemented |
 | **GitHub client (httpx)** | Thin httpx client: `validate_token`, `get_repo`, `list_repos`, `create_pr`; PAT-authenticated. | implemented |
-| **Webhook listener** | Local endpoint receiving GitHub events; validate + dedup + match trigger rules. | planned (Phase 1) |
-| **Scheduler** | Cron screening runs + dedup + notifications. | planned (Phase 2) |
+| **Webhook listener** | Local endpoint receiving GitHub events; validate + dedup + match trigger rules. | implemented (Phase 1) |
+| **Screening scheduler** | Daemon thread (`ScreeningScheduler`) wakes every 60s, matches each screen's 5-field cron (`cron.py`), runs due screens (read-only audits) one at a time with HEAD-baseline dedup + ntfy. | implemented (Phase 2) |
 | **Storage** | SQLite via SQLAlchemy 2 + Alembic migrations; `secrets.json` (0600). | implemented |
 
 ## 3. Data flow
@@ -78,12 +78,12 @@
 4. When all reviewers have posted, the user decides (approve/request changes/merge) — **manually**.
 5. Optionally, a follow-up to the original fix agent: "address the reviewers' comments".
 
-### 3.3 Screening loop — planned (Phase 2)
+### 3.3 Screening loop — implemented (Phase 2)
 
-1. User enables/creates screenings per repo (system prompt + cron cadence).
-2. Scheduler checks cadence; skips if repo HEAD unchanged since last run (baseline dedup).
-3. Runs a read-only audit; parses findings; stores them; notifies (in-app + optional ntfy).
-4. Findings are browseable; user can convert a finding into a task — **never auto-started**.
+1. User creates screens per repo (system prompt + cron cadence), from the starter catalog or freeform.
+2. `ScreeningScheduler` (daemon thread) wakes every 60s, matches `cadence_cron` via `cron.py`; skips when the repo HEAD is unchanged since the last terminal run (baseline dedup).
+3. Runs a **read-only** audit: detached worktree at HEAD, opencode with a "return JSON array" contract; parses findings, masks + stores output, notifies via ntfy when configured.
+4. Findings are browsable (`/screenings`); the user converts a finding into a `screen_finding` task — **never auto-started**.
 
 ### 3.4 Event-triggered loop (webhook-driven) — planned (Phase 1)
 

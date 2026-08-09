@@ -67,6 +67,7 @@ Settings values are **type-validated** on `POST /api/settings` (rejects `"false"
 - No per-task `auto_publish` override (global setting only).
 - A cancelled/killed agent session may become unresumable (opencode-side session state); the task is still marked `cancelled`/`interrupted`.
 - Single-port localhost only — no TLS; optional Basic-auth UI password when exposed (PRD §F13).
+- **Screening scheduler** is a daemon thread (dies with the process). A run in flight when the server stops is left `running` in the DB; on restart it has no live HEAD comparison until the next cron tick, and a manual "Run now" starts fresh (screening runs have no resume). Runs are persisted and never lost.
 
 ## 6. Reference
 

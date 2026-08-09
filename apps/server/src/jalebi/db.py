@@ -346,6 +346,66 @@ class EventDelivery(Base):
     )
     result: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON summary
 
+class Screening(Base):
+    """A proactive, scheduled code audit (PRD F10).
+
+    Each screen audits a connected repo at HEAD with its own system prompt and
+    cadence, producing structured findings. Screening is **notify-only** — it
+    never creates tasks/PRs on its own; the owner converts findings into
+    ``screen_finding`` tasks explicitly. ``scope_branch`` NULL means the repo's
+    default branch. ``findings`` are stored on each run, not a separate table.
+    """
+
+    __tablename__ = "screenings"
+    __table_args__ = (Index("ix_screenings_repo_id", "repo_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    repo_id: Mapped[int] = mapped_column(
+        ForeignKey("repos.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    system_prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    cadence_cron: Mapped[str] = mapped_column(
+        Text, nullable=False, default="0 6 * * *", server_default=sa.text("'0 6 * * *'")
+    )
+    scope_branch: Mapped[str | None] = mapped_column(Text, nullable=True)
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=sa.text("1")
+    )
+    notify_ntfy: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=sa.text("1")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+
+
+class ScreeningRun(Base):
+    """One execution of a screen against a specific HEAD.
+
+    ``findings_json`` is the parsed JSON array; ``output_json`` is the raw final
+    agent message (both masked). ``head_sha`` is the audited HEAD and doubles as
+    the baseline-dedup watermark (skip a due screen if its last ``done`` run is
+    at the same HEAD).
+    """
+
+    __tablename__ = "screening_runs"
+    __table_args__ = (Index("ix_screening_runs_screening_id", "screening_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    screening_id: Mapped[int] = mapped_column(
+        ForeignKey("screenings.id", ondelete="CASCADE"), nullable=False
+    )
+    head_sha: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, default="queued", server_default=sa.text("'queued'")
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    findings_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    output_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class Setting(Base):
     __tablename__ = "settings"
 

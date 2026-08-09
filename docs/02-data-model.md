@@ -181,6 +181,39 @@ delivery, every matched rule's id is recorded in `result.rules[].rule_id`
 (Step 45/M5 dropped the single-value `matched_rule_id` column, which
 could only record `rules[0].id`).
 
+### `screenings` (Phase 2 — PRD F10)
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | int PK | |
+| `repo_id` | int FK → repos (CASCADE) | the repo being audited |
+| `name` | text | human-readable screen name |
+| `system_prompt` | text | the audit system prompt |
+| `cadence_cron` | text, default `'0 6 * * *'` | 5-field cron (see `jalebi/cron.py`) |
+| `scope_branch` | text, null | NULL = repo default branch |
+| `enabled` | bool | disabled screens never run |
+| `notify_ntfy` | bool | push findings via ntfy |
+| `created_at` / `updated_at` | datetime | |
+
+Index: `repo_id`. Screening is **notify-only** — it never creates tasks/PRs;
+the owner converts findings into `screen_finding` tasks. See `docs/07`.
+
+### `screening_runs` (Phase 2 — PRD F10)
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | int PK | |
+| `screening_id` | int FK → screenings (CASCADE) | |
+| `head_sha` | text, null | the audited HEAD — also the baseline-dedup watermark |
+| `status` | text, default `'queued'` | `queued` \| `running` \| `done` \| `failed` |
+| `started_at` / `finished_at` | datetime, null | |
+| `findings_json` | text, null | parsed JSON array of findings |
+| `output_json` | text, null | masked raw output `{"message": …}` |
+| `error` | text, null | run failure detail |
+
+Index: `screening_id`. A screen skips a tick when its last terminal run
+(`done`/`failed`) audited the same `head_sha` (baseline dedup).
+
 ### `settings`
 
 | Column | Type | Notes |
@@ -238,4 +271,5 @@ runs  0───1 review_assignments  (run_id, set when the reviewer run starts)
 
 ## 5. Not yet implemented (later phases)
 
-`check_runs`, `screenings`, `screening_runs`, `findings` — created by future migrations per PRD §10.
+`check_runs` — created by a future migration per PRD §10. (`screenings` /
+`screening_runs` shipped in Phase 2 — see §2 above.)
