@@ -37,8 +37,25 @@ const RULES = [
   },
 ];
 
-function makeFetchMock() {
+const DELIVERIES = [
+  {
+    id: 1,
+    github_delivery_id: "abc123",
+    event: "pull_request",
+    action: "opened",
+    repo_id: 1,
+    repo_full_name: "owner/repo",
+    received_at: "2026-08-08T00:00:00",
+    status: "matched",
+    result: null,
+  },
+];
+
+function makeFetchMock(deliveries: unknown[] = []) {
   return vi.fn(async (url: string, init?: RequestInit) => {
+    if (String(url).includes("/replay") && init?.method === "POST") {
+      return { ok: true, json: async () => ({ matched: 1, results: [] }) };
+    }
     if (String(url).includes("/api/triggers") && init?.method === "POST") {
       const body = JSON.parse(init.body as string) as Record<string, unknown>;
       return { ok: true, json: async () => ({ id: 9, ...body }) };
@@ -50,7 +67,7 @@ function makeFetchMock() {
       return { ok: true, json: async () => RULES };
     }
     if (String(url).includes("/api/webhooks/deliveries")) {
-      return { ok: true, json: async () => [] };
+      return { ok: true, json: async () => deliveries };
     }
     if (String(url).includes("/api/webhook/status")) {
       return {
@@ -130,5 +147,34 @@ describe("Triggers", () => {
       );
       expect(registerCall).toBeDefined();
     });
+  });
+});
+
+it("replay button refreshes the delivery log", async () => {
+  const fetchMock = makeFetchMock(DELIVERIES);
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(<Triggers />);
+  await screen.findByText("Delivery log");
+
+  await userEvent.click(screen.getByRole("button", { name: "replay" }));
+  // inline ack still appears
+  expect(await screen.findByText("replayed ✓")).toBeInTheDocument();
+
+  // 1. the replay POST went out
+  await waitFor(() => {
+    const replayCall = fetchMock.mock.calls.find(
+      ([url, init]) => String(url).includes("/replay") && init?.method === "POST"
+    );
+    expect(replayCall).toBeDefined();
+  });
+
+  // 2. getDeliveries is fetched again after the replay (initial + refresh).
+  // GETs come in without init.method.
+  await waitFor(() => {
+    const getDeliveriesCalls = fetchMock.mock.calls.filter(
+      ([url, init]) => String(url).includes("/api/webhooks/deliveries") && !init?.method
+    );
+    expect(getDeliveriesCalls.length).toBeGreaterThanOrEqual(2);
   });
 });

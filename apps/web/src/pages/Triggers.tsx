@@ -203,12 +203,13 @@ function RuleForm({
   );
 }
 
-function DeliveryRow({ d }: { d: EventDelivery }) {
+function DeliveryRow({ d, onReplayed }: { d: EventDelivery; onReplayed: () => void }) {
   const [replayed, setReplayed] = useState<string | null>(null);
   async function replay() {
     try {
       await api.replayDelivery(d.id);
       setReplayed("replayed ✓");
+      onReplayed();
     } catch (err) {
       setReplayed(err instanceof Error ? err.message : "replay failed");
     }
@@ -431,7 +432,7 @@ export default function Triggers() {
         ) : (
           <ul className="divide-y divide-ink-800/70">
             {deliveries.map((d) => (
-              <DeliveryRow key={d.id} d={d} />
+              <DeliveryRow key={d.id} d={d} onReplayed={load} />
             ))}
           </ul>
         )}
