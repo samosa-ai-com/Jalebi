@@ -7,7 +7,9 @@ import queue
 import signal
 import threading
 import time
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any, cast
 
 from sqlalchemy import func, select
 
@@ -39,9 +41,9 @@ MAX_STEPS = 500
 MAX_STEP_TEXT = 2000
 MAX_DIFF_BYTES = 512 * 1024
 KILL_GRACE_SECONDS = 5
-MAX_AUTO_RETRIES = 1
 DEFAULT_TIMEOUT_MINUTES = 60
-STALL_TIMEOUT_SECONDS = 300  # no agent output for this long ⇒ the process is hung
+STALL_TIMEOUT_SECONDS = 600  # default no-output stall threshold (settings-overridable)
+MAX_RECOVERY_TIMEOUT_MINUTES = 180  # cap on auto-recovery timeout escalation
 
 GIT_USER_NAME = "Jalebi"
 GIT_USER_EMAIL = "jalebi@localhost"
@@ -113,6 +115,7 @@ class _RunState:
         self.handle = handle
         self.reason: str | None = None  # "timeout" | "cancelled" | "stalled"
         self.last_event = time.monotonic()  # updated as agent events stream in
+        self.stall_timeout: float = STALL_TIMEOUT_SECONDS  # live setting, set at start
         # Last agent message text seen (for progress notifications), updated by
         # the event loop in _stream_and_finish.
         self.last_step_text: str | None = None
@@ -182,7 +185,7 @@ class TaskQueue:
         self.config = config
         self.events = TaskEvents()
         # Items: ("task", task_id) | ("followup", task_id, body) | None (stop).
-        self._queue: queue.Queue[tuple | None] = queue.Queue()
+        self._queue: queue.Queue[object] = queue.Queue()
         self._running: dict[int, _RunState] = {}
         self._running_lock = threading.Lock()
         self._workers: list[threading.Thread] = []
@@ -240,8 +243,11 @@ class TaskQueue:
         body: str,
         pat_name: str | None = None,
         model: str | None = None,
+        auto: bool = False,
     ) -> None:
-        self._queue.put(("followup", task_id, body, pat_name, model))
+        """Queue a session resume. ``auto=True`` marks an auto-recovery resume
+        (no ``followups`` row is recorded — it isn't a user follow-up)."""
+        self._queue.put(("followup", task_id, body, pat_name, model, auto))
 
     # -- worker loop -------------------------------------------------------
 
@@ -255,15 +261,19 @@ class TaskQueue:
                     continue
                 if item is None:
                     return
+                if not isinstance(item, tuple):
+                    continue
+                parts = cast("Sequence[Any]", item)
                 if self._target_concurrency == 0:
                     self._queue.put(item)
                     time.sleep(0.5)
                     continue
                 try:
-                    if item[0] == "followup":
-                        self._run_followup(item[1], item[2], item[3], item[4])
+                    if parts[0] == "followup":
+                        auto = bool(parts[5]) if len(parts) > 5 else False
+                        self._run_followup(parts[1], parts[2], parts[3], parts[4], auto=auto)
                     else:
-                        self._run_task(item[1])
+                        self._run_task(parts[1])
                 except Exception:
                     logger.exception("worker crashed on %s", item)
         finally:
@@ -462,15 +472,18 @@ class TaskQueue:
             self._running.pop(task.id, None)
 
         if state.reason == "stalled":
-            # The agent process produced nothing for STALL_TIMEOUT_SECONDS; the
+            # The agent process produced nothing for the stall timeout; the
             # stall watchdog killed it. Surface a clear diagnostic instead of a
-            # run that looks like it is still "running".
+            # run that looks like it is still "running". The "stall" sentinel is
+            # a stable machine-readable marker for _run_stalled (the text is for
+            # humans).
             steps.append(
                 {
                     "type": "error",
                     "phase": None,
+                    "stall": True,
                     "text": (
-                        f"Agent produced no output for {STALL_TIMEOUT_SECONDS}s — "
+                        f"Agent produced no output for {state.stall_timeout}s — "
                         "the agent process hung and was terminated. Re-run the task "
                         "or check the agent/opencode configuration."
                     ),
@@ -494,6 +507,11 @@ class TaskQueue:
         run.status = final_status
         task.status = final_status
         task.updated_at = utcnow()
+        if final_status == "done":
+            # Deliverable met: the auto-recovery escalation (which is derived
+            # from retry_count) resets so the next run starts from the base
+            # timeout again.
+            task.retry_count = 0
 
         if (
             publish
@@ -615,10 +633,32 @@ class TaskQueue:
                 run.steps_json = json.dumps(steps[-MAX_STEPS:])
 
     def _resolve_timeout(self, session, task: Task) -> int:
+        """Effective per-run timeout: the task's own, escalated by auto-recovery.
+
+        Auto-recovery escalates the timeout on each attempt (so sub-agent-heavy
+        work isn't cut short), but it is **derived** from ``task.retry_count``
+        rather than mutating ``task.timeout_minutes`` — a manual rerun after a
+        success (or a fresh task) always starts from the base timeout.
+        """
         if task.timeout_minutes is not None:
-            return task.timeout_minutes
-        raw = settings.get_setting(session, "default_timeout_minutes") or DEFAULT_TIMEOUT_MINUTES
-        return raw if isinstance(raw, int) and raw > 0 else DEFAULT_TIMEOUT_MINUTES
+            base = task.timeout_minutes
+        else:
+            raw = (
+                settings.get_setting(session, "default_timeout_minutes")
+                or DEFAULT_TIMEOUT_MINUTES
+            )
+            base = raw if isinstance(raw, int) and raw > 0 else DEFAULT_TIMEOUT_MINUTES
+        retries = task.retry_count or 0
+        if retries <= 0:
+            return base
+        policy = settings.get_setting(session, "retry_policy") or {}
+        if not isinstance(policy, dict) or not policy.get("auto_retry"):
+            return base
+        multiplier = policy.get("timeout_multiplier")
+        multiplier = multiplier if isinstance(multiplier, (int, float)) and multiplier >= 1 else 2
+        cap = policy.get("max_timeout_minutes")
+        cap = cap if isinstance(cap, int) and cap >= 1 else MAX_RECOVERY_TIMEOUT_MINUTES
+        return min(max(1, int(base * (multiplier**retries))), cap)
 
     def _run_task(self, task_id: int) -> None:
         session = Session()
@@ -675,7 +715,7 @@ class TaskQueue:
             if task.type == "pr_review":
                 run = self._run_review(session, task, repo, cli, timeout, token, masker, state)
                 session.commit()
-                self._maybe_retry(session, task, run)
+                self._maybe_recover(session, task, run)
                 return
 
             run = self._prepare_run(session, task, cli)
@@ -716,7 +756,7 @@ class TaskQueue:
             run.pid = getattr(state.handle.proc, "pid", None)
             run.model = effective_model  # record the effective (possibly agent-pinned) model
             session.commit()
-            self._start_watchdog(task, state, timeout)
+            self._start_watchdog(task, state, timeout, stall_timeout=self._stall_timeout(session))
 
             if state.reason == "cancelled":
                 _kill_proc(state.handle.proc)
@@ -725,7 +765,7 @@ class TaskQueue:
                 session, task, repo, run, git, token, masker, state.handle, state
             )
             session.commit()
-            self._maybe_retry(session, task, run)
+            self._maybe_recover(session, task, run)
         except Exception:
             logger.exception("task %s run failed", task_id)
             run_id = run.id if run is not None else None
@@ -800,7 +840,7 @@ class TaskQueue:
             run.pid = getattr(state.handle.proc, "pid", None)
             run.model = effective_model  # record the effective (possibly agent-pinned) model
             session.commit()
-            self._start_watchdog(task, state, timeout)
+            self._start_watchdog(task, state, timeout, stall_timeout=self._stall_timeout(session))
 
             if state.reason == "cancelled":
                 _kill_proc(state.handle.proc)
@@ -1064,8 +1104,14 @@ class TaskQueue:
         body: str,
         pat_name: str | None = None,
         model: str | None = None,
+        auto: bool = False,
     ) -> None:
-        """Resume a completed task's session in its own worktree (PRD F11)."""
+        """Resume a completed task's session in its own worktree (PRD F11).
+
+        ``auto=True`` marks an auto-recovery resume: no ``followups`` row is
+        recorded (it isn't a user follow-up; the recovery step is already on the
+        failed run's timeline).
+        """
         session = Session()
         run: Run | None = None
         state: _RunState | None = None
@@ -1147,7 +1193,7 @@ class TaskQueue:
             )
             run.pid = getattr(state.handle.proc, "pid", None)
             session.commit()
-            self._start_watchdog(task, state, timeout)
+            self._start_watchdog(task, state, timeout, stall_timeout=self._stall_timeout(session))
 
             if state.reason == "cancelled":
                 _kill_proc(state.handle.proc)
@@ -1174,15 +1220,19 @@ class TaskQueue:
                     self._post_review(
                         session, task, repo, pr_number, wt, run, token, masker
                     )
-            tasks.add_followup(
-                session,
-                task.id,
-                prev.id,
-                body,
-                pat_name=pat_name or task.pat_name,
-                model=effective_model,
-            )
+            if not auto:
+                # Auto-recovery resumes are not user follow-ups; only real
+                # follow-ups get a row (the recovery step is on the failed run).
+                tasks.add_followup(
+                    session,
+                    task.id,
+                    prev.id,
+                    body,
+                    pat_name=pat_name or task.pat_name,
+                    model=effective_model,
+                )
             session.commit()
+            self._maybe_recover(session, task, run)
         except Exception:
             logger.exception("follow-up for task %s failed", task_id)
             run_id = run.id if run is not None else None
@@ -1312,8 +1362,15 @@ class TaskQueue:
 
     # -- helpers -----------------------------------------------------------
 
-    def _start_watchdog(self, task: Task, state: _RunState, default_timeout: int) -> None:
-        timeout = task.timeout_minutes if task.timeout_minutes is not None else default_timeout
+    def _start_watchdog(
+        self, task: Task, state: _RunState, default_timeout: int, stall_timeout: float | None = None
+    ) -> None:
+        if stall_timeout is not None:
+            state.stall_timeout = stall_timeout
+        # ``default_timeout`` is already the effective (possibly escalated)
+        # timeout resolved by the caller via _resolve_timeout — use it directly
+        # so the watchdog matches the timeout the run is governed by.
+        timeout = default_timeout
         deadline = time.monotonic() + timeout * 60
         thread = threading.Thread(
             target=self._watchdog_loop,
@@ -1337,22 +1394,102 @@ class TaskQueue:
         )
         progress.start()
 
-    def _maybe_retry(self, session, task: Task, run: Run) -> None:
-        """Auto-retry a failed run once if ``retry_policy.auto_retry`` is set."""
-        if run.status != "failed":
+    @staticmethod
+    def _stall_timeout(session) -> float:
+        raw = settings.get_setting(session, "stall_timeout_seconds") or STALL_TIMEOUT_SECONDS
+        return raw if isinstance(raw, (int, float)) and raw >= 1 else STALL_TIMEOUT_SECONDS
+
+    @staticmethod
+    def _run_stalled(run: Run) -> bool:
+        """Whether a failed run was killed by the stall watchdog (hung process).
+
+        The stall diagnostic step carries a ``"stall": true`` sentinel written
+        by ``_stream_and_finish``; the human text is also checked as a fallback
+        for runs recorded before the sentinel existed. A fresh run is safer than
+        resuming a wedged session that could re-hang.
+        """
+        if not run.steps_json:
+            return False
+        try:
+            steps = json.loads(run.steps_json)
+        except (ValueError, TypeError):
+            return False
+        return any(
+            isinstance(s, dict)
+            and s.get("type") == "error"
+            and (
+                s.get("stall") is True
+                or str(s.get("text") or "").startswith("Agent produced no output")
+            )
+            for s in steps
+        )
+
+    def _maybe_recover(self, session, task: Task, run: Run) -> None:
+        """Auto-recover a failed/timed_out run that never delivered its output.
+
+        Every task type has an expected deliverable; if the agent failed,
+        timed out, or stalled before producing it, recover automatically:
+
+        - **timeout / other failure** → resume the last session with a
+          "continue" prompt (the provider stopped; the session is usually fine);
+        - **stall** (process hung, no output) → fresh re-run instead of resuming
+          a session that may be wedged and would just hang again.
+
+        The per-run timeout is escalated on each attempt (``timeout_multiplier``,
+        capped at ``max_timeout_minutes``) so sub-agent-heavy runs aren't cut
+        short again. Recovery is **unbounded by design**: each run is still
+        bounded by its own timeout, and terminal/progress notifications keep the
+        owner informed. ``task.retry_count`` is bumped for observability only.
+        """
+        if run.status not in ("failed", "timed_out"):
             return
         policy = settings.get_setting(session, "retry_policy") or {}
-        auto = bool(policy.get("auto_retry")) if isinstance(policy, dict) else False
-        if not auto:
+        if not isinstance(policy, dict) or not policy.get("auto_retry"):
             return
-        if (task.retry_count or 0) >= MAX_AUTO_RETRIES:
-            return
+
         task.retry_count = (task.retry_count or 0) + 1
+        # The escalated timeout is derived (see _resolve_timeout), so the base
+        # task.timeout_minutes is never permanently mutated.
+        escalated = self._resolve_timeout(session, task)
         task.status = "queued"
         task.updated_at = utcnow()
+
+        # Timestamp the failed run's timeline so the owner sees why a new run
+        # suddenly appeared.
+        steps = json.loads(run.steps_json or "[]")
+        steps.append(
+            {
+                "type": "message",
+                "phase": None,
+                "text": (
+                    f"Auto-recovering — re-running with a longer timeout "
+                    f"({escalated}m, attempt {task.retry_count})."
+                ),
+                "ts": utcnow().isoformat(),
+            }
+        )
+        run.steps_json = json.dumps(steps[-MAX_STEPS:])
         session.commit()
-        self.enqueue(task.id)
-        logger.info("auto-retrying task %s (attempt %s)", task.id, task.retry_count)
+
+        if self._run_stalled(run):
+            self.enqueue(task.id)
+            logger.info(
+                "auto-recovering task %s (attempt %s): fresh run", task.id, task.retry_count
+            )
+            return
+
+        prev = tasks.latest_resumable_run(session, task.id)
+        if prev is not None and prev.session_id:
+            body = str(policy.get("continue_prompt") or "continue")
+            self.enqueue_followup(task.id, body, auto=True)
+            logger.info("auto-recovering task %s (attempt %s): resume", task.id, task.retry_count)
+        else:
+            self.enqueue(task.id)
+            logger.info(
+                "auto-recovering task %s (attempt %s): fresh run (no resumable session)",
+                task.id,
+                task.retry_count,
+            )
 
     def _watchdog_loop(self, deadline: float, state: _RunState) -> None:
         while True:
@@ -1366,17 +1503,19 @@ class TaskQueue:
         _kill_proc(state.handle.proc)
 
     def _stall_watchdog_loop(self, state: _RunState) -> None:
-        """Kill the agent process if it emits no output for STALL_TIMEOUT_SECONDS.
+        """Kill the agent process if it emits no output for ``state.stall_timeout``.
 
-        A hung ``opencode run`` (e.g. a broken ``--session`` resume) would
-        otherwise keep a run "running" forever with an empty timeline until the
-        much longer total timeout fires. The stall guard bounds it and the caller
-        surfaces a clear "agent produced no output" diagnostic.
+        A hung agent run (e.g. a broken ``--session`` resume, or a tool such as
+        a sub-agent that stops reporting to the parent stream) would otherwise
+        keep a run "running" forever with an empty timeline until the much
+        longer total timeout fires. The stall guard bounds it and the caller
+        surfaces a clear "agent produced no output" diagnostic; the auto-recovery
+        layer then resumes or re-runs the task.
         """
         while True:
             if state.handle.proc.poll() is not None:
                 return
-            if time.monotonic() - state.last_event >= STALL_TIMEOUT_SECONDS:
+            if time.monotonic() - state.last_event >= state.stall_timeout:
                 state.reason = "stalled"
                 _kill_proc(state.handle.proc)
                 return

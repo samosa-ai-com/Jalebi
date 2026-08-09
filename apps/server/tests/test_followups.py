@@ -506,6 +506,8 @@ def test_pr_review_followup_without_review_marks_failed(
     from jalebi import reviews as reviews_service
 
     settings.set_setting(session, "auto_publish", False)
+    # Isolate the deliverable-validation behavior from auto-recovery.
+    settings.set_setting(session, "retry_policy", {"auto_retry": False})
     task = _review_task_with_resumable_session(session, repo_row.id, prs=[3])
     _with_assignment(session, task)
 

@@ -305,21 +305,29 @@ class GitWorkspace:
         with self._lock_for(full_name):
             if not mirror.exists():
                 raise GitWorkspaceError(f"mirror missing for {full_name}; call ensure_mirror first")
+            # Always fetch the PR head so a re-run/follow-up reviews the *current*
+            # head, not the one first checked out (the PR may have gained commits
+            # since the initial review).
+            _run_git(
+                [
+                    "-C",
+                    str(mirror),
+                    "fetch",
+                    "origin",
+                    f"refs/pull/{pr_number}/head:{ref}",
+                ],
+                auth_env=auth,
+            )
             if not (ws / ".git").is_file():
-                _run_git(
-                    [
-                        "-C",
-                        str(mirror),
-                        "fetch",
-                        "origin",
-                        f"refs/pull/{pr_number}/head:{ref}",
-                    ],
-                    auth_env=auth,
-                )
                 _run_git(
                     ["-C", str(mirror), "worktree", "add", "--detach", str(ws), ref],
                     auth_env=auth,
                 )
+            else:
+                # Re-checkout the existing detached worktree to the current head.
+                # Review worktrees never hold agent-pushed work, so a hard reset is
+                # safe (untracked files such as node_modules are preserved).
+                _run_git(["-C", str(ws), "reset", "--hard", ref], auth_env=auth)
         return ws
 
     def remove_review_worktree(

@@ -337,13 +337,83 @@ export default function Settings() {
     },
     {
       key: "retry_policy",
-      label: "Auto-retry failures",
-      desc: "Re-run a failed task once automatically.",
+      label: "Auto-recovery",
+      desc: "Re-run failed / timed-out / stalled tasks automatically until they deliver their output (each run still respects the timeout; notifications keep you informed).",
       control: (
         <Toggle
           checked={settings.retry_policy.auto_retry}
-          onChange={(v) => save("retry_policy", { auto_retry: v })}
-          ariaLabel="Auto-retry failures"
+          onChange={(v) => save("retry_policy", { ...settings.retry_policy, auto_retry: v })}
+          ariaLabel="Auto-recovery"
+        />
+      ),
+    },
+    {
+      key: "retry_policy",
+      label: "Continue prompt",
+      desc: "Message sent when a timed-out / failed run is resumed (stalls restart fresh).",
+      control: (
+        <input
+          type="text"
+          defaultValue={settings.retry_policy.continue_prompt ?? "continue"}
+          onBlur={(e) =>
+            save("retry_policy", {
+              ...settings.retry_policy,
+              continue_prompt: e.target.value.trim() || "continue",
+            })
+          }
+          className="field w-64 font-mono"
+        />
+      ),
+    },
+    {
+      key: "retry_policy",
+      label: "Timeout multiplier",
+      desc: "Each recovery multiplies the task's timeout (capped by Max timeout).",
+      control: (
+        <input
+          type="number"
+          min={1}
+          defaultValue={settings.retry_policy.timeout_multiplier ?? 2}
+          onBlur={(e) =>
+            save("retry_policy", {
+              ...settings.retry_policy,
+              timeout_multiplier: Math.max(1, Number(e.target.value) || 2),
+            })
+          }
+          className="field w-28 font-mono"
+        />
+      ),
+    },
+    {
+      key: "retry_policy",
+      label: "Max timeout",
+      desc: "Ceiling (minutes) a recovered run may reach.",
+      control: (
+        <input
+          type="number"
+          min={1}
+          defaultValue={settings.retry_policy.max_timeout_minutes ?? 180}
+          onBlur={(e) =>
+            save("retry_policy", {
+              ...settings.retry_policy,
+              max_timeout_minutes: Math.max(1, Number(e.target.value) || 180),
+            })
+          }
+          className="field w-28 font-mono"
+        />
+      ),
+    },
+    {
+      key: "stall_timeout_seconds",
+      label: "Stall timeout",
+      desc: "Seconds of no agent output before a run is declared hung (e.g. a sub-agent/tool that stops reporting) and auto-recovered.",
+      control: (
+        <input
+          type="number"
+          min={60}
+          defaultValue={settings.stall_timeout_seconds}
+          onBlur={(e) => save("stall_timeout_seconds", Math.max(60, Number(e.target.value)))}
+          className="field w-28 font-mono"
         />
       ),
     },
@@ -526,7 +596,7 @@ export default function Settings() {
 
       <div className="grid gap-4 md:grid-cols-2 animate-fade-up" style={{ animationDelay: "0.05s" }}>
         {rows.map((row) => (
-          <section key={row.key} className="surface flex flex-col justify-between gap-4 p-5">
+          <section key={row.label} className="surface flex flex-col justify-between gap-4 p-5">
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="panel-title">{row.label}</h2>

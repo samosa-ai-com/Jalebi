@@ -66,7 +66,7 @@ Queue items are tagged tuples: `("task", task_id)` or `("followup", task_id, bod
 ## 5. Timeouts (PRD F16)
 
 - Per-task `timeout_minutes`, defaulting to `settings.default_timeout_minutes` (**default 60 minutes**; PRD §F16 said 30 — owner-approved deviation). A daemon **watchdog thread** enforces it: on expiry it kills the child (SIGTERM → 5s grace → SIGKILL) and the run resolves to `timed_out`. A timeout of `0` fires immediately (used in tests).
-- **Stall guard:** a second daemon **stall watchdog** (`STALL_TIMEOUT_SECONDS = 300`) kills the child if the agent process stays alive but emits **no event for 300s** (checked from run start). The run then resolves to `failed` with a diagnostic step ("Agent produced no output for 300s — the agent process hung and was terminated. Re-run the task or check the agent/opencode configuration."). This bounds the empty-stream/hang failure mode so no run can sit `running` with an empty timeline indefinitely; the total-budget timeout remains the last line of defence. (Bumped from 120s so slow-but-healthy long model turns aren't killed.)
+- **Stall guard:** a second daemon **stall watchdog** kills the child if the agent process stays alive but emits **no event for `settings.stall_timeout_seconds`** (default **600s**; checked from run start). The run then resolves to `failed` with a diagnostic step ("Agent produced no output for Ns — …"). A quiet-but-healthy tool phase (e.g. a sub-agent that stops reporting to the parent stream) therefore has a generous window, and if it still trips, **auto-recovery** (see §7) restarts it instead of stranding the task. The total-budget timeout remains the last line of defence.
 
 ## 5a. Notifications (ntfy)
 
@@ -81,10 +81,17 @@ Queue items are tagged tuples: `("task", task_id)` or `("followup", task_id, bod
 - `cancel()` sets a reason and kills the child process group (SIGTERM → SIGKILL); the event stream ends and the run resolves to `cancelled`. Cancellation works for a task that is `queued` (status flip + `queue.cancel` so an in-flight pickup is flagged) or `running` (child killed). Agent children spawn in their own session (`start_new_session`), so killing the process group reaches MCP servers/grandchildren instead of orphaning them.
 - On run completion the worktree's committed changes are snapshotted into `runs.diff_text` (masked **before** truncation, byte-capped at 512 KB) for the PRD §12 diff viewer — only for non-review tasks (the review worktree is the PR itself). Best-effort; a capture failure never fails the run.
 
-## 7. Retries (PRD F16)
+## 7. Retries & auto-recovery (PRD F16)
 
-- `rerun` reuses the same task row + worktree (`create_worktree` resumes an existing worktree); a fresh agent session runs (new `runs` row, new `seq`). `retry_count` counts **auto-retries only** — a manual rerun never touches it (so manual reruns never block future auto-retries).
-- **Auto-retry:** if `settings.retry_policy.auto_retry` is set, a run that ends `failed` is re-enqueued once (`retry_count` capped at 1) as a fresh run.
+- `rerun` reuses the same task row + worktree (`create_worktree` resumes an existing worktree); a fresh agent session runs (new `runs` row, new `seq`). `retry_count` counts **auto-recoveries only** — a manual rerun never touches it.
+- **Auto-recovery (`retry_policy`, ships ON):** a run that ends `failed` (incl. **stalled**) or `timed_out` is recovered automatically, for **every task type** (each task has an expected deliverable). Unbounded by design — every run is still bounded by its own (escalating) timeout and terminal/progress notifications keep the owner informed:
+  - **timeout / other failure** → resumes the last session with `retry_policy.continue_prompt` (default `"continue"`);
+  - **stall** (process hung, no output) → **fresh re-run** instead of resuming a session that may be wedged and would just hang again;
+  - no resumable session → fresh re-run.
+  - Each attempt **derives** an escalated timeout from `task.retry_count` (`base × timeout_multiplier^attempts`, capped at `retry_policy.max_timeout_minutes`) — `task.timeout_minutes` is never permanently mutated, and a `done` run **resets `retry_count`**, so a later manual rerun starts from the base timeout again.
+  - Recovery resumes are tagged **auto** and are **not** recorded as user follow-ups (they aren't; the recovery step is on the failed run's timeline).
+  - Applied in **all three run paths**: `_run_task` (normal + `pr_review`) and `_run_followup` (previously unretried). `task.retry_count` increments for observability; a timeline step notes "Auto-recovering — re-running with a longer timeout (Nm, attempt N)."
+- **Review worktrees re-sync on every run:** `create_review_worktree` re-fetches `refs/pull/<n>/head` and hard-resets the detached worktree to the **current** PR head (safe — review worktrees never hold agent-pushed work), so a follow-up/re-run review sees the latest code instead of the originally-checked-out head.
 
 ## 8. Restart recovery (PRD F3/F13)
 

@@ -126,6 +126,9 @@ def _install_adapter(monkeypatch, handle) -> None:
 
 def _no_publish(session) -> None:
     settings.set_setting(session, "auto_publish", False)
+    # Auto-recovery ships ON; failure-path tests must opt out or a failing run
+    # would silently re-enqueue. Recovery tests re-enable it after this.
+    settings.set_setting(session, "retry_policy", {"auto_retry": False})
 
 
 def _seed_commit(q, task_id: int, clone_url: str) -> None:
@@ -461,45 +464,283 @@ def test_tool_call_events_persisted(q, session, repo_row, monkeypatch) -> None:
     assert types == ["message", "tool_call", "done"]
 
 
-# -- auto-retry ------------------------------------------------------------
+# -- auto-recovery ---------------------------------------------------------
 
 
-def test_auto_retry_failed_task_once(q, session, repo_row, monkeypatch) -> None:
+def test_auto_recover_failed_task_resumes(q, session, repo_row, monkeypatch) -> None:
+    """A non-stalled failure auto-recovers by resuming with a 'continue' prompt."""
     _no_publish(session)
-    settings.set_setting(session, "retry_policy", {"auto_retry": True})
+    settings.set_setting(
+        session,
+        "retry_policy",
+        {"auto_retry": True, "continue_prompt": "keep going", "timeout_multiplier": 2},
+    )
     task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
 
-    calls = {"n": 0}
+    calls = {"resumes": 0}
 
     class FlakyAdapter:
         def start(self, cwd, prompt, model=None, env=None):
-            calls["n"] += 1
-            if calls["n"] == 1:
-                return FakeHandle([AgentEvent(type="error", text="boom")])
-            return FakeHandle([AgentEvent(type="done")])
+            # First run fails with an agent error (no stall diagnostic).
+            return FakeHandle([AgentEvent(type="error", text="boom")], session_id="ses_orig")
 
-        def resume(self, *args, **kwargs):
-            raise NotImplementedError
+        def resume(self, cwd, session_id, prompt, model=None, env=None):
+            calls["resumes"] += 1
+            assert session_id == "ses_orig"
+            assert "keep going" in str(prompt)
+            return FakeHandle([AgentEvent(type="done")], session_id="ses_orig")
 
         def list_models(self):
             return []
 
     monkeypatch.setattr("jalebi.queue.get_adapter", lambda cli: FlakyAdapter())
 
-    # First run fails -> auto-retry enqueues a second run.
+    # First run fails -> recovery enqueues a resume (task flips back to queued).
     q._run_task(task.id)
     session.expire_all()
     fresh = tasks.get_task(session, task.id)
     assert fresh is not None
     assert fresh.status == "queued"
     assert fresh.retry_count == 1
+    # The base timeout is never permanently mutated; the escalation is derived.
+    assert fresh.timeout_minutes == 60
+    assert q._resolve_timeout(session, fresh) == 120  # 60 * multiplier
 
-    q._run_task(task.id)
+    # The worker processes the enqueued follow-up: it resumes and succeeds.
+    q._run_followup(task.id, "keep going")
     session.expire_all()
     fresh = tasks.get_task(session, task.id)
     assert fresh is not None
     assert fresh.status == "done"
+    assert calls["resumes"] == 1
     assert len(tasks.runs_for_task(session, task.id)) == 2
+
+
+def test_failed_followup_auto_recovers(q, session, repo_row, monkeypatch) -> None:
+    """A follow-up run that fails is auto-recovered too (_run_followup path)."""
+    settings.set_setting(session, "retry_policy", {"auto_retry": True})
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
+    run = Run(
+        task_id=task.id,
+        seq=1,
+        session_id="ses_orig",
+        status="done",
+        started_at=utcnow(),
+        finished_at=utcnow(),
+    )
+    session.add(run)
+    task.status = "done"
+    session.commit()
+
+    class FailingFollowupAdapter:
+        def start(self, cwd, prompt, model=None, env=None):
+            return FakeHandle([AgentEvent(type="done")], session_id="ses_orig")
+
+        def resume(self, cwd, session_id, prompt, model=None, env=None):
+            return FakeHandle([AgentEvent(type="error", text="boom")], session_id="ses_orig")
+
+        def list_models(self):
+            return []
+
+    monkeypatch.setattr("jalebi.queue.get_adapter", lambda cli: FailingFollowupAdapter())
+
+    q._run_followup(task.id, "more work")
+    session.expire_all()
+    fresh = tasks.get_task(session, task.id)
+    assert fresh is not None
+    assert fresh.status == "queued"  # auto-recovery re-enqueued a resume
+    assert fresh.retry_count == 1
+
+
+def test_auto_recovery_resume_not_recorded_as_user_followup(
+    q, session, repo_row, monkeypatch
+) -> None:
+    """An auto-recovery resume is NOT recorded as a user follow-up row."""
+    _no_publish(session)
+    settings.set_setting(session, "retry_policy", {"auto_retry": True})
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
+    run = Run(
+        task_id=task.id,
+        seq=1,
+        session_id="ses_orig",
+        status="done",
+        started_at=utcnow(),
+        finished_at=utcnow(),
+    )
+    session.add(run)
+    task.status = "done"
+    task.retry_count = 3  # prior recoveries; success must reset the escalation
+    session.commit()
+
+    class OkAdapter:
+        def start(self, cwd, prompt, model=None, env=None):
+            return FakeHandle([AgentEvent(type="done")], session_id="ses_orig")
+
+        def resume(self, cwd, session_id, prompt, model=None, env=None):
+            return FakeHandle([AgentEvent(type="done")], session_id="ses_orig")
+
+        def list_models(self):
+            return []
+
+    monkeypatch.setattr("jalebi.queue.get_adapter", lambda cli: OkAdapter())
+
+    # Simulate the worker processing an auto-recovery resume item (auto=True).
+    q._run_followup(task.id, "continue", auto=True)
+    session.expire_all()
+    assert tasks.list_followups(session, task.id) == []
+    fresh = tasks.get_task(session, task.id)
+    assert fresh is not None
+    assert fresh.status == "done"
+    assert fresh.retry_count == 0  # success resets the escalation counter
+
+
+def test_maybe_recover_stalled_restarts_fresh(q, session, repo_row, monkeypatch) -> None:
+    """A stalled run (no-output diagnostic) restarts FRESH, not a wedged session."""
+    _no_publish(session)
+    settings.set_setting(session, "retry_policy", {"auto_retry": True, "timeout_multiplier": 3})
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
+    run = Run(
+        task_id=task.id,
+        seq=1,
+        session_id="ses_wedged",
+        status="failed",
+        started_at=utcnow(),
+        finished_at=utcnow(),
+        steps_json=json.dumps(
+            [
+                {"type": "message", "text": "working", "ts": utcnow().isoformat()},
+                {
+                    "type": "error",
+                    "stall": True,
+                    "text": (
+                        "Agent produced no output for 600s — the agent process hung "
+                        "and was terminated. Re-run the task or check the "
+                        "agent/opencode configuration."
+                    ),
+                    "ts": utcnow().isoformat(),
+                },
+            ]
+        ),
+    )
+    session.add(run)
+    task.status = "failed"
+    session.commit()
+
+    enqueued: list[int] = []
+    resumed: list[tuple[int, str]] = []
+    monkeypatch.setattr(q, "enqueue", lambda tid: enqueued.append(tid))
+    monkeypatch.setattr(q, "enqueue_followup", lambda tid, body, **k: resumed.append((tid, body)))
+
+    q._maybe_recover(session, task, run)
+
+    session.expire_all()
+    fresh = tasks.get_task(session, task.id)
+    assert fresh is not None
+    assert enqueued == [task.id]  # fresh run, not a resume
+    assert resumed == []
+    assert fresh.status == "queued"
+    assert fresh.retry_count == 1
+    assert fresh.timeout_minutes == 60  # base never mutated
+    assert q._resolve_timeout(session, fresh) == 180  # 60 * 3
+
+
+def test_maybe_recover_timeout_resumes_session(q, session, repo_row, monkeypatch) -> None:
+    """A timed-out run resumes the session with the continue prompt."""
+    _no_publish(session)
+    settings.set_setting(
+        session, "retry_policy", {"auto_retry": True, "continue_prompt": "keep going"}
+    )
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
+    run = Run(
+        task_id=task.id,
+        seq=1,
+        session_id="ses_ok",
+        status="timed_out",
+        started_at=utcnow(),
+        finished_at=utcnow(),
+        steps_json="[]",
+    )
+    session.add(run)
+    task.status = "timed_out"
+    session.commit()
+
+    enqueued: list[int] = []
+    resumed: list[tuple[int, str]] = []
+    monkeypatch.setattr(q, "enqueue", lambda tid: enqueued.append(tid))
+    monkeypatch.setattr(q, "enqueue_followup", lambda tid, body, **k: resumed.append((tid, body)))
+
+    q._maybe_recover(session, task, run)
+
+    session.expire_all()
+    fresh = tasks.get_task(session, task.id)
+    assert fresh is not None
+    assert enqueued == []
+    assert resumed == [(task.id, "keep going")]
+    assert fresh.status == "queued"
+    assert fresh.retry_count == 1
+
+
+def test_maybe_recover_no_session_restarts_fresh(q, session, repo_row, monkeypatch) -> None:
+    """A failed run with no resumable session restarts fresh."""
+    _no_publish(session)
+    settings.set_setting(session, "retry_policy", {"auto_retry": True})
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
+    run = Run(
+        task_id=task.id,
+        seq=1,
+        session_id=None,
+        status="failed",
+        started_at=utcnow(),
+        finished_at=utcnow(),
+        steps_json="[]",
+    )
+    session.add(run)
+    task.status = "failed"
+    session.commit()
+
+    enqueued: list[int] = []
+    resumed: list[tuple[int, str]] = []
+    monkeypatch.setattr(q, "enqueue", lambda tid: enqueued.append(tid))
+    monkeypatch.setattr(q, "enqueue_followup", lambda tid, body, **k: resumed.append((tid, body)))
+
+    q._maybe_recover(session, task, run)
+
+    assert enqueued == [task.id]
+    assert resumed == []
+    session.expire_all()
+    fresh = tasks.get_task(session, task.id)
+    assert fresh is not None
+    assert fresh.status == "queued"
+
+
+def test_no_recovery_when_disabled(q, session, repo_row, monkeypatch) -> None:
+    _no_publish(session)
+    settings.set_setting(session, "retry_policy", {"auto_retry": False})
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
+    run = Run(
+        task_id=task.id,
+        seq=1,
+        session_id="ses_x",
+        status="failed",
+        started_at=utcnow(),
+        finished_at=utcnow(),
+        steps_json="[]",
+    )
+    session.add(run)
+    task.status = "failed"
+    session.commit()
+
+    enqueued: list[int] = []
+    monkeypatch.setattr(q, "enqueue", lambda tid: enqueued.append(tid))
+
+    q._maybe_recover(session, task, run)
+
+    assert enqueued == []
+    session.expire_all()
+    fresh = tasks.get_task(session, task.id)
+    assert fresh is not None
+    assert fresh.retry_count == 0
+    assert fresh.status == "failed"
 
 
 def test_cancel_between_pickup_and_running_bails(q, session, repo_row, monkeypatch) -> None:

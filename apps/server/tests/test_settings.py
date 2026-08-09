@@ -12,7 +12,13 @@ def test_defaults_returned_when_unset(session: OrmSession) -> None:
     assert get_setting(session, "artifact_ttl_days") == 7
     assert get_setting(session, "ntfy_topic") == ""
     assert get_setting(session, "secret_patterns") == []
-    assert get_setting(session, "retry_policy") == {"auto_retry": False}
+    assert get_setting(session, "retry_policy") == {
+        "auto_retry": True,
+        "continue_prompt": "continue",
+        "timeout_multiplier": 2,
+        "max_timeout_minutes": 180,
+    }
+    assert get_setting(session, "stall_timeout_seconds") == 600
     assert get_setting(session, "unknown_key") is None
 
 

@@ -190,6 +190,9 @@ def _install_adapter(monkeypatch, handle) -> None:
 
 def _no_publish(session) -> None:
     settings.set_setting(session, "auto_publish", False)
+    # Auto-recovery ships ON; failure-path tests must opt out or a failing run
+    # would silently re-enqueue. Recovery tests re-enable it after this.
+    settings.set_setting(session, "retry_policy", {"auto_retry": False})
 
 
 def _seed_commit(q, task_id: int, repo_row) -> None:
@@ -340,6 +343,7 @@ def test_terminal_notification_masks_env_var_values(
 
 def test_failure_notification_gated_by_toggle(q, session, repo_row, monkeypatch) -> None:
     """A failed run does NOT notify when notify_on_failed is off."""
+    _no_publish(session)
     settings.set_setting(session, "ntfy_topic", "room")
     settings.set_setting(session, "notify_on_failed", False)
     task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
@@ -502,7 +506,7 @@ def test_stall_marks_failed_with_diagnostic(q, session, repo_row, monkeypatch) -
             return
             yield  # pragma: no cover — makes this a generator
 
-    monkeypatch.setattr("jalebi.queue.STALL_TIMEOUT_SECONDS", 0)
+    settings.set_setting(session, "stall_timeout_seconds", 1)
     _install_adapter(monkeypatch, HungHandle())
     q._run_task(task.id)
 
@@ -1560,8 +1564,10 @@ def test_publish_comments_on_linked_issues(q, session, repo_row, monkeypatch) ->
 
 
 def test_slow_but_live_stream_is_not_stalled(q, session, repo_row, monkeypatch) -> None:
-    """An agent that keeps emitting (never 300s silent) must NOT be stalled (T-9)."""
-    monkeypatch.setattr("jalebi.queue.STALL_TIMEOUT_SECONDS", 0.5)
+    """An agent that keeps emitting (never silent for the stall timeout) must
+    NOT be stalled (T-9)."""
+    # Generous stall timeout so a CI hiccup between the 10 ms events can't flake.
+    settings.set_setting(session, "stall_timeout_seconds", 5)
     _no_publish(session)
     task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
 
@@ -1570,9 +1576,9 @@ def test_slow_but_live_stream_is_not_stalled(q, session, repo_row, monkeypatch) 
             super().__init__([])
 
         def events(self):
-            # 10 ms gaps vs a 0.5 s stall timeout = a wide margin; the agent is
-            # slow but never silent.
-            for i in range(5):
+            # 10 ms gaps vs a 5 s stall timeout = a wide margin; the agent is
+            # slow but never silent (150 ticks ~ 1.5 s total).
+            for i in range(150):
                 yield AgentEvent(type="message", text=f"tick {i}")
                 time.sleep(0.01)
             yield AgentEvent(type="done")
@@ -1590,7 +1596,7 @@ def test_slow_but_live_stream_is_not_stalled(q, session, repo_row, monkeypatch) 
     assert step_types[-1] == "done"
     assert not any("no output" in (s.get("text") or "") for s in json.loads(run.steps_json or "[]"))
     texts = [s.get("text") for s in json.loads(run.steps_json or "[]")]
-    assert "tick 0" in texts and "tick 4" in texts
+    assert "tick 0" in texts and "tick 149" in texts
 
 
 def test_catalog_agent_applies_cli_model_custom_instructions(

@@ -157,12 +157,20 @@ export interface TokensResponse {
   accounts: Account[];
 }
 
+export interface RetryPolicy {
+  auto_retry: boolean;
+  continue_prompt?: string;
+  timeout_multiplier?: number;
+  max_timeout_minutes?: number;
+}
+
 export interface SettingsMap {
   concurrency: number;
   auto_publish: boolean;
   ntfy_topic: string;
   default_timeout_minutes: number;
-  retry_policy: { auto_retry: boolean };
+  retry_policy: RetryPolicy;
+  stall_timeout_seconds: number;
   secret_patterns: string[];
   artifact_ttl_days: number;
   agent_cli: string;

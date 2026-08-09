@@ -8,7 +8,8 @@ const SETTINGS = {
   auto_publish: true,
   ntfy_topic: "",
   default_timeout_minutes: 60,
-  retry_policy: { auto_retry: false },
+  retry_policy: { auto_retry: false, continue_prompt: "continue", timeout_multiplier: 2, max_timeout_minutes: 180 },
+  stall_timeout_seconds: 600,
   secret_patterns: [],
   artifact_ttl_days: 7,
   agent_cli: "opencode",
@@ -91,5 +92,43 @@ describe("Settings", () => {
     render(<Settings />);
     expect(await screen.findByText("Timeout")).toBeInTheDocument();
     expect(screen.queryByText("Default timeout")).not.toBeInTheDocument();
+  });
+
+  it("toggling auto-recovery preserves the other retry_policy keys", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<Settings />);
+    await screen.findByText("Auto-recovery");
+
+    await userEvent.click(screen.getByRole("switch", { name: "Auto-recovery" }));
+
+    await waitFor(() => {
+      const postCall = fetchMock.mock.calls.find(
+        ([url, init]) =>
+          String(url).includes("/api/settings") && init?.method === "POST"
+      );
+      expect(postCall).toBeTruthy();
+      const body = JSON.parse((postCall?.[1] as RequestInit).body as string) as {
+        key: string;
+        value: Record<string, unknown>;
+      };
+      expect(body.key).toBe("retry_policy");
+      expect(body.value.auto_retry).toBe(true);
+      expect(body.value.continue_prompt).toBe("continue");
+      expect(body.value.timeout_multiplier).toBe(2);
+      expect(body.value.max_timeout_minutes).toBe(180);
+    });
+  });
+
+  it("shows the stall-timeout and continue-prompt recovery fields", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<Settings />);
+    expect(await screen.findByText("Stall timeout")).toBeInTheDocument();
+    expect(screen.getByText("Continue prompt")).toBeInTheDocument();
+    expect(screen.getByText("Timeout multiplier")).toBeInTheDocument();
+    expect(screen.getByText("Max timeout")).toBeInTheDocument();
   });
 });

@@ -148,6 +148,9 @@ describe("TaskDetail", () => {
 
     renderDetail();
     expect(await screen.findByText("Follow-up")).toBeInTheDocument();
+    expect(
+      screen.getByText(/Resume refreshes remote refs first/)
+    ).toBeInTheDocument();
 
     await userEvent.type(
       screen.getByPlaceholderText(/Address the reviewer comments/),

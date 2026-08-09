@@ -435,6 +435,10 @@ function FollowUpComposer({
           placeholder="e.g. Address the reviewer comments, then update the README…"
           className="field resize-y"
         />
+        <p className="text-[11px] leading-relaxed text-ink-600">
+          Resume refreshes remote refs first, then continues your worktree&apos;s local
+          commits; review worktrees move to the current PR head.
+        </p>
         {error && <p className="text-xs text-red-400">{error}</p>}
         <div className="flex justify-end gap-2">
           {showAddressReviewers && (

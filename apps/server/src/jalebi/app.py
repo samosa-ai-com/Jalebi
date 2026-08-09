@@ -41,6 +41,29 @@ def _valid_secret_patterns(value: object) -> bool:
     return True
 
 
+def _valid_retry_policy(v) -> bool:
+    """retry_policy: {auto_retry, continue_prompt?, timeout_multiplier?, max_timeout_minutes?}.
+
+    Accepts the legacy ``{"auto_retry": bool}`` shape too; new keys are optional.
+    ``timeout_multiplier`` may be fractional (matches the consumer, which accepts
+    int/float); ``max_timeout_minutes`` is an int (minutes).
+    """
+    if not isinstance(v, dict) or not isinstance(v.get("auto_retry"), bool):
+        return False
+    if "continue_prompt" in v and not isinstance(v["continue_prompt"], str):
+        return False
+    if "timeout_multiplier" in v and not (
+        isinstance(v["timeout_multiplier"], (int, float))
+        and v["timeout_multiplier"] >= 1
+    ):
+        return False
+    if "max_timeout_minutes" in v and not (
+        isinstance(v["max_timeout_minutes"], int) and v["max_timeout_minutes"] >= 1
+    ):
+        return False
+    return True
+
+
 _SETTING_VALIDATORS = {
     "concurrency": lambda v: isinstance(v, int) and 0 <= v <= 64,
     "auto_publish": lambda v: isinstance(v, bool),
@@ -49,7 +72,8 @@ _SETTING_VALIDATORS = {
     "ntfy_topic": lambda v: isinstance(v, str) and (
         v == "" or v.startswith(("http://", "https://")) or ("/" not in v and " " not in v)
     ),
-    "retry_policy": lambda v: isinstance(v, dict) and isinstance(v.get("auto_retry"), bool),
+    "retry_policy": _valid_retry_policy,
+    "stall_timeout_seconds": lambda v: isinstance(v, int) and v >= 60,
     "secret_patterns": _valid_secret_patterns,
     "artifact_ttl_days": lambda v: isinstance(v, int) and v >= 1,
     "agent_cli": lambda v: v in ALLOWED_AGENT_CLIS,
