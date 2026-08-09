@@ -1599,7 +1599,9 @@ class TaskQueue:
             raise PublishError(
                 f"PR #{pr_number} is {pr.get('state')}; cannot update a closed PR"
             )
-        head_branch = (pr.get("head") or {}).get("ref")
+        # get_pr normalizes "head" to the branch-ref string (not the raw GitHub
+        # head object), so this is the ref name directly.
+        head_branch = pr.get("head")
         if not head_branch:
             raise PublishError(
                 f"PR #{pr_number} has no resolvable head branch"

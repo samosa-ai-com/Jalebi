@@ -204,7 +204,7 @@ def test_publish_update_pr_rejects_closed_pr(
             pass
 
         def get_pr(self, full_name, number):
-            return {"number": number, "state": "closed", "head": {"ref": "feature"}}
+            return {"number": number, "state": "closed", "head": "feature"}
 
         def close(self):
             pass
@@ -231,7 +231,7 @@ def test_publish_update_pr_happy_path(q, session, repo_row, monkeypatch) -> None
             return {
                 "number": number,
                 "state": "open",
-                "head": {"ref": "feature/foo"},
+                "head": "feature/foo",
             }
 
         def close(self):
@@ -329,7 +329,7 @@ def test_publish_conflict_propagates(q, session, repo_row, monkeypatch) -> None:
             pass
 
         def get_pr(self, full_name, number):
-            return {"number": number, "state": "open", "head": {"ref": "feature"}}
+            return {"number": number, "state": "open", "head": "feature"}
 
         def close(self):
             pass
@@ -370,7 +370,7 @@ def test_publish_lease_failure_propagates(q, session, repo_row, monkeypatch) -> 
             pass
 
         def get_pr(self, full_name, number):
-            return {"number": number, "state": "open", "head": {"ref": "feature"}}
+            return {"number": number, "state": "open", "head": "feature"}
 
         def close(self):
             pass
