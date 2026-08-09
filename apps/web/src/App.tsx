@@ -102,7 +102,7 @@ function App() {
             ))}
             <span className="ml-3 flex items-center gap-2 rounded-full border border-ink-800 px-3 py-1.5">
               <HealthDot />
-              <span className="font-mono text-[11px] text-ink-500">api:3456</span>
+              <span className="font-mono text-[11px] text-ink-500">api:{window.location.port || "2052"}</span>
             </span>
           </div>
         </div>

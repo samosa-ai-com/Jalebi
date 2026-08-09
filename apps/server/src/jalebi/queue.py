@@ -937,18 +937,16 @@ class TaskQueue:
         except Exception:
             logger.warning("notification for task %s failed", task.id, exc_info=True)
 
-    @staticmethod
-    def _notify_click(task_id: int) -> str:
+    def _notify_click(self, task_id: int) -> str:
         """The URL to open when the notification is tapped (the Jalebi task page)."""
-        return f"http://127.0.0.1:3456/tasks/{task_id}"
+        return f"http://127.0.0.1:{self.config.port}/tasks/{task_id}"
 
-    @staticmethod
-    def _notify_open_action(task_id: int) -> dict[str, object]:
+    def _notify_open_action(self, task_id: int) -> dict[str, object]:
         """A 'view' action button that opens the Jalebi task page."""
         return {
             "action": "view",
             "label": "Open task",
-            "url": f"http://127.0.0.1:3456/tasks/{task_id}",
+            "url": f"http://127.0.0.1:{self.config.port}/tasks/{task_id}",
         }
 
     @staticmethod

@@ -16,13 +16,13 @@
 
 ## 1. Shell & navigation
 
-| # | What to expect | How to test | Pass |
-|---|---|---|---|
-| 1.1 | Top bar now shows **Tasks · Repos · GitHub · Agents · Triggers · Settings** as solid nav items. **Screenings** is the only dimmed "coming soon" left. | Look at the top bar. | ☐ |
-| 1.2 | Clicking **Agents** opens the real Agents page (not "Coming soon"). | Click Agents. | ☐ |
-| 1.3 | Clicking **Triggers** opens the real Triggers page (not "Coming soon"). | Click Triggers. | ☐ |
-| 1.4 | Clicking **Screenings** still shows "Coming in a later phase…". | Click Screenings. | ☐ |
-| 1.5 | No browser console errors on Agents / Triggers / a task detail page. | DevTools → Console on each page. | ☐ |
+| #   | What to expect                                                                                                                                                        | How to test                       | Pass |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- | ---- |
+| 1.1 | Top bar now shows**Tasks · Repos · GitHub · Agents · Triggers · Settings** as solid nav items. **Screenings** is the only dimmed "coming soon" left. | Look at the top bar.              | ☐Y  |
+| 1.2 | Clicking**Agents** opens the real Agents page (not "Coming soon").                                                                                              | Click Agents.                     | ☐Y  |
+| 1.3 | Clicking**Triggers** opens the real Triggers page (not "Coming soon").                                                                                          | Click Triggers.                   | ☐Y  |
+| 1.4 | Clicking**Screenings** still shows "Coming in a later phase…".                                                                                                 | Click Screenings.                 | ☐Y  |
+| 1.5 | No browser console errors on Agents / Triggers / a task detail page.                                                                                                  | DevTools → Console on each page. | ☐Y  |
 
 ---
 
@@ -30,40 +30,40 @@
 
 ### List & metadata
 
-| # | What to expect | How to test | Pass |
-|---|---|---|---|
-| 2.1 | Empty state: "No catalog agents yet" with a "Create an agent…" prompt. | Open Agents with an empty catalog. | ☐ |
-| 2.2 | Each agent card shows: slug (amber, mono), a kind badge (`general` / `reviewer`), the display name, optional `cli:` / `model:` chips, skill count, a 2-line personality preview, and **Edit / Delete** buttons. | Create one agent (see 2.3) and look at the card. | ☐ |
-| 2.3 | **Create** (`+ New agent`): slug (lowercase letters/digits with single hyphens), name, kind, optional CLI/model pins, personality markdown, skills editor (+ Add skill), custom instructions, enabled toggle. **Save** works and the card appears. | Create a reviewer agent, e.g. slug `security-auditor`, name `Security Auditor`, kind `reviewer`, personality *"You are a senior application security engineer."*, one skill, custom instructions *"Check auth, secrets, and injection."*. | ☐ |
-| 2.4 | **Validation errors are surfaced inline (400s, no 500s):** bad slug (e.g. `Bad Slug!`), empty name, kind not in {general, reviewer}, a skill name with `..`/`/` (path-traversal guard, e.g. `../../escape`), duplicate skill names. | Try each invalid input → red inline error, form stays open. | ☐ |
-| 2.5 | **Edit**: change kind/model/personality → Save → the card updates; untouched fields are preserved. | Edit the agent you created. | ☐ |
-| 2.6 | **Clear a pin**: set a model, then clear the model field (empty) → Save → the `model:` chip disappears (an empty string clears, it can't get stuck). | Set then clear the model pin. | ☐ |
-| 2.7 | **Disable**: toggle **Enabled** off → the card shows a `disabled` badge. A disabled agent is **not** offered in the task form's Agent picker. | Disable it, then open the New task form's Agent dropdown. | ☐ |
-| 2.8 | **Delete** asks for confirmation and removes the card. Tasks that used the agent keep their history (their `agent_id` stays; a rerun just falls back to the default build agent). | Delete a throwaway agent. | ☐ |
+| #   | What to expect                                                                                                                                                                                                                                                   | How to test                                                                                                                                                                                                                                        | Pass                                                                                                                                    |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| 2.1 | Empty state: "No catalog agents yet" with a "Create an agent…" prompt.                                                                                                                                                                                          | Open Agents with an empty catalog.                                                                                                                                                                                                                 | ☐Y                                                                                                                                     |
+| 2.2 | Each agent card shows: slug (amber, mono), a kind badge (`general` / `reviewer`), the display name, optional `cli:` / `model:` chips, skill count, a 2-line personality preview, and **Edit / Delete** buttons.                                    | Create one agent (see 2.3) and look at the card.                                                                                                                                                                                                   | ☐ Y<br />"The model selection should have a list of models, not just a text field."<br />"unsupported agent cli: for default:opencode" |
+| 2.3 | **Create** (`+ New agent`): slug (lowercase letters/digits with single hyphens), name, kind, optional CLI/model pins, personality markdown, skills editor (+ Add skill), custom instructions, enabled toggle. **Save** works and the card appears. | Create a reviewer agent, e.g. slug`security-auditor`, name `Security Auditor`, kind `reviewer`, personality *"You are a senior application security engineer."*, one skill, custom instructions *"Check auth, secrets, and injection."*. | ☐Y                                                                                                                                     |
+| 2.4 | **Validation errors are surfaced inline (400s, no 500s):** bad slug (e.g. `Bad Slug!`), empty name, kind not in {general, reviewer}, a skill name with `..`/`/` (path-traversal guard, e.g. `../../escape`), duplicate skill names.                | Try each invalid input → red inline error, form stays open.                                                                                                                                                                                       | ☐Y                                                                                                                                     |
+| 2.5 | **Edit**: change kind/model/personality → Save → the card updates; untouched fields are preserved.                                                                                                                                                       | Edit the agent you created.                                                                                                                                                                                                                        | ☐Y                                                                                                                                     |
+| 2.6 | **Clear a pin**: set a model, then clear the model field (empty) → Save → the `model:` chip disappears (an empty string clears, it can't get stuck).                                                                                                   | Set then clear the model pin.                                                                                                                                                                                                                      | ☐I did not test it because there was no field list to select the model from.                                                           |
+| 2.7 | **Disable**: toggle **Enabled** off → the card shows a `disabled` badge. A disabled agent is **not** offered in the task form's Agent picker.                                                                                               | Disable it, then open the New task form's Agent dropdown.                                                                                                                                                                                          | ☐Y                                                                                                                                     |
+| 2.8 | **Delete** asks for confirmation and removes the card. Tasks that used the agent keep their history (their `agent_id` stays; a rerun just falls back to the default build agent).                                                                        | Delete a throwaway agent.                                                                                                                                                                                                                          | ☐Y                                                                                                                                     |
 
 ---
 
 ## 3. New task form — agent picker + reviewers (F6/F7)
 
-| # | What to expect | How to test | Pass |
-|---|---|---|---|
-| 3.1 | The form's **Agent** dropdown lists the **default build agent** (placeholder) + every **enabled** catalog agent as `Name (slug)`. | Open the New task form. | ☐ |
-| 3.2 | Selecting an agent does **not** force a model onto the task (the agent's pinned model applies at run time; the task-level Model dropdown stays whatever you chose or empty = default). | Pick an agent with a pinned model → the Model dropdown is unchanged (empty unless you set it). | ☐ |
-| 3.3 | Selecting **Review PR** (`pr_review`) with enabled reviewer-kind agents shows a **Reviewers** checkbox group ("Each reviewer runs its own review task…"). | Switch the type to Review PR. | ☐ |
-| 3.4 | Picking reviewers + a PR + **Create** creates **one task per reviewer** (all `pr_review`, each with that agent), not a single task. | Create a review with 2 reviewers → Tasks page shows 2 new rows. | ☐ |
-| 3.5 | Selecting reviewers on a **non-Review-PR** type is refused (the UI doesn't offer the group there; the API 400s if forced). | The group only appears for Review PR. | ☐ |
+| #   | What to expect                                                                                                                                                                              | How to test                                                                                     | Pass |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ---- |
+| 3.1 | The form's**Agent** dropdown lists the **default build agent** (placeholder) + every **enabled** catalog agent as `Name (slug)`.                                        | Open the New task form.                                                                         | ☐Y  |
+| 3.2 | Selecting an agent does**not** force a model onto the task (the agent's pinned model applies at run time; the task-level Model dropdown stays whatever you chose or empty = default). | Pick an agent with a pinned model → the Model dropdown is unchanged (empty unless you set it). | ☐Y  |
+| 3.3 | Selecting**Review PR** (`pr_review`) with enabled reviewer-kind agents shows a **Reviewers** checkbox group ("Each reviewer runs its own review task…").                     | Switch the type to Review PR.                                                                   | ☐Y  |
+| 3.4 | Picking reviewers + a PR +**Create** creates **one task per reviewer** (all `pr_review`, each with that agent), not a single task.                                            | Create a review with 2 reviewers → Tasks page shows 2 new rows.                                | ☐Y  |
+| 3.5 | Selecting reviewers on a**non-Review-PR** type is refused (the UI doesn't offer the group there; the API 400s if forced).                                                             | The group only appears for Review PR.                                                           | ☐Y  |
 
 ---
 
 ## 4. Task detail — reviewers card + address-reviewers (F7)
 
-| # | What to expect | How to test | Pass |
-|---|---|---|---|
-| 4.1 | A task that has a PR (its own `pr_number`, or a PR referenced) shows a **Reviewers** card: `posted/running/queued` count (`N/M posted`), each reviewer row = agent name + status badge + a link to its reviewer task (`task #N`) + a GitHub PR link when posted. | Open the fix task whose PR you assigned reviewers to. | ☐ |
-| 4.2 | The **Assign more reviewers** row lists reviewer agents **not already assigned**; clicking one creates a new reviewer task + assignment and updates the card. | Click `+ <reviewer>` on the card. | ☐ |
-| 4.3 | Reviewers of kind `general` are **not** offered in the assign row (only `reviewer` kind). | Check the card's available buttons. | ☐ |
-| 4.4 | A reviewer task that finished and posted shows its assignment `posted`; if it failed/timed out/cancelled, the assignment shows `failed` (never stuck `running`). | Open the reviewer task's detail; watch its card on the parent. | ☐ |
-| 4.5 | **Address reviewers** button appears in the **Follow-up** composer when the task has a PR. Clicking it sends a follow-up that resumes the fixer with the PR's **current review comments fetched + embedded** (no need to curl). | Click "Address reviewers" → the task resumes; the timeline shows it working from the embedded comments. | ☐ |
+| #   | What to expect                                                                                                                                                                                                                                                                | How to test                                                                                              | Pass |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | ---- |
+| 4.1 | A task that has a PR (its own`pr_number`, or a PR referenced) shows a **Reviewers** card: `posted/running/queued` count (`N/M posted`), each reviewer row = agent name + status badge + a link to its reviewer task (`task #N`) + a GitHub PR link when posted. | Open the fix task whose PR you assigned reviewers to.                                                    | ☐Y  |
+| 4.2 | The**Assign more reviewers** row lists reviewer agents **not already assigned**; clicking one creates a new reviewer task + assignment and updates the card.                                                                                                      | Click`+ <reviewer>` on the card.                                                                       | ☐Y  |
+| 4.3 | Reviewers of kind`general` are **not** offered in the assign row (only `reviewer` kind).                                                                                                                                                                            | Check the card's available buttons.                                                                      | ☐Y  |
+| 4.4 | A reviewer task that finished and posted shows its assignment`posted`; if it failed/timed out/cancelled, the assignment shows `failed` (never stuck `running`).                                                                                                         | Open the reviewer task's detail; watch its card on the parent.                                           | ☐Y  |
+| 4.5 | **Address reviewers** button appears in the **Follow-up** composer when the task has a PR. Clicking it sends a follow-up that resumes the fixer with the PR's **current review comments fetched + embedded** (no need to curl).                             | Click "Address reviewers" → the task resumes; the timeline shows it working from the embedded comments. | ☐Y  |
 
 ---
 
@@ -73,41 +73,41 @@
 
 ### W-R1 — Assign reviewers via the create form
 
-1. [ ] Create a **Review PR** task, pick a real open PR on the test repo, check **two** reviewer agents → **Create**.
-2. [ ] Expect **two** `pr_review` tasks queued/running (each its own agent), each opening a detached review worktree at the PR head.
-3. [ ] Open each reviewer task → the review streams; on `done`, the agent wrote `.jalebi/review.md`.
-4. [ ] When both post, the GitHub PR shows **two review comments** (the Jalebi-branded header + the review body + the ⭐ footer; body is masked — see W-R3). Jalebi never approves/merges.
-5. [ ] The parent task's **Reviewers** card shows `2/2 posted`.
+1. [X] Create a **Review PR** task, pick a real open PR on the test repo, check **two** reviewer agents → **Create**.
+2. [X] Expect **two** `pr_review` tasks queued/running (each its own agent), each opening a detached review worktree at the PR head.
+3. [X] Open each reviewer task → the review streams; on `done`, the agent wrote `.jalebi/review.md`.
+4. [X] When both post, the GitHub PR shows **two review comments** (the Jalebi-branded header + the review body + the ⭐ footer; body is masked — see W-R3). Jalebi never approves/merges.
+5. [X] The parent task's **Reviewers** card shows `2/2 posted`.
 
 ### W-R2 — Assign from the task's PR card
 
-1. [ ] On any task with a PR, click `+ <reviewer>` in the Reviewers card.
-2. [ ] Expect a new reviewer task + a `queued` assignment row on the card.
-3. [ ] Watch it go `queued → running → posted`.
+1. [X] On any task with a PR, click `+ <reviewer>` in the Reviewers card.
+2. [X] Expect a new reviewer task + a `queued` assignment row on the card.
+3. [X] Watch it go `queued → running → posted`.
 
 ### W-R3 — Masking in review comments
 
-1. [ ] Set `secret_patterns` to `AKIA[0-9A-Z]{16}` (Settings).
-2. [ ] Make the agent's review mention `AKIA0123456789ABCDEF` (e.g. put it in the PR description being reviewed, or add a `secret_patterns` value to the review).
-3. [ ] Open the posted review comment on GitHub → the value is `***`, not raw.
+1. [X] Set `secret_patterns` to `AKIA[0-9A-Z]{16}` (Settings).
+2. [X] Make the agent's review mention `AKIA0123456789ABCDEF` (e.g. put it in the PR description being reviewed, or add a `secret_patterns` value to the review).
+3. [X] Open the posted review comment on GitHub → the value is `***`, not raw.
 
 ### W-R4 — Address reviewers follow-up
 
-1. [ ] After reviewers posted, open the **fix** task → Follow-up composer → **Address reviewers**.
-2. [ ] Expect the fixer session to resume and the timeline to show it reading the embedded review comments (look for "PR review comments to address" content) and amending the branch.
-3. [ ] The same PR gains the new commit (no duplicate PR).
+1. [X] After reviewers posted, open the **fix** task → Follow-up composer → **Address reviewers**.
+2. [X] Expect the fixer session to resume and the timeline to show it reading the embedded review comments (look for "PR review comments to address" content) and amending the branch.
+3. [ ] The same PR gains the new commit (no duplicate PR). [See task number 24 after addressing the issue; it did not post the commit to the PR.]
 
 ---
 
 ## 6. Settings — Webhooks section + write-only secret (F14)
 
-| # | What to expect | How to test | Pass |
-|---|---|---|---|
-| 6.1 | A **Webhooks** card above Notifications with two inputs: **Public webhook URL (tunnel base)** and **Webhook secret (optional)**, plus a hint showing the exact delivery URL (`<url>/webhook`). | Open Settings. | ☐ |
-| 6.2 | Saving the URL works; an invalid value (not `http(s)://`) is rejected with an error. | Set `https://jalebi.example.tunnel`, then try `not-a-url`. | ☐ |
-| 6.3 | **The secret is write-only**: after setting one, the field shows `••••••••`, and `GET /api/settings` never returns the real value. | Set a secret → refresh Settings → field shows bullets; `curl http://127.0.0.1:3456/api/settings` has no plaintext secret. | ☐ |
-| 6.4 | Re-saving the masked placeholder does **not** wipe the stored secret; clearing the field (empty) **does** clear it. | Set a secret → save the bullets (unchanged) → still set; save empty → cleared. | ☐ |
-| 6.5 | **Password-protected hardening:** if `JALEBI_PASSWORD` is set but no webhook_secret, `POST /webhook` is refused with a clear error (the signature is the webhook's only auth). | Optional: start with `JALEBI_PASSWORD=x`, no secret → curl the listener → 403. | ☐ |
+| #   | What to expect                                                                                                                                                                                                    | How to test                                                                                                                  | Pass               |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------------ |
+| 6.1 | A**Webhooks** card above Notifications with two inputs: **Public webhook URL (tunnel base)** and **Webhook secret (optional)**, plus a hint showing the exact delivery URL (`<url>/webhook`). | Open Settings.                                                                                                               | ☐Y                |
+| 6.2 | Saving the URL works; an invalid value (not`http(s)://`) is rejected with an error.                                                                                                                             | Set`https://jalebi.example.tunnel`, then try `not-a-url`.                                                                | ☐Y                |
+| 6.3 | **The secret is write-only**: after setting one, the field shows `••••••••`, and `GET /api/settings` never returns the real value.                                                              | Set a secret → refresh Settings → field shows bullets;`curl http://127.0.0.1:3456/api/settings` has no plaintext secret. | ☐Y                |
+| 6.4 | Re-saving the masked placeholder does**not** wipe the stored secret; clearing the field (empty) **does** clear it.                                                                                    | Set a secret → save the bullets (unchanged) → still set; save empty → cleared.                                            | ☐Y                |
+| 6.5 | **Password-protected hardening:** if `JALEBI_PASSWORD` is set but no webhook_secret, `POST /webhook` is refused with a clear error (the signature is the webhook's only auth).                          | Optional: start with`JALEBI_PASSWORD=x`, no secret → curl the listener → 403.                                            | ☐(NOT TRIED YET)) |
 
 ---
 
@@ -115,28 +115,28 @@
 
 ### Webhook status card
 
-| # | What to expect | How to test | Pass |
-|---|---|---|---|
-| 7.1 | The card shows a **reachable / not exposed** pill (not exposed when `webhook_url` is empty), the configured URL, a "signature verified" note when a secret is set, and a per-repo list with **Register / Unregister**. | Open Triggers. | ☐ |
-| 7.2 | With no `webhook_url` set, **Register** shows a clear error ("expose Jalebi via a tunnel… and set the URL in Settings first"). | Click Register with an empty URL. | ☐ |
-| 7.3 | With a `webhook_url` set, **Register** calls the GitHub API and flips the repo to `registered` (needs the repo's account to have admin/webhook scope — the test account does). | Set a URL, click Register → status flips; verify a hook exists on GitHub (repo → Settings → Webhooks). | ☐ |
-| 7.4 | Clicking **Register** again is a **no-op** (no duplicate hook is created). | Click Register twice → GitHub shows exactly one hook. | ☐ |
-| 7.5 | **Unregister** removes the hook(s) matching the exact URL and flips back to `not registered`. | Unregister → GitHub shows no hook, UI shows not registered. | ☐ |
+| #   | What to expect                                                                                                                                                                                                                      | How to test                                                                                               | Pass |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | ---- |
+| 7.1 | The card shows a**reachable / not exposed** pill (not exposed when `webhook_url` is empty), the configured URL, a "signature verified" note when a secret is set, and a per-repo list with **Register / Unregister**. | Open Triggers.                                                                                            | ☐Y  |
+| 7.2 | With no`webhook_url` set, **Register** shows a clear error ("expose Jalebi via a tunnel… and set the URL in Settings first").                                                                                              | Click Register with an empty URL.                                                                         | ☐Y  |
+| 7.3 | With a`webhook_url` set, **Register** calls the GitHub API and flips the repo to `registered` (needs the repo's account to have admin/webhook scope — the test account does).                                            | Set a URL, click Register → status flips; verify a hook exists on GitHub (repo → Settings → Webhooks). | ☐Y  |
+| 7.4 | Clicking**Register** again is a **no-op** (no duplicate hook is created).                                                                                                                                               | Click Register twice → GitHub shows exactly one hook.                                                    | ☐Y  |
+| 7.5 | **Unregister** removes the hook(s) matching the exact URL and flips back to `not registered`.                                                                                                                               | Unregister → GitHub shows no hook, UI shows not registered.                                              | ☐Y  |
 
 ### Trigger rules
 
-| # | What to expect | How to test | Pass |
-|---|---|---|---|
-| 7.6 | `+ New rule` opens a form: Repo, Event (`pull_request.opened` / `.synchronize` / `.reopened` / `pull_request_review` / `issues.opened` / `push`), Action (`start_review` / `triage_issue` / `create_task` / `rerun_review`), optional branch / author / label filters, and — for `start_review` — a **Reviewers** checkbox group (kind-reviewer agents). | Open the rule form. | ☐ |
-| 7.7 | `start_review` without reviewers is rejected ("start_review requires agent_ids"). | Try to save a start_review rule with no reviewers. | ☐ |
-| 7.8 | Rules list each with event, action badge, repo, filters, agents, an Enable/Disable toggle, Edit, Delete. A disabled rule shows a `disabled` badge and never fires. | Create a rule → toggle it off → it shows disabled. | ☐ |
+| #   | What to expect                                                                                                                                                                                                                                                                                                                                                                           | How to test                                          | Pass |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- | ---- |
+| 7.6 | `+ New rule` opens a form: Repo, Event (`pull_request.opened` / `.synchronize` / `.reopened` / `pull_request_review` / `issues.opened` / `push`), Action (`start_review` / `triage_issue` / `create_task` / `rerun_review`), optional branch / author / label filters, and — for `start_review` — a **Reviewers** checkbox group (kind-reviewer agents). | Open the rule form.                                  | ☐Y  |
+| 7.7 | `start_review` without reviewers is rejected ("start_review requires agent_ids").                                                                                                                                                                                                                                                                                                      | Try to save a start_review rule with no reviewers.   | ☐Y  |
+| 7.8 | Rules list each with event, action badge, repo, filters, agents, an Enable/Disable toggle, Edit, Delete. A disabled rule shows a`disabled` badge and never fires.                                                                                                                                                                                                                      | Create a rule → toggle it off → it shows disabled. | ☐Y  |
 
 ### Delivery log
 
-| # | What to expect | How to test | Pass |
-|---|---|---|---|
-| 7.9 | The **Delivery log** lists every received webhook: status pill (`matched`/`ignored`/`received`), event (+ action), repo, time, and a **replay** button. | Send a webhook (Section 8) → a row appears. | ☐ |
-| 7.10 | Replaying a delivery re-runs the matcher. **Replaying a `start_review` delivery does NOT create a second reviewer task** (agents already assigned → no-op). | Replay a PR-opened delivery → no new reviewer tasks. | ☐ |
+| #    | What to expect                                                                                                                                                           | How to test                                           | Pass  |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------- | ----- |
+| 7.9  | The**Delivery log** lists every received webhook: status pill (`matched`/`ignored`/`received`), event (+ action), repo, time, and a **replay** button. | Send a webhook (Section 8) → a row appears.          | ☐Y  |
+| 7.10 | Replaying a delivery re-runs the matcher.**Replaying a `start_review` delivery does NOT create a second reviewer task** (agents already assigned → no-op).      | Replay a PR-opened delivery → no new reviewer tasks. | ☐Y   |
 
 ---
 
@@ -146,12 +146,13 @@
 
 ### Setup
 
-1. [ ] Set the `webhook_secret` in Settings (e.g. `livesecret`).
-2. [ ] Create a reviewer agent and a trigger rule: `/triggers` → `+ New rule` → repo `example-account/example-test-repo`, event `pull_request.opened`, action `start_review`, reviewers = your agent.
+1. [X] Set the `webhook_secret` in Settings (e.g. `livesecret`).
+2. [X] Create a reviewer agent and a trigger rule: `/triggers` → `+ New rule` → repo `example-account/example-test-repo`, event `pull_request.opened`, action `start_review`, reviewers = your agent.
 
-### W-W1 — Signed delivery creates a reviewer task
+### W-W1 — Signed delivery creates a reviewer task [I'm not going to test this. I hope it works.]
 
 1. [ ] Send a signed delivery (run this from the repo root — it uses the `phase-1` checkout; the token is read from the vault, never printed):
+
 ```bash
 python3 - << 'PY'
 import hmac, hashlib, json, urllib.request
@@ -170,17 +171,19 @@ with urllib.request.urlopen(req) as r:
   print(json.load(r))   # expect {"ok": true, "matched": true, "results": [{"action": "start_review", ...}]}
 PY
 ```
+
 2. [ ] Expect a new `pr_review` task in the Tasks page, running with your reviewer agent (it will fail/`failed` because PR #999 doesn't exist — that's fine; the **assignment** goes `failed`, not stuck `running`).
 3. [ ] The Triggers page Delivery log shows the delivery as `matched`.
 
-### W-W2 — Dedup (re-delivery is a no-op)
+### W-W2 — Dedup (re-delivery is a no-op)[Same, I'm not going to test this.]
 
 1. [ ] Send the **exact same** command again (same `X-GitHub-Delivery: manual-1`).
 2. [ ] Expect `{"ok": true, "deduplicated": true}` and **no** second reviewer task.
 
-### W-W3 — Bad signature → 403
+### W-W3 — Bad signature → 403[Same, I'm not going to test this.]
 
 1. [ ] Send the same payload with a wrong signature:
+
 ```bash
 curl -s -o /dev/null -w "%{http_code}\n" -X POST http://127.0.0.1:3456/webhook \
   -H "Content-Type: application/json" -H "X-GitHub-Delivery: manual-2" \
@@ -188,32 +191,33 @@ curl -s -o /dev/null -w "%{http_code}\n" -X POST http://127.0.0.1:3456/webhook \
   -H "X-Hub-Signature-256: sha256=0000000000000000000000000000000000000000000000000000000000000000" \
   -d '{"action":"opened","repository":{"full_name":"example-account/example-test-repo"}}'
 ```
+
 2. [ ] Expect `403`, and **no** delivery row / no task created.
 
-### W-W4 — Unconnected repo → ignored
+### W-W4 — Unconnected repo → ignored[Same, I'm not going to test this.]
 
 1. [ ] Send a delivery whose `repository.full_name` is not a connected repo (e.g. `other/repo`).
 2. [ ] Expect `{"ok": true, "matched": false}` and a delivery row with status `ignored`.
 
-### W-W5 — triage_issue masks payload secrets
+### W-W5 — triage_issue masks payload secrets (working))
 
-1. [ ] Add a rule: event `issues.opened`, action `triage_issue`, instructions "fix it".
-2. [ ] Send an `issues.opened` delivery whose issue body contains a value matching a configured `secret_patterns` (or your actual token text).
+1. [X] Add a rule: event `issues.opened`, action `triage_issue`, instructions "fix it".
+2. [X] Send an `issues.opened` delivery whose issue body contains a value matching a configured `secret_patterns` (or your actual token text).
 3. [ ] Open the created `issue_fix` task → its stored context / the worktree `AGENTS.md` shows the value as `***` (masked), never raw.
 
 ### W-W6 — Replay
 
-1. [ ] In the Triggers page, click **replay** on the `manual-1` delivery.
-2. [ ] Expect `matched: 1` but **no** new reviewer tasks (agents already assigned).
+1. [X] In the Triggers page, click **replay** on the `manual-1` delivery. [what is it's role for a issue?, it created a new PR, duplicate to the triggerd issues fir PR]
+2. [X] Expect `matched: 1` but **no** new reviewer tasks (agents already assigned).
 
 ---
 
 ## 9. Settings live-vs-startup cheat sheet (new Phase-1 keys)
 
-| Setting | Takes effect |
-|---|---|
+| Setting                             | Takes effect                                           |
+| ----------------------------------- | ------------------------------------------------------ |
 | `webhook_url`, `webhook_secret` | Immediately (read per delivery / at registration time) |
-| All Phase-0 settings | Unchanged (see `docs/12` §8) |
+| All Phase-0 settings                | Unchanged (see`docs/12` §8)                         |
 
 ## 10. Known limitations (do NOT expect these yet)
 
@@ -230,6 +234,7 @@ curl -s -o /dev/null -w "%{http_code}\n" -X POST http://127.0.0.1:3456/webhook \
 When all boxes above are ticked, Phase 1 is validated. Note any failing check (page, step, expected-vs-actual) and share it — a failing check is a bug to fix, not a test failure.
 
 **Quick automated gate first** (should be all green before manual QA):
+
 ```
 cd apps/server && uv run pytest            # 416 passed
 cd .. && npm test -w @jalebi/web           # 32 passed

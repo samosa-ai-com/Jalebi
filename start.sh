@@ -7,9 +7,13 @@ PID_FILE="$RUN_DIR/server.pid"
 LOG_FILE="$RUN_DIR/server.log"
 VENV_PYTHON="$ROOT/apps/server/.venv/bin/python"
 
-HOST="${JALEBI_HOST:-127.0.0.1}"
-PORT="${JALEBI_PORT:-3456}"
-URL="http://${HOST}:${PORT}/api/health"
+HOST="${JALEBI_HOST:-0.0.0.0}"
+PORT="${JALEBI_PORT:-2052}"
+HEALTH_HOST="$HOST"
+if [[ "$HEALTH_HOST" == "0.0.0.0" ]]; then
+  HEALTH_HOST="127.0.0.1"
+fi
+URL="http://${HEALTH_HOST}:${PORT}/api/health"
 
 if [[ ! -x "$VENV_PYTHON" ]]; then
   echo "Python venv not found at $VENV_PYTHON" >&2

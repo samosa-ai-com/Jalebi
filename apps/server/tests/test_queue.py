@@ -269,7 +269,7 @@ def test_terminal_notification_sent_on_done(q, session, repo_row, monkeypatch) -
     assert sent[0]["url"] == "https://ntfy.sh"  # JSON publishing → server root
     assert body["topic"] == "room"
     assert body["markdown"] is True
-    assert body["click"] == f"http://127.0.0.1:3456/tasks/{task.id}"
+    assert body["click"] == f"http://127.0.0.1:{q.config.port}/tasks/{task.id}"
 
 
 def test_terminal_notification_skipped_when_topic_unset(q, session, repo_row, monkeypatch) -> None:
