@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, taskEvents } from "../api/client";
 import { StatusBadge } from "../components/StatusBadge";
-import type { Account, Artifact, Followup, Repo, Run, SseEvent, Task } from "../types";
+import PublishDialog from "../components/PublishDialog";
+import type { Account, Artifact, CatalogAgent, Followup, GithubPr, Repo, Run, SseEvent, Task } from "../types";
 
 const TERMINAL = new Set(["done", "failed", "timed_out", "cancelled", "needs_approval", "interrupted"]);
 
@@ -46,6 +47,208 @@ function Action({ onClick, children, disabled }: { onClick: () => void; children
     <button onClick={onClick} disabled={disabled} className="btn-ghost disabled:opacity-40">
       {children}
     </button>
+  );
+}
+
+function canManualPublish(task: Task | null): boolean {
+  if (!task) return false;
+  // Show the new Publish button (with the three-mode picker) for any task in
+  // `done` — that's where freeform/screen_finding/triggered tasks land when
+  // auto-publish is off, and where issue_fix tasks land after auto-publish
+  // (showing the button here is harmless: the backend's no-op gate rejects
+  // "nothing to publish" with 409). The legacy Publish button for
+  // `needs_approval` has its own direct-click path and is rendered separately.
+  return task.status === "done";
+}
+
+function PublishButton({
+  task,
+  disabled,
+  onPick,
+}: {
+  task: Task;
+  disabled: boolean;
+  onPick: (opts: { mode: "new_pr" | "update_pr" | "push_branch"; branch?: string; pr_number?: number }) => void;
+}) {
+  const hasLinkedPr = task.prs && task.prs.length > 0;
+  const defaultPr = hasLinkedPr ? task.prs[0] : undefined;
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  // Explicit mode choice in the Advanced panel (null = not chosen → smart default).
+  const [advancedModeChoice, setAdvancedModeChoice] = useState<"new_pr" | "update_pr" | "push_branch" | null>(null);
+  // Explicit pick in the update_pr dropdown ("" = not picked → smart default).
+  const [pickedPr, setPickedPr] = useState<number | "">("");
+  const [branchInput, setBranchInput] = useState<string>("");
+  // The repo's open PRs, fetched so the update_pr picker is not limited to PRs
+  // that happened to be linked at task creation (null = still loading).
+  const [openPrs, setOpenPrs] = useState<GithubPr[] | null>(null);
+  const [prsLoadFailed, setPrsLoadFailed] = useState(false);
+  const prsLoadedRef = useRef(false);
+
+  useEffect(() => {
+    if (prsLoadedRef.current) return;
+    const repo = task.repo_full_name;
+    const account = task.pat_name ?? undefined;
+    prsLoadedRef.current = true;
+    let cancelled = false;
+    // Without a resolvable account there is nothing to fetch — resolve empty so
+    // the picker just shows linked PRs (state updates only in async callbacks).
+    const load: Promise<GithubPr[]> =
+      repo && account
+        ? api.getGithubContext(repo, account).then((ctx) => ctx.prs ?? [])
+        : Promise.resolve([]);
+    load
+      .then((prs) => {
+        if (!cancelled) setOpenPrs(prs);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setOpenPrs([]);
+          setPrsLoadFailed(true);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [task.repo_full_name, task.pat_name]);
+
+  const linkedNumbers = new Set(task.prs ?? []);
+  // Smart default: if a PR was attached at creation time, land the work on it.
+  // Otherwise, fall back to the first open PR whose head is the branch this
+  // task builds on (e.g. a review-fix task working from the PR's head), so the
+  // primary action updates that PR instead of silently opening a new one.
+  const matchingOpenPr = (openPrs ?? []).find(
+    (p) => p.head === task.source_branch && !linkedNumbers.has(p.number)
+  );
+  const effectiveDefaultPr = defaultPr ?? matchingOpenPr?.number;
+  const defaultMode: "new_pr" | "update_pr" = effectiveDefaultPr !== undefined ? "update_pr" : "new_pr";
+  const advancedMode: "new_pr" | "update_pr" | "push_branch" =
+    advancedModeChoice ?? (defaultMode === "update_pr" ? "update_pr" : "new_pr");
+  const advancedPr: number | undefined = pickedPr === "" ? effectiveDefaultPr : pickedPr;
+
+  const primaryLabel = defaultMode === "update_pr" && effectiveDefaultPr !== undefined
+    ? `Push to PR #${effectiveDefaultPr}`
+    : "Publish";
+
+  // Selectable PRs: linked PRs first (labeled by number), then the repo's open
+  // PRs with title + head→base so the owner can pick any PR to update.
+  const prOptions: { number: number; label: string }[] = [];
+  for (const n of task.prs ?? []) prOptions.push({ number: n, label: `PR #${n}` });
+  for (const p of openPrs ?? []) {
+    if (linkedNumbers.has(p.number)) continue;
+    prOptions.push({ number: p.number, label: `#${p.number} — ${p.title} (${p.head} → ${p.base})` });
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <Action
+          onClick={() => {
+            if (defaultMode === "update_pr" && effectiveDefaultPr !== undefined) {
+              onPick({ mode: "update_pr", pr_number: effectiveDefaultPr });
+            } else {
+              onPick({ mode: "new_pr" });
+            }
+          }}
+          disabled={disabled}
+        >
+          {primaryLabel}
+        </Action>
+        <button
+          type="button"
+          onClick={() => setShowAdvanced((v) => !v)}
+          className="text-xs text-ink-500 underline-offset-2 hover:text-ink-300 hover:underline"
+          aria-expanded={showAdvanced}
+        >
+          {showAdvanced ? "Hide advanced" : "Advanced"}
+        </button>
+      </div>
+      {showAdvanced && (
+        <div className="surface-muted space-y-2 rounded-lg p-3 text-xs">
+          <div className="flex flex-col gap-1">
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                name={`publish-mode-${task.id}`}
+                checked={advancedMode === "new_pr"}
+                onChange={() => setAdvancedModeChoice("new_pr")}
+              />
+              <span>Open a new PR (push <span className="font-mono">jalebi/{task.id}</span> → target)</span>
+            </label>
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                name={`publish-mode-${task.id}`}
+                checked={advancedMode === "update_pr"}
+                onChange={() => setAdvancedModeChoice("update_pr")}
+              />
+              <span>Update existing PR (push to its head branch)</span>
+            </label>
+            {advancedMode === "update_pr" && (
+              <select
+                aria-label="Pull request to update"
+                className="select ml-6 w-fit"
+                value={advancedPr ?? ""}
+                onChange={(e) => setPickedPr(e.target.value === "" ? "" : Number(e.target.value))}
+              >
+                <option value="">— pick a PR —</option>
+                {prOptions.map((o) => (
+                  <option key={o.number} value={o.number}>
+                    {o.label}
+                  </option>
+                ))}
+                {openPrs === null && prOptions.length === 0 && (
+                  <option value="" disabled>loading PRs…</option>
+                )}
+                {prsLoadFailed && (
+                  <option value="" disabled>couldn't load PRs</option>
+                )}
+                {openPrs !== null && !prsLoadFailed && prOptions.length === 0 && (
+                  <option value="" disabled>no open PRs in this repo</option>
+                )}
+              </select>
+            )}
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                name={`publish-mode-${task.id}`}
+                checked={advancedMode === "push_branch"}
+                onChange={() => setAdvancedModeChoice("push_branch")}
+              />
+              <span>Push to specific branch (no PR)</span>
+            </label>
+            {advancedMode === "push_branch" && (
+              <input
+                type="text"
+                className="input ml-6 w-fit"
+                placeholder="branch name"
+                value={branchInput}
+                onChange={(e) => setBranchInput(e.target.value)}
+              />
+            )}
+          </div>
+          <div className="flex justify-end">
+            <Action
+              disabled={
+                disabled ||
+                (advancedMode === "update_pr" && advancedPr === undefined) ||
+                (advancedMode === "push_branch" && !branchInput.trim())
+              }
+              onClick={() => {
+                if (advancedMode === "new_pr") {
+                  onPick({ mode: "new_pr" });
+                } else if (advancedMode === "update_pr") {
+                  onPick({ mode: "update_pr", pr_number: advancedPr });
+                } else {
+                  onPick({ mode: "push_branch", branch: branchInput.trim() });
+                }
+              }}
+            >
+              Run
+            </Action>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -146,6 +349,12 @@ function FollowUpComposer({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const hasPr = (task.prs?.length ?? 0) > 0 || task.pr_number != null;
+  // "Address reviewers" only makes sense on the fixer task: a pr_review task's
+  // session lives in the detached review worktree, so resuming it there would
+  // never push a commit to the PR.
+  const showAddressReviewers = hasPr && task.type !== "pr_review";
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (busy) return;
@@ -154,6 +363,27 @@ function FollowUpComposer({
     setError(null);
     try {
       await api.postFollowup(task.id, text.trim(), {
+        pat_name: patName || undefined,
+        model: model || undefined,
+      });
+      setText("");
+      onSent();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "failed to send follow-up");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function addressReviewers() {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      // "Address the reviewers": resume the fixer with the PR's review comments
+      // fetched + embedded by the server (F7.6).
+      await api.postFollowup(task.id, "Address the reviewers' comments.", {
+        include_reviews: true,
         pat_name: patName || undefined,
         model: model || undefined,
       });
@@ -205,8 +435,23 @@ function FollowUpComposer({
           placeholder="e.g. Address the reviewer comments, then update the README…"
           className="field resize-y"
         />
+        <p className="text-[11px] leading-relaxed text-ink-600">
+          Resume refreshes remote refs first, then continues your worktree&apos;s local
+          commits; review worktrees move to the current PR head.
+        </p>
         {error && <p className="text-xs text-red-400">{error}</p>}
-        <div className="flex justify-end">
+        <div className="flex justify-end gap-2">
+          {showAddressReviewers && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={addressReviewers}
+              className="btn-ghost text-xs"
+              title="Resume the fixer with the PR's current review comments (fetched + embedded)"
+            >
+              {busy ? "Sending…" : "Address reviewers"}
+            </button>
+          )}
           <button type="submit" disabled={busy || !text.trim()} className="btn-primary">
             {busy ? "Sending…" : "Send follow-up"}
           </button>
@@ -224,6 +469,95 @@ function FollowUpComposer({
           ))}
         </ol>
       )}
+    </section>
+  );
+}
+
+const REVIEWER_STATUS_COLOR: Record<string, string> = {
+  queued: "text-ink-400",
+  running: "text-syrup-300",
+  posted: "text-green-400",
+  failed: "text-red-400",
+};
+
+function ReviewersCard({
+  task,
+  agents,
+  assigning,
+  assignError,
+  onAssign,
+}: {
+  task: Task;
+  agents: CatalogAgent[];
+  assigning: boolean;
+  assignError: string | null;
+  onAssign: (agentId: string) => void;
+}) {
+  const reviewers = task.reviewers ?? [];
+  const assigned = new Set(reviewers.map((r) => r.agent_id));
+  const available = agents.filter((a) => !assigned.has(a.id));
+
+  return (
+    <section className="surface p-5 animate-fade-up">
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <h2 className="panel-title">Reviewers</h2>
+        <span className="font-mono text-[11px] text-ink-500">
+          {reviewers.filter((r) => r.status === "posted").length}/{reviewers.length} posted
+        </span>
+      </div>
+
+      {reviewers.length > 0 ? (
+        <ul className="divide-y divide-ink-800/70">
+          {reviewers.map((r) => (
+            <li key={r.id} className="flex items-center gap-3 py-2 text-sm">
+              <span className={`font-mono ${REVIEWER_STATUS_COLOR[r.status] ?? "text-ink-400"}`}>
+                {r.agent_name}
+              </span>
+              <span className="rounded-full border border-ink-800 px-2 py-0.5 text-[11px] text-ink-500">
+                {r.status}
+              </span>
+              <span className="ml-auto flex items-center gap-2">
+                {r.status === "posted" && task.pr_number != null && (
+                  <a
+                    className="font-mono text-xs text-syrup-400 hover:text-syrup-300"
+                    href={`https://github.com/${task.repo_full_name ?? ""}/pull/${task.pr_number}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    PR #{task.pr_number} ↗
+                  </a>
+                )}
+                <Link
+                  to={`/tasks/${r.task_id}`}
+                  className="font-mono text-xs text-ink-500 hover:text-ink-300"
+                >
+                  task #{r.task_id}
+                </Link>
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mb-3 text-xs text-ink-500">
+          No reviewers assigned yet. Assign catalog reviewers (kind <code className="font-mono">reviewer</code>) to review this PR — each runs its own review task and posts its comments.
+        </p>
+      )}
+
+      {available.length > 0 && (
+        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-ink-800 pt-3">
+          {available.map((a) => (
+            <button
+              key={a.id}
+              disabled={assigning}
+              onClick={() => onAssign(a.id)}
+              className="btn-ghost !px-2.5 !py-1 text-xs"
+            >
+              + {a.name} ({a.id})
+            </button>
+          ))}
+        </div>
+      )}
+      {assignError && <p className="mt-2 text-xs text-red-400">{assignError}</p>}
     </section>
   );
 }
@@ -429,6 +763,9 @@ export default function TaskDetail() {
   const [repos, setRepos] = useState<Repo[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [models, setModels] = useState<string[]>([]);
+  const [agents, setAgents] = useState<CatalogAgent[]>([]);
+  const [assigning, setAssigning] = useState(false);
+  const [assignError, setAssignError] = useState<string | null>(null);
   const [live, setLive] = useState<SseEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [runsError, setRunsError] = useState<string | null>(null);
@@ -438,6 +775,12 @@ export default function TaskDetail() {
   const [followScroll, setFollowScroll] = useState(true);
   const [actionBusy, setActionBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [publishDialogOpen, setPublishDialogOpen] = useState(false);
+  const [publishOptions, setPublishOptions] = useState<{
+    mode: "new_pr" | "update_pr" | "push_branch";
+    branch?: string;
+    pr_number?: number;
+  } | null>(null);
   const closePreview = useCallback(() => setPreview(null), []);
   const actionInFlightRef = useRef(false);
   const lastRunIdRef = useRef<number | null>(null);
@@ -484,6 +827,10 @@ export default function TaskDetail() {
         });
       })
       .catch(() => setRunsError("Could not load run history."));
+    api
+      .getAgents(true)
+      .then((a) => setAgents(a.filter((x) => x.kind === "reviewer")))
+      .catch(() => {});
     api.getRepos().then(setRepos).catch(() => {});
     api.getTokens().then((t) => setAccounts(t.accounts ?? [])).catch(() => {});
     api.getModels().then((m) => setModels(m.models ?? [])).catch(() => {});
@@ -519,6 +866,20 @@ export default function TaskDetail() {
     }
     await api.deleteTask(task.id);
     window.location.assign("/");
+  }
+
+  async function assignReviewer(agentId: string) {
+    if (!task || !agentId || assigning) return;
+    setAssigning(true);
+    setAssignError(null);
+    try {
+      await api.assignReviewers(task.id, [agentId]);
+      load();
+    } catch (err) {
+      setAssignError(err instanceof Error ? err.message : "failed to assign reviewer");
+    } finally {
+      setAssigning(false);
+    }
   }
 
   const running = task !== null && !TERMINAL.has(task.status);
@@ -713,11 +1074,24 @@ export default function TaskDetail() {
         )}
         {task.status === "needs_approval" && (
           <Action
-            onClick={() => runAction(() => api.publishTask(task.id))}
+            onClick={() => {
+              setPublishOptions({ mode: "new_pr" });
+              setPublishDialogOpen(true);
+            }}
             disabled={actionBusy}
           >
             Publish
           </Action>
+        )}
+        {canManualPublish(task) && (
+          <PublishButton
+            task={task}
+            disabled={actionBusy}
+            onPick={(opts) => {
+              setPublishOptions(opts);
+              setPublishDialogOpen(true);
+            }}
+          />
         )}
         <Action
           onClick={deleteTask}
@@ -727,6 +1101,16 @@ export default function TaskDetail() {
         </Action>
         {actionError && <p className="text-xs text-red-400">{actionError}</p>}
       </div>
+
+      {(task.prs?.length || task.pr_number) && (
+        <ReviewersCard
+          task={task}
+          agents={agents}
+          assigning={assigning}
+          assignError={assignError}
+          onAssign={assignReviewer}
+        />
+      )}
 
       {runs.some((r) => r.session_id) && TERMINAL.has(task.status) && (
         <FollowUpComposer
@@ -854,6 +1238,23 @@ export default function TaskDetail() {
           taskId={task.id}
           artifact={preview}
           onClose={closePreview}
+        />
+      )}
+
+      {publishDialogOpen && publishOptions && (
+        <PublishDialog
+          taskId={task.id}
+          options={publishOptions}
+          onClose={() => {
+            setPublishDialogOpen(false);
+            setPublishOptions(null);
+          }}
+          onPublished={() => {
+            runAction(async () => {
+              // Reload the task so the PR number / status reflect the publish.
+              await api.getTask(task.id).then((t) => setTask(t));
+            });
+          }}
         />
       )}
     </div>

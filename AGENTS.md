@@ -106,6 +106,10 @@ This is critical and repeated: **all GitHub interaction in this project goes thr
 | `docs/12-ui-validation.md` | Manual UI QA checklist for every implemented feature. | Feature/UI behavior changes. |
 | `docs/13-phase0-review.md` | Comprehensive Phase 0 code review (logic, security, PRD compliance). | Post-review follow-up changes. |
 | `docs/14-env-vars.md` | Env-var store (global + per-repo), `/api/envvars`, `.env` import, agent injection + masking. | Env-var work. |
+| `docs/15-catalog.md` | Agent catalog (personality → `AGENTS.md`, skills → `@path`, cli/model pins). | Catalog agent work. |
+| `docs/16-triggers.md` | Webhook listener, delivery dedup, trigger rules, registration, replay. | Webhook/trigger work. |
+| `docs/17-phase1-validation.md` | Manual UI QA checklist for every Phase 1 feature. | Feature/UI behavior changes. |
+| `docs/18-cast-workflows-grid.md` | Design-only plan for per-thread cast, reusable workflows, the Inbox-as-helm dashboard, the 4×4 dynamic grid, and future multi-agent orchestration. **Not approved for implementation** — subject to change. | Design discussions only. |
 
 **If you add a doc file, add it to this table.**
 
@@ -138,7 +142,11 @@ Jalebi/
 │   ├── 10-security.md
 │   ├── 11-reliability.md
 │   ├── 12-ui-validation.md
-│   └── 13-phase0-review.md
+│   ├── 13-phase0-review.md
+│   ├── 14-env-vars.md
+│   ├── 15-catalog.md
+│   ├── 16-triggers.md
+│   └── 17-phase1-validation.md
 ├── apps/
 │   ├── server/                    # Flask orchestrator (Python 3.13, uv)
 │   │   ├── pyproject.toml         # uv project; `jalebi` console script → jalebi.app:main
@@ -147,7 +155,7 @@ Jalebi/
 │   │   │   ├── app.py             # create_app factory (+ SPA serving) + CLI entrypoint
 │   │   │   ├── config.py          # env → Config (host/port/data_dir/db_url)
 │   │   │   ├── db.py              # SQLAlchemy engine/session + Phase-0 models
-│   │   │   ├── migrations/        # Alembic env.py + versions/
+│   │   │   ├── migrations/        # Alembic env.py + versions/ (current head: c2d3e4f5a6b7)
 │   │   │   ├── secrets.py         # 0600 secrets.json (named PAT vault; no primary)
 │   │   │   ├── github.py          # thin httpx GitHub client (validate/PR/repos/issues/review)
 │   │   │   ├── git_workspace.py   # bare mirrors + worktrees + review worktrees + token-authenticated push

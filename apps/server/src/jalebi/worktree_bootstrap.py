@@ -25,6 +25,7 @@ no ``GH_TOKEN``/``GH_CONFIG_DIR``) — even a bypassed deny has no gh credential
 """
 
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -107,7 +108,14 @@ You are working inside a git worktree prepared by Jalebi.
 # `git add .`, `git status`, and artifact capture. Root-anchored: they only hide
 # the worktree-root files Jalebi creates (a repo that *tracks* AGENTS.md is
 # unaffected — excludes never apply to tracked files; the hook covers that case).
-INFO_EXCLUDE_LINES = (".jalebi/", "/opencode.json", "/AGENTS.md")
+# `.claude/skills/` holds catalog-agent skills materialized into the worktree
+# (opencode's native skills loading) — Jalebi-internal, never committed.
+INFO_EXCLUDE_LINES = (
+    ".jalebi/",
+    "/opencode.json",
+    "/AGENTS.md",
+    "/.claude/skills/",
+)
 
 PRECOMMIT_HOOK = """#!/bin/sh
 # Jalebi: never allow committing Jalebi-internal files.
@@ -274,10 +282,58 @@ def _write_guard(worktree: Path, cli: str) -> None:
     # (the env/prompt layers still apply).
 
 
+def write_agent_skills(worktree: Path, skills: list[dict[str, str]]) -> list[Path]:
+    """Materialize catalog-agent skills into ``.claude/skills/<name>/SKILL.md``.
+
+    opencode loads skills from ``.claude/skills`` (PRD F6.4 — the
+    ``OPENCODE_DISABLE_CLAUDE_CODE_SKILLS`` env must stay unset, which the queue
+    never sets). Each skill is a SKILL.md so the CLI discovers them like its own.
+    """
+    written: list[Path] = []
+    base = worktree / ".claude" / "skills"
+    for skill in skills:
+        name = str(skill.get("name", "")).strip()
+        content = str(skill.get("content", ""))
+        if not name:
+            continue
+        directory = base / name
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / "SKILL.md"
+        path.write_text(content)
+        written.append(path)
+    return written
+
+
+def _write_skills(worktree: Path, skills: list[dict[str, str]] | None) -> None:
+    """Write catalog-agent skills into the worktree (dropping stale ones).
+
+    When an agent's skill list changes, a re-bootstrap of the same worktree must
+    not leave orphaned ``SKILL.md`` files behind — opencode would keep
+    auto-discovering them, so the run wouldn't match the catalog. Any existing
+    skill subdir not in the new name set is removed.
+    """
+    base = worktree / ".claude" / "skills"
+    if skills:
+        names = {str(skill.get("name", "")).strip() for skill in skills}
+        if base.is_dir():
+            for child in base.iterdir():
+                if child.is_dir() and child.name not in names:
+                    shutil.rmtree(child, ignore_errors=True)
+        write_agent_skills(worktree, skills)
+    else:
+        # No agent selected: ensure no stale skills linger from a previous run
+        # that used a catalog agent in this worktree.
+        if base.is_dir():
+            shutil.rmtree(base, ignore_errors=True)
+
+
 def bootstrap_worktree(
-    worktree: Path, agent_md: str = DEFAULT_AGENT_MD, cli: str = "opencode"
+    worktree: Path,
+    agent_md: str = DEFAULT_AGENT_MD,
+    cli: str = "opencode",
+    skills: list[dict[str, str]] | None = None,
 ) -> None:
-    """Apply the full bootstrap: guard + identity + AGENTS.md + excludes.
+    """Apply the full bootstrap: guard + identity + AGENTS.md + excludes + skills.
 
     Idempotent.
     """
@@ -287,6 +343,7 @@ def bootstrap_worktree(
     write_agent_md(worktree, agent_md)
     write_info_exclude(worktree)
     write_precommit_hook(worktree)
+    _write_skills(worktree, skills)
 
 
 def _strip_agent_md(raw: str) -> str:
@@ -334,6 +391,9 @@ def remove_guard(worktree: Path) -> None:
             (worktree / name).unlink()
         except FileNotFoundError:
             pass
+    # Drop only Jalebi's materialized catalog-agent skills — never a repo's own
+    # `.claude` content (e.g. settings.json / commands).
+    shutil.rmtree(worktree / ".claude" / "skills", ignore_errors=True)
     md = worktree / "AGENTS.md"
     if md.is_file():
         restored = _strip_agent_md(md.read_text())

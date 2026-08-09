@@ -149,6 +149,82 @@ def _seed_commit(q, task_id: int, clone_url: str) -> None:
     _git(["-C", str(wt), "commit", "-m", "change"])
 
 
+def make_review_git(wt):
+    """Fake GitWorkspace: pr_review follow-ups must land in the review worktree."""
+
+    class ReviewGit:
+        def __init__(self, config):
+            self.config = config
+
+        @staticmethod
+        def worktree_path(data_dir, task_id):
+            return wt
+
+        def ensure_mirror(self, *a, **k):
+            return None
+
+        def create_review_worktree(self, *a, **k):
+            return wt
+
+        def create_worktree(self, *a, **k):
+            raise AssertionError("pr_review follow-up must resume in the review worktree")
+
+    return ReviewGit
+
+
+class RecordingGitHub(FakeGitHubClient):
+    """FakeGitHubClient that records posted PR reviews."""
+
+    def __init__(self, token: str):
+        super().__init__(token)
+        self.posted: list[tuple[str, int, str]] = []
+
+    def post_pr_review(self, full_name, pr_number, body):
+        self.posted.append((full_name, pr_number, body))
+
+
+def _review_task_with_resumable_session(
+    session, repo_id: int, prs: list[int] | None = None
+):
+    prs = prs or [3]
+    task = tasks.create_task(
+        session,
+        type_="pr_review",
+        repo_id=repo_id,
+        prompt="review it",
+        prs=prs,
+        context={"prs": [{"number": prs[0]}]},
+    )
+    run = Run(
+        task_id=task.id,
+        seq=1,
+        session_id="ses_orig",
+        status="done",
+        started_at=utcnow(),
+        finished_at=utcnow(),
+    )
+    session.add(run)
+    task.status = "done"
+    session.commit()
+    return task
+
+
+def _with_assignment(session, task, agent_id: str = "reviewer-1", pr_number: int = 3):
+    from jalebi.db import ReviewAssignment
+
+    session.add(
+        ReviewAssignment(
+            task_id=task.id,
+            agent_id=agent_id,
+            pr_number=pr_number,
+            repo_id=task.repo_id,
+            status="posted",
+            created_at=utcnow(),
+        )
+    )
+    session.commit()
+
+
 # -- route tests ---------------------------------------------------------
 
 
@@ -338,26 +414,10 @@ def test_pr_review_followup_resumes_in_review_worktree(
     session.commit()
 
     review_wt = tmp_path / "review-wt"
-    review_wt.mkdir(parents=True)
+    (review_wt / ".jalebi").mkdir(parents=True)
+    (review_wt / ".jalebi" / "review.md").write_text("Verdict: fine.\n")
 
-    class ReviewGit:
-        def __init__(self, config):
-            self.config = config
-
-        @staticmethod
-        def worktree_path(data_dir, task_id):
-            return review_wt
-
-        def ensure_mirror(self, *a, **k):
-            return None
-
-        def create_review_worktree(self, *a, **k):
-            return review_wt
-
-        def create_worktree(self, *a, **k):
-            raise AssertionError("pr_review follow-up must resume in the review worktree")
-
-    monkeypatch.setattr("jalebi.queue.GitWorkspace", ReviewGit)
+    monkeypatch.setattr("jalebi.queue.GitWorkspace", make_review_git(review_wt))
     monkeypatch.setattr(
         "jalebi.queue.worktree_bootstrap.bootstrap_worktree", lambda *a, **k: None
     )
@@ -365,6 +425,7 @@ def test_pr_review_followup_resumes_in_review_worktree(
     handle = FakeHandle([AgentEvent(type="done")], session_id="ses_orig")
     adapter = ResumeAdapter(handle)
     monkeypatch.setattr("jalebi.queue.get_adapter", lambda cli: adapter)
+    monkeypatch.setattr("jalebi.queue.GitHubClient", RecordingGitHub)
 
     q._run_followup(task.id, "more review")
 
@@ -379,6 +440,106 @@ def test_pr_review_followup_resumes_in_review_worktree(
     fups = tasks.list_followups(session, task.id)
     assert len(fups) == 1
     assert fups[0].body == "more review"
+
+
+def test_pr_review_followup_posts_review_to_github(
+    q, session, repo_row, monkeypatch, tmp_path
+) -> None:
+    """A pr_review follow-up that writes a review posts it to the PR (F7.4)."""
+    from jalebi import reviews as reviews_service
+
+    settings.set_setting(session, "auto_publish", False)
+    task = _review_task_with_resumable_session(session, repo_row.id, prs=[3])
+    _with_assignment(session, task)
+
+    review_wt = tmp_path / "review-wt"
+    (review_wt / ".jalebi").mkdir(parents=True)
+    # Include the test token to prove the follow-up path masks before posting.
+    (review_wt / ".jalebi" / "review.md").write_text(
+        "**Verdict:** needs work\n\n"
+        "- **High** `a.py:10` — leaked ghp_test\n"
+        "- **Med** `b.py:20` — reuse the wrap helper\n"
+    )
+
+    monkeypatch.setattr("jalebi.queue.GitWorkspace", make_review_git(review_wt))
+    monkeypatch.setattr(
+        "jalebi.queue.worktree_bootstrap.bootstrap_worktree", lambda *a, **k: None
+    )
+    recording = RecordingGitHub("ghp_test")
+    monkeypatch.setattr("jalebi.queue.GitHubClient", lambda token: recording)
+
+    handle = FakeHandle([AgentEvent(type="done")], session_id="ses_orig")
+    adapter = ResumeAdapter(handle)
+    monkeypatch.setattr("jalebi.queue.get_adapter", lambda cli: adapter)
+
+    q._run_followup(task.id, "more review")
+
+    session.expire_all()
+    fresh = tasks.get_task(session, task.id)
+    assert fresh is not None
+    assert fresh.status == "done"
+
+    assert len(recording.posted) == 1
+    full_name, pr_number, body = recording.posted[0]
+    assert full_name == FULL_NAME
+    assert pr_number == 3
+    assert "**Verdict:** needs work" in body
+    assert "leaked ***" in body  # token masked before posting
+    assert "Review posted by [Jalebi]" in body  # wrap header
+
+    assignment = reviews_service.assignment_by_task(session, task.id)
+    assert assignment is not None
+    assert assignment.status == "posted"
+    run = tasks.latest_run(session, task.id)
+    assert run is not None
+    assert run.status == "done"
+    assert run.steps_json and "Review posted to PR #3." in run.steps_json
+
+    fups = tasks.list_followups(session, task.id)
+    assert [f.body for f in fups] == ["more review"]
+
+
+def test_pr_review_followup_without_review_marks_failed(
+    q, session, repo_row, monkeypatch, tmp_path
+) -> None:
+    """A done pr_review follow-up with no review content is a failure, not done."""
+    from jalebi import reviews as reviews_service
+
+    settings.set_setting(session, "auto_publish", False)
+    # Isolate the deliverable-validation behavior from auto-recovery.
+    settings.set_setting(session, "retry_policy", {"auto_retry": False})
+    task = _review_task_with_resumable_session(session, repo_row.id, prs=[3])
+    _with_assignment(session, task)
+
+    review_wt = tmp_path / "review-wt"
+    review_wt.mkdir(parents=True)
+
+    monkeypatch.setattr("jalebi.queue.GitWorkspace", make_review_git(review_wt))
+    monkeypatch.setattr(
+        "jalebi.queue.worktree_bootstrap.bootstrap_worktree", lambda *a, **k: None
+    )
+
+    # Agent emits `done` but neither wrote .jalebi/review.md nor a final message.
+    handle = FakeHandle([AgentEvent(type="done")], session_id="ses_orig")
+    adapter = ResumeAdapter(handle)
+    monkeypatch.setattr("jalebi.queue.get_adapter", lambda cli: adapter)
+
+    q._run_followup(task.id, "more review")
+
+    session.expire_all()
+    fresh = tasks.get_task(session, task.id)
+    assert fresh is not None
+    assert fresh.status == "failed"
+
+    run = tasks.latest_run(session, task.id)
+    assert run is not None
+    assert run.status == "failed"
+    assert run.steps_json and "without writing a review" in run.steps_json
+
+    assignment = reviews_service.assignment_by_task(session, task.id)
+    assert assignment is not None
+    assert assignment.status == "failed"
+    assert assignment.run_id == run.id
 
 
 def test_followup_forwards_model_override(q, session, repo_row, monkeypatch) -> None:

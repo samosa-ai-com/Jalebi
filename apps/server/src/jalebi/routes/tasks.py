@@ -9,12 +9,12 @@ from pathlib import Path
 import httpx
 from flask import Blueprint, Response, current_app, jsonify, request, send_file
 from flask.typing import ResponseReturnValue
-from sqlalchemy import delete as sa_delete
 
-from jalebi import artifacts, db, masking, secrets, settings, tasks
+from jalebi import artifacts, db, masking, prompts, reviews, secrets, settings, tasks
+from jalebi.catalog import agent_by_slug
 from jalebi.config import Config
-from jalebi.db import Artifact, Followup, Run, Task, utcnow
-from jalebi.git_workspace import GitWorkspace
+from jalebi.db import Artifact, Run, Task, utcnow
+from jalebi.git_workspace import GitWorkspace, PushLeaseFailed
 from jalebi.github import GitHubClient, GitHubError
 from jalebi.queue import PublishConflict, PublishError, TaskQueue
 
@@ -30,6 +30,21 @@ def _queue() -> TaskQueue:
 def _repo_name(session, repo_id: int) -> str | None:
     repo = session.get(db.Repo, repo_id)
     return repo.full_name if repo is not None else None
+
+
+def _task_dict(session, task: Task) -> dict[str, object]:
+    """Serialize a task with its run, followups, artifacts, and reviewers."""
+    run = tasks.latest_run(session, task.id)
+    reviewers_raw = reviews.reviews_json_for_task(session, task.id)
+    reviewers = json.loads(reviewers_raw) if reviewers_raw else []
+    return tasks.task_to_dict(
+        task,
+        run=run,
+        followups=tasks.list_followups(session, task.id),
+        artifacts=tasks.list_artifacts(session, run.id) if run is not None else None,
+        repo_full_name=_repo_name(session, task.repo_id),
+        reviewers=reviewers,
+    )
 
 
 def _valid_pat(config, name: str | None) -> bool:
@@ -113,9 +128,24 @@ def create_task() -> ResponseReturnValue:
     session = db.get_session()
     masker = _masker(session)
 
+    # Catalog agent selection: the slug is validated to exist + be enabled here;
+    # the task's OWN cli/model are explicit user overrides only (the agent's
+    # pinned cli/model apply at run time when the task has no override — see
+    # queue._agent_run_opts). Precedence: task override > live agent pin > default.
+    agent_id = payload.get("agent_id")
+    agent = None
+    if agent_id is not None:
+        agent = agent_by_slug(session, agent_id)
+        if agent is None:
+            return jsonify({"error": f"catalog agent not found: {agent_id}"}), 400
+        if not agent.enabled:
+            return jsonify({"error": f"catalog agent is disabled: {agent_id}"}), 400
+
     cli = payload.get("cli")
     if cli is not None and cli not in ("opencode",):
         return jsonify({"error": f"unsupported agent cli: {cli}"}), 400
+
+    model = payload.get("model")
 
     raw_timeout = payload.get("timeout_minutes")
     if isinstance(raw_timeout, int) and raw_timeout > 0:
@@ -176,6 +206,28 @@ def create_task() -> ResponseReturnValue:
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
 
+    # Reviewer workflow (PRD F7): a pr_review task may select reviewers from the
+    # catalog (kind reviewer). Each reviewer runs as its OWN pr_review task;
+    # assignments link task ↔ agent ↔ PR and track posted status.
+    reviewers = payload.get("reviewers")
+    if reviewers is not None and not isinstance(reviewers, list):
+        return jsonify({"error": "reviewers must be a list of catalog agent ids"}), 400
+    if reviewers:
+        if type_ != "pr_review":
+            return jsonify({"error": "reviewers are only valid for pr_review tasks"}), 400
+        if pr_number is None:
+            return jsonify({"error": "pr_number is required for pr_review tasks"}), 400
+        if repo is None:
+            return jsonify({"error": "repo not found"}), 400
+        try:
+            created = reviews.assign_reviewers(
+                session, repo, int(pr_number), [str(r) for r in reviewers],
+                queue=_queue(), masker=masker,
+            )
+        except reviews.ReviewError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify([_task_dict(session, t) for t in created]), 201
+
     try:
         task = tasks.create_task(
             session,
@@ -184,7 +236,8 @@ def create_task() -> ResponseReturnValue:
             prompt=prompt,
             source_branch=str(source_branch),
             target_branch=str(target_branch),
-            model=payload.get("model"),
+            agent_id=agent_id,
+            model=model,
             cli=cli,
             pat_name=effective_pat,
             issues=[int(issue_number)] if issue_number is not None else None,
@@ -199,25 +252,13 @@ def create_task() -> ResponseReturnValue:
         return jsonify({"error": str(exc)}), 400
 
     _queue().enqueue(task.id)
-    return jsonify(tasks.task_to_dict(task, repo_full_name=_repo_name(session, task.repo_id))), 201
+    return jsonify(_task_dict(session, task)), 201
 
 
 @bp.get("")
 def list_tasks() -> ResponseReturnValue:
     session = db.get_session()
-    items = []
-    for task in tasks.list_tasks(session):
-        run = tasks.latest_run(session, task.id)
-        items.append(
-            tasks.task_to_dict(
-                task,
-                run=run,
-                followups=tasks.list_followups(session, task.id),
-                artifacts=tasks.list_artifacts(session, run.id) if run is not None else None,
-                repo_full_name=_repo_name(session, task.repo_id),
-            )
-        )
-    return jsonify(items)
+    return jsonify([_task_dict(session, task) for task in tasks.list_tasks(session)])
 
 
 @bp.get("/<int:task_id>")
@@ -226,16 +267,7 @@ def get_task(task_id: int) -> ResponseReturnValue:
     task = tasks.get_task(session, task_id)
     if task is None:
         return jsonify({"error": "task not found"}), 404
-    run = tasks.latest_run(session, task_id)
-    return jsonify(
-        tasks.task_to_dict(
-            task,
-            run=run,
-            followups=tasks.list_followups(session, task_id),
-            artifacts=tasks.list_artifacts(session, run.id) if run is not None else None,
-            repo_full_name=_repo_name(session, task.repo_id),
-        )
-    )
+    return jsonify(_task_dict(session, task))
 
 
 @bp.post("/<int:task_id>/cancel")
@@ -272,7 +304,7 @@ def rerun_task(task_id: int) -> ResponseReturnValue:
     task.updated_at = utcnow()
     session.commit()
     _queue().enqueue(task.id)
-    return jsonify(tasks.task_to_dict(task, repo_full_name=_repo_name(session, task.repo_id)))
+    return jsonify(_task_dict(session, task))
 
 
 @bp.delete("/<int:task_id>")
@@ -294,16 +326,10 @@ def delete_task(task_id: int) -> ResponseReturnValue:
         task.status = "cancelled"
         session.commit()
 
-    runs = tasks.runs_for_task(session, task_id)
-    run_ids = [r.id for r in runs]
-    if task_id:
-        session.execute(
-            sa_delete(Followup).where(Followup.task_id == task_id)
-        )
-    if run_ids:
-        session.execute(sa_delete(Artifact).where(Artifact.run_id.in_(run_ids)))
-        session.execute(sa_delete(Run).where(Run.id.in_(run_ids)))
-    session.execute(sa_delete(Task).where(Task.id == task_id))
+    # Use the canonical cascade helper so the task + every child row are
+    # removed in the right FK order. Returning ``run_ids`` lets the disk
+    # cleanup below drop the artifact store dirs and the worktree path.
+    run_ids = tasks.delete_tasks_cascade(session, [task_id])
     session.commit()
 
     # Best-effort disk cleanup (outside the DB transaction). The worktree is
@@ -330,15 +356,57 @@ def delete_task(task_id: int) -> ResponseReturnValue:
 
 @bp.post("/<int:task_id>/publish")
 def publish_task(task_id: int) -> ResponseReturnValue:
+    """Manually publish a task. Body: ``{mode, branch?, pr_number?}`` (all optional).
+
+    - ``mode="new_pr"`` (default) — push ``jalebi/<id>`` and open/reuse a PR.
+    - ``mode="update_pr"`` — push onto an existing PR's head branch (requires
+      ``pr_number``, or falls back to ``task.prs_json[0]``).
+    - ``mode="push_branch"`` — push onto ``branch`` directly (requires ``branch``).
+
+    Errors:
+    - 400 invalid mode / missing required field
+    - 404 task or repo not found
+    - 409 conflict (merge conflict / closed PR / no-op gate)
+    - 412 remote branch moved since last sync (``--force-with-lease`` refused)
+    - 502 anything else
+    """
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        return jsonify({"error": "expected JSON object body"}), 400
+    mode = payload.get("mode", "new_pr")
+    if mode not in ("new_pr", "update_pr", "push_branch"):
+        return jsonify({"error": f"unknown publish mode: {mode!r}"}), 400
+    target_branch = payload.get("branch")
+    if target_branch is not None and not isinstance(target_branch, str):
+        return jsonify({"error": "`branch` must be a string"}), 400
+    pr_number = payload.get("pr_number")
+    if pr_number is not None and not isinstance(pr_number, int):
+        return jsonify({"error": "`pr_number` must be an integer"}), 400
     try:
-        pr_number = _queue().publish_task(task_id)
+        result = _queue().publish_task(
+            task_id,
+            mode=mode,
+            target_branch=target_branch,
+            pr_number=pr_number,
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     except KeyError as exc:
         return jsonify({"error": str(exc)}), 404
-    except (PublishConflict, PublishError) as exc:
-        return jsonify({"error": str(exc)}), 409
-    except Exception as exc:
+    except PublishConflict as exc:
+        return jsonify({"error": str(exc), "kind": "conflict"}), 409
+    except PublishError as exc:
+        return jsonify({"error": str(exc), "kind": "publish"}), 409
+    except PushLeaseFailed as exc:
+        return jsonify({"error": str(exc), "kind": "lease_failed"}), 412
+    except Exception as exc:  # pragma: no cover - defensive
         return jsonify({"error": str(exc)}), 502
-    return jsonify({"pr_number": pr_number, "status": "done"})
+    body: dict[str, object] = {"status": "done", "mode": mode}
+    if mode == "push_branch":
+        body["branch"] = target_branch
+    else:
+        body["pr_number"] = result
+    return jsonify(body)
 
 
 @bp.post("/<int:task_id>/followup")
@@ -368,20 +436,96 @@ def followup_task(task_id: int) -> ResponseReturnValue:
     model = payload.get("model") if isinstance(payload, dict) else None
 
     masker = _masker(session)
+
+    # "Address the reviewers" follow-up (PRD F7.6 / F11): when include_reviews
+    # is set, the current PR review comments are fetched (masked) and embedded
+    # into the prompt so the fixer can address them without guessing URLs.
+    include_reviews = bool(payload.get("include_reviews")) if isinstance(payload, dict) else False
+    if include_reviews:
+        body = _with_review_comments(session, task, body, masker=masker)
+
     masked = masker(body.strip())
     # The Followup row (incl. PAT/model overrides) is recorded by the worker when
     # the resume actually runs — not here, to avoid duplicates.
     _queue().enqueue_followup(task_id, masked, pat_name=pat_name, model=model)
-    run = tasks.latest_run(session, task_id)
-    return jsonify(
-        tasks.task_to_dict(
-            task,
-            run=run,
-            followups=tasks.list_followups(session, task_id),
-            artifacts=tasks.list_artifacts(session, run.id) if run is not None else None,
-            repo_full_name=_repo_name(session, task.repo_id),
+    return jsonify(_task_dict(session, task)), 202
+
+
+def _with_review_comments(session, task: Task, body: str, *, masker) -> str:
+    """Fetch the task's PR review comments and embed them into a follow-up prompt.
+
+    Uses the task's own account (no fallback). Best-effort: if the PR can't be
+    found or fetching fails, the follow-up proceeds with the user's text alone
+    (the agent is told to fetch reviews itself as a fallback).
+    """
+    config: Config = current_app.config["JALEBI_CONFIG"]
+    pr_number = task.pr_number
+    if pr_number is None and task.prs_json:
+        try:
+            pr_number = int(json.loads(task.prs_json)[0])
+        except (ValueError, TypeError, IndexError):
+            pr_number = None
+    if pr_number is None:
+        return prompts.build_address_reviewers_prompt(body, [])
+    token = secrets.resolve_token(config, task.pat_name)
+    if token is None:
+        return prompts.build_address_reviewers_prompt(body, [])
+    repo = session.get(db.Repo, task.repo_id)
+    if repo is None:
+        return prompts.build_address_reviewers_prompt(body, [])
+    client = GitHubClient(token)
+    try:
+        reviews = client.list_pr_reviews(repo.full_name, pr_number)
+    except Exception:
+        reviews = []
+    finally:
+        client.close()
+    masked_reviews = []
+    for review in reviews:
+        text = review.get("body") or ""
+        if text.strip():
+            masked_reviews.append({"author": review.get("user") or "unknown", "body": masker(text)})
+    return prompts.build_address_reviewers_prompt(body, masked_reviews)
+
+
+@bp.post("/<int:task_id>/reviewers")
+def assign_reviewers(task_id: int) -> ResponseReturnValue:
+    """Assign catalog reviewers to a task's PR (PRD F7.1).
+
+    Each reviewer runs as its own ``pr_review`` task. Body: {reviewers: [agent_id]}.
+    """
+    session = db.get_session()
+    task = tasks.get_task(session, task_id)
+    if task is None:
+        return jsonify({"error": "task not found"}), 404
+    if not task.pr_number and not task.prs_json:
+        return jsonify({"error": "this task has no PR to review"}), 409
+    pr_number = task.pr_number
+    if pr_number is None and task.prs_json:
+        try:
+            pr_number = int(json.loads(task.prs_json)[0])
+        except (ValueError, TypeError, IndexError):
+            pr_number = None
+    if pr_number is None:
+        return jsonify({"error": "this task has no PR to review"}), 409
+    repo = session.get(db.Repo, task.repo_id)
+    if repo is None:
+        return jsonify({"error": "repo not found"}), 404
+
+    payload = request.get_json(silent=True)
+    reviewers = payload.get("reviewers") if isinstance(payload, dict) else None
+    if not isinstance(reviewers, list) or not all(isinstance(r, str) for r in reviewers):
+        return jsonify({"error": 'expected JSON body {"reviewers": ["<agent_id>", ...]}'}), 400
+
+    masker = _masker(session)
+    try:
+        created = reviews.assign_reviewers(
+            session, repo, pr_number, reviewers,
+            queue=_queue(), masker=masker,
         )
-    ), 202
+    except reviews.ReviewError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify([_task_dict(session, t) for t in created]), 201
 
 
 @bp.get("/<int:task_id>/runs")

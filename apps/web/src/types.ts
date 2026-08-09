@@ -36,6 +36,18 @@ export interface Followup {
   created_at: string;
 }
 
+export interface ReviewAssignment {
+  id: number;
+  task_id: number;
+  agent_id: string;
+  agent_name: string;
+  run_id: number | null;
+  pr_number: number;
+  repo_id: number;
+  status: string;
+  created_at: string;
+}
+
 export interface Task {
   id: number;
   type: string;
@@ -43,6 +55,7 @@ export interface Task {
   repo_full_name: string | null;
   source_branch: string;
   target_branch: string;
+  agent_id: string | null;
   model: string | null;
   cli: string | null;
   pat_name: string | null;
@@ -59,6 +72,7 @@ export interface Task {
   updated_at: string;
   run: Run | null;
   followups?: Followup[];
+  reviewers?: ReviewAssignment[];
 }
 
 export interface Repo {
@@ -143,12 +157,20 @@ export interface TokensResponse {
   accounts: Account[];
 }
 
+export interface RetryPolicy {
+  auto_retry: boolean;
+  continue_prompt?: string;
+  timeout_multiplier?: number;
+  max_timeout_minutes?: number;
+}
+
 export interface SettingsMap {
   concurrency: number;
   auto_publish: boolean;
   ntfy_topic: string;
   default_timeout_minutes: number;
-  retry_policy: { auto_retry: boolean };
+  retry_policy: RetryPolicy;
+  stall_timeout_seconds: number;
   secret_patterns: string[];
   artifact_ttl_days: number;
   agent_cli: string;
@@ -157,6 +179,8 @@ export interface SettingsMap {
   notify_on_progress: boolean;
   notify_on_needs_approval: boolean;
   notify_progress_interval_minutes: number;
+  webhook_url: string;
+  webhook_secret: string;
 }
 
 export interface EnvVar {
@@ -166,4 +190,60 @@ export interface EnvVar {
   repo_id: number | null;
   repo_full_name: string | null;
   created_at: string;
+}
+
+export interface CatalogSkill {
+  name: string;
+  content: string;
+}
+
+export interface CatalogAgent {
+  id: string;
+  name: string;
+  kind: "general" | "reviewer";
+  cli: string | null;
+  model: string | null;
+  personality_md: string;
+  skills: CatalogSkill[];
+  custom_instructions: string;
+  enabled: boolean;
+  created_at: string;
+}
+
+export interface TriggerRule {
+  id: number;
+  repo_id: number;
+  event: string;
+  action: string;
+  branch_filter: string | null;
+  label_filter: string[];
+  author_filter: string | null;
+  agent_ids: string[];
+  custom_instructions: string | null;
+  enabled: boolean;
+  created_at: string;
+}
+
+export interface EventDelivery {
+  id: number;
+  github_delivery_id: string;
+  event: string;
+  action: string | null;
+  repo_id: number | null;
+  repo_full_name: string | null;
+  received_at: string;
+  status: string;
+  result: unknown;
+}
+
+export interface WebhookStatus {
+  url: string;
+  secret_set: boolean;
+  reachable: boolean;
+  repos: {
+    id: number;
+    full_name: string;
+    webhook_registered: boolean;
+    poll_fallback: boolean;
+  }[];
 }

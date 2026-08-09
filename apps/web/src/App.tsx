@@ -2,11 +2,13 @@ import { useEffect, useState } from "react";
 import { Link, NavLink, Route, Routes } from "react-router-dom";
 import { api } from "./api/client";
 import { ComingSoon } from "./components/ComingSoon";
+import Agents from "./pages/Agents";
 import Github from "./pages/Github";
 import Repos from "./pages/Repos";
 import Settings from "./pages/Settings";
 import TaskDetail from "./pages/TaskDetail";
 import Tasks from "./pages/Tasks";
+import Triggers from "./pages/Triggers";
 
 function JalebiMark({ className }: { className?: string }) {
   return (
@@ -26,14 +28,12 @@ const NAV_ITEMS = [
   { to: "/", label: "Tasks", end: true },
   { to: "/repos", label: "Repos", end: false },
   { to: "/github", label: "GitHub", end: false },
+  { to: "/agents", label: "Agents", end: false },
+  { to: "/triggers", label: "Triggers", end: false },
   { to: "/settings", label: "Settings", end: false },
 ];
 
-const SOON_ITEMS = [
-  { to: "/screenings", label: "Screenings" },
-  { to: "/agents", label: "Agents" },
-  { to: "/triggers", label: "Triggers" },
-];
+const SOON_ITEMS = [{ to: "/screenings", label: "Screenings" }];
 
 function navClass({ isActive }: { isActive: boolean }): string {
   return `relative rounded-lg px-3 py-1.5 text-sm transition-colors ${
@@ -102,7 +102,7 @@ function App() {
             ))}
             <span className="ml-3 flex items-center gap-2 rounded-full border border-ink-800 px-3 py-1.5">
               <HealthDot />
-              <span className="font-mono text-[11px] text-ink-500">api:3456</span>
+              <span className="font-mono text-[11px] text-ink-500">api:{window.location.port || "2052"}</span>
             </span>
           </div>
         </div>
@@ -114,10 +114,10 @@ function App() {
           <Route path="/tasks/:id" element={<TaskDetail />} />
           <Route path="/repos" element={<Repos />} />
           <Route path="/github" element={<Github />} />
+          <Route path="/agents" element={<Agents />} />
+          <Route path="/triggers" element={<Triggers />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/screenings" element={<ComingSoon feature="Screenings" />} />
-          <Route path="/agents" element={<ComingSoon feature="Agents" />} />
-          <Route path="/triggers" element={<ComingSoon feature="Triggers" />} />
           <Route
             path="*"
             element={

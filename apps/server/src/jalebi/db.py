@@ -14,6 +14,7 @@ from sqlalchemy import (
     Index,
     Integer,
     Text,
+    UniqueConstraint,
     create_engine,
     event,
 )
@@ -190,6 +191,42 @@ class Artifact(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
 
 
+class CatalogAgent(Base):
+    """A named, user-configured agent = personality + skills + optional overrides.
+
+    ``kind`` is ``general`` or ``reviewer`` (reviewers get the reviewer workflow).
+    The ``id`` is a user-chosen slug. ``personality_md`` is merged into the task
+    worktree's ``AGENTS.md``; ``skills_json`` holds ``[{name, content}]`` markdown
+    files materialized to ``.claude/skills/<name>/SKILL.md`` in the worktree so
+    the CLI auto-discovers them; ``custom_instructions`` is appended to the task
+    prompt when this agent is selected. ``cli``/``model`` override the task
+    defaults. ``tasks.agent_id`` references this table by slug but is deliberately
+    FK-less (a SQLite batch rebuild of the FK-referenced ``tasks`` parent is the
+    Step-37 migration hazard) — validity is enforced in the service layer.
+    """
+
+    __tablename__ = "catalog_agents"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(
+        Text, nullable=False, default="general", server_default=sa.text("'general'")
+    )
+    cli: Mapped[str | None] = mapped_column(Text, nullable=True)
+    model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    personality_md: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=sa.text("''")
+    )
+    skills_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    custom_instructions: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=sa.text("''")
+    )
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=sa.text("1")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+
+
 class EnvVar(Base):
     """A named environment variable injected into task agent subprocesses.
 
@@ -212,6 +249,102 @@ class EnvVar(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
 
+
+class ReviewAssignment(Base):
+    """One reviewer (catalog agent of kind ``reviewer``) assigned to review a PR.
+
+    Each reviewer runs as its OWN ``pr_review`` task (``task_id`` = that task) —
+    reusing the existing review worktree + posting machinery, running in parallel
+    under the queue's concurrency. The assignment is a lightweight registry
+    (task ↔ agent ↔ PR ↔ repo ↔ status) so the PR card and the webhook flow can
+    show which reviewers have posted.
+
+    The ``UNIQUE(repo_id, pr_number, agent_id)`` constraint is the last line of
+    defense against duplicate reviewer assignments under concurrent webhook
+    deliveries or manual calls (the application-level ``assignments_for_pr``
+    pre-filter is racy; two threads can both see ``{}`` before either inserts).
+    On IntegrityError, ``reviews.assign_reviewers`` recovers the existing
+    assignment's task rather than re-creating.
+    """
+
+    __tablename__ = "review_assignments"
+    __table_args__ = (
+        Index("ix_review_assignments_task_id", "task_id"),
+        Index("ix_review_assignments_pr_number", "pr_number"),
+        UniqueConstraint(
+            "repo_id", "pr_number", "agent_id",
+            name="uq_review_assignments_repo_pr_agent",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id"), nullable=False)
+    agent_id: Mapped[str] = mapped_column(Text, nullable=False)
+    run_id: Mapped[int | None] = mapped_column(ForeignKey("runs.id"), nullable=True)
+    pr_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    repo_id: Mapped[int] = mapped_column(ForeignKey("repos.id"), nullable=False)
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, default="queued", server_default=sa.text("'queued'")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+
+
+class TriggerRule(Base):
+    """A per-repo webhook trigger rule (PRD F14).
+
+    ``event`` is the full event key, e.g. ``pull_request.opened`` (from the
+    ``X-GitHub-Event`` header + the payload's ``action``). ``action`` is what to
+    do: ``start_review`` (reviewer tasks per ``agent_ids_json``), ``triage_issue``
+    (issue_fix task), ``create_task`` (freeform task with custom_instructions),
+    or ``rerun_review`` (re-enqueue the PR's existing reviewer tasks). Optional
+    scope filters narrow when a rule fires.
+    """
+
+    __tablename__ = "trigger_rules"
+    __table_args__ = (Index("ix_trigger_rules_repo_id", "repo_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    repo_id: Mapped[int] = mapped_column(
+        ForeignKey("repos.id", ondelete="CASCADE"), nullable=False
+    )
+    event: Mapped[str] = mapped_column(Text, nullable=False)
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    branch_filter: Mapped[str | None] = mapped_column(Text, nullable=True)
+    label_filter: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON list
+    author_filter: Mapped[str | None] = mapped_column(Text, nullable=True)
+    agent_ids_json: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON list
+    custom_instructions: Mapped[str | None] = mapped_column(Text, nullable=True)
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=sa.text("1")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+
+
+class EventDelivery(Base):
+    """One received webhook delivery (idempotency + replay log, PRD F14).
+
+    ``github_delivery_id`` is UNIQUE (the ``X-GitHub-Delivery`` header), so a
+    GitHub re-delivery is detected and skipped. ``payload_json`` is the raw body
+    so a delivery can be replayed later; ``result`` records what the rule did.
+    """
+
+    __tablename__ = "event_deliveries"
+    __table_args__ = (Index("ix_event_deliveries_repo_id", "repo_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    github_delivery_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    event: Mapped[str] = mapped_column(Text, nullable=False)
+    action: Mapped[str | None] = mapped_column(Text, nullable=True)
+    repo_id: Mapped[int | None] = mapped_column(
+        ForeignKey("repos.id", ondelete="SET NULL"), nullable=True
+    )
+    repo_full_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False)
+    received_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, default="received", server_default=sa.text("'received'")
+    )
+    result: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON summary
 
 class Setting(Base):
     __tablename__ = "settings"

@@ -7,17 +7,21 @@ import queue
 import signal
 import threading
 import time
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any, cast
 
 from sqlalchemy import func, select
 
 from jalebi import (
     artifacts,
+    catalog,
     envvars,
     masking,
     messaging,
     notify,
     prompts,
+    reviews,
     secrets,
     settings,
     tasks,
@@ -26,9 +30,9 @@ from jalebi import (
 from jalebi.adapters import get_adapter
 from jalebi.adapters.types import AgentEvent
 from jalebi.config import Config
-from jalebi.db import Repo, Run, Session, Task, utcnow
+from jalebi.db import CatalogAgent, Repo, Run, Session, Task, utcnow
 from jalebi.events import TaskEvents
-from jalebi.git_workspace import GitWorkspace
+from jalebi.git_workspace import GitWorkspace, PushLeaseFailed
 from jalebi.github import GitHubClient
 
 logger = logging.getLogger(__name__)
@@ -37,9 +41,9 @@ MAX_STEPS = 500
 MAX_STEP_TEXT = 2000
 MAX_DIFF_BYTES = 512 * 1024
 KILL_GRACE_SECONDS = 5
-MAX_AUTO_RETRIES = 1
 DEFAULT_TIMEOUT_MINUTES = 60
-STALL_TIMEOUT_SECONDS = 300  # no agent output for this long ⇒ the process is hung
+STALL_TIMEOUT_SECONDS = 600  # default no-output stall threshold (settings-overridable)
+MAX_RECOVERY_TIMEOUT_MINUTES = 180  # cap on auto-recovery timeout escalation
 
 GIT_USER_NAME = "Jalebi"
 GIT_USER_EMAIL = "jalebi@localhost"
@@ -111,6 +115,7 @@ class _RunState:
         self.handle = handle
         self.reason: str | None = None  # "timeout" | "cancelled" | "stalled"
         self.last_event = time.monotonic()  # updated as agent events stream in
+        self.stall_timeout: float = STALL_TIMEOUT_SECONDS  # live setting, set at start
         # Last agent message text seen (for progress notifications), updated by
         # the event loop in _stream_and_finish.
         self.last_step_text: str | None = None
@@ -180,7 +185,7 @@ class TaskQueue:
         self.config = config
         self.events = TaskEvents()
         # Items: ("task", task_id) | ("followup", task_id, body) | None (stop).
-        self._queue: queue.Queue[tuple | None] = queue.Queue()
+        self._queue: queue.Queue[object] = queue.Queue()
         self._running: dict[int, _RunState] = {}
         self._running_lock = threading.Lock()
         self._workers: list[threading.Thread] = []
@@ -238,8 +243,11 @@ class TaskQueue:
         body: str,
         pat_name: str | None = None,
         model: str | None = None,
+        auto: bool = False,
     ) -> None:
-        self._queue.put(("followup", task_id, body, pat_name, model))
+        """Queue a session resume. ``auto=True`` marks an auto-recovery resume
+        (no ``followups`` row is recorded — it isn't a user follow-up)."""
+        self._queue.put(("followup", task_id, body, pat_name, model, auto))
 
     # -- worker loop -------------------------------------------------------
 
@@ -253,15 +261,19 @@ class TaskQueue:
                     continue
                 if item is None:
                     return
+                if not isinstance(item, tuple):
+                    continue
+                parts = cast("Sequence[Any]", item)
                 if self._target_concurrency == 0:
                     self._queue.put(item)
                     time.sleep(0.5)
                     continue
                 try:
-                    if item[0] == "followup":
-                        self._run_followup(item[1], item[2], item[3], item[4])
+                    if parts[0] == "followup":
+                        auto = bool(parts[5]) if len(parts) > 5 else False
+                        self._run_followup(parts[1], parts[2], parts[3], parts[4], auto=auto)
                     else:
-                        self._run_task(item[1])
+                        self._run_task(parts[1])
                 except Exception:
                     logger.exception("worker crashed on %s", item)
         finally:
@@ -355,6 +367,43 @@ class TaskQueue:
         env.update({k: v for k, v in task_env.items() if v is not None})
         return env
 
+    def _catalog_agent(self, session, task: Task) -> CatalogAgent | None:
+        """The enabled catalog agent backing ``task``, or ``None``.
+
+        ``tasks.agent_id`` is a plain slug (no FK). A task whose agent was
+        deleted or disabled after creation falls back to the default build agent
+        rather than failing the run — the task's stored ``model``/``cli`` (which
+        the route resolved from the agent at creation) still apply.
+        """
+        if not task.agent_id:
+            return None
+        agent = catalog.agent_by_slug(session, task.agent_id)
+        if agent is None or not agent.enabled:
+            logger.warning(
+                "task %s references missing/disabled catalog agent %s; using defaults",
+                task.id,
+                task.agent_id,
+            )
+            return None
+        return agent
+
+    def _agent_run_opts(
+        self, session, task: Task, cli: str
+    ) -> tuple[str, list[dict[str, str]] | None]:
+        """Resolve the effective CLI + skills for a catalog agent.
+
+        Returns ``(cli, skills)``. Precedence for the CLI is the same as for the
+        model everywhere else: **explicit task-level override > live agent pin >
+        default**. ``cli`` already carries the task's override + settings default,
+        so the agent's pinned ``cli`` applies only when the task didn't pin one.
+        ``skills`` is the agent's skill list for the bootstrap.
+        """
+        agent = self._catalog_agent(session, task)
+        if agent is None:
+            return cli, None
+        effective_cli = task.cli or agent.cli or cli
+        return effective_cli, catalog.skills(agent)
+
     def _prepare_run(self, session, task: Task, cli: str) -> Run:
         """Open a fresh run row and flip the task to ``running``."""
         seq = session.execute(
@@ -423,15 +472,18 @@ class TaskQueue:
             self._running.pop(task.id, None)
 
         if state.reason == "stalled":
-            # The agent process produced nothing for STALL_TIMEOUT_SECONDS; the
+            # The agent process produced nothing for the stall timeout; the
             # stall watchdog killed it. Surface a clear diagnostic instead of a
-            # run that looks like it is still "running".
+            # run that looks like it is still "running". The "stall" sentinel is
+            # a stable machine-readable marker for _run_stalled (the text is for
+            # humans).
             steps.append(
                 {
                     "type": "error",
                     "phase": None,
+                    "stall": True,
                     "text": (
-                        f"Agent produced no output for {STALL_TIMEOUT_SECONDS}s — "
+                        f"Agent produced no output for {state.stall_timeout}s — "
                         "the agent process hung and was terminated. Re-run the task "
                         "or check the agent/opencode configuration."
                     ),
@@ -455,6 +507,11 @@ class TaskQueue:
         run.status = final_status
         task.status = final_status
         task.updated_at = utcnow()
+        if final_status == "done":
+            # Deliverable met: the auto-recovery escalation (which is derived
+            # from retry_count) resets so the next run starts from the base
+            # timeout again.
+            task.retry_count = 0
 
         if (
             publish
@@ -576,10 +633,32 @@ class TaskQueue:
                 run.steps_json = json.dumps(steps[-MAX_STEPS:])
 
     def _resolve_timeout(self, session, task: Task) -> int:
+        """Effective per-run timeout: the task's own, escalated by auto-recovery.
+
+        Auto-recovery escalates the timeout on each attempt (so sub-agent-heavy
+        work isn't cut short), but it is **derived** from ``task.retry_count``
+        rather than mutating ``task.timeout_minutes`` — a manual rerun after a
+        success (or a fresh task) always starts from the base timeout.
+        """
         if task.timeout_minutes is not None:
-            return task.timeout_minutes
-        raw = settings.get_setting(session, "default_timeout_minutes") or DEFAULT_TIMEOUT_MINUTES
-        return raw if isinstance(raw, int) and raw > 0 else DEFAULT_TIMEOUT_MINUTES
+            base = task.timeout_minutes
+        else:
+            raw = (
+                settings.get_setting(session, "default_timeout_minutes")
+                or DEFAULT_TIMEOUT_MINUTES
+            )
+            base = raw if isinstance(raw, int) and raw > 0 else DEFAULT_TIMEOUT_MINUTES
+        retries = task.retry_count or 0
+        if retries <= 0:
+            return base
+        policy = settings.get_setting(session, "retry_policy") or {}
+        if not isinstance(policy, dict) or not policy.get("auto_retry"):
+            return base
+        multiplier = policy.get("timeout_multiplier")
+        multiplier = multiplier if isinstance(multiplier, (int, float)) and multiplier >= 1 else 2
+        cap = policy.get("max_timeout_minutes")
+        cap = cap if isinstance(cap, int) and cap >= 1 else MAX_RECOVERY_TIMEOUT_MINUTES
+        return min(max(1, int(base * (multiplier**retries))), cap)
 
     def _run_task(self, task_id: int) -> None:
         session = Session()
@@ -610,6 +689,12 @@ class TaskQueue:
                 patterns,
             )
             cli = str(task.cli or settings.get_setting(session, "agent_cli") or "opencode")
+            cli, agent_skills = self._agent_run_opts(session, task, cli)
+            agent = self._catalog_agent(session, task)
+            effective_model = task.model or (agent.model if agent is not None else None)
+            effective_prompt = task.prompt
+            if agent is not None and agent.custom_instructions:
+                effective_prompt = f"{task.prompt}\n\n{agent.custom_instructions}"
             timeout = self._resolve_timeout(session, task)
 
             # Register cancellation state BEFORE committing "running" so a cancel
@@ -630,7 +715,7 @@ class TaskQueue:
             if task.type == "pr_review":
                 run = self._run_review(session, task, repo, cli, timeout, token, masker, state)
                 session.commit()
-                self._maybe_retry(session, task, run)
+                self._maybe_recover(session, task, run)
                 return
 
             run = self._prepare_run(session, task, cli)
@@ -654,18 +739,24 @@ class TaskQueue:
                 git.reset_branch_to_base(
                     task.id, repo.full_name, self._worktree_base(task)
                 )
-            worktree_bootstrap.bootstrap_worktree(wt, prompts.build_agent_md(task, repo))
+            worktree_bootstrap.bootstrap_worktree(
+                wt,
+                prompts.build_agent_md(task, repo, agent=agent),
+                cli=cli,
+                skills=agent_skills,
+            )
 
             adapter = get_adapter(cli)
             state.handle = adapter.start(
                 str(wt),
-                task.prompt,
-                model=task.model,
+                effective_prompt,
+                model=effective_model,
                 env=self._agent_env(session, task, repo, token),
             )
             run.pid = getattr(state.handle.proc, "pid", None)
+            run.model = effective_model  # record the effective (possibly agent-pinned) model
             session.commit()
-            self._start_watchdog(task, state, timeout)
+            self._start_watchdog(task, state, timeout, stall_timeout=self._stall_timeout(session))
 
             if state.reason == "cancelled":
                 _kill_proc(state.handle.proc)
@@ -674,7 +765,7 @@ class TaskQueue:
                 session, task, repo, run, git, token, masker, state.handle, state
             )
             session.commit()
-            self._maybe_retry(session, task, run)
+            self._maybe_recover(session, task, run)
         except Exception:
             logger.exception("task %s run failed", task_id)
             run_id = run.id if run is not None else None
@@ -724,18 +815,32 @@ class TaskQueue:
         session.commit()
 
         try:
+            # If this reviewer task has an assignment, mark it running (with the run).
+            reviews.set_assignment_status(session, task.id, "running", run_id=run.id)
+            cli, agent_skills = self._agent_run_opts(session, task, cli)
+            agent = self._catalog_agent(session, task)
+            effective_model = task.model or (agent.model if agent is not None else None)
+            effective_prompt = task.prompt
+            if agent is not None and agent.custom_instructions:
+                effective_prompt = f"{task.prompt}\n\n{agent.custom_instructions}"
             git = GitWorkspace(self.config)
             git.ensure_mirror(repo.full_name, repo.clone_url, token)
             wt = git.create_review_worktree(task.id, repo.full_name, pr_number, token)
-            worktree_bootstrap.bootstrap_worktree(wt, prompts.build_agent_md(task, repo))
+            worktree_bootstrap.bootstrap_worktree(
+                wt,
+                prompts.build_agent_md(task, repo, agent=agent),
+                cli=cli,
+                skills=agent_skills,
+            )
 
             adapter = get_adapter(cli)
             state.handle = adapter.start(
-                str(wt), task.prompt, model=task.model, env=_build_agent_env(token)
+                str(wt), effective_prompt, model=effective_model, env=_build_agent_env(token)
             )
             run.pid = getattr(state.handle.proc, "pid", None)
+            run.model = effective_model  # record the effective (possibly agent-pinned) model
             session.commit()
-            self._start_watchdog(task, state, timeout)
+            self._start_watchdog(task, state, timeout, stall_timeout=self._stall_timeout(session))
 
             if state.reason == "cancelled":
                 _kill_proc(state.handle.proc)
@@ -755,43 +860,9 @@ class TaskQueue:
             )
             session.commit()
 
-            if run.status == "done":
-                review_text = self._read_review(wt)
-                if not review_text:
-                    review_text = self._last_message(session, task.id)
-                if review_text:
-                    review_text = masker(review_text)
-                    review_body = messaging.wrap_pr_review(review_text)
-                    try:
-                        client = GitHubClient(token)
-                        try:
-                            client.post_pr_review(repo.full_name, pr_number, review_body)
-                        finally:
-                            client.close()
-                        steps = json.loads(run.steps_json or "[]")
-                        steps.append(
-                            {
-                                "type": "message",
-                                "phase": None,
-                                "text": f"Review posted to PR #{pr_number}.",
-                                "ts": utcnow().isoformat(),
-                            }
-                        )
-                        run.steps_json = json.dumps(steps[-MAX_STEPS:])
-                        session.commit()
-                    except Exception as exc:
-                        logger.warning("posting review for task %s failed: %s", task.id, exc)
-                        steps = json.loads(run.steps_json or "[]")
-                        steps.append(
-                            {
-                                "type": "error",
-                                "phase": None,
-                                "text": f"posting review to PR #{pr_number} failed: {exc}",
-                                "ts": utcnow().isoformat(),
-                            }
-                        )
-                        run.steps_json = json.dumps(steps[-MAX_STEPS:])
-                        session.commit()
+            self._post_review(
+                session, task, repo, pr_number, wt, run, token, masker
+            )
         except Exception:
             logger.exception("pr_review task %s failed", task.id)
             run_id = run.id
@@ -808,7 +879,100 @@ class TaskQueue:
                 task.status = "failed"
                 task.updated_at = utcnow()
             session.commit()
+            reviews.set_assignment_status(session, task.id, "failed", run_id=run_id)
         return run
+
+    def _post_review(
+        self,
+        session,
+        task: Task,
+        repo: Repo,
+        pr_number: int,
+        worktree: Path,
+        run: Run,
+        token: str,
+        masker,
+    ) -> None:
+        """Post a ``pr_review`` run's deliverable to GitHub and reconcile the assignment.
+
+        Shared by the initial review run and follow-up resumes, which both finish
+        with ``run.status`` decided and the review written to the review
+        worktree's ``.jalebi/review.md`` (or the last assistant message):
+
+        - non-``done`` run → assignment resolved to ``failed`` (else it would sit
+          ``running`` forever while the task shows the real terminal status);
+        - ``done`` run with no review content → the run/task are **flipped to
+          ``failed``** with a diagnostic step, because a review task that produced
+          no review has no deliverable (previously this silently stayed ``done``);
+        - ``done`` run with content → review posted to the PR; assignment →
+          ``posted`` (or ``failed`` if the GitHub post errors).
+        """
+        if run.status != "done":
+            reviews.set_assignment_status(session, task.id, "failed", run_id=run.id)
+            return
+
+        review_text = self._read_review(worktree)
+        if not review_text:
+            review_text = self._last_message(session, task.id)
+        if not review_text:
+            # A done run with no review content has nothing to post. Flip the run
+            # AND the task so the timeline/status never claim a review was
+            # delivered that does not exist.
+            run.status = "failed"
+            run.finished_at = utcnow()
+            task.status = "failed"
+            task.updated_at = utcnow()
+            steps = json.loads(run.steps_json or "[]")
+            steps.append(
+                {
+                    "type": "error",
+                    "phase": None,
+                    "text": (
+                        "Run finished without writing a review; nothing to post "
+                        "to the PR."
+                    ),
+                    "ts": utcnow().isoformat(),
+                }
+            )
+            run.steps_json = json.dumps(steps[-MAX_STEPS:])
+            session.commit()
+            reviews.set_assignment_status(session, task.id, "failed", run_id=run.id)
+            return
+
+        review_text = masker(review_text)
+        review_body = messaging.wrap_pr_review(review_text)
+        try:
+            client = GitHubClient(token)
+            try:
+                client.post_pr_review(repo.full_name, pr_number, review_body)
+            finally:
+                client.close()
+            steps = json.loads(run.steps_json or "[]")
+            steps.append(
+                {
+                    "type": "message",
+                    "phase": None,
+                    "text": f"Review posted to PR #{pr_number}.",
+                    "ts": utcnow().isoformat(),
+                }
+            )
+            run.steps_json = json.dumps(steps[-MAX_STEPS:])
+            session.commit()
+            reviews.set_assignment_status(session, task.id, "posted", run_id=run.id)
+        except Exception as exc:
+            logger.warning("posting review for task %s failed: %s", task.id, exc)
+            steps = json.loads(run.steps_json or "[]")
+            steps.append(
+                {
+                    "type": "error",
+                    "phase": None,
+                    "text": f"posting review to PR #{pr_number} failed: {exc}",
+                    "ts": utcnow().isoformat(),
+                }
+            )
+            run.steps_json = json.dumps(steps[-MAX_STEPS:])
+            session.commit()
+            reviews.set_assignment_status(session, task.id, "failed", run_id=run.id)
 
     @staticmethod
     def _task_pr_number(task: Task) -> int | None:
@@ -861,18 +1025,16 @@ class TaskQueue:
         except Exception:
             logger.warning("notification for task %s failed", task.id, exc_info=True)
 
-    @staticmethod
-    def _notify_click(task_id: int) -> str:
+    def _notify_click(self, task_id: int) -> str:
         """The URL to open when the notification is tapped (the Jalebi task page)."""
-        return f"http://127.0.0.1:3456/tasks/{task_id}"
+        return f"http://127.0.0.1:{self.config.port}/tasks/{task_id}"
 
-    @staticmethod
-    def _notify_open_action(task_id: int) -> dict[str, object]:
+    def _notify_open_action(self, task_id: int) -> dict[str, object]:
         """A 'view' action button that opens the Jalebi task page."""
         return {
             "action": "view",
             "label": "Open task",
-            "url": f"http://127.0.0.1:3456/tasks/{task_id}",
+            "url": f"http://127.0.0.1:{self.config.port}/tasks/{task_id}",
         }
 
     @staticmethod
@@ -942,8 +1104,14 @@ class TaskQueue:
         body: str,
         pat_name: str | None = None,
         model: str | None = None,
+        auto: bool = False,
     ) -> None:
-        """Resume a completed task's session in its own worktree (PRD F11)."""
+        """Resume a completed task's session in its own worktree (PRD F11).
+
+        ``auto=True`` marks an auto-recovery resume: no ``followups`` row is
+        recorded (it isn't a user follow-up; the recovery step is already on the
+        failed run's timeline).
+        """
         session = Session()
         run: Run | None = None
         state: _RunState | None = None
@@ -977,6 +1145,13 @@ class TaskQueue:
             timeout = self._resolve_timeout(session, task)
             effective_model = model or task.model or prev.model
 
+            cli, agent_skills = self._agent_run_opts(session, task, cli)
+            agent = self._catalog_agent(session, task)
+            if agent is not None and agent.model:
+                effective_model = effective_model or agent.model
+            if agent is not None and agent.custom_instructions:
+                body = f"{body}\n\n{agent.custom_instructions}"
+
             state = _RunState(None)
             with self._running_lock:
                 self._running[task.id] = state
@@ -1001,7 +1176,12 @@ class TaskQueue:
                 wt = git.create_worktree(
                     task.id, repo.full_name, self._worktree_base(task), token
                 )
-            worktree_bootstrap.bootstrap_worktree(wt, prompts.build_agent_md(task, repo))
+            worktree_bootstrap.bootstrap_worktree(
+                wt,
+                prompts.build_agent_md(task, repo, agent=agent),
+                cli=cli,
+                skills=agent_skills,
+            )
 
             adapter = get_adapter(cli)
             state.handle = adapter.resume(
@@ -1013,23 +1193,46 @@ class TaskQueue:
             )
             run.pid = getattr(state.handle.proc, "pid", None)
             session.commit()
-            self._start_watchdog(task, state, timeout)
+            self._start_watchdog(task, state, timeout, stall_timeout=self._stall_timeout(session))
 
             if state.reason == "cancelled":
                 _kill_proc(state.handle.proc)
 
+            # Review follow-ups never push code: the resumed agent only edits the
+            # review worktree (publish=False), and artifacts are captured from that
+            # worktree so a freshly written review.md is not missed.
             self._stream_and_finish(
-                session, task, repo, run, git, token, masker, state.handle, state
-            )
-            tasks.add_followup(
                 session,
-                task.id,
-                prev.id,
-                body,
-                pat_name=pat_name or task.pat_name,
-                model=effective_model,
+                task,
+                repo,
+                run,
+                git,
+                token,
+                masker,
+                state.handle,
+                state,
+                publish=task.type != "pr_review",
+                worktree=wt,
             )
+            if task.type == "pr_review":
+                pr_number = self._task_pr_number(task)
+                if pr_number is not None:
+                    self._post_review(
+                        session, task, repo, pr_number, wt, run, token, masker
+                    )
+            if not auto:
+                # Auto-recovery resumes are not user follow-ups; only real
+                # follow-ups get a row (the recovery step is on the failed run).
+                tasks.add_followup(
+                    session,
+                    task.id,
+                    prev.id,
+                    body,
+                    pat_name=pat_name or task.pat_name,
+                    model=effective_model,
+                )
             session.commit()
+            self._maybe_recover(session, task, run)
         except Exception:
             logger.exception("follow-up for task %s failed", task_id)
             run_id = run.id if run is not None else None
@@ -1052,8 +1255,30 @@ class TaskQueue:
             session.close()
             self.events.close(task_id)
 
-    def publish_task(self, task_id: int) -> int:
-        """Manually publish a task's branch (push + open PR). Returns the PR number."""
+    def publish_task(
+        self,
+        task_id: int,
+        *,
+        mode: str = "new_pr",
+        target_branch: str | None = None,
+        pr_number: int | None = None,
+    ) -> int:
+        """Manually publish a task's branch. Returns the PR number (0 if push_branch).
+
+        ``mode`` selects the publish behaviour:
+
+        - ``new_pr`` (default) — push ``jalebi/<id>`` and open a new PR into
+          ``task.target_branch`` (or reuse an existing open PR with that head).
+        - ``update_pr`` — fast-forward ``jalebi/<id>`` into an existing PR's
+          head branch and force-push with ``--force-with-lease``. Requires
+          ``pr_number`` (or ``task.prs_json[0]``). The existing PR is reused;
+          no new PR is opened and no issue comment is posted.
+        - ``push_branch`` — fast-forward ``jalebi/<id>`` into ``target_branch``
+          directly and force-push. No PR interaction.
+
+        Validation lives in the route handler (``routes/tasks.py``) so the
+        caller surfaces 400s on bad input before any work starts.
+        """
         session = Session()
         try:
             task = session.get(Task, task_id)
@@ -1084,10 +1309,52 @@ class TaskQueue:
                     "the task branch has no commits ahead of the target branch — "
                     "nothing to publish"
                 )
-            pr_number = self._publish(task, repo, token, git, masker=masker)
-            task.pr_number = pr_number
+            # Mode-specific validation (route catches ValueError → 400).
+            if mode not in ("new_pr", "update_pr", "push_branch"):
+                raise ValueError(f"unknown publish mode: {mode!r}")
+            if mode == "push_branch" and not target_branch:
+                raise ValueError("push_branch mode requires `branch`")
+            if mode == "update_pr":
+                if pr_number is None:
+                    try:
+                        linked = json.loads(task.prs_json) if task.prs_json else []
+                    except (ValueError, TypeError):
+                        linked = []
+                    if linked:
+                        pr_number = int(linked[0])
+                    else:
+                        raise ValueError("update_pr mode requires `pr_number`")
+            pr_number = self._publish(
+                task,
+                repo,
+                token,
+                git,
+                masker=masker,
+                mode=mode,
+                target_branch=target_branch,
+                pr_number=pr_number,
+            )
+            # ``push_branch`` returns 0 (no PR interaction); leave the existing
+            # ``task.pr_number`` untouched in that case. For ``new_pr`` /
+            # ``update_pr`` the return value is the real PR number to record.
+            if mode != "push_branch":
+                task.pr_number = pr_number
             task.status = "done"
             task.updated_at = utcnow()
+            # Append a timeline step so the owner sees what mode actually ran.
+            run = tasks.latest_run(session, task.id)
+            if run is not None:
+                steps = json.loads(run.steps_json or "[]")
+                if mode == "new_pr":
+                    text = f"Published as PR #{pr_number}." if pr_number else "Published."
+                elif mode == "update_pr":
+                    text = f"Pushed to PR #{pr_number} (existing PR head branch)."
+                else:  # push_branch
+                    text = f"Pushed to branch `{target_branch}`."
+                steps.append(
+                    {"type": "message", "phase": None, "text": text, "ts": utcnow().isoformat()}
+                )
+                run.steps_json = json.dumps(steps[-MAX_STEPS:])
             session.commit()
             return pr_number
         finally:
@@ -1095,8 +1362,15 @@ class TaskQueue:
 
     # -- helpers -----------------------------------------------------------
 
-    def _start_watchdog(self, task: Task, state: _RunState, default_timeout: int) -> None:
-        timeout = task.timeout_minutes if task.timeout_minutes is not None else default_timeout
+    def _start_watchdog(
+        self, task: Task, state: _RunState, default_timeout: int, stall_timeout: float | None = None
+    ) -> None:
+        if stall_timeout is not None:
+            state.stall_timeout = stall_timeout
+        # ``default_timeout`` is already the effective (possibly escalated)
+        # timeout resolved by the caller via _resolve_timeout — use it directly
+        # so the watchdog matches the timeout the run is governed by.
+        timeout = default_timeout
         deadline = time.monotonic() + timeout * 60
         thread = threading.Thread(
             target=self._watchdog_loop,
@@ -1120,22 +1394,102 @@ class TaskQueue:
         )
         progress.start()
 
-    def _maybe_retry(self, session, task: Task, run: Run) -> None:
-        """Auto-retry a failed run once if ``retry_policy.auto_retry`` is set."""
-        if run.status != "failed":
+    @staticmethod
+    def _stall_timeout(session) -> float:
+        raw = settings.get_setting(session, "stall_timeout_seconds") or STALL_TIMEOUT_SECONDS
+        return raw if isinstance(raw, (int, float)) and raw >= 1 else STALL_TIMEOUT_SECONDS
+
+    @staticmethod
+    def _run_stalled(run: Run) -> bool:
+        """Whether a failed run was killed by the stall watchdog (hung process).
+
+        The stall diagnostic step carries a ``"stall": true`` sentinel written
+        by ``_stream_and_finish``; the human text is also checked as a fallback
+        for runs recorded before the sentinel existed. A fresh run is safer than
+        resuming a wedged session that could re-hang.
+        """
+        if not run.steps_json:
+            return False
+        try:
+            steps = json.loads(run.steps_json)
+        except (ValueError, TypeError):
+            return False
+        return any(
+            isinstance(s, dict)
+            and s.get("type") == "error"
+            and (
+                s.get("stall") is True
+                or str(s.get("text") or "").startswith("Agent produced no output")
+            )
+            for s in steps
+        )
+
+    def _maybe_recover(self, session, task: Task, run: Run) -> None:
+        """Auto-recover a failed/timed_out run that never delivered its output.
+
+        Every task type has an expected deliverable; if the agent failed,
+        timed out, or stalled before producing it, recover automatically:
+
+        - **timeout / other failure** → resume the last session with a
+          "continue" prompt (the provider stopped; the session is usually fine);
+        - **stall** (process hung, no output) → fresh re-run instead of resuming
+          a session that may be wedged and would just hang again.
+
+        The per-run timeout is escalated on each attempt (``timeout_multiplier``,
+        capped at ``max_timeout_minutes``) so sub-agent-heavy runs aren't cut
+        short again. Recovery is **unbounded by design**: each run is still
+        bounded by its own timeout, and terminal/progress notifications keep the
+        owner informed. ``task.retry_count`` is bumped for observability only.
+        """
+        if run.status not in ("failed", "timed_out"):
             return
         policy = settings.get_setting(session, "retry_policy") or {}
-        auto = bool(policy.get("auto_retry")) if isinstance(policy, dict) else False
-        if not auto:
+        if not isinstance(policy, dict) or not policy.get("auto_retry"):
             return
-        if (task.retry_count or 0) >= MAX_AUTO_RETRIES:
-            return
+
         task.retry_count = (task.retry_count or 0) + 1
+        # The escalated timeout is derived (see _resolve_timeout), so the base
+        # task.timeout_minutes is never permanently mutated.
+        escalated = self._resolve_timeout(session, task)
         task.status = "queued"
         task.updated_at = utcnow()
+
+        # Timestamp the failed run's timeline so the owner sees why a new run
+        # suddenly appeared.
+        steps = json.loads(run.steps_json or "[]")
+        steps.append(
+            {
+                "type": "message",
+                "phase": None,
+                "text": (
+                    f"Auto-recovering — re-running with a longer timeout "
+                    f"({escalated}m, attempt {task.retry_count})."
+                ),
+                "ts": utcnow().isoformat(),
+            }
+        )
+        run.steps_json = json.dumps(steps[-MAX_STEPS:])
         session.commit()
-        self.enqueue(task.id)
-        logger.info("auto-retrying task %s (attempt %s)", task.id, task.retry_count)
+
+        if self._run_stalled(run):
+            self.enqueue(task.id)
+            logger.info(
+                "auto-recovering task %s (attempt %s): fresh run", task.id, task.retry_count
+            )
+            return
+
+        prev = tasks.latest_resumable_run(session, task.id)
+        if prev is not None and prev.session_id:
+            body = str(policy.get("continue_prompt") or "continue")
+            self.enqueue_followup(task.id, body, auto=True)
+            logger.info("auto-recovering task %s (attempt %s): resume", task.id, task.retry_count)
+        else:
+            self.enqueue(task.id)
+            logger.info(
+                "auto-recovering task %s (attempt %s): fresh run (no resumable session)",
+                task.id,
+                task.retry_count,
+            )
 
     def _watchdog_loop(self, deadline: float, state: _RunState) -> None:
         while True:
@@ -1149,17 +1503,19 @@ class TaskQueue:
         _kill_proc(state.handle.proc)
 
     def _stall_watchdog_loop(self, state: _RunState) -> None:
-        """Kill the agent process if it emits no output for STALL_TIMEOUT_SECONDS.
+        """Kill the agent process if it emits no output for ``state.stall_timeout``.
 
-        A hung ``opencode run`` (e.g. a broken ``--session`` resume) would
-        otherwise keep a run "running" forever with an empty timeline until the
-        much longer total timeout fires. The stall guard bounds it and the caller
-        surfaces a clear "agent produced no output" diagnostic.
+        A hung agent run (e.g. a broken ``--session`` resume, or a tool such as
+        a sub-agent that stops reporting to the parent stream) would otherwise
+        keep a run "running" forever with an empty timeline until the much
+        longer total timeout fires. The stall guard bounds it and the caller
+        surfaces a clear "agent produced no output" diagnostic; the auto-recovery
+        layer then resumes or re-runs the task.
         """
         while True:
             if state.handle.proc.poll() is not None:
                 return
-            if time.monotonic() - state.last_event >= STALL_TIMEOUT_SECONDS:
+            if time.monotonic() - state.last_event >= state.stall_timeout:
                 state.reason = "stalled"
                 _kill_proc(state.handle.proc)
                 return
@@ -1269,6 +1625,30 @@ class TaskQueue:
         token: str,
         git: GitWorkspace,
         masker=None,
+        *,
+        mode: str = "new_pr",
+        target_branch: str | None = None,
+        pr_number: int | None = None,
+    ) -> int:
+        if mode == "update_pr":
+            return self._publish_update_pr(
+                task, repo, token, git, pr_number=pr_number
+            )
+        if mode == "push_branch":
+            if not target_branch:
+                raise PublishError("push_branch mode requires `target_branch`")
+            return self._publish_push_branch(task, repo, token, git, target_branch)
+        if mode != "new_pr":
+            raise PublishError(f"unknown publish mode: {mode!r}")
+        return self._publish_new_pr(task, repo, token, git, masker=masker)
+
+    def _publish_new_pr(
+        self,
+        task: Task,
+        repo: Repo,
+        token: str,
+        git: GitWorkspace,
+        masker=None,
     ) -> int:
         # Ensure the worktree exists (it may have been cleaned for old tasks);
         # create_worktree reuses the existing jalebi/<taskId> branch if present.
@@ -1330,6 +1710,108 @@ class TaskQueue:
             return pr_number
         finally:
             client.close()
+
+    def _publish_update_pr(
+        self,
+        task: Task,
+        repo: Repo,
+        token: str,
+        git: GitWorkspace,
+        *,
+        pr_number: int | None,
+    ) -> int:
+        """Push ``jalebi/<id>`` onto an existing PR's head branch.
+
+        Validates the PR is open, fast-forwards (or merges) the agent's
+        commits into the PR's head branch, and force-pushes with
+        ``--force-with-lease``. Does NOT open a new PR, does NOT comment on
+        linked issues (this is an update, not a new publication).
+        """
+        if pr_number is None:
+            raise PublishError("update_pr mode requires `pr_number`")
+        client = GitHubClient(token)
+        try:
+            pr = client.get_pr(repo.full_name, pr_number)
+        finally:
+            client.close()
+        if pr.get("state") != "open":
+            raise PublishError(
+                f"PR #{pr_number} is {pr.get('state')}; cannot update a closed PR"
+            )
+        # get_pr normalizes "head" to the branch-ref string (not the raw GitHub
+        # head object), so this is the ref name directly.
+        head_branch = pr.get("head")
+        if not head_branch:
+            raise PublishError(
+                f"PR #{pr_number} has no resolvable head branch"
+            )
+        # The worktree is already ensured by ``publish_task`` (commits_ahead
+        # gate ran on it), so ``jalebi/<id>`` is on disk — no second
+        # create_worktree call needed.
+        old_sha = git.current_remote_sha(repo.full_name, head_branch, token)
+        conflicts = git.fast_forward_into(
+            task.id, repo.full_name, head_branch, token
+        )
+        if conflicts:
+            raise PublishConflict(
+                f"pushing to PR #{pr_number} ({head_branch}) would conflict: "
+                + ", ".join(conflicts)
+                + " — the merge was aborted. Send a follow-up asking the agent to "
+                "resolve, then publish again."
+            )
+        try:
+            git.push_existing_branch(repo.full_name, head_branch, token)
+        except PushLeaseFailed:
+            raise
+        # The merge + push updated the local mirror's tracking ref (push
+        # does an implicit fetch). Read it without an extra network round
+        # trip so we log what actually went up, not what the remote looks
+        # like now.
+        new_sha = git.local_ref_sha(repo.full_name, head_branch)
+        logger.info(
+            "task %s updated PR #%s (%s): %s -> %s",
+            task.id,
+            pr_number,
+            head_branch,
+            (old_sha or "?")[:10],
+            (new_sha or "?")[:10],
+        )
+        return pr_number
+
+    def _publish_push_branch(
+        self,
+        task: Task,
+        repo: Repo,
+        token: str,
+        git: GitWorkspace,
+        target_branch: str,
+    ) -> int:
+        """Push ``jalebi/<id>`` onto ``target_branch`` directly (no PR)."""
+        # Same as _publish_update_pr: worktree was already ensured.
+        old_sha = git.current_remote_sha(repo.full_name, target_branch, token)
+        conflicts = git.fast_forward_into(
+            task.id, repo.full_name, target_branch, token
+        )
+        if conflicts:
+            raise PublishConflict(
+                f"pushing to `{target_branch}` would conflict: "
+                + ", ".join(conflicts)
+                + " — the merge was aborted. Send a follow-up asking the agent to "
+                "resolve, then publish again."
+            )
+        try:
+            git.push_existing_branch(repo.full_name, target_branch, token)
+        except PushLeaseFailed:
+            raise
+        new_sha = git.local_ref_sha(repo.full_name, target_branch)
+        logger.info(
+            "task %s pushed to branch %s: %s -> %s",
+            task.id,
+            target_branch,
+            (old_sha or "?")[:10],
+            (new_sha or "?")[:10],
+        )
+        return 0
 
     def _comment_on_issues(
         self, client: GitHubClient, full_name: str, task: Task, pr_number: int

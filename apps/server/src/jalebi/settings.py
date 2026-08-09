@@ -21,7 +21,19 @@ DEFAULTS: dict[str, object] = {
     # ("https://ntfy.example.com/room"). ntfy_url was folded into this.
     "ntfy_topic": "",
     "default_timeout_minutes": 60,
-    "retry_policy": {"auto_retry": False},
+    # Auto-recovery on failed/timed_out/stalled runs. Unbounded by design: each
+    # run is bounded by its own (escalating) timeout and terminal/progress
+    # notifications keep the owner informed. Stall runs restart fresh (a wedged
+    # session re-hangs); timeouts/other failures resume the session with
+    # ``continue_prompt``.
+    "retry_policy": {
+        "auto_retry": True,
+        "continue_prompt": "continue",
+        "timeout_multiplier": 2,
+        "max_timeout_minutes": 180,
+    },
+    # No-output threshold before a run is declared stalled (and auto-recovered).
+    "stall_timeout_seconds": 600,
     "secret_patterns": [],
     "artifact_ttl_days": 7,
     "agent_cli": "opencode",
@@ -30,9 +42,20 @@ DEFAULTS: dict[str, object] = {
     "notify_on_progress": True,
     "notify_on_needs_approval": True,
     "notify_progress_interval_minutes": 30,
+    # Public base URL GitHub can reach to deliver webhooks (e.g. a tunnel such
+    # as cloudflared/ngrok). Empty = not exposed → webhooks can't be delivered.
+    "webhook_url": "",
+    # Optional HMAC secret verified against X-Hub-Signature-256 on POST /webhook.
+    # Empty = signature check disabled (only safe on a localhost-only install).
+    "webhook_secret": "",
 }
 
 SETTING_KEYS = tuple(DEFAULTS)
+
+# Sentinel returned by GET /api/settings for write-only secrets (webhook_secret):
+# the value is never exposed, only a placeholder that the UI treats as
+# "unchanged" on save (an empty string clears it).
+SECRET_MASK = "••••••••"
 
 
 def seed_defaults(session: Session) -> int:

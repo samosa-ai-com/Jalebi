@@ -68,6 +68,10 @@ The authoritative behavioral spec is **`JALEBI_PRD.md`** at the repo root. This 
 | `08-ui.md` | React app structure, pages, components, SSE consumption. |
 | `09-testing.md` | Test strategy per layer, how to run tests, fixtures. |
 | `10-security.md` | Localhost binding, secrets, masking, sandboxing, threat notes. |
+| `14-env-vars.md` | Env-var store (global + per-repo), `/api/envvars`, `.env` import. |
+| `15-catalog.md` | Agent catalog (personality → `AGENTS.md`, skills → `@path`). |
+| `16-triggers.md` | Webhook listener, trigger rules, deliveries, registration, replay. |
+| `17-phase1-validation.md` | Manual UI QA checklist for every Phase 1 feature. |
 
 ## 6. Roadmap (phases)
 

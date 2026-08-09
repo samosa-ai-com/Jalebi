@@ -7,15 +7,15 @@ from jalebi.config import Config, load_config, repo_root
 
 def test_config_defaults() -> None:
     cfg = Config()
-    assert cfg.host == "127.0.0.1"
-    assert cfg.port == 3456
+    assert cfg.host == "0.0.0.0"
+    assert cfg.port == 2052
     assert cfg.data_dir == Path.home() / ".jalebi"
     assert cfg.db_url == f"sqlite:///{cfg.data_dir.as_posix()}/data.db"
 
 
 def test_config_port_junk_falls_back(monkeypatch) -> None:
     monkeypatch.setenv("JALEBI_PORT", "not-a-number")
-    assert load_config().port == 3456
+    assert load_config().port == 2052
 
 
 def test_config_db_url_rejects_url_breaking_chars() -> None:

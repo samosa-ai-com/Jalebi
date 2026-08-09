@@ -25,8 +25,8 @@ def repo_root() -> Path:
 
 @dataclass(frozen=True)
 class Config:
-    host: str = "127.0.0.1"
-    port: int = 3456
+    host: str = "0.0.0.0"
+    port: int = 2052
     data_dir: Path = field(default_factory=lambda: Path.home() / ".jalebi")
     password: str = ""
 
@@ -57,11 +57,11 @@ def load_config() -> Config:
     """Load .env from the repo root (without overriding existing env vars) and build a Config."""
     load_dotenv(repo_root() / ".env")
     try:
-        port = int(os.environ.get("JALEBI_PORT", "3456"))
+        port = int(os.environ.get("JALEBI_PORT", "2052"))
     except ValueError:
-        port = 3456  # junk JALEBI_PORT should not crash startup
+        port = 2052  # junk JALEBI_PORT should not crash startup
     return Config(
-        host=os.environ.get("JALEBI_HOST", "127.0.0.1"),
+        host=os.environ.get("JALEBI_HOST", "0.0.0.0"),
         port=port,
         data_dir=Path(os.environ.get("JALEBI_DATA_DIR") or Path.home() / ".jalebi"),
         # Optional UI password (PRD §F13): gate the API + SPA behind Basic auth

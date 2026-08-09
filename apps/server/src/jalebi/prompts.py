@@ -11,7 +11,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from jalebi.db import Repo, Task
+from jalebi import catalog
+from jalebi.db import CatalogAgent, Repo, Task
 
 BEST_PRACTICES = """\
 ## Working conventions
@@ -81,14 +82,21 @@ def _review_md_note() -> str:
     )
 
 
-def build_agent_md(task: Task, repo: Repo) -> str:
-    """Build the worktree ``AGENTS.md`` from the task's stored context."""
+def build_agent_md(task: Task, repo: Repo, agent: CatalogAgent | None = None) -> str:
+    """Build the worktree ``AGENTS.md`` from the task's stored context.
+
+    When a catalog ``agent`` is selected, its ``personality_md`` is merged in as
+    its own section and each skill is referenced via ``@path`` links (opencode
+    auto-reads skills next to ``AGENTS.md``).
+    """
     parts = [
         "# Jalebi task environment",
         "",
         f"- Repo: `{repo.full_name}`",
         f"- Task type: `{task.type}`",
     ]
+    if agent is not None:
+        parts.append(f"- Agent: `{agent.name}` ({agent.id})")
     if task.type == "issue_fix":
         # Single-target model: the worktree is based on the PR base branch, so
         # the PR diff is exactly the agent's fix and merges cleanly (PRD F8's
@@ -102,6 +110,18 @@ def build_agent_md(task: Task, repo: Repo) -> str:
     if task.pat_name and task.pat_name != "default":
         parts.append(f"- Using GitHub token: `{task.pat_name}`")
     parts += ["", HARD_RULES, "", BEST_PRACTICES]
+
+    if agent is not None:
+        personality = (agent.personality_md or "").strip()
+        if personality:
+            parts += ["", "## Agent personality", personality]
+        agent_skills = catalog.skills(agent)
+        if agent_skills:
+            parts += ["", "## Skills"]
+            for skill in agent_skills:
+                name = skill.get("name")
+                if name:
+                    parts.append(f"- `@.claude/skills/{name}/SKILL.md`")
 
     ctx = json.loads(task.context_json) if task.context_json else {}
     issues = ctx.get("issues") or []
@@ -176,3 +196,40 @@ def build_followup_prompt(task: Task, repo: Repo, body: str) -> str:
 
 def review_file(worktree: Path) -> Path:
     return worktree / ".jalebi" / "review.md"
+
+
+def build_address_reviewers_prompt(body: str, reviews: list[dict[str, str]]) -> str:
+    """The "address the reviewers" follow-up prompt (PRD F7.6).
+
+    ``body`` is the user's follow-up text; ``reviews`` is the list of
+    ``{author, body}`` PR review comments already fetched + masked by the route.
+    The reviews are embedded as UNTRUSTED DATA (they are content to address, not
+    instructions).
+    """
+    parts = [body.strip()]
+    if reviews:
+        parts += [
+            "",
+            "## PR review comments to address",
+            "The current PR review comments are below. Address them: fix the code, "
+            "and commit your changes (Jalebi pushes).",
+            "",
+        ]
+        for i, review in enumerate(reviews, start=1):
+            parts += [
+                f"### Review {i} — {review.get('author') or 'unknown'}",
+                "",
+                "  ```",
+                "  --- BEGIN UNTRUSTED DATA: PR review comment ---",
+                (review.get("body") or "").strip() or "(no comment body)",
+                "  --- END UNTRUSTED DATA ---",
+                "  ```",
+            ]
+    else:
+        parts += [
+            "",
+            "(No PR review comments were found to embed — if this PR has reviews, "
+            "fetch them via `curl -H \"Authorization: Bearer $JALEBI_GITHUB_TOKEN\" "
+            "https://api.github.com/repos/<owner>/<repo>/pulls/<n>/reviews`.)",
+        ]
+    return "\n".join(parts)

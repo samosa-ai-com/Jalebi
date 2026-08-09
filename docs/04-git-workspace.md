@@ -63,6 +63,28 @@ Jalebi uses the **git CLI** (not libgit2) for all repo operations. Each task/age
 - **Sync-before-push + conflict detection:** before pushing, Jalebi fetches origin and **merges `origin/<target>` into the task branch** (`merge_origin_into`) so the PR is up to date with target's progress and mergable. A **conflict aborts the merge**, surfaces the conflicting files ("PR would conflict with `<target>`: file1…"), sets the task to `needs_approval`, and pushes/opens nothing. The user resolves via a follow-up asking the agent to merge `origin/<target>` and resolve, then publishes again.
 - **PR updates on follow-ups:** follow-ups amend the same branch; the existing PR is updated by the push (publish reuses the existing PR number) — never a second PR for the same task.
 - **Issue comments on new PR only:** the "Jalebi opened a pull request for this issue" comment is posted **only when a PR is newly created**, never when re-publishing to an existing open PR (follow-up pushes stay silent).
+- **Three publish modes** (manual publish via the UI; auto-publish always uses `new_pr`):
+
+  | Mode | What it does | When to use |
+  |---|---|---|
+  | `new_pr` *(default, current behaviour)* | Push `jalebi/<id>` → target, open a new PR (or reuse an existing open PR with that head). | The agent's work is a standalone change. |
+  | `update_pr` | Fast-forward (or merge) `jalebi/<id>` into an existing PR's head branch, force-push with `--force-with-lease`. | The agent's commits should land on top of an existing PR (e.g. addressing review feedback or adding to a branch the user already opened). |
+  | `push_branch` | Fast-forward (or merge) `jalebi/<id>` into a named branch, force-push with `--force-with-lease`. No PR interaction. | The agent's work goes onto a feature branch with no PR. |
+
+  All three run in Jalebi's queue/server process — never in the agent subprocess. `auth_env` (git push credentials) is never applied to the agent env, so the agent still cannot push directly (see `docs/10-security.md`).
+
+- **Smart-default for the manual Publish button:**
+  - **freeform / screen_finding / triggered** — if `task.prs_json` is non-empty (the user attached a PR at creation time), the button reads `"Push to PR #N"` and dispatches `update_pr` for the first linked PR. Otherwise it reads `"Publish"` and dispatches `new_pr`.
+  - **issue_fix** — always `"Publish"` and `new_pr` (its canonical purpose is opening a new PR with `Closes #N`); the other modes are still available under the **Advanced** disclosure.
+  - **Advanced** disclosure exposes all three modes + a PR picker (when `prs_json` has >1 entry) + a branch text input for `push_branch`.
+
+- **`update_pr` / `push_branch` mechanics** (`apps/server/src/jalebi/queue.py`):
+  1. Fetch origin, capture the remote SHA of the target branch (`GitWorkspace.current_remote_sha`).
+  2. `GitWorkspace.fast_forward_into(task_id, full_name, target_branch, token)` — try FF first, fall back to a regular merge (creates a merge commit if the branches diverged). On conflict, **abort** the merge and return the conflicting file list; the queue raises `PublishConflict` (HTTP 409).
+  3. `GitWorkspace.push_existing_branch(full_name, branch, token)` — `git push origin <branch> --force-with-lease`. If the remote moved since step 1, the push is refused with `PushLeaseFailed` (HTTP 412).
+  4. Append a timeline step to the latest run: `"Pushed to PR #N (existing PR head branch)."` or `"Pushed to branch \`<name>\`."`.
+
+- **Lease safety:** `--force-with-lease` refuses to overwrite if someone else pushed to the remote branch between the fetch and the push. The UI surfaces this as a clear "remote branch moved" error so the owner can re-fetch, decide, and retry — never silent clobbering.
 
 ## 9. Cleanup / prune policy (PRD §F12)
 

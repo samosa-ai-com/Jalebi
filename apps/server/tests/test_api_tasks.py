@@ -218,6 +218,56 @@ def test_delete_task(client: FlaskClient, repo_id: int) -> None:
     assert client.delete(f"/api/tasks/{task_id}").status_code == 404
 
 
+def test_delete_task_cascade_handles_all_children(client, session, repo_id: int) -> None:
+    """Deleting a task removes every child row (Followup, ReviewAssignment,
+    Artifact, Run). Locks the Step-45/L14 single-source cascade in place —
+    if a future change adds a new child table to ``db.py`` without updating
+    ``tasks.delete_tasks_cascade``, this test trips (the new row is left
+    orphaned under the deleted task)."""
+    from sqlalchemy import select
+
+    from jalebi import catalog
+    from jalebi.db import Artifact, Followup, ReviewAssignment, Run, Task, utcnow
+
+    catalog.create_agent(
+        session, id="auditor-cascade", name="A", kind="reviewer",
+        personality_md="x", enabled=True,
+    )
+    task_id = client.post(
+        "/api/tasks", json={"repo_id": repo_id, "prompt": "x"}
+    ).get_json()["id"]
+    run = Run(
+        task_id=task_id, seq=1, session_id="s1", status="running",
+        started_at=utcnow(),
+    )
+    session.add(run)
+    session.commit()
+    session.add(Followup(task_id=task_id, run_id=run.id, body="more"))
+    session.add(Artifact(run_id=run.id, path="a.txt", size=1))
+    session.add(ReviewAssignment(
+        task_id=task_id, agent_id="auditor-cascade", pr_number=1,
+        repo_id=repo_id, status="queued", created_at=utcnow(),
+    ))
+    session.commit()
+
+    resp = client.delete(f"/api/tasks/{task_id}")
+    assert resp.status_code == 200
+
+    assert session.get(Task, task_id) is None
+    assert session.execute(
+        select(Run).where(Run.id == run.id)
+    ).scalar_one_or_none() is None
+    assert session.execute(
+        select(Followup).where(Followup.task_id == task_id)
+    ).scalars().all() == []
+    assert session.execute(
+        select(Artifact).where(Artifact.run_id == run.id)
+    ).scalars().all() == []
+    assert session.execute(
+        select(ReviewAssignment).where(ReviewAssignment.task_id == task_id)
+    ).scalars().all() == []
+
+
 def test_create_task_inherits_repo_pat(app, client, session) -> None:
     from jalebi import repos, secrets
 

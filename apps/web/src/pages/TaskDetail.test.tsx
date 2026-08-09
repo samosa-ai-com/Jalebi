@@ -25,6 +25,7 @@ const TASK = {
   repo_full_name: "owner/repo",
   source_branch: "main",
   target_branch: "main",
+  agent_id: null,
   model: "m1",
   cli: null,
   pat_name: null,
@@ -39,6 +40,7 @@ const TASK = {
   updated_at: "2026-08-06T10:01:00",
   run: RUN,
   followups: [],
+  reviewers: [],
 };
 
 const REPOS = [
@@ -146,6 +148,9 @@ describe("TaskDetail", () => {
 
     renderDetail();
     expect(await screen.findByText("Follow-up")).toBeInTheDocument();
+    expect(
+      screen.getByText(/Resume refreshes remote refs first/)
+    ).toBeInTheDocument();
 
     await userEvent.type(
       screen.getByPlaceholderText(/Address the reviewer comments/),
@@ -275,6 +280,11 @@ describe("TaskDetail", () => {
     const publish = await screen.findByRole("button", { name: "Publish" });
     await userEvent.click(publish);
 
+    // The publish action now goes through a confirmation dialog so the owner
+    // sees the target (PR #, branch) before the push.
+    const confirm = await screen.findByRole("button", { name: "Confirm" });
+    await userEvent.click(confirm);
+
     expect(await screen.findByText("PR create failed")).toBeInTheDocument();
     // The failure is shown inline; the page is NOT replaced by a full-page error.
     expect(screen.getByText("fix the bug")).toBeInTheDocument();
@@ -329,5 +339,365 @@ describe("TaskDetail", () => {
       () => expect(screen.getByText("running")).toBeInTheDocument(),
       { timeout: 5000 }
     );
+  });
+
+  it("shows assigned reviewers with status and can assign more", async () => {
+    const reviewerTask = {
+      ...TASK,
+      pr_number: 9,
+      prs: [9],
+      status: "done",
+      run: { ...RUN, status: "done" },
+      reviewers: [
+        {
+          id: 1,
+          task_id: 8,
+          agent_id: "auditor-a",
+          agent_name: "Auditor A",
+          run_id: 2,
+          pr_number: 9,
+          repo_id: 1,
+          status: "posted",
+          created_at: "2026-08-08T10:00:00",
+        },
+      ],
+    };
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/runs")) {
+        return { ok: true, json: async () => [reviewerTask.run] };
+      }
+      if (url.includes("/api/tasks") && init?.method === "POST") {
+        return { ok: true, json: async () => [] };
+      }
+      if (url.includes("/api/tasks")) {
+        return { ok: true, json: async () => reviewerTask };
+      }
+      if (url.includes("/api/agents")) {
+        return {
+          ok: true,
+          json: async () => [
+            { id: "auditor-a", name: "Auditor A", kind: "reviewer", skills: [], enabled: true },
+            { id: "auditor-b", name: "Auditor B", kind: "reviewer", skills: [], enabled: true },
+          ],
+        };
+      }
+      if (url.includes("/api/github/tokens")) {
+        return { ok: true, json: async () => ({ accounts: [] }) };
+      }
+      if (url.includes("/api/models")) {
+        return { ok: true, json: async () => ({ cli: "opencode", models: ["m1"] }) };
+      }
+      return { ok: true, json: async () => REPOS };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderDetail();
+    expect(await screen.findByText("Reviewers")).toBeInTheDocument();
+    expect(screen.getByText("Auditor A")).toBeInTheDocument();
+    expect(screen.getByText("posted")).toBeInTheDocument();
+    expect(screen.getByText(/1\/1 posted/)).toBeInTheDocument();
+
+    // Auditor A is already assigned, so only Auditor B is offered.
+    await userEvent.click(screen.getByRole("button", { name: /Auditor B/ }));
+    await waitFor(() => {
+      const assignCall = fetchMock.mock.calls.find(
+        ([url, init]) =>
+          String(url).includes("/api/tasks/7/reviewers") && init?.method === "POST"
+      );
+      expect(assignCall).toBeDefined();
+      const body = JSON.parse((assignCall?.[1] as RequestInit).body as string) as {
+        reviewers: string[];
+      };
+      expect(body.reviewers).toEqual(["auditor-b"]);
+    });
+  });
+
+  it("hides Address reviewers on a pr_review task (fixer-only action)", async () => {
+    const reviewTask = {
+      ...TASK,
+      type: "pr_review",
+      pr_number: 9,
+      prs: [9],
+      status: "done",
+      run: { ...RUN, status: "done" },
+      reviewers: [],
+    };
+    stubFetch(reviewTask);
+    vi.stubGlobal("EventSource", FakeEventSource);
+
+    renderDetail();
+    await screen.findByText("Follow-up");
+    // The follow-up composer exists, but the fixer-only Address-reviewers
+    // button must NOT be offered on a reviewer task.
+    expect(screen.queryByRole("button", { name: "Address reviewers" })).toBeNull();
+  });
+
+  it("shows Address reviewers on a fix task that has a PR", async () => {
+    const fixTask = {
+      ...TASK,
+      type: "issue_fix",
+      pr_number: 9,
+      prs: [9],
+      status: "done",
+      run: { ...RUN, status: "done" },
+      reviewers: [],
+    };
+    stubFetch(fixTask);
+    vi.stubGlobal("EventSource", FakeEventSource);
+
+    renderDetail();
+    await screen.findByText("Follow-up");
+    expect(
+      await screen.findByRole("button", { name: "Address reviewers" })
+    ).toBeInTheDocument();
+  });
+
+  describe("publish modes", () => {
+    function doneTask(overrides: Record<string, unknown> = {}) {
+      return {
+        ...TASK,
+        ...overrides,
+        status: "done",
+        run: { ...RUN, status: "done" },
+      };
+    }
+
+    function stubFetchWithPublish(task: Record<string, unknown>, publishResponse: unknown) {
+      const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === "POST" && url.includes("/publish")) {
+          return { ok: true, json: async () => publishResponse };
+        }
+        if (url.endsWith("/runs")) {
+          return { ok: true, json: async () => [task.run ?? RUN] };
+        }
+        if (url.includes("/api/tasks")) {
+          return { ok: true, json: async () => task };
+        }
+        if (url.includes("/api/github/tokens")) {
+          return { ok: true, json: async () => ({ accounts: [] }) };
+        }
+        if (url.includes("/api/models")) {
+          return { ok: true, json: async () => ({ cli: "opencode", models: ["m1"] }) };
+        }
+        return { ok: true, json: async () => REPOS };
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      return fetchMock;
+    }
+
+    it("shows 'Publish' when no PR is linked", async () => {
+      stubFetchWithPublish(doneTask({ prs: [] }), { status: "done", mode: "new_pr", pr_number: 42 });
+      renderDetail();
+      const btn = await screen.findByRole("button", { name: "Publish" });
+      await userEvent.click(btn);
+      const confirm = await screen.findByRole("button", { name: "Confirm" });
+      await userEvent.click(confirm);
+      await waitFor(() => {
+        const call = vi.mocked(fetch).mock.calls.find(
+          ([url, init]) =>
+            String(url).includes("/api/tasks/7/publish") && init?.method === "POST"
+        );
+        expect(call).toBeDefined();
+        const body = JSON.parse((call?.[1] as RequestInit).body as string) as {
+          mode?: string;
+        };
+        // Default mode is new_pr.
+        expect(body.mode).toBe("new_pr");
+      });
+    });
+
+    it("defaults to 'Push to PR #N' when a PR was attached at creation", async () => {
+      stubFetchWithPublish(
+        doneTask({ prs: [9] }),
+        { status: "done", mode: "update_pr", pr_number: 9 }
+      );
+      renderDetail();
+      const btn = await screen.findByRole("button", { name: "Push to PR #9" });
+      await userEvent.click(btn);
+      const confirm = await screen.findByRole("button", { name: "Confirm" });
+      await userEvent.click(confirm);
+      await waitFor(() => {
+        const call = vi.mocked(fetch).mock.calls.find(
+          ([url, init]) =>
+            String(url).includes("/api/tasks/7/publish") && init?.method === "POST"
+        );
+        expect(call).toBeDefined();
+        const body = JSON.parse((call?.[1] as RequestInit).body as string) as {
+          mode?: string;
+          pr_number?: number;
+        };
+        expect(body.mode).toBe("update_pr");
+        expect(body.pr_number).toBe(9);
+      });
+    });
+
+    it("Advanced disclosure exposes push_branch with a branch input", async () => {
+      stubFetchWithPublish(
+        doneTask({ prs: [] }),
+        { status: "done", mode: "push_branch", branch: "feature/manual" }
+      );
+      renderDetail();
+      await screen.findByRole("button", { name: "Publish" });
+      await userEvent.click(screen.getByRole("button", { name: "Advanced" }));
+      // Pick the "Push to branch" radio.
+      const radios = screen.getAllByRole("radio", { name: /Push to specific branch/ });
+      await userEvent.click(radios[0]);
+      // Fill the branch input.
+      const branchInput = screen.getByPlaceholderText("branch name");
+      await userEvent.type(branchInput, "feature/manual");
+      // Click "Run" inside the Advanced panel.
+      await userEvent.click(screen.getByRole("button", { name: "Run" }));
+      const confirm = await screen.findByRole("button", { name: "Confirm" });
+      await userEvent.click(confirm);
+      await waitFor(() => {
+        const call = vi.mocked(fetch).mock.calls.find(
+          ([url, init]) =>
+            String(url).includes("/api/tasks/7/publish") && init?.method === "POST"
+        );
+        expect(call).toBeDefined();
+        const body = JSON.parse((call?.[1] as RequestInit).body as string) as {
+          mode?: string;
+          branch?: string;
+        };
+        expect(body.mode).toBe("push_branch");
+        expect(body.branch).toBe("feature/manual");
+      });
+    });
+
+    it("surfaces a server error from publishTask inside the dialog", async () => {
+      const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === "POST" && url.includes("/publish")) {
+          return { ok: false, status: 409, json: async () => ({ error: "conflict" }) };
+        }
+        if (url.endsWith("/runs")) {
+          return { ok: true, json: async () => [RUN] };
+        }
+        if (url.includes("/api/tasks")) {
+          return { ok: true, json: async () => doneTask() };
+        }
+        if (url.includes("/api/github/tokens")) {
+          return { ok: true, json: async () => ({ accounts: [] }) };
+        }
+        if (url.includes("/api/models")) {
+          return { ok: true, json: async () => ({ cli: "opencode", models: ["m1"] }) };
+        }
+        return { ok: true, json: async () => REPOS };
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      renderDetail();
+      const publish = await screen.findByRole("button", { name: "Publish" });
+      await userEvent.click(publish);
+      const confirm = await screen.findByRole("button", { name: "Confirm" });
+      await userEvent.click(confirm);
+      expect(await screen.findByText("conflict")).toBeInTheDocument();
+    });
+
+    it("lists the repo's open PRs in the update_pr picker and can publish to a picked PR", async () => {
+      const task = doneTask({
+        prs: [],
+        source_branch: "phase-1",
+        target_branch: "main",
+        pat_name: "RB",
+        repo_full_name: "owner/repo",
+      });
+      const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === "POST" && url.includes("/publish")) {
+          return { ok: true, json: async () => ({ status: "done", mode: "update_pr", pr_number: 5 }) };
+        }
+        if (url.endsWith("/runs")) return { ok: true, json: async () => [task.run ?? RUN] };
+        if (url.includes("/api/tasks")) return { ok: true, json: async () => task };
+        if (url.includes("/api/github/tokens")) return { ok: true, json: async () => ({ accounts: [] }) };
+        if (url.includes("/api/models")) return { ok: true, json: async () => ({ cli: "opencode", models: ["m1"] }) };
+        if (url.includes("/api/github/context")) {
+          return {
+            ok: true,
+            json: async () => ({
+              issues: [],
+              prs: [
+                { number: 1, title: "Phase 1", html_url: "u", state: "open", base: "main", head: "phase-1", author: "me" },
+                { number: 5, title: "Housekeeping", html_url: "u", state: "open", base: "main", head: "chore", author: "me" },
+              ],
+              branches: ["main", "phase-1"],
+            }),
+          };
+        }
+        return { ok: true, json: async () => REPOS };
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      renderDetail();
+      // No linked PR, but PR #1's head (phase-1) matches the task's source
+      // branch → the smart default targets it instead of opening a new PR.
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: "Push to PR #1" })).toBeInTheDocument();
+      });
+
+      // Advanced → Update existing PR → the picker shows the repo's open PRs.
+      await userEvent.click(screen.getByRole("button", { name: "Advanced" }));
+      await userEvent.click(screen.getByRole("radio", { name: /Update existing PR/ }));
+      const select = screen.getByRole("combobox", { name: "Pull request to update" });
+      expect(screen.getByRole("option", { name: /#1 — Phase 1/ })).toBeInTheDocument();
+      expect(screen.getByRole("option", { name: /#5 — Housekeeping/ })).toBeInTheDocument();
+
+      // Pick a different open PR and run the publish.
+      await userEvent.selectOptions(select, "5");
+      await userEvent.click(screen.getByRole("button", { name: "Run" }));
+      const confirm = await screen.findByRole("button", { name: "Confirm" });
+      await userEvent.click(confirm);
+      await waitFor(() => {
+        const call = vi.mocked(fetch).mock.calls.find(
+          ([url, init]) => String(url).includes("/api/tasks/7/publish") && init?.method === "POST"
+        );
+        expect(call).toBeDefined();
+        const body = JSON.parse((call?.[1] as RequestInit).body as string) as {
+          mode?: string;
+          pr_number?: number;
+        };
+        expect(body.mode).toBe("update_pr");
+        expect(body.pr_number).toBe(5);
+      });
+    });
+
+    it("falls back to linked PRs when the repo's open PRs cannot be loaded", async () => {
+      const task = doneTask({ prs: [9], pat_name: "RB" });
+      const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === "POST" && url.includes("/publish")) {
+          return { ok: true, json: async () => ({ status: "done", mode: "update_pr", pr_number: 9 }) };
+        }
+        if (url.endsWith("/runs")) return { ok: true, json: async () => [task.run ?? RUN] };
+        if (url.includes("/api/tasks")) return { ok: true, json: async () => task };
+        if (url.includes("/api/github/tokens")) return { ok: true, json: async () => ({ accounts: [] }) };
+        if (url.includes("/api/models")) return { ok: true, json: async () => ({ cli: "opencode", models: ["m1"] }) };
+        if (url.includes("/api/github/context")) {
+          return { ok: false, status: 502, json: async () => ({ error: "no token" }) };
+        }
+        return { ok: true, json: async () => REPOS };
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      renderDetail();
+      await screen.findByRole("button", { name: "Push to PR #9" });
+      await userEvent.click(screen.getByRole("button", { name: "Advanced" }));
+      await userEvent.click(screen.getByRole("radio", { name: /Update existing PR/ }));
+      const select = screen.getByRole("combobox", { name: "Pull request to update" });
+      expect(screen.getByRole("option", { name: "PR #9" })).toBeInTheDocument();
+      expect(select).toHaveTextContent(/couldn't load PRs/);
+
+      await userEvent.click(screen.getByRole("button", { name: "Run" }));
+      const confirm = await screen.findByRole("button", { name: "Confirm" });
+      await userEvent.click(confirm);
+      await waitFor(() => {
+        const call = vi.mocked(fetch).mock.calls.find(
+          ([url, init]) => String(url).includes("/api/tasks/7/publish") && init?.method === "POST"
+        );
+        expect(call).toBeDefined();
+        const body = JSON.parse((call?.[1] as RequestInit).body as string) as {
+          mode?: string;
+          pr_number?: number;
+        };
+        expect(body.mode).toBe("update_pr");
+        expect(body.pr_number).toBe(9);
+      });
+    });
   });
 });

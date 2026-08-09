@@ -45,7 +45,8 @@ default only for a key added by a code update before the next restart.
 | `agent_cli` | live (per run) |
 | `secret_patterns` | live (per run/prompt ingest) |
 | `default_timeout_minutes` | live (used for new tasks / watchdog fallback) |
-| `retry_policy.auto_retry` | live (per run) |
+| `retry_policy` (`auto_retry`, `continue_prompt`, `timeout_multiplier`, `max_timeout_minutes`) | live (per run completion) |
+| `stall_timeout_seconds` | live (per run start) |
 | `artifact_ttl_days` | **startup only** (artifact prune runs once at boot) |
 | `ntfy_topic` | live (per notification; merged endpoint — bare topic or full URL) |
 | `notify_on_done` / `notify_on_failed` / `notify_on_progress` / `notify_on_needs_approval` | live (per run/progress ping) |
@@ -58,7 +59,7 @@ Settings values are **type-validated** on `POST /api/settings` (rejects `"false"
 - Prompts, follow-up bodies, PR title/body, run-end diffs, and artifacts are masked with the **PAT and `secret_patterns`** at ingest — pattern-secrets never reach GitHub PRs.
 - Unknown `/api/*` paths return `404` JSON (they do not fall through to the SPA `index.html`).
 - Artifact downloads are path-traversal-safe; the PAT never appears in argv, URLs, or logs (git auth via `GIT_CONFIG_*` Basic header). Agent children spawn in their own session and cancel/timeout kill the whole process group.
-- **Stall guard** (fixed constant, 300s) bounds the empty-stream/hang failure mode; the per-task timeout remains the last line of defence.
+- **Stall guard** (`settings.stall_timeout_seconds`, default 600s) bounds the empty-stream/hang failure mode — a quiet-but-healthy sub-agent/tool phase gets a generous window, and if it still trips, **auto-recovery** (see `docs/06-task-queue.md` §7) resumes/restarts the run instead of stranding the task. The per-task timeout remains the last line of defence.
 
 ## 5. Known limitations (flagged)
 

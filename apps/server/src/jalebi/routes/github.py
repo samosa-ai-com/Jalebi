@@ -16,7 +16,16 @@ from sqlalchemy import delete as sa_delete
 from sqlalchemy import select
 
 from jalebi import artifacts, db, secrets
-from jalebi.db import Artifact, Followup, Repo, Run, Task
+from jalebi.db import (
+    Artifact,
+    EventDelivery,
+    Followup,
+    Repo,
+    ReviewAssignment,
+    Run,
+    Task,
+    TriggerRule,
+)
 from jalebi.git_workspace import GitWorkspace
 from jalebi.github import GitHubClient, GitHubError, TokenInfo
 
@@ -222,12 +231,25 @@ def delete_token(name: str) -> ResponseReturnValue:
     run_ids = [r.id for r in runs]
     if task_ids:
         session.execute(sa_delete(Followup).where(Followup.task_id.in_(task_ids)))
+        session.execute(sa_delete(ReviewAssignment).where(ReviewAssignment.task_id.in_(task_ids)))
+        # Assignments whose PR lives on a deleted repo but whose reviewer task is
+        # on another account would dangle — drop them too.
+        if repo_ids:
+            session.execute(
+                sa_delete(ReviewAssignment).where(ReviewAssignment.repo_id.in_(repo_ids))
+            )
     if run_ids:
         session.execute(sa_delete(Artifact).where(Artifact.run_id.in_(run_ids)))
         session.execute(sa_delete(Run).where(Run.id.in_(run_ids)))
     if task_ids:
         session.execute(sa_delete(Task).where(Task.id.in_(task_ids)))
     if repo_ids:
+        # Webhook artifacts of the repo: delete deliveries first (they reference
+        # both the repo and the rules), then the rules, then the repo.
+        session.execute(
+            sa_delete(EventDelivery).where(EventDelivery.repo_id.in_(repo_ids))
+        )
+        session.execute(sa_delete(TriggerRule).where(TriggerRule.repo_id.in_(repo_ids)))
         session.execute(sa_delete(Repo).where(Repo.id.in_(repo_ids)))
 
     secrets.remove_github_token(config, name)

@@ -1,6 +1,6 @@
 """Tests for the prompt/AGENTS.md builders."""
 
-from jalebi import prompts, tasks
+from jalebi import catalog, prompts, tasks
 from jalebi.db import Repo
 
 
@@ -104,3 +104,48 @@ def test_followup_prompt_includes_constraints(session) -> None:
     prompt = prompts.build_followup_prompt(task, repo, "address the reviewers")
     assert prompt.startswith("address the reviewers")
     assert "no gh" in prompt
+
+
+def test_agent_md_merges_personality_and_skills(session) -> None:
+    repo = Repo(
+        full_name="owner/repo",
+        default_branch="main",
+        clone_url="https://github.com/owner/repo.git",
+        pat_name="test",
+    )
+    session.add(repo)
+    session.commit()
+    agent = catalog.create_agent(
+        session,
+        id="security-auditor",
+        name="Security Auditor",
+        kind="reviewer",
+        personality_md="You are a senior application security engineer.",
+        skills=[
+            {"name": "secure-coding", "content": "# Secure coding\n"},
+            {"name": "owasp-top10", "content": "# OWASP\n"},
+        ],
+    )
+    task = _task(session, repo)
+    md = prompts.build_agent_md(task, repo, agent=agent)
+    assert "## Agent personality" in md
+    assert "You are a senior application security engineer." in md
+    assert "## Skills" in md
+    assert "@.claude/skills/secure-coding/SKILL.md" in md
+    assert "@.claude/skills/owasp-top10/SKILL.md" in md
+    assert "Agent: `Security Auditor` (security-auditor)" in md
+
+
+def test_agent_md_without_agent_no_personality_section(session) -> None:
+    repo = Repo(
+        full_name="owner/repo",
+        default_branch="main",
+        clone_url="https://github.com/owner/repo.git",
+        pat_name="test",
+    )
+    session.add(repo)
+    session.commit()
+    task = _task(session, repo)
+    md = prompts.build_agent_md(task, repo, agent=None)
+    assert "## Agent personality" not in md
+    assert "## Skills" not in md

@@ -4,11 +4,12 @@
 
 ---
 
-## 1. Localhost binding (PRD §F13)
+## 1. Network binding & auth (PRD §F13)
 
-- Server binds to **127.0.0.1** only.
-- **Implemented:** optional UI password — when `JALEBI_PASSWORD` (or `OPENCODE_SERVER_PASSWORD`) is set, every route except `/api/health` requires **Basic auth** (`WWW-Authenticate: Basic`; the browser prompts once, then sends credentials on same-origin API/SSE calls). Off by default; intended for tunnel exposure.
-- If the app is ever exposed (tunnel), require the UI password and document the risk.
+- Server binds to **0.0.0.0** by default for local network (LAN) access (configurable via `JALEBI_HOST=127.0.0.1` or any custom interface IP).
+- **Implemented:** optional UI password — when `JALEBI_PASSWORD` (or `OPENCODE_SERVER_PASSWORD`) is set, every route except `/api/health` requires **Basic auth** (`WWW-Authenticate: Basic`; the browser prompts once, then sends credentials on same-origin API/SSE calls). Off by default; intended for LAN or tunnel exposure.
+- If the app is exposed on a shared network or tunnel, set `JALEBI_PASSWORD` to protect access.
+- **Failed-login notifications:** every wrong-password attempt pushes an ntfy alert ("failed login attempt" + client IP, attempted username masked so a real PAT used as a username never ships raw) to the configured `ntfy_topic`. Pushes are **throttled to one per client per 60s** (a brute-force scan can't flood the channel) and run on a **daemon thread** — a dead/slow ntfy server never blocks or delays the 401 response, only the alert is dropped.
 
 ## 2. Secrets (PRD §F1, §F13)
 

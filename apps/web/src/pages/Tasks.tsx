@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import { StatusBadge } from "../components/StatusBadge";
-import type { Account, GithubContext, Repo, Task } from "../types";
+import type { Account, CatalogAgent, GithubContext, Repo, Task } from "../types";
 
 function repoName(repos: Repo[], id: number): string {
   return repos.find((r) => r.id === id)?.full_name ?? `repo#${id}`;
@@ -85,6 +85,7 @@ function CreateTask({
   const [prompt, setPrompt] = useState("");
   const [sourceBranch, setSourceBranch] = useState("");
   const [targetBranch, setTargetBranch] = useState("");
+  const [agentId, setAgentId] = useState("");
   const [model, setModel] = useState("");
   const [patName, setPatName] = useState("");
   const [issueNumber, setIssueNumber] = useState("");
@@ -92,6 +93,8 @@ function CreateTask({
   const [publishMode, setPublishMode] = useState<"auto" | "manual" | "">("");
   const [context, setContext] = useState<GithubContext | null>(null);
   const [models, setModels] = useState<string[]>([]);
+  const [agents, setAgents] = useState<CatalogAgent[]>([]);
+  const [reviewers, setReviewers] = useState<string[]>([]);
   const [envVars, setEnvVars] = useState<string[]>([]);
   const [availableEnvVars, setAvailableEnvVars] = useState<{ name: string; masked: string }[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -116,6 +119,10 @@ function CreateTask({
     api
       .getModels()
       .then((m) => setModels(m.models ?? []))
+      .catch(() => {});
+    api
+      .getAgents(true)
+      .then((a) => setAgents(a ?? []))
       .catch(() => {});
   }, []);
 
@@ -182,18 +189,21 @@ function CreateTask({
         prompt: prompt.trim(),
         source_branch: sourceBranch || undefined,
         target_branch: targetBranch || undefined,
+        agent_id: agentId || undefined,
         model: model || undefined,
-        cli: "opencode",
         pat_name: patName || undefined,
         issue_number: issueNumber ? Number(issueNumber) : undefined,
         pr_number: prNumber ? Number(prNumber) : undefined,
         publish_mode: publishMode === "" ? undefined : publishMode,
+        reviewers: reviewers.length > 0 ? reviewers : undefined,
         env_vars: envVars,
       });
       setPrompt("");
       setIssueNumber("");
       setPrNumber("");
       setEnvVars([]);
+      setAgentId("");
+      setReviewers([]);
       onCreated();
     } catch (err) {
       setError(err instanceof Error ? err.message : "failed to create task");
@@ -260,7 +270,7 @@ function CreateTask({
         </Select>
       </div>
 
-      {(type === "issue_fix" || type === "pr_review") && context && (
+      {(type === "issue_fix" || type === "pr_review" || type === "freeform") && context && (
         <div className="grid gap-4 sm:grid-cols-2">
           {type === "issue_fix" && (
             <Select
@@ -276,9 +286,9 @@ function CreateTask({
               ))}
             </Select>
           )}
-          {type === "pr_review" && (
+          {type !== "issue_fix" && (
             <Select
-              label="Pull request"
+              label={type === "pr_review" ? "Pull request" : "Link PR (optional)"}
               value={prNumber}
               onChange={setPrNumber}
               placeholder={context.prs.length ? "Select a PR…" : "No open PRs"}
@@ -337,9 +347,58 @@ function CreateTask({
         </div>
       )}
 
+      {type === "pr_review" && agents.filter((a) => a.kind === "reviewer").length > 0 && (
+        <fieldset>
+          <legend className="mb-1.5 block text-xs font-medium text-ink-400">
+            Reviewers (catalog agents, kind reviewer)
+          </legend>
+          <div className="flex flex-wrap gap-2">
+            {agents
+              .filter((a) => a.kind === "reviewer")
+              .map((a) => {
+                const checked = reviewers.includes(a.id);
+                return (
+                  <label
+                    key={a.id}
+                    className={`inline-flex cursor-pointer items-center gap-1.5 rounded-full border px-3 py-1 font-mono text-xs transition-colors ${
+                      checked
+                        ? "border-syrup-500/60 bg-syrup-500/10 text-syrup-300"
+                        : "border-ink-800 text-ink-400 hover:border-ink-600"
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() =>
+                        setReviewers((prev) =>
+                          checked ? prev.filter((n) => n !== a.id) : [...prev, a.id]
+                        )
+                      }
+                      className="hidden"
+                    />
+                    {a.name} ({a.id})
+                  </label>
+                );
+              })}
+          </div>
+          <p className="mt-1.5 text-[11px] text-ink-500">
+            Each reviewer runs its own review task on this PR and posts its comments.
+          </p>
+        </fieldset>
+      )}
+
       <div className="grid gap-4 sm:grid-cols-4">
-        <Select label="Agent" value="opencode" onChange={() => {}}>
-          <option value="opencode">opencode</option>
+        <Select
+          label="Agent"
+          value={agentId}
+          onChange={setAgentId}
+          placeholder="Default build agent"
+        >
+          {agents.map((a) => (
+            <option key={a.id} value={a.id}>
+              {a.name} ({a.id})
+            </option>
+          ))}
         </Select>
         <Select label="Model" value={model} onChange={setModel} placeholder="default model">
           {models.map((m) => (

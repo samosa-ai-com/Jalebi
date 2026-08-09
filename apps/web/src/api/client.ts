@@ -1,5 +1,8 @@
 import type {
+  CatalogAgent,
+  CatalogSkill,
   EnvVar,
+  EventDelivery,
   GithubContext,
   GithubRepo,
   Health,
@@ -9,6 +12,8 @@ import type {
   SseEvent,
   Task,
   TokensResponse,
+  TriggerRule,
+  WebhookStatus,
 } from "../types";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -36,12 +41,14 @@ export interface CreateTaskInput {
   prompt: string;
   source_branch?: string;
   target_branch?: string;
+  agent_id?: string;
   model?: string;
   cli?: string;
   pat_name?: string;
   issue_number?: number;
   pr_number?: number;
   publish_mode?: "auto" | "manual";
+  reviewers?: string[];
   env_vars?: string[];
 }
 
@@ -49,6 +56,96 @@ export const api = {
   getHealth: () => request<Health>("/api/health"),
   getSettings: () => request<SettingsMap>("/api/settings"),
   getModels: () => request<{ cli: string; models: string[] }>("/api/models"),
+  getAgents: (enabledOnly = false) =>
+    request<CatalogAgent[]>(`/api/agents${enabledOnly ? "?enabled=1" : ""}`),
+  createAgent: (input: {
+    id: string;
+    name: string;
+    kind: string;
+    cli?: string | null;
+    model?: string | null;
+    personality_md?: string;
+    skills?: CatalogSkill[];
+    custom_instructions?: string;
+    enabled?: boolean;
+  }) =>
+    request<CatalogAgent>("/api/agents", { method: "POST", body: JSON.stringify(input) }),
+  updateAgent: (
+    slug: string,
+    input: {
+      name?: string;
+      kind?: string;
+      cli?: string | null;
+      model?: string | null;
+      personality_md?: string;
+      skills?: CatalogSkill[];
+      custom_instructions?: string;
+      enabled?: boolean;
+    }
+  ) =>
+    request<CatalogAgent>(`/api/agents/${encodeURIComponent(slug)}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
+  deleteAgent: (slug: string) =>
+    request<{ deleted: string }>(`/api/agents/${encodeURIComponent(slug)}`, {
+      method: "DELETE",
+    }),
+  getWebhookStatus: () => request<WebhookStatus>("/api/webhook/status"),
+  getTriggerRules: (repoId?: number) =>
+    request<TriggerRule[]>(
+      `/api/triggers${repoId ? `?repo_id=${repoId}` : ""}`
+    ),
+  createTriggerRule: (input: {
+    repo_id: number;
+    event: string;
+    action: string;
+    branch_filter?: string;
+    label_filter?: string[];
+    author_filter?: string;
+    agent_ids?: string[];
+    custom_instructions?: string;
+    enabled?: boolean;
+  }) =>
+    request<TriggerRule>("/api/triggers", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  updateTriggerRule: (
+    id: number,
+    input: {
+      event?: string;
+      action?: string;
+      branch_filter?: string | null;
+      label_filter?: string[];
+      author_filter?: string | null;
+      agent_ids?: string[];
+      custom_instructions?: string | null;
+      enabled?: boolean;
+    }
+  ) =>
+    request<TriggerRule>(`/api/triggers/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
+  deleteTriggerRule: (id: number) =>
+    request<{ deleted: number }>(`/api/triggers/${id}`, { method: "DELETE" }),
+  getDeliveries: () => request<EventDelivery[]>("/api/webhooks/deliveries"),
+  replayDelivery: (id: number) =>
+    request<{ matched: number; results: unknown[] }>(
+      `/api/webhooks/deliveries/${id}/replay`,
+      { method: "POST" }
+    ),
+  registerWebhook: (repoId: number) =>
+    request<{ full_name: string; webhook_url: string; registered: boolean }>(
+      `/api/repos/${repoId}/webhook`,
+      { method: "POST" }
+    ),
+  unregisterWebhook: (repoId: number) =>
+    request<{ full_name: string; removed: number; registered: boolean }>(
+      `/api/repos/${repoId}/webhook`,
+      { method: "DELETE" }
+    ),
   updateSetting: (key: string, value: unknown) =>
     request<SettingsMap>(`/api/settings`, { method: "POST", body: JSON.stringify({ key, value }) }),
   testNotification: () =>
@@ -102,12 +199,35 @@ export const api = {
   rerunTask: (id: number) => request<Task>(`/api/tasks/${id}/rerun`, { method: "POST" }),
   deleteTask: (id: number) =>
     request<{ deleted: number }>(`/api/tasks/${id}`, { method: "DELETE" }),
-  publishTask: (id: number) =>
-    request<{ pr_number: number }>(`/api/tasks/${id}/publish`, { method: "POST" }),
-  postFollowup: (id: number, prompt: string, opts?: { pat_name?: string; model?: string }) =>
+  publishTask: (
+    id: number,
+    opts: {
+      mode?: "new_pr" | "update_pr" | "push_branch";
+      branch?: string;
+      pr_number?: number;
+    } = {},
+  ) => {
+    const body: Record<string, unknown> = {};
+    if (opts.mode) body.mode = opts.mode;
+    if (opts.branch) body.branch = opts.branch;
+    if (opts.pr_number !== undefined) body.pr_number = opts.pr_number;
+    return request<{ status: string; mode: string; pr_number?: number; branch?: string }>(
+      `/api/tasks/${id}/publish`,
+      {
+        method: "POST",
+        body: Object.keys(body).length ? JSON.stringify(body) : undefined,
+      },
+    );
+  },
+  postFollowup: (id: number, prompt: string, opts?: { pat_name?: string; model?: string; include_reviews?: boolean }) =>
     request<Task>(`/api/tasks/${id}/followup`, {
       method: "POST",
       body: JSON.stringify({ prompt, ...opts }),
+    }),
+  assignReviewers: (id: number, reviewers: string[]) =>
+    request<Task[]>(`/api/tasks/${id}/reviewers`, {
+      method: "POST",
+      body: JSON.stringify({ reviewers }),
     }),
   getRepos: () => request<Repo[]>("/api/repos"),
   connectRepo: (fullName: string, patName?: string) =>

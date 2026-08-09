@@ -125,6 +125,62 @@ Index: `run_id`.
 
 Unique: `(name, repo_id)`. Index: `repo_id`. See `docs/14-env-vars.md`.
 
+### `review_assignments` (Phase 1 — PRD F7)
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | int PK | |
+| `task_id` | int FK → tasks | the reviewer's own `pr_review` task |
+| `agent_id` | text | catalog agent slug (kind `reviewer`) |
+| `run_id` | int FK → runs, null | the reviewer run (set when it starts) |
+| `pr_number` | int | the PR under review |
+| `repo_id` | int FK → repos | |
+| `status` | text | `queued` \| `running` \| `posted` \| `failed` |
+| `created_at` | datetime | |
+
+Indexes: `task_id`, `pr_number`. Each reviewer runs as its own `pr_review`
+task; the assignment is a lightweight registry (task ↔ agent ↔ PR ↔ repo) so the
+PR card and the webhook flow can show posted status. See `docs/05` §6.
+
+### `trigger_rules` (Phase 1 — PRD F14)
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | int PK | |
+| `repo_id` | int FK → repos | |
+| `event` | text | e.g. `pull_request.opened`, `issues.opened`, `push` |
+| `action` | text | `start_review` \| `triage_issue` \| `create_task` \| `rerun_review` |
+| `branch_filter` | text, null | match head OR base ref |
+| `label_filter` | text, null | JSON list — all must be present |
+| `author_filter` | text, null | match PR/issue author login |
+| `agent_ids_json` | text, null | JSON list of catalog agent ids |
+| `custom_instructions` | text, null | task prompt for triage/create_task |
+| `enabled` | bool | disabled rules never fire |
+| `created_at` | datetime | |
+
+Index: `repo_id`. See `docs/16-triggers.md`.
+
+### `event_deliveries` (Phase 1 — PRD F14)
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | int PK | |
+| `github_delivery_id` | text UNIQUE | `X-GitHub-Delivery` — idempotency |
+| `event` | text | `X-GitHub-Event` |
+| `action` | text, null | payload `action` |
+| `repo_id` | int FK → repos, null | |
+| `repo_full_name` | text, null | |
+| `payload_json` | text | raw body (for replay) |
+| `received_at` | datetime | |
+| `status` | text | `received` \| `matched` \| `ignored` \| `failed` |
+| `result` | text, null | JSON `{"rules": [{"rule_id", "action", "work"}, ...]}` — full set of matched rules (the source of truth) |
+
+Index: `repo_id`. The UNIQUE `github_delivery_id` makes re-deliveries no-ops;
+the stored payload enables replay. When multiple rules match a single
+delivery, every matched rule's id is recorded in `result.rules[].rule_id`
+(Step 45/M5 dropped the single-value `matched_rule_id` column, which
+could only record `rules[0].id`).
+
 ### `settings`
 
 | Column | Type | Notes |
@@ -134,7 +190,29 @@ Unique: `(name, repo_id)`. Index: `repo_id`. See `docs/14-env-vars.md`.
 
 Settings keys (defaults in `jalebi/settings.py`): `concurrency` (4), `auto_publish` (true), `ntfy_topic` ("" — merged: bare topic **or** full URL), `default_timeout_minutes` (60), `retry_policy` (`{"auto_retry": false}`), `secret_patterns` (`[]`), `artifact_ttl_days` (7), `agent_cli` (`"opencode"`), `notify_on_done` (true), `notify_on_failed` (true), `notify_on_progress` (true), `notify_on_needs_approval` (true), `notify_progress_interval_minutes` (30). **Every key is materialized as a row at startup (`seed_defaults`)** — settings are persistent and never held in memory; stored values override the code default.
 
-## 3. Relationships (Phase 0)
+### `catalog_agents` (Phase 1 — PRD F6)
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | text PK | slug, e.g. `security-auditor` |
+| `name` | text | display name |
+| `kind` | text | `general` \| `reviewer` |
+| `cli` | text, null | backend override (opencode only today) |
+| `model` | text, null | pinned model |
+| `personality_md` | text | markdown merged into the worktree `AGENTS.md` |
+| `skills_json` | text, null | JSON list of `{name, content}` markdown files |
+| `custom_instructions` | text | appended to the task prompt |
+| `enabled` | bool | disabled agents aren't selectable on new tasks |
+| `created_at` | datetime | |
+
+`tasks.agent_id` references `catalog_agents.id` by slug but is **FK-less by
+design** (a SQLite batch rebuild of the FK-referenced `tasks` parent is the
+Step-37 migration hazard); validity is enforced in the service layer and at run
+time. Skill content lives in the DB and is materialized directly into the task
+worktree (`.claude/skills/<name>/SKILL.md`) at run time (see
+`docs/15-catalog.md`).
+
+## 3. Relationships (Phase 0 + Phase 1 catalog + reviewers)
 
 ```
 repos 1───* tasks
@@ -143,6 +221,10 @@ tasks 1───* followups
 runs  1───* followups  (run_id nullable)
 runs  1───* artifacts
 repos 0───* env_vars   (repo_id nullable = global)
+tasks 0───1 catalog_agents  (agent_id slug, FK-less by design)
+repos 1───* review_assignments
+tasks 1───* review_assignments  (task_id = the reviewer's own pr_review task)
+runs  0───1 review_assignments  (run_id, set when the reviewer run starts)
 ```
 
 ## 4. Key invariants
@@ -156,4 +238,4 @@ repos 0───* env_vars   (repo_id nullable = global)
 
 ## 5. Not yet implemented (later phases)
 
-`catalog_agents`, `review_assignments`, `trigger_rules`, `event_deliveries`, `check_runs`, `screenings`, `screening_runs`, `findings` — created by future migrations per PRD §10.
+`check_runs`, `screenings`, `screening_runs`, `findings` — created by future migrations per PRD §10.

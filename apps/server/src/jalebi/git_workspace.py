@@ -21,6 +21,14 @@ class GitWorkspaceError(Exception):
     """Raised when a git command fails or a precondition is unmet."""
 
 
+class PushLeaseFailed(GitWorkspaceError):
+    """``git push --force-with-lease`` refused because the remote moved.
+
+    Surfaces to the UI as a 412 with the old/new SHAs so the owner can
+    re-fetch, decide, and retry.
+    """
+
+
 def _clean_git_env(env: dict[str, str]) -> dict[str, str]:
     """Make a git subprocess environment hermetic.
 
@@ -297,21 +305,29 @@ class GitWorkspace:
         with self._lock_for(full_name):
             if not mirror.exists():
                 raise GitWorkspaceError(f"mirror missing for {full_name}; call ensure_mirror first")
+            # Always fetch the PR head so a re-run/follow-up reviews the *current*
+            # head, not the one first checked out (the PR may have gained commits
+            # since the initial review).
+            _run_git(
+                [
+                    "-C",
+                    str(mirror),
+                    "fetch",
+                    "origin",
+                    f"refs/pull/{pr_number}/head:{ref}",
+                ],
+                auth_env=auth,
+            )
             if not (ws / ".git").is_file():
-                _run_git(
-                    [
-                        "-C",
-                        str(mirror),
-                        "fetch",
-                        "origin",
-                        f"refs/pull/{pr_number}/head:{ref}",
-                    ],
-                    auth_env=auth,
-                )
                 _run_git(
                     ["-C", str(mirror), "worktree", "add", "--detach", str(ws), ref],
                     auth_env=auth,
                 )
+            else:
+                # Re-checkout the existing detached worktree to the current head.
+                # Review worktrees never hold agent-pushed work, so a hard reset is
+                # safe (untracked files such as node_modules are preserved).
+                _run_git(["-C", str(ws), "reset", "--hard", ref], auth_env=auth)
         return ws
 
     def remove_review_worktree(
@@ -462,3 +478,199 @@ class GitWorkspace:
                 conflicts = []
             _run_git(["-C", str(worktree), "merge", "--abort"])
             return conflicts
+
+    # -- publish modes: update_pr + push_branch --------------------------
+
+    def current_remote_sha(
+        self, full_name: str, branch: str, token: str | None = None
+    ) -> str | None:
+        """Return the SHA of ``origin/<branch>``, or ``None`` if absent.
+
+        Fetches first so the value reflects current remote state (and primes
+        the mirror's tracking ref for ``--force-with-lease``). A failed
+        fetch (e.g. the branch doesn't exist remotely) returns ``None``
+        rather than raising — callers check the SHA before deciding what
+        mode to use.
+        """
+        mirror = self.mirror_path(self.config.data_dir, full_name)
+        auth = _auth_env(token)
+        with self._lock_for(full_name):
+            try:
+                _run_git(["-C", str(mirror), "fetch", "origin", branch], auth_env=auth)
+            except GitWorkspaceError:
+                return None
+            try:
+                return _run_git(
+                    ["-C", str(mirror), "rev-parse", "--verify", f"refs/remotes/origin/{branch}"]
+                )
+            except GitWorkspaceError:
+                return None
+
+    def local_ref_sha(self, full_name: str, branch: str) -> str | None:
+        """Return the SHA of the mirror's ``refs/heads/<branch>``, or ``None``.
+
+        Used by the post-push log to read the local ref (which the push
+        already updated implicitly), avoiding a redundant network fetch.
+        """
+        mirror = self.mirror_path(self.config.data_dir, full_name)
+        try:
+            return _run_git(
+                ["-C", str(mirror), "rev-parse", "--verify", f"refs/heads/{branch}"]
+            )
+        except GitWorkspaceError:
+            return None
+
+    def fast_forward_into(
+        self,
+        task_id: int,
+        full_name: str,
+        target_branch: str,
+        token: str | None = None,
+    ) -> list[str]:
+        """Merge ``jalebi/<task_id>`` into a local ``target_branch``.
+
+        Caller is responsible for fetching the branch first (so the local
+        tracking ref matches the remote — use ``current_remote_sha``).
+
+        Returns a list of conflicting file paths (empty = clean merge). On
+        conflict the merge is ABORTED so the mirror is left in a clean state.
+        A fast-forward is preferred when possible; otherwise a real merge
+        commit is created.
+        """
+        mirror = self.mirror_path(self.config.data_dir, full_name)
+        auth = _auth_env(token)
+        task_branch = self.task_branch(task_id)
+
+        with self._lock_for(full_name):
+            if not mirror.exists():
+                raise GitWorkspaceError(
+                    f"mirror missing for {full_name}; call ensure_mirror first"
+                )
+            try:
+                _run_git(
+                    ["-C", str(mirror), "rev-parse", "--verify", f"refs/heads/{target_branch}"]
+                )
+            except GitWorkspaceError:
+                _run_git(
+                    ["-C", str(mirror), "branch", target_branch, f"origin/{target_branch}"],
+                    auth_env=auth,
+                )
+            try:
+                task_sha = _run_git(
+                    ["-C", str(mirror), "rev-parse", f"refs/heads/{task_branch}"]
+                )
+                target_sha = _run_git(
+                    ["-C", str(mirror), "rev-parse", f"refs/heads/{target_branch}"]
+                )
+            except GitWorkspaceError as exc:
+                raise GitWorkspaceError(
+                    f"cannot resolve branches for fast-forward: {exc}"
+                ) from None
+            if task_sha == target_sha:
+                return []  # nothing to do
+
+            temp_ws = self.worktree_path(self.config.data_dir, task_id) / "publish-tmp"
+            if temp_ws.exists():
+                _run_git(["-C", str(mirror), "worktree", "remove", "--force", str(temp_ws)])
+            _run_git(
+                [
+                    "-C",
+                    str(mirror),
+                    "worktree",
+                    "add",
+                    "-B",
+                    target_branch,
+                    str(temp_ws),
+                    target_branch,
+                ],
+                auth_env=auth,
+            )
+            try:
+                env = _clean_git_env(os.environ.copy())
+                if auth:
+                    env.update(auth)
+                proc = subprocess.run(
+                    ["git", "-C", str(temp_ws), "merge", task_branch],
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=GIT_TIMEOUT_SECONDS,
+                )
+                if proc.returncode == 0:
+                    return []
+                # Conflict path — same shape as merge_origin_into.
+                try:
+                    _run_git(
+                        [
+                            "-C",
+                            str(temp_ws),
+                            "rev-parse",
+                            "--verify",
+                            "-q",
+                            "MERGE_HEAD",
+                        ]
+                    )
+                except GitWorkspaceError:
+                    raise GitWorkspaceError(
+                        f"git merge failed: {(proc.stderr or '').strip()}"
+                    ) from None
+                try:
+                    conflicts = _run_git(
+                        [
+                            "-C",
+                            str(temp_ws),
+                            "diff",
+                            "--name-only",
+                            "--diff-filter=U",
+                        ]
+                    ).splitlines()
+                except GitWorkspaceError:
+                    conflicts = []
+                _run_git(["-C", str(temp_ws), "merge", "--abort"])
+                return conflicts
+            finally:
+                _run_git(["-C", str(mirror), "worktree", "remove", "--force", str(temp_ws)])
+
+    def push_existing_branch(
+        self, full_name: str, branch: str, token: str | None = None
+    ) -> None:
+        """Force-push ``branch`` to ``origin`` with ``--force-with-lease``.
+
+        Caller MUST have fetched the branch first (``current_remote_sha`` does
+        this). The lease compares the local tracking ref to the remote; if the
+        remote moved since the fetch, the push is refused and
+        :class:`PushLeaseFailed` is raised so the UI can surface a 412.
+
+        Lease detection: instead of pattern-matching git's stderr (which varies
+        across versions), we read git's own structured error output. Modern
+        git (>= 2.30) prints ``! [rejected] <remote_ref> -> <local_ref>
+        (stale info)`` to stderr for a lease failure; the substring
+        ``(stale info)`` is part of the protocol and is stable across
+        localisations. We match on the parenthetical alone to avoid false
+        positives from generic "non-fast-forward" messages that don't imply
+        a stale lease.
+        """
+        mirror = self.mirror_path(self.config.data_dir, full_name)
+        auth = _auth_env(token)
+        with self._lock_for(full_name):
+            base_env = os.environ.copy()
+            if auth:
+                base_env.update(auth)
+            proc = subprocess.run(
+                ["git", "-C", str(mirror), "push", "--force-with-lease", "origin", branch],
+                env=_clean_git_env(base_env),
+                capture_output=True,
+                text=True,
+                timeout=GIT_TIMEOUT_SECONDS,
+            )
+            if proc.returncode == 0:
+                return
+            stderr = (proc.stderr or "").strip() or (proc.stdout or "").strip()
+            if "(stale info)" in stderr:
+                raise PushLeaseFailed(
+                    f"remote branch {branch} moved since last fetch — "
+                    "re-fetch and retry to confirm the new state"
+                ) from None
+            raise GitWorkspaceError(
+                f"git push --force-with-lease {branch} failed: {stderr}"
+            )
