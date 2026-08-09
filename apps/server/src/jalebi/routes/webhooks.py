@@ -114,11 +114,35 @@ def webhook() -> ResponseReturnValue:
             summary = [{"type": "error", "error": str(exc)}]
         results.append({"rule_id": rule.id, "action": rule.action, "work": summary})
 
+    # A delivery only counts as "matched" when at least one rule actually
+    # produced non-error work (created/enqueued something). When every rule's
+    # work is empty or composed only of error entries (e.g. triage_issue/
+    # create_task rule fired but tasks.create_task raised on a disconnected
+    # repo, oversized prompt, or missing custom_instructions), record the
+    # delivery as "failed" so the Triggers page Delivery log doesn't lie about
+    # success. The HTTP response stays 200 (GitHub already accepted the
+    # delivery; we never want to make GitHub retry on app-side failures).
+    any_work = _any_rule_produced_work(results)
+    delivery_status = "matched" if any_work else "failed"
     _complete_delivery(
-        session, reserved, repo_id=repo_id, matched_rule_id=rules[0].id, status="matched",
-        result={"rules": results},
+        session, reserved, repo_id=repo_id, matched_rule_id=rules[0].id,
+        status=delivery_status, result={"rules": results},
     )
-    return jsonify({"ok": True, "matched": True, "results": results})
+    return jsonify({"ok": True, "matched": any_work, "results": results})
+
+
+def _any_rule_produced_work(results: list[dict]) -> bool:
+    """True iff at least one rule's ``work`` contains a non-error entry.
+
+    A rule with an empty ``work`` list, or whose ``work`` is composed entirely
+    of ``{"type": "error", ...}`` items, is treated as no-work — the
+    dispatcher tried but produced nothing usable.
+    """
+    for r in results:
+        for item in r.get("work") or []:
+            if isinstance(item, dict) and item.get("type") != "error":
+                return True
+    return False
 
 
 def _reserve_delivery(session, delivery_id, event, action, full_name, payload):

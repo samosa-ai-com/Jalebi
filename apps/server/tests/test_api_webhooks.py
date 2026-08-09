@@ -442,3 +442,95 @@ def test_webhook_concurrent_redelivery_only_dispatches_once(
     from jalebi import tasks as tasks_service
 
     assert len(tasks_service.list_tasks(session)) == 1
+
+
+def test_all_rules_error_marks_delivery_failed(client, session, repo) -> None:
+    """A delivery whose rules only returned error work must record status=failed
+    (not the prior hardcoded "matched"), so the Triggers page Delivery log
+    doesn't lie about success."""
+    from jalebi import tasks as tasks_service
+
+    # create_task with no custom_instructions is rejected before create_task is
+    # even called (webhooks._dispatch_create_task returns an error list).
+    rule = webhooks.create_rule(
+        session, repo_id=repo, event="push", action="create_task",
+    )
+
+    res = client.post(
+        "/webhook",
+        headers={"X-GitHub-Delivery": "d-h1-1", "X-GitHub-Event": "push"},
+        json={"ref": "refs/heads/main", "repository": {"full_name": "owner/repo"}},
+    )
+    body = res.get_json()
+    assert res.status_code == 200
+    assert body["ok"] is True
+    assert body["matched"] is False
+    assert len(body["results"]) == 1
+    assert body["results"][0]["rule_id"] == rule.id
+    assert body["results"][0]["work"] == [
+        {"type": "error", "error": "create_task requires custom_instructions"}
+    ]
+    delivery = webhooks.list_deliveries(session)[0]
+    assert delivery.status == "failed"
+    assert delivery.matched_rule_id == rule.id
+    stored: dict = json.loads(delivery.result or "{}")
+    assert stored["rules"][0]["work"][0]["type"] == "error"
+    assert len(tasks_service.list_tasks(session)) == 0
+
+
+def test_mixed_one_ok_one_error_keeps_matched(client, session, repo) -> None:
+    """When at least one rule produces real work and another errors, the
+    delivery stays status=matched (regression guard vs over-correction)."""
+    from jalebi import tasks as tasks_service
+
+    ok_rule = webhooks.create_rule(
+        session, repo_id=repo, event="push", action="create_task",
+        custom_instructions="Sync the changelog.",
+    )
+    err_rule = webhooks.create_rule(
+        session, repo_id=repo, event="push", action="create_task",
+    )
+
+    res = client.post(
+        "/webhook",
+        headers={"X-GitHub-Delivery": "d-h1-2", "X-GitHub-Event": "push"},
+        json={"ref": "refs/heads/main", "repository": {"full_name": "owner/repo"}},
+    )
+    body = res.get_json()
+    assert res.status_code == 200
+    assert body["ok"] is True
+    assert body["matched"] is True
+    assert len(body["results"]) == 2
+    by_id = {r["rule_id"]: r for r in body["results"]}
+    assert by_id[ok_rule.id]["work"][0]["type"] == "freeform"
+    assert by_id[err_rule.id]["work"][0]["type"] == "error"
+    delivery = webhooks.list_deliveries(session)[0]
+    assert delivery.status == "matched"
+    assert delivery.matched_rule_id in {ok_rule.id, err_rule.id}
+    assert len(tasks_service.list_tasks(session)) == 1
+
+
+def test_webhook_empty_work_marks_delivery_failed(client, session, repo) -> None:
+    """A rule that matched but returned empty work (e.g. rerun_review with no
+    prior assignments and no pr_number in the payload) must also be recorded
+    as failed, not matched."""
+    from jalebi import tasks as tasks_service
+
+    rule = webhooks.create_rule(
+        session, repo_id=repo, event="push", action="rerun_review",
+    )
+
+    res = client.post(
+        "/webhook",
+        headers={"X-GitHub-Delivery": "d-h1-3", "X-GitHub-Event": "push"},
+        json={"ref": "refs/heads/main", "repository": {"full_name": "owner/repo"}},
+    )
+    body = res.get_json()
+    assert res.status_code == 200
+    assert body["matched"] is False
+    delivery = webhooks.list_deliveries(session)[0]
+    assert delivery.status == "failed"
+    stored: dict = json.loads(delivery.result or "{}")
+    assert stored["rules"][0]["work"] == []
+    assert len(tasks_service.list_tasks(session)) == 0
+    assert rule.id == body["results"][0]["rule_id"]
