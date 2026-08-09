@@ -14,7 +14,7 @@ Key architectural facts:
 - **GitHub PAT** (the owner's own token) drives all GitHub interaction via a thin httpx client. **The `gh` CLI is forbidden.**
 - Agents run as **local child processes** in per-task **git worktrees**.
 - Stack: Python 3.13 + Flask + SQLAlchemy 2 (SQLite) + Alembic + httpx + React + Vite + Tailwind. SSE for events. Git CLI (not libgit2).
-- Single owner, no multi-user, no cloud, localhost only. **One port (3456): Flask serves both the API and the built UI.**
+- Single owner, no multi-user, no cloud, localhost only. **One port (2052): Flask serves both the API and the built UI.** (`JALEBI_PORT` overrides.)
 
 **The authoritative behavioral spec is `JALEBI_PRD.md`.** If anything here or in `docs/` conflicts with the PRD, the PRD wins — flag the conflict, never silently resolve it.
 
@@ -45,6 +45,7 @@ These are non-negotiable. Every agent must follow them on every interaction.
 
 - Behavior comes from `JALEBI_PRD.md`. If code, docs, or an instinct disagree with the PRD, **flag the discrepancy to the user** — do not silently pick a side.
 - Follow PRD **Goal #10 — Simplicity above all**: no over-engineering, no event-bus frameworks, no complex state machines, no borrowing whole subsystems from reference projects. Borrow only small, specific snippets and re-write them in Jalebi's own style.
+- **Owner-authorized PRD edits:** the PRD is normally read-only, but the owner has explicitly authorized edits on record — Steps 34–35 (notifications + env vars) and the 2026-08-09 reconciliation (stack/schema/behavior brought in line with the shipped implementation). Any *future* PRD edit still requires explicit owner approval first.
 
 ### 2.4 Test & verify
 
@@ -106,6 +107,7 @@ This is critical and repeated: **all GitHub interaction in this project goes thr
 | `docs/12-ui-validation.md` | Manual UI QA checklist for every implemented feature. | Feature/UI behavior changes. |
 | `docs/13-phase0-review.md` | Comprehensive Phase 0 code review (logic, security, PRD compliance). | Post-review follow-up changes. |
 | `docs/14-env-vars.md` | Env-var store (global + per-repo), `/api/envvars`, `.env` import, agent injection + masking. | Env-var work. |
+| `docs/14-messaging-strategy.md` | External messaging templates + invariants (PR body/footer, issue comments, PR reviews, co-author). | Any template/brand change. |
 | `docs/15-catalog.md` | Agent catalog (personality → `AGENTS.md`, skills → `@path`, cli/model pins). | Catalog agent work. |
 | `docs/16-triggers.md` | Webhook listener, delivery dedup, trigger rules, registration, replay. | Webhook/trigger work. |
 | `docs/17-phase1-validation.md` | Manual UI QA checklist for every Phase 1 feature. | Feature/UI behavior changes. |
@@ -144,9 +146,11 @@ Jalebi/
 │   ├── 12-ui-validation.md
 │   ├── 13-phase0-review.md
 │   ├── 14-env-vars.md
+│   ├── 14-messaging-strategy.md
 │   ├── 15-catalog.md
 │   ├── 16-triggers.md
-│   └── 17-phase1-validation.md
+│   ├── 17-phase1-validation.md
+│   └── 18-cast-workflows-grid.md   ← design-only, NOT approved for implementation
 ├── apps/
 │   ├── server/                    # Flask orchestrator (Python 3.13, uv)
 │   │   ├── pyproject.toml         # uv project; `jalebi` console script → jalebi.app:main
@@ -181,7 +185,7 @@ Jalebi/
 1. Server deps: `uv sync` (run inside `apps/server`). Web deps: `npm install` (repo root).
 2. Copy `.env.example` → `.env` and set `JALEBI_GITHUB_TOKEN` (git-ignored; never commit).
 3. Build the UI once: `npm run build` (output: `apps/web/dist`, served by Flask).
-4. Run the app (API + UI on `127.0.0.1:3456`, one port): `./start.sh` — stop with `./stop.sh`.
+4. Run the app (API + UI on `127.0.0.1:2052`, one port): `./start.sh` — stop with `./stop.sh`.
    (Dev alternative: `uv run --project apps/server jalebi`; optional Vite hot-reload via `npm run dev:web`.)
 5. Tests: server `uv run pytest` (in `apps/server`); web `npm test -w @jalebi/web`; or `npm test` for both.
 6. Lint/format: `uv run ruff check` (server); `npm run lint` / `npm run format` (web).

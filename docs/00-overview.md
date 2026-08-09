@@ -10,7 +10,7 @@ Jalebi is a **private, self-hosted, localhost-only web application** that behave
 
 The authoritative behavioral spec is **`JALEBI_PRD.md`** at the repo root. This doc set is a navigable, per-topic companion to the PRD — it never overrides it.
 
-**Stack (as implemented):** Python 3.13 + Flask + SQLAlchemy 2 (SQLite) + Alembic + httpx (GitHub client) on the server, managed with `uv`; React + Vite + Tailwind on the web. The built UI is served by Flask on the **same port as the API (3456)** — a single origin. Git CLI (not libgit2) for repo ops.
+**Stack (as implemented):** Python 3.13 + Flask + SQLAlchemy 2 (SQLite) + Alembic + httpx (GitHub client) on the server, managed with `uv`; React + Vite + Tailwind on the web. The built UI is served by Flask on the **same port as the API (default 2052)** — a single origin. Git CLI (not libgit2) for repo ops.
 
 ## 2. Core principles
 
@@ -19,7 +19,7 @@ The authoritative behavioral spec is **`JALEBI_PRD.md`** at the repo root. This 
 3. **Model freedom** — any model available to the selected CLI, per task and per agent.
 4. **Agent catalog** — named agents = personality (markdown → `AGENTS.md`) + skills + optional model + optional CLI.
 5. **Reviewer workflow** — catalog reviewers run in their own worktrees and post PR review comments.
-6. **Branch control** — source/target branch selection per task.
+6. **Branch control** — per task type: `issue_fix` single target branch, `freeform` source/target, `pr_review` none.
 7. **Proactive screening** — scheduled, notify-only audits (never auto-act).
 8. **Privacy & ownership** — localhost-bound, PAT-authenticated, single-owner.
 9. **Event-driven automation** — webhook-pushed triggers (not polling).
@@ -68,15 +68,20 @@ The authoritative behavioral spec is **`JALEBI_PRD.md`** at the repo root. This 
 | `08-ui.md` | React app structure, pages, components, SSE consumption. |
 | `09-testing.md` | Test strategy per layer, how to run tests, fixtures. |
 | `10-security.md` | Localhost binding, secrets, masking, sandboxing, threat notes. |
+| `11-reliability.md` | Restart recovery, live concurrency, settings live-vs-startup, hardening. |
+| `12-ui-validation.md` | Manual UI QA checklist for every implemented feature. |
+| `13-phase0-review.md` | Comprehensive Phase 0 code review (logic, security, PRD compliance). |
 | `14-env-vars.md` | Env-var store (global + per-repo), `/api/envvars`, `.env` import. |
+| `14-messaging-strategy.md` | External messaging templates + invariants (PR body/footer, issue comments, PR reviews). |
 | `15-catalog.md` | Agent catalog (personality → `AGENTS.md`, skills → `@path`). |
 | `16-triggers.md` | Webhook listener, trigger rules, deliveries, registration, replay. |
 | `17-phase1-validation.md` | Manual UI QA checklist for every Phase 1 feature. |
+| `18-cast-workflows-grid.md` | Design-only plan for the Inbox-as-helm grid dashboard — **not approved** for implementation. |
 
 ## 6. Roadmap (phases)
 
 - **Phase 0 — Foundation (v1, opencode only):** scaffolding, config, SQLite schema, PAT settings + validation, git workspace manager, `AgentAdapter` + opencode adapter, task queue (concurrency 4), run lifecycle (cancel/timeout/retry), publish (auto/manual, `Closes #N`), secret masking, minimal Jules-like UI (queue + task detail + live console), follow-up via `opencode run --session`, artifacts (F18), restart recovery + live concurrency. **Status: complete (hardened).**
-- **Phase 1 — Catalog & reviewers + event-driven triggers:** catalog agents, reviewer workflow, "address reviewers" follow-up, webhook listener + dedup + trigger rules + registration/polling fallback.
+- **Phase 1 — Catalog & reviewers + event-driven triggers:** catalog agents, reviewer workflow, "address reviewers" follow-up, webhook listener + dedup + trigger rules + registration. **Status: complete (polling fallback deferred/inert).**
 - **Phase 2 — Branch control + screening + merge gating:** source/target branch selectors, screening engine, check runs for branch protection.
 - **Phase 3 — Backend parity:** Codex adapter, Claude Code adapter, per-task model dropdown from `listModels()`.
 

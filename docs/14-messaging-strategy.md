@@ -171,7 +171,7 @@ _Automated by Jalebi — [task 42](http://127.0.0.1:3456/tasks/42)_
 Co-authored-by: Jalebi <jalebi@localhost>
 ```
 
-Issues with the old footer (captured by `REVIEW_PHASE0.md` L5):
+Issues with the old footer (captured by Phase-0 review finding **L5**, see `docs/13-phase0-review.md`):
 
 1. **`127.0.0.1` URL** — meaningless to anyone but the owner; advertised the
    localhost-only install.

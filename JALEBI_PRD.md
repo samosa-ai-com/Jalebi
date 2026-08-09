@@ -3,11 +3,17 @@
 |                          |                                                                                                                                                 |
 | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Product name**   | Jalebi                                                                                                                                          |
-| **Status**         | Draft v1.0                                                                                                                                      |
-| **Date**           | 2026-08-06                                                                                                                                      |
-| **Owner**          | samosa-ai-com                                                                                                                                   |
-| **Repo (planned)** | Separate project —**not** in the Gotcha repo. This PRD is authored in the Gotcha working dir only for convenience and will be relocated. |
+| **Status**         | Draft v1.1 — reconciled with the shipped implementation (Phases 0–1 complete)                                                                    |
+| **Date**           | 2026-08-09                                                                                                                                      |
+| **Owner**          | Samosa AI (`samosa-ai-com`)                                                                                                                     |
+| **Repo**           | `Rishabh-Bajpai/Jalebi` (current home). This PRD lives in the Jalebi repo.                                                                       |
 | **Versioning**     | Follow this file; feature set is additive                                                                                                       |
+
+> **Reading note (2026-08-09):** this document was reconciled against the shipped
+> implementation after Phases 0–1. It is the **spec of record** for what exists and
+> what is planned. Where the earlier draft specified a Node/TypeScript stack, this
+> version adopts the actual Python/Flask stack. Sections marked **Phase 2** /
+> **Phase 3** describe planned work that is not yet implemented.
 
 ---
 
@@ -15,10 +21,12 @@
 
 Jalebi is a **private, self-hosted, localhost-only web application** that behaves like Google's "Jules (https://jules.google/docs/)": a coding-agent dashboard where the repo owner connects their own GitHub account, creates tasks ("fix this issue", "review this PR", "implement this feature", "audit the security posture of the development branch"), watches the agent work through a live step-by-step timeline, comments to give follow-ups, and gets proactively notified of improvement opportunities. It is also **event-driven**: repo webhooks can auto-start work in real time — the moment a PR is opened, its assigned reviewers from the catalog begin reviewing automatically.
 
+**Current status (2026-08-09):** Phases 0 and 1 are **complete and shipped**. The backend is the **opencode** CLI adapter only; Codex and Claude Code are planned (Phase 3). See §12 Roadmap.
+
 Unlike the existing **Chanakya** automation in the Gotcha repo (GitHub Actions + self-hosted runner + comment-triggered `opencode github run`), Jalebi is **completely independent**:
 
 - No `.github/workflows`, no self-hosted runner, no comment-triggered slash commands. Event automation uses **repo webhooks** delivered to a local listener.
-- Uses the owner's **GitHub personal access token (PAT)** directly.
+- Uses the owner's **GitHub personal access token(s) (PAT)** directly, from a **named vault** of equal accounts (see §F1).
 - Runs agents as **local child processes** on the user's machine.
 - The **UI is a dedicated custom dashboard**, not a comment thread.
 - **Backend CLI-agnostic**: the same app can drive opencode, Codex, or Claude Code. In v1 only **opencode** ships; switching the backend is intended to be a **one-line config change** (`agent.cli`).
@@ -49,7 +57,7 @@ The Gotcha repo currently automates AI coding work via a GitHub Actions workflow
 | `review-pr`    | `/chanakya review` on a PR     | Reviews the PR diff, posts a comment                                             |
 | `review-issue` | `/chanakya review` on an issue | Analyzes the issue, proposes/explains a fix, posts a comment                     |
 | `triage`       | `/chanakya triage`             | Classifies an issue (severity/type), posts a comment                             |
-| `fix`          | `/chanakya fix`                | Clones the repo, creates a branch, fixes the issue, opens a PR with`Closes #N` |
+| `fix`          | `/chanakya fix`                | Clones the repo, creates a branch, fixes the issue, opens a PR with `Closes #N` |
 | `general`      | `/chanakya <anything else>`    | Free-form Q&A about the repo, posts a comment                                    |
 
 **Key workflow facts a developer must know:**
@@ -87,12 +95,13 @@ Everything is local, private to the owner, and driven from the dashboard.
 2. **Pluggable agent backends.** v1 ships the **opencode** CLI. Architecture must support adding **Codex** and **Claude Code** (and others) with a **one-line config change** (`agent.cli`) and no changes elsewhere.
 3. **Model freedom.** The user can pick any model available to the selected CLI, per task and per agent (no hard-coded model).
 4. **Agent catalog with personalities & skills.** Users configure named agents (e.g. "Security Auditor", "Backend Reviewer", "Docs Guru", "Conflict Resolver"). Each is just: a **personality** (markdown injected into the task worktree's `AGENTS.md`) + a set of **skill files** (markdown, referenced by path) + an optional **model** + an optional **CLI**. The underlying default agent (opencode build agent) picks these up automatically during execution.
-5. **Reviewer workflow.** Users assign catalog agents as reviewers on a PR. Each reviewer works in its **own local clone**, validates, then posts its comments on the GitHub PR. The user then manually approves/merges, and can send a follow-up to the original fix agent referencing the reviewers' comments.
-6. **Branch control.** Every issue-fix / PR task lets the user choose **source branch** and **target branch** (e.g. fix from `main` but commit to `development`).
-7. **Proactive screening.** Scheduled, multi-profile audits ("suggestions for improvements") with **per-profile cadence and system prompt**. Screening is **notify-only — it never auto-acts** on issues; the user explicitly chooses to start work.
-8. **Privacy & ownership.** Localhost-bound, PAT-authenticated, single-owner.
+5. **Reviewer workflow.** Users assign catalog agents as reviewers on a PR. Each reviewer works in its **own local worktree**, validates, then posts its comments on the GitHub PR. The user then manually approves/merges, and can send a follow-up to the original fix agent referencing the reviewers' comments.
+6. **Branch control.** Branch selection is **per task type** (as shipped): `issue_fix` uses a **single target branch** (the PR base); `freeform` exposes **source and target** selectors; `pr_review` uses neither (it checks out the PR head). Full two-selector support for `issue_fix` remains an option for Phase 2 (see §F8).
+7. **Proactive screening.** Scheduled, multi-profile audits ("suggestions for improvements") with **per-profile cadence and system prompt**. Screening is **notify-only — it never auto-acts** on issues; the user explicitly chooses to start work. *(Phase 2.)*
+8. **Privacy & ownership.** Localhost-bound, PAT-authenticated, single-owner. The owner can register **multiple named PAT accounts** (a vault of equal accounts) and select which account runs a given repo/task.
 9. **Event-driven automation (essential).** Repo webhook events can auto-start tasks in real time — e.g. the moment a PR is opened, its assigned reviewers from the catalog begin reviewing automatically. Triggers are **webhook-pushed**, not polled (scheduling is not the mechanism; triggering is).
 10. **Simplicity above all.** The implementation must stay **logically simple**. Do not import whole subsystems or frameworks from reference projects just because they exist — borrow only the specific ideas/snippets that directly serve a feature, and prefer the simplest code that satisfies the PRD. Avoid over-engineering (no event-bus frameworks, no complex state machines, no distributed abstractions) unless a requirement literally demands it. If a feature starts feeling complex to implement, stop and revisit the design.
+11. **Reliability by default.** Runs survive restarts and are **auto-recovered** on failure/timeout/stall (unbounded, per-run escalating timeouts, notifications at each terminal state). A run that goes quiet (stall) is detected by a watchdog and restarted. See §7.5 and §F16.
 
 ## 4. Non-goals (v1)
 
@@ -102,13 +111,14 @@ Everything is local, private to the owner, and driven from the dashboard.
 - **No** GitHub App / OAuth app — PAT only in v1 (a GitHub App can be a future option).
 - **No** auto-acting screening (screenings never open issues/PRs or start fixes on their own).
 - **No** shipping the Gemini CLI adapter (explicitly replaced by **Codex**).
+- **No** polling as the triggering mechanism — webhooks are the default and preferred path. A per-repo **polling fallback** toggle exists in the schema/UI but is currently **inert** (deferred).
 - **No** replacing Chanakya itself — Chanakya remains in Gotcha; Jalebi is a separate, independent project.
 
 ---
 
 ## 5. Personas
 
-- **The owner (primary):** owns the repos, connects a PAT, creates tasks, approves PRs, configures agents and screenings. Only persona.
+- **The owner (primary):** owns the repos, connects one or more named PAT accounts, creates tasks, approves PRs, configures agents and screenings. Only persona.
 - **The downstream developer:** reads the PRD and builds Jalebi on any machine. This document is their single source of truth for behavior + context.
 
 ---
@@ -120,15 +130,19 @@ Everything is local, private to the owner, and driven from the dashboard.
 | **Task**             | A unit of work in Jalebi (fix issue, review PR, free-text instruction, screen).        |
 | **Run**              | One agent execution (one CLI child process) within a task.                             |
 | **Follow-up**        | A user comment on a task that**resumes** the same agent session.                 |
+| **Recovery run**     | An **auto**-dispatched rerun on failure/timeout/stall — resumes the session or starts fresh; tagged `auto`, never recorded as a user follow-up. |
+| **Stall**           | A run that stops emitting output for longer than `stall_timeout_seconds` (default 600); the watchdog declares it stalled and auto-recovery restarts it fresh. |
 | **Adapter**          | A backend integration that maps a CLI (opencode/Codex/Claude) to one common interface. |
+| **Named account**   | One of the owner's registered GitHub PATs in the vault — all **equal** (no primary/fallback); the account selected for a task/repo is the one used. |
 | **Catalog agent**    | A user-configured named agent = personality + skills + optional model + optional CLI.  |
 | **Reviewer**         | A catalog agent of kind`reviewer` assigned to a PR.                                  |
 | **Screen/Screening** | A scheduled proactive audit with its own system prompt + cadence.                      |
 | **Webhook trigger**  | A repo webhook event (e.g. `pull_request.opened`) that auto-starts task(s) per user rules. |
-| **Check run**        | A GitHub commit status reporting a task's queued/in-progress/completed state — can gate merges via branch protection. |
+| **Check run**        | A GitHub commit status reporting a task's queued/in-progress/completed state — can gate merges via branch protection. *(Phase 2.)* |
 | **Artifact**         | A file produced by a run (log, report, coverage) captured and retained per run.        |
 | **Worktree**         | A git worktree — an isolated checkout of a repo for a single task/agent.              |
 | **Publish**          | Push branch + open (or update) a PR.                                                   |
+| **Publish mode**     | `new_pr` (open/reuse a PR), `update_pr` (force-push into an existing PR's head), `push_branch` (push to a named branch). |
 | **Resume**           | Continue an existing agent session (CLI-native continuation).                          |
 
 ---
@@ -137,11 +151,11 @@ Everything is local, private to the owner, and driven from the dashboard.
 
 ### 7.1 Core loop (single task)
 
-1. User connects a PAT (Settings).
-2. User creates a task: pick a repo, choose a task type, select **source/target branches**, pick a **catalog agent** (or the default build agent), optionally choose a **model**, and enter instructions (issue number / PR number / free text).
+1. User connects one or more named PAT accounts (Settings).
+2. User creates a task: pick a repo, choose a task type, select branches **per the type's rule** (§F8), pick a **catalog agent** (or the default build agent), optionally choose a **model**, and enter instructions (issue number / PR number / free text).
 3. Orchestrator creates a **worktree**, writes the personality/skills files, and runs the agent via the selected CLI adapter (`start`).
 4. UI streams the agent's **step timeline** (scanning → planning → implementing → testing → creating PR), the **live console**, and the **incremental diff**.
-5. On completion, Jalebi **publishes** per the publish policy (default: auto-open PR) and shows the PR link.
+5. On completion, Jalebi **publishes** per the publish policy (default: auto-open PR) and shows the PR link. If the run **fails, times out, or stalls**, auto-recovery (§7.5) takes over instead of leaving the task dead.
 6. User can post a **follow-up** → the orchestrator **resumes** the same agent session in the same worktree → agent amends its work → branch/PR updated.
 7. User approves/merges the PR manually on GitHub.
 
@@ -149,11 +163,11 @@ Everything is local, private to the owner, and driven from the dashboard.
 
 1. A PR exists (created by a fix task, or an existing external PR).
 2. User assigns 1..N reviewers from the catalog.
-3. Each reviewer runs in **its own worktree**, checks out the PR branch, reviews with its own personality/skills/model/CLI, validates (builds/tests), then **posts a PR review comment** via the GitHub API.
+3. Each reviewer runs as its **own `pr_review` task in its own review worktree**, checks out the PR branch, reviews with its own personality/skills/model/CLI, validates (builds/tests), then **posts a PR review comment** via the GitHub API.
 4. When all reviewers have commented, the user decides (approve, request changes, merge) — **manually**.
 5. Optionally, the user sends a **follow-up** to the original fix agent: "Look at the reviewers' comments and fix accordingly." The fix agent resumes, sees the PR comments (fetched from GitHub), and updates the PR.
 
-### 7.3 Screening loop
+### 7.3 Screening loop *(Phase 2)*
 
 1. User enables/creates screenings per repo (each with its own system prompt + cron cadence).
 2. Scheduler checks cadence; skips if the repo HEAD is unchanged since the last run (baseline dedup).
@@ -165,64 +179,75 @@ Everything is local, private to the owner, and driven from the dashboard.
 1. GitHub delivers a **repo webhook event** to Jalebi's local listener (e.g. `pull_request` opened, `issues` opened, PR updated).
 2. The listener validates and **idempotently** dedups the delivery (`X-GitHub-Delivery` / `X-GitHub-Event` headers), then matches it against the user's **trigger rules**.
 3. A matching rule creates and enqueues task(s) immediately — e.g. a PR just opened ⇒ each **assigned reviewer** gets its own review task and starts in real time.
-4. Runs proceed exactly like a manual task (timeline, logs, diffs) and report back via **check runs** on the PR's head commit when configured.
-5. No polling involved; the trigger is the event itself. (A manual "replay last event" button and an optional polling fallback exist for when webhooks can't be configured.)
+4. Runs proceed exactly like a manual task (timeline, logs, diffs) and report back via **check runs** on the PR's head commit when configured *(Phase 2)*.
+5. No polling involved; the trigger is the event itself. (A manual "replay last delivery" button exists; an optional polling fallback is inert.)
+
+### 7.5 Recovery loop (auto-recovery)
+
+1. A run ends **terminal-failed** (including **stalled**) or **timed-out**.
+2. Auto-recovery (default ON, unbounded for all task types) dispatches a new run:
+   - **timeout / other failure** → **resume the last session** with the `continue_prompt` (`retry_policy.continue_prompt`, default `"continue"`);
+   - **stall** → **fresh re-run** (a wedged session re-hangs — a stalled session is never resumed);
+   - no resumable session → fresh run.
+3. The per-run timeout **escalates**: `timeout_minutes × timeout_multiplier^attempts`, capped at `retry_policy.max_timeout_minutes` (default 180). `task.timeout_minutes` is never mutated.
+4. A `done` run **resets `retry_count`**; a manual rerun after success starts from the base timeout again.
+5. Recovery runs are tagged `auto` (queue + run) and are **never recorded as user follow-ups**; the owner still gets terminal/progress notifications (see §F19).
+6. The loop is unbounded **by design**: each run is bounded by its own escalating timeout, and notifications keep the owner informed.
 
 ---
 
 ## 8. Detailed features
 
-### F1. GitHub integration (PAT)
+### F1. GitHub integration (named PAT vault)
 
-- The user supplies a **fine-grained or classic PAT** in Settings.
-- Required scopes (document in UI): classic `repo` (or fine-grained: Contents read/write, Pull requests read/write, Issues read/write, Metadata read, **Commit statuses read/write** for check runs).
-- Token is stored in a `0600` secrets file on disk (never in the browser; the backend proxies all GitHub calls).
-- Capabilities used: repo list & default branch, issues, PRs (create/update/comment/review), refs, clone/push via authenticated git, **repo webhook registration/management**, **commit statuses (check runs)**.
-- **Webhook setup:** Jalebi registers repo webhooks via the API (`POST /repos/{owner}/{repo}/hooks`) targeting its local listener (URL + optional secret for signature verification). For a localhost-only install, GitHub cannot reach the machine — the listener must be exposed via a **tunnel (e.g. `cloudflared`/`ngrok`)** or the webhook URL points at a small reverse proxy; the app detects an unreachable webhook and warns, offering the polling fallback.
-- **Safety:** the token is never exposed to the frontend or to agent prompts.
+- The owner registers **one or more named PATs** in Settings. Every token is stored by name in the `0600` secrets file `<data-dir>/secrets.json` (`github_tokens: [{name, token}]`).
+- **All accounts are equal** — there is **no primary/default account and no fallback**. The account selected for a task/repo is the one used; a task without an account is refused.
+- A fine-grained or classic PAT per account. Required scopes (document in UI): classic `repo` (or fine-grained: Contents read/write, Pull requests read/write, Issues read/write, Metadata read, **Commit statuses read/write** for check runs).
+- **`JALEBI_GITHUB_TOKEN`** is **masking-only** (a stray value never survives into logs); it is never used to resolve which account runs anything. While developing/testing it may also be set in the git-ignored `.env` file.
+- Tokens are stored on disk (never in the browser; the backend proxies all GitHub calls). All GitHub calls go through a thin **httpx** client (`github.py`).
+- Capabilities used: repo list & default branch, issues, PRs (create/update/comment/review), refs, clone/push via authenticated git, **repo webhook registration/management**, **commit statuses (check runs)** *(Phase 2)*.
+- **Webhook setup:** Jalebi registers repo webhooks via the API (`POST /repos/{owner}/{repo}/hooks`) targeting its local listener (URL + optional secret for signature verification). For a localhost-only install, GitHub cannot reach the machine — the listener must be exposed via a **tunnel (e.g. `cloudflared`/`ngrok`)** or the webhook URL points at a small reverse proxy; the app detects an unreachable webhook and warns, offering the (inert) polling fallback.
+- **Safety:** token values are never exposed to the frontend or to agent prompts; all PAT values are masked from logs/console at ingest (see §F17).
 
 ### F2. Local web app / UI (Jules-like)
 
 Layout (three areas):
 
-1. **Left rail — Task queue:** list of tasks with status (`queued / running / waiting-review / needs-approval / done / failed`), repo, agent, model, PR link. Filterable (all, running, done, failed, screenings).
+1. **Left rail — Task queue:** list of tasks with status (`queued / running / waiting-review / needs-approval / done / failed / timed-out / interrupted / cancelled`), repo, agent, model, PR link. Filterable.
 2. **Main panel — Task detail:**
    - **Step timeline:** ordered phases of the current run (scanning → planning → implementing → testing → creating PR → reviewing) with timestamps; the agent adapter emits `step` events.
-   - **Live console:** streaming stdout of the CLI child process (syntax-highlighted).
-   - **Diff viewer:** incremental file diffs as they appear; per-file expand.
+   - **Live console:** streaming stdout of the CLI child process (masked at ingest).
+   - **Diff viewer:** incremental file diffs as they appear; today this is the captured `runs.diff_text` (per-file expand/polish is Phase 2).
    - **Follow-up composer:** free-text comment → resumes the session.
-   - **PR card:** status of publish, link to the GitHub PR, reviewers assigned, reviewer comment status.
-3. **Top bar — Global nav:** Repos · Tasks · Screenings · Agents · Triggers · Settings.
+   - **PR card:** status of publish, link to the GitHub PR, reviewers assigned + reviewer comment status, publish modes (`new_pr`/`update_pr`/`push_branch`), **check-run status** *(Phase 2)*.
+3. **Top bar — Global nav:** Repos · Tasks · Agents · Triggers · Settings. (*Screenings* lands with Phase 2.)
 
 Non-goal: build nothing on `opencode web`'s chat UI — Jalebi's UI is bespoke and orchestrator-centric (queue + timeline + diffs + reviewers), not a direct agent chat.
 
 ### F3. Task queue & concurrency
 
-- **Default concurrency: 4** parallel tasks, **configurable from the UI** (0 = paused queue).
+- **Default concurrency: 4** parallel tasks, **configurable from the UI** (0 = paused queue). Read live per run (settings are persistent rows, not process-time constants).
 - Worker pool executes the configured max number of tasks concurrently; the rest wait in queue.
-- Cancel/abort a running task (kill child process; for opencode use `POST /session/:id/abort` if attached to a server, else terminate the process).
+- Cancel/abort a running task (kill child process: SIGTERM → SIGKILL after a grace period).
 - Tasks survive restarts (persisted in SQLite; interrupted runs are marked `interrupted` and resumable).
 
 ### F4. Agent adapters (backend CLI independence)
 
 **Principle (P0):** the entire system depends on one interface; the only place that knows the CLI name is the adapter and a one-line config.
 
-```ts
-interface AgentAdapter {
-  id: "opencode" | "codex" | "claude"
-  name: string
-  listModels(): Promise<string[]>                // models the CLI can use
-  start(opts: { cwd; prompt; model?; env? }): Promise<RunHandle>
-  resume(opts: { cwd; sessionId; prompt }): Promise<RunHandle>
-  parse(line: string): AgentEvent[]              // normalize CLI output → AgentEvent
-}
+The shipped interface is a Python protocol (`adapters/types.py`):
 
-interface RunHandle {
-  sessionId: string
-  child: ChildProcess
-  events: AsyncIterable<AgentEvent>
-}
+```python
+class AgentAdapter(Protocol):
+    id: str                              # "opencode" | "codex" | "claude"
+    name: str
+    def list_models(self) -> list[str]: ...
+    def start(self, *, cwd, prompt, model=None, env=None) -> RunHandle: ...
+    def resume(self, *, cwd, session_id, prompt, env=None) -> RunHandle: ...
+    def parse(self, line: str) -> list[AgentEvent]: ...
 ```
+
+`RunHandle` exposes `session_id`, the child process handle, and an async iterator of `AgentEvent`s. (Phase 3 may add `--output-schema` support for structured screening findings.)
 
 `AgentEvent` normalized vocabulary:
 
@@ -240,21 +265,21 @@ Adapter command references (authoritative, captured 2026-08):
 
 | CLI                      | Start a new task                                                             | Resume (follow-up)                                                         | Structured output                                                                                                     | Model flag                                   |
 | ------------------------ | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
-| **opencode** (v1)  | `opencode run --dir <ws> --format json [--model <m>] <prompt>`             | `opencode run --session <sessionId> --format json <prompt>`              | `--format json` (event stream; contains `session.id`, `session.updated`, `message.updated`, `session.idle`) | `-m/--model provider/model`; env `MODEL` |
-| **codex** (later)  | `codex exec --json [--model <m>] "<prompt>"`                               | `codex exec resume <session_id> "<prompt>"`                              | `--json`; `--output-schema` for structured findings                                                               | `-m/--model` (or `config.toml`)          |
-| **claude** (later) | `claude -p "<prompt>" --output-format stream-json --verbose [--model <m>]` | `claude -p "<prompt>" --resume <session_id> --output-format stream-json` | `--output-format stream-json` (`init.session_id` + typed events)                                                  | `--model`                                  |
+| **opencode** (v1, shipped) | `opencode run --dir <ws> --format json [--model <m>] <prompt>`             | `opencode run --session <sessionId> --format json <prompt>`              | `--format json` (event stream; contains `session.id`, `session.updated`, `message.updated`, `session.idle`) | `-m/--model provider/model`; env `MODEL` |
+| **codex** (Phase 3)  | `codex exec --json [--model <m>] "<prompt>"`                               | `codex exec resume <session_id> "<prompt>"`                              | `--json`; `--output-schema` for structured findings                                                               | `-m/--model` (or `config.toml`)          |
+| **claude** (Phase 3) | `claude -p "<prompt>" --output-format stream-json --verbose [--model <m>]` | `claude -p "<prompt>" --resume <session_id> --output-format stream-json` | `--output-format stream-json` (`init.session_id` + typed events)                                                  | `--model`                                  |
 
 **Known adapter quirks (must be documented in code + README):**
 
 - **opencode:** resuming keeps the session's original model unless `--model` is passed on resume (supported). `--fork` can fork instead of continuing if the user prefers a clean follow-up.
-- **codex:** **on resume, the model/reasoning-effort cannot be changed** — the resumed session retains the original run's settings. Model changes on follow-ups must start a fresh run or be surfaced in the UI.
+- **codex:** **on resume, the model/reasoning-effort cannot be changed** — the resumed session retains the original run's settings. Model changes on follow-ups must start a fresh run or be surfaced in the UI (open Phase 3 decision).
 - **claude:** `--resume <id>` requires the session id captured from the first run (`init.session_id`). `--continue` resumes the last session only (do not rely on it).
 - Processes must be spawned with a **working directory = the task worktree** so the CLI discovers `AGENTS.md`/skills.
 - Parsing must be **defensive**: unknown/non-parseable lines are shown verbatim in the console rather than crashing.
 
 ### F5. Model selection
 
-- **No hard-coded model.** Each task exposes a model dropdown populated from the active adapter's `listModels()`.
+- **No hard-coded model.** Each task exposes a model dropdown populated from the active adapter's `listModels()` (shipped for opencode via `/api/models`).
 - Per-task default: the adapter's configured default (e.g. opencode config default, or `config.toml` default for codex).
 - A **catalog agent** may pin a model (e.g. a reviewer pinned to a different model than the fixer → intentionally different review output).
 - UI shows the model used for each task/run; follow-ups reuse the run's model by default but allow override where the CLI permits it (see F4 quirks).
@@ -286,7 +311,7 @@ custom_instructions: |         # appended to the task prompt when this agent is 
 1. Each catalog agent's files live in a dedicated directory on disk, e.g. `<jalebi-data>/agents/<agentId>/` containing `personality.md` (or `AGENTS.md` fragment) and `skills/*.md`.
 2. When a task uses a catalog agent, the orchestrator:
    - writes/merges the personality into the **task worktree's `AGENTS.md`** (root level, so the CLI auto-discovers it), and
-   - copies the skill files into the worktree (e.g. `.jalebi/agents/<agentId>/skills/*.md`) and **references them from `AGENTS.md` via `@path` links**, plus passes the **directory path** on the run command where the CLI supports it (e.g. `--dir`/cwd, or a skills path flag).
+   - materializes the skill files into the worktree as `.claude/skills/<name>/SKILL.md` and **references them from `AGENTS.md` via `@path` links** (stale skills are pruned when the list changes), plus passes the **directory path** on the run command where the CLI supports it (e.g. `--dir`/cwd).
 3. The **default agent of the CLI** (e.g. opencode's build agent) reads `AGENTS.md` + skills and uses them opportunistically during execution. No custom agent definitions, no special prompts plumbing.
 4. For opencode specifically this also works with its `.claude/skills`-compatible loading (`OPENCODE_DISABLE_CLAUDE_CODE_SKILLS` must remain unset) and `AGENTS.md` auto-discovery.
 
@@ -296,41 +321,43 @@ This satisfies: *"They can be at certain location, and you may just inject the a
 
 ### F7. Reviewer workflow
 
-1. **Assigning:** on a task's PR card (or a standalone "Review PR" task), the user selects reviewers from the catalog (kind `reviewer`).
-2. **Execution:** each reviewer gets its **own worktree** (isolated clone), checks out the PR's head branch, and runs a review session with its own personality/skills/model/CLI (via the same adapter interface — `start`, not `resume`).
+1. **Assigning:** on a task's PR card (or a standalone "Review PR" task), the user selects reviewers from the catalog (kind `reviewer`). Each reviewer runs as its **own `pr_review` task** in its **own review worktree**, under the queue's normal concurrency.
+2. **Execution:** each reviewer checks out the PR's head branch and runs a review session with its own personality/skills/model/CLI (via the same adapter interface — `start`, not `resume`).
 3. **Validation:** the reviewer is instructed (via a system prompt injected in its task prompt) to build/test what it touched if feasible, and to report blockers.
-4. **Posting:** on completion, the orchestrator posts the reviewer's output as a **PR review comment** on GitHub (using its PAT; e.g. `POST /repos/{owner}/{repo}/pulls/{n}/reviews` with `event: "COMMENT"` and body = the review). The UI tracks which reviewers have posted.
-5. **Approval is manual:** Jalebi never approves/merges. When all reviewers have posted, the user approves or requests changes on GitHub directly.
-6. **Follow-up to the fixer:** the user can send a follow-up to the original fix agent: the orchestrator **resumes** the fixer's session, and (via its prompt) instructs it to fetch the current PR review comments from GitHub and address them. The fixer amends the branch; the PR updates.
+4. **Posting:** on completion, the orchestrator posts the reviewer's output as a **PR review comment** on GitHub (using its PAT; e.g. `POST /repos/{owner}/{repo}/pulls/{n}/reviews` with `event: "COMMENT"` and body = the review wrapped with the Jalebi header/CTA via `messaging.wrap_pr_review`). The UI tracks which reviewers have posted.
+5. **Dedup:** `review_assignments` has `UNIQUE(repo_id, pr_number, agent_id)` — concurrent webhook deliveries/manual calls cannot double-assign a reviewer. On collision, the existing assignment's task is reused.
+6. **Approval is manual:** Jalebi never approves/merges. When all reviewers have posted, the user approves or requests changes on GitHub directly.
+7. **Follow-up to the fixer:** the user can send a follow-up to the original fix agent: the orchestrator **resumes** the fixer's session, and (via its prompt) instructs it to fetch the current PR review comments from GitHub and address them. The fixer amends the branch; the PR updates.
 
 ### F8. Branch selection (source/target)
 
-Every issue-fix and PR task exposes **two branch selectors** in the UI (prefilled with sensible defaults):
+Branch selection is **per task type** (shipped behavior; supersedes the earlier two-selector-everywhere text):
 
-- **Source branch** — the base to branch off / the branch whose state the worktree starts from.
-- **Target branch** — the PR base (`base`), where the fix will land.
+- **`issue_fix`** — **single target branch**: the worktree is based on the target (PR-base) branch and the PR opens into it. This was a deliberate owner decision (Step 32) to match how the existing automation works.
+- **`freeform`** — exposes **source and target** selectors: worktree from **source**, PR `base = target`.
+- **`pr_review`** — neither: checks out the PR head directly.
 
-Use cases this serves:
+Use cases (relevant where selectors exist):
 
 - Issue filed against `development` → source `development`, target `development`.
-- Issue filed against `main` but the team wants changes staged in `development` → source `main`, target `development` (the fixer works from `main` and opens the PR into `development`).
+- Issue filed against `main` but the team wants changes staged in `development` → source `main`, target `development`.
 - Feature work always lands in `development` → default target `development` unless the user overrides.
 
-The orchestrator creates the worktree from **source**, opens the PR with **base = target**, `head = <jalebi>/<taskId>`.
+**Phase 2 option (open):** full source/target selectors for `issue_fix` (the shipped single-target behavior remains the default; a selector is the extension).
 
 ### F9. PR publishing policy
 
-- **Default: auto-publish** — on task completion the orchestrator pushes the branch and opens a PR. Title = agent's `.jalebi/pr.md` first `# <title>` line (fallback: `🦦 Jalebi: <first prompt line>` / `🦦 Jalebi task`); body includes the agent-written `.jalebi/pr.md` body (or raw prompt as fallback) + `Closes #N` when an issue was referenced + the Jalebi brand footer (`🦦 Opened by [Jalebi](https://github.com/samosa-ai-com/jalebi) — your self-hosted AI coding agent by [Samosa AI](https://github.com/samosa-ai-com).`) + `Co-authored-by: Jalebi <jalebi@samosa-ai.com>`. External posts must not contain task IDs, `localhost`, internal URLs, or any other owner-only info — see `docs/14-messaging-strategy.md` for the templates and invariants (supersedes the earlier "link to the Jalebi task" mandate).
+- **Default: auto-publish** — on task completion the orchestrator pushes the branch and opens a PR. Title = agent's `.jalebi/pr.md` first `# <title>` line (fallback: `🦦 Jalebi: <first prompt line>` / `🦦 Jalebi task`); body includes the agent-written `.jalebi/pr.md` body (or raw prompt as fallback) + `Closes #N` when an issue was referenced + the Jalebi brand footer (`🦦 Opened by [Jalebi](https://github.com/samosa-ai-com/jalebi) — your self-hosted AI coding agent by [Samosa AI](https://github.com/samosa-ai-com).`) + `Co-authored-by: Jalebi <jalebi@samosa-ai.com>`. External posts must not contain task IDs, `localhost`, internal URLs, or any other owner-only info — see `docs/14-messaging-strategy.md` for the templates and invariants.
 - **Three publish modes** — manual publish (`POST /api/tasks/<id>/publish` body `{mode, branch?, pr_number?}`) supports three modes; auto-publish always uses `new_pr`:
   - **`new_pr`** *(default)* — push `jalebi/<id>` and open/reuse a PR into `task.target_branch`.
   - **`update_pr`** — fast-forward (or merge) `jalebi/<id>` into an existing PR's head branch and force-push with `--force-with-lease`. Requires `pr_number` (or `task.prs_json[0]`). No new PR opened; no `Closes #N` comment.
   - **`push_branch`** — fast-forward (or merge) `jalebi/<id>` into a named branch and force-push with `--force-with-lease`. Requires `branch`. No PR interaction.
   - On merge conflict (any mode): `PublishConflict` (409) with the conflicting file list. On remote-moved-since-fetch (`--force-with-lease` refusal): `PushLeaseFailed` (412). UI shows both as clear inline errors. `--force-with-lease` is the only force variant used — never `--force`, so concurrent pushes by others are protected.
 - **Smart-default Publish button:** for `freeform` / `screen_finding` / `triggered` tasks with `task.prs_json` non-empty, the manual Publish button reads **"Push to PR #N"** and dispatches `update_pr` for the first linked PR (the common case — work done against an existing PR). Otherwise it reads **"Publish"** and dispatches `new_pr`. An **Advanced** disclosure exposes all three modes + a PR picker (when `prs_json` has >1) + a branch text input for `push_branch`. `issue_fix` always defaults to `new_pr` (its canonical purpose is opening a PR with `Closes #N`); the other modes are still available under Advanced.
-- **Configurable:** per-task or global setting `auto_publish: true|false`; when `false`, the UI shows a **"Publish"** button (push + open PR) that the user clicks, and a "push-only" option.
+- **Configurable:** per-task or global setting `auto_publish: true|false`; when `false`, the UI shows a **"Publish"** button (push + open PR) that the user clicks, and a "push-only" option. `issue_fix` defaults to `auto`; `freeform`/`screen_finding`/`triggered` default to `manual`.
 - **PR updates on follow-ups:** follow-ups amend the same branch; existing PR is force-updated (new commit pushed) — never a second PR for the same task.
 
-### F10. Proactive screening (suggestions for improvements)
+### F10. Proactive screening *(Phase 2)*
 
 **Design principle: screening finds and notifies; it never acts.** No screening auto-opens issues, opens PRs, or starts fix tasks. The user converts findings into work.
 
@@ -343,10 +370,10 @@ The orchestrator creates the worktree from **source**, opens the PR with **base 
   - *Docs drift* — README/AGENTS docs out of sync with code.
   - *Performance hotspots* — obvious N+1 / heavy loops / unbounded growth.
   - *Code-quality consistency* — style inconsistencies across modules.
-- **Scheduler:** `node-cron` per screen. **Baseline dedup:** store last audited `HEAD` per (repo × screen); skip if unchanged. Run the screen at HEAD with a **read-only prompt** (no edits, no git writes) and an optional structured-output schema for findings.
+- **Scheduler:** a cron scheduler per screen (planned: **APScheduler** or a simple timer — the Python equivalent of the originally-planned `node-cron`). **Baseline dedup:** store last audited `HEAD` per (repo × screen); skip if unchanged. Run the screen at HEAD with a **read-only prompt** (no edits, no git writes) and an optional structured-output schema for findings.
 - **Findings model:** `{ severity, title, file, line?, detail, recommendation }`.
 - **Notification:** in-app (screenings tab, unread badge) + optional **ntfy** push (a topic the user sets) — the owner's environment already uses ntfy.
-- **UI:** Screenings tab to configure cadence, enable/disable, view history, and **"New task from finding"** (opens a prefilled task — still requires the user's explicit action).
+- **UI:** Screenings tab to configure cadence, enable/disable, view history, and **"New task from finding"** (opens a prefilled `screen_finding` task — still requires the user's explicit action).
 
 ### F11. Follow-ups (resume)
 
@@ -355,78 +382,95 @@ The orchestrator creates the worktree from **source**, opens the PR with **base 
 - For a reviewer follow-up or "address the reviewers" request, the prompt includes the current GitHub PR review comments (fetched via API) so the agent can see them.
 - Follow-ups must be **backend-agnostic** (works for opencode, codex, claude).
 - Session ids are persisted per run (`runs.session_id`) so follow-ups survive restarts.
+- **Distinct from auto-recovery:** user follow-ups are recorded in `followups`; **auto-recovery** runs are tagged `auto` and are never recorded as follow-ups (see §7.5/§F16).
 
 ### F12. Storage
 
-- **SQLite** via better-sqlite3 + Drizzle ORM.
-- Tables: `repos`, `tasks`, `runs`, `followups`, `catalog_agents`, `screenings`, `screening_runs`, `findings`, `settings` (key-value, incl. concurrency, publish policy, PAT pointer, ntfy topic).
-- Data dir (default `~/.jalebi/`): `data.db`, `secrets.json` (0600), `repos/` (bare mirrors), `ws/` (worktrees), `agents/` (catalog agent files), `logs/`.
-- Prune policy: delete task worktrees for `done` tasks after a configurable TTL (default 7 days) unless a PR is still open.
+- **SQLite** via **SQLAlchemy 2 + Alembic** (schema managed by migrations; run at startup).
+- Tables (shipped): `repos`, `tasks`, `runs`, `followups`, `artifacts`, `catalog_agents`, `review_assignments`, `trigger_rules`, `event_deliveries`, `env_vars`, `settings` (key-value, see §10 for the full key list). **Phase 2** adds `screenings`, `screening_runs`, `findings`, `check_runs`.
+- Data dir (default `~/.jalebi/`; `JALEBI_DATA_DIR` overrides): `data.db`, `secrets.json` (0600), `repos/` (bare mirrors), `ws/` (worktrees), `agents/` (catalog agent files), `logs/`.
+- Prune policy: delete task worktrees for `done` tasks after a configurable TTL (default 7 days, `artifact_ttl_days`) unless a PR is still open.
 
 ### F13. Security & privacy
 
-- Bind server to **127.0.0.1** only. Optional UI password (env `JALEBI_PASSWORD` or `OPENCODE_SERVER_PASSWORD` reuse).
-- PAT stored with `0600`; never logged, never sent to the browser, never passed to agent prompts.
-- Agents execute arbitrary shell code by design — each child process is scoped to its own worktree (cwd), and a settings toggle can add a sandbox wrapper (e.g. `bwrap`/`firejail`) later.
+- Bind server to **127.0.0.1** by default. Optional UI password (env `JALEBI_PASSWORD` or `OPENCODE_SERVER_PASSWORD` reuse) gates the API + SPA behind Basic auth when tunnel-exposed.
+- **Failed-login alerts:** a wrong password pushes a throttled (1/60 s per client) ntfy alert — masks any token-like username; the alert is best-effort and never delays the 401.
+- Named PATs stored with `0600`; never logged, never sent to the browser, never passed to agent prompts. All PAT values are masked at ingest (see §F17).
+- **Agent sandboxing / `gh` guard:** each child process is scoped to its own worktree (cwd). The per-worktree `opencode.json` **denies `gh`** via opencode permission rules and denies external-directory access; the agent env carries an empty `GH_CONFIG_DIR` and stripped `GH_TOKEN`/`GITHUB_TOKEN`, and the `gh` CLI is banned project-wide (§17.2). A settings toggle can add a sandbox wrapper (e.g. `bwrap`/`firejail`) later.
 - Publishing is idempotent; follow-ups only ever touch the task's own branch.
-- If the app is ever exposed (tunnel), require the UI password and document the risk.
+- If the app is ever exposed (tunnel), require the UI password and document the risk. Webhook deliveries are HMAC-verified when a secret is configured; the `/webhook` listener is exempt from the Basic-auth gate (GitHub doesn't send credentials).
 
 ### F14. Event-driven triggers (webhooks)
 
 Triggering is a first-class, **webhook-pushed** mechanism (not polling, not scheduling).
 
-- **Listener:** a local HTTP endpoint (`POST /webhook`) receiving repo webhook events. Validated by optional `X-Hub-Signature-256` secret; **idempotent** — deliveries deduped on `X-GitHub-Delivery`, so re-deliveries never double-run a task.
+- **Listener:** a local HTTP endpoint (`POST /webhook`) receiving repo webhook events. Validated by optional `X-Hub-Signature-256` secret; **idempotent** — deliveries deduped on the **UNIQUE `X-GitHub-Delivery`** (the DB constraint is the atomic reservation that wins concurrent re-deliveries), so re-deliveries never double-run a task. Unconnected repos are ignored.
 - **Trigger rules:** per repo, user-configurable rules of the form:
   - event: `pull_request.opened` | `pull_request.synchronize` | `pull_request.reopened` | `issues.opened` | `pull_request_review` | `push` (…)
   - action: `start_review` | `triage_issue` | `create_task` | `rerun_review`
   - scope: branch filter (optional), labels (optional), PR author (optional)
   - target: which catalog agent(s) / reviewer(s) to launch, with custom instructions.
 - **Core use case:** `pull_request.opened` ⇒ auto-start the **assigned reviewers** from the catalog; each begins its own review task immediately. A `synchronize` (new push) can optionally re-trigger a reviewer pass.
-- **Reviewer auto-assignment source:** trigger rules may reference a default reviewer set, or reviewers can be assigned per-PR via the UI; the webhook path uses whichever applies.
-- **Replay & fallback:** UI offers "replay last delivery" for any event; if the webhook is unreachable (localhost not exposed), a **polling fallback** can be enabled per repo (interval check for new/updated PRs), but webhooks are the default and preferred path.
+- **Reviewer auto-assignment source:** trigger rules may reference a default reviewer set, or reviewers can be assigned per-PR via the UI; the webhook path uses whichever applies. Reviewers are deduped against already-assigned; a `rerun_review`/`start_review` whose assignments are all already made records a delivery `status="failed"` (work == []).
+- **Delivery log & replay:** every delivery is recorded (`event_deliveries`) with its **result** (`result.rules[]`, per-rule `work`); the UI offers **replay** for any delivery. Replay is idempotent: rules whose stored work is non-empty are skipped (a rule added *after* the delivery still fires).
+- **Semantics:** a delivery whose rules produced **no work** (all empty/error) is recorded `status="failed"` (a future "no-op" status is a possible refinement). The HTTP response stays 200.
+- **Fallback:** if the webhook is unreachable (localhost not exposed), a **polling fallback** can be enabled per repo (interval check for new/updated PRs) — the toggle exists but is currently **inert** (deferred).
 - **Notifications:** triggered tasks appear in the queue in real time; the UI surfaces which event started each task (delivery id, event, timestamp).
 
-### F15. Check runs & merge gating
+### F15. Check runs & merge gating *(Phase 2)*
 
-Mirrors GitHub Actions' ability to gate merges on agent results.
+Mirrors GitHub Actions' ability to gate merges on agent results. (Schema placeholders `repos.check_runs_enabled` and `tasks.check_run_id` already exist.)
 
 - Jalebi creates **check runs** (commit statuses) on the head SHA of the branch it's working on, via the PAT (`POST /repos/{owner}/{repo}/check-runs`).
 - Lifecycle mirrors a run: `queued` → `in_progress` (with a friendly name like `Jalebi / review (security-auditor)`) → `completed` with `conclusion` (`success`/`failure`/`neutral`/`cancelled`).
 - Because these are real check runs, **branch protection** can require them — merging is blocked until the agent's review/fix check is green. This is opt-in per repo (user enables "report check runs" for the repo and adds the check to branch protection).
 - Failure/success of the underlying task drives the conclusion; a follow-up updates the existing check rather than creating duplicates (matched by name + head SHA).
 
-### F16. Timeouts & retries
+### F16. Timeouts, retries & auto-recovery
 
-- **Per-task timeout (enforced):** each task has a timeout (default **60 minutes**; revised from 30 to suit longer agent runs), configurable per task and per repo. On expiry the child process is killed (SIGTERM → SIGKILL), the task marked `failed`/`timed-out`, and the check run (if any) completed with `failure`.
-- **Retries:** a failed/timed-out task can be **re-run** (UI action) — a fresh `run` reusing the same worktree/session where sensible, or a new run when the CLI requires it (e.g. a fresh `opencode run`). Retry count is tracked; auto-retry on transient failures (e.g. network) is configurable (default off for publishing tasks, on for pure-review tasks).
+- **Per-task timeout (enforced):** each task has a timeout (default **60 minutes**, configurable per task and per repo; the DB-level `server_default` stays 30 only because SQLite cannot alter it in place — the ORM Python default of 60 always applies). On expiry the child process is killed (SIGTERM → SIGKILL), the task marked `failed`/`timed_out`, and the check run (if any) completed with `failure`.
+- **Stall detection:** a **watchdog** (per-run `stall_timeout_seconds`, live setting, default 600) declares a run **stalled** when it stops emitting output; the task is marked `failed` and auto-recovery restarts it **fresh** (a wedged session re-hangs).
+- **Auto-recovery (default ON, unbounded, all task types):** on terminal `failed` (incl. stalled) or `timed_out`, recovery dispatches a new run — **resume the last session** with `continue_prompt` for timeout/other failures, **fresh re-run** for stalls, fresh if no resumable session. See §7.5 for the full loop.
+- **Derived timeout escalation:** the per-run timeout is computed from `task.retry_count` — `base × timeout_multiplier^attempts` (default multiplier 2), capped at `retry_policy.max_timeout_minutes` (180). `task.timeout_minutes` is never mutated; a `done` run **resets `retry_count`**, so a manual rerun after success starts from the base timeout again.
+- **Manual re-run:** a failed/timed-out task can be **re-run** (UI action) — a fresh `run` reusing the same worktree/session where sensible.
 - Interrupted runs remain resumable via follow-up (F11).
+- **Settings (`retry_policy`):** `{ auto_retry: true, continue_prompt: "continue", timeout_multiplier: 2, max_timeout_minutes: 180 }`.
 
 ### F17. Secret masking in logs
 
-- The PAT (and any user-marked secret) is **automatically masked** in the live console and stored run logs: any occurrence of the secret string is redacted (e.g. `***`), so even if an agent echoes an env var or token, the console never shows it.
+- The PATs (all vault accounts) and any user-marked secret is **automatically masked** in the live console and stored run logs: any occurrence of the secret string is redacted (e.g. `***`), so even if an agent echoes an env var or token, the console never shows it.
+- Also masks **env-var values** (see F20) and applies to **notifications** (title/body) before send.
 - Implemented at the ingest layer (before events are broadcast/persisted), not as a display-only filter.
-- Optional user-supplied extra secret patterns (regex) to mask beyond the PAT.
+- Optional user-supplied extra secret patterns (regex) to mask beyond the PATs (`secret_patterns` setting).
 
 ### F18. Artifacts
 
 - Runs may emit **artifacts**: files the agent produced (logs, test reports, coverage, screenshots) captured from the worktree.
-- An **artifact store** keeps them per run (uploaded from the worktree at completion), with retention TTL (default 7 days, matching worktree cleanup; configurable).
+- An **artifact store** keeps them per run (uploaded from the worktree at completion), with retention TTL (default 7 days, `artifact_ttl_days`, matching worktree cleanup; configurable).
 - UI: artifact list on the task detail page with download links.
 
 ### F19. Notifications
 
-- **Channel:** ntfy push (self-hosted or `ntfy.sh`). The endpoint is a **single merged setting** — either a bare topic name (default `https://ntfy.sh` server) or a full URL to a self-hosted server.
-- **Rendering (JSON publishing, docs.ntfy.sh/publish/):** notifications POST a JSON body to the **server root** with `topic` inside it — never to `/topic` (that would show raw JSON as the message). Messages are **Markdown**, carry tags, an optional priority, a **click action** and a **"Open task" action button** deep-linking to the Jalebi task page.
-- **Events (each a toggle, defaults on):** task **done** (final agent message + summary), task **failed/timed out/cancelled**, task **needs approval** (publish failed / pending manual publish), and **progress** — a periodic "still running" ping every `notify_progress_interval_minutes` (default 30) with elapsed time and the agent's latest message.
+- **Channel:** ntfy push (self-hosted or `ntfy.sh`). The endpoint is a **single merged setting** (`ntfy_topic`) — either a bare topic name (default `https://ntfy.sh` server) or a full URL to a self-hosted server.
+- **Rendering (JSON publishing, docs.ntfy.sh/publish/):** notifications POST a JSON body to the **server root** with `topic` inside it — never to `/topic`. Messages are **Markdown**, carry tags, an optional priority, a **click action** and an **"Open task" action button** deep-linking to the Jalebi task page.
+- **Events (each a toggle, defaults on):** task **done** (final agent message + summary), task **failed/timed out/cancelled**, task **needs approval** (publish failed / pending manual publish), and **progress** — a periodic "still running" ping every `notify_progress_interval_minutes` (default 30) with elapsed time and the agent's latest message. Plus a **failed-login** alert (§F13).
 - **Test:** a "Send test notification" button validates the endpoint (`POST /api/notify/test`).
-- **Masking:** notification title/body are run through the secret masker before send, so a stray PAT/env-var value can never reach the push channel. Sending is **best-effort** — a dead ntfy server never fails a task.
+- **Masking:** notification title/body are run through the secret masker before send. Sending is **best-effort** — a dead ntfy server never fails a task.
 
 ### F20. Environment variables for agents
 
 - Owners store named **environment variables** that task agents need to build/test/develop (DB URLs, API keys, tokens), scoped **globally or per-repo**.
 - Values are **secrets**: never returned in full by the API (masked previews), added to the secret masker so an agent echoing them is redacted, and injected into the agent subprocess env **on top of** Jalebi's pinned env (they cannot override the token/identity/git hygiene).
-- Tasks **select** which variables to inject (checkbox chips on the new-task form); the selection is stored on the task and applied to runs and follow-ups.
+- Tasks **select** which variables to inject (checkbox chips on the new-task form); the selection is stored on the task (`tasks.env_vars_json`) and applied to runs and follow-ups.
 - `.env` files can be **imported** (paste → parse `KEY=VALUE` → upsert) in Settings.
+
+### F21. Reliability
+
+- **Restart recovery:** runs + sessions are persisted; interrupted runs are marked `interrupted` and remain resumable via follow-up. Migrations run at startup. On restart, stale worktree registrations are pruned so a task id whose worktree was deleted never fails `worktree add`.
+- **Live settings:** concurrency, stall timeout, and retry policy are read per run from the persisted `settings` table (not process-time constants) — no restart needed for settings changes.
+- **Bounded children:** the number of concurrent child processes is capped at the configured concurrency; abort kills with a timeout then SIGKILL.
+- **Watchdog:** the stall watchdog (§F16) bounds runs that stop reporting.
+- **Webhook idempotency:** deliveries are idempotent (§F14); replay never double-runs.
 
 ---
 
@@ -437,13 +481,13 @@ Mirrors GitHub Actions' ability to gate merges on agent results.
 │                    ▲ GitHub webhook events (via tunnel/proxy)                    │
 │                    │                                                             │
 │  ┌─────────────────┼──────┐  HTTP (REST + SSE)   ┌────────────────────────────┐  │
-│  │  React + Vite UI │      │◀───────────────────▶│  Orchestrator (Node+Hono)  │  │
+│  │  React + Vite UI │      │◀───────────────────▶│  Orchestrator (Flask/Py)    │  │
 │  │  queue | task    │      │                     │  ┌──────────────────────┐  │  │
 │  │  | diff | agents │      │                     │  │ Webhook listener     │  │  │
-│  │  | screenings    │      │                     │  │  (validate + dedup   │  │  │
-│  │  | triggers      │      │                     │  │   + match rules)     │  │  │
-│  │  | settings      │      │                     │  └──────────┬───────────┘  │  │
-│  └──────────────────┼──────┘                     │             │              │  │
+│  │  | triggers      │      │                     │  │  (validate + dedup   │  │  │
+│  │  | settings      │      │                     │  │   + match rules)     │  │  │
+│  └──────────────────┼──────┘                     │  └──────────┬───────────┘  │  │
+│                     │                            │             │              │  │
 │                     │                            │  ┌──────────▼───────────┐  │  │
 │                     │                            │  │ Task queue + workers │  │  │
 │                     │                            │  │ (default 4 parallel) │  │  │
@@ -452,8 +496,8 @@ Mirrors GitHub Actions' ability to gate merges on agent results.
 │                     │                            │  ┌──────────▼───────────┐  │  │
 │                     │                            │  │ Agent adapters        │  │  │
 │                     │                            │  │  opencode (v1)        │  │  │
-│                     │                            │  │  codex (later)        │  │  │
-│                     │                            │  │  claude (later)       │  │  │
+│                     │                            │  │  codex (Phase 3)      │  │  │
+│                     │                            │  │  claude (Phase 3)     │  │  │
 │                     │                            │  └──────────┬───────────┘  │  │
 │                     │                            │             │ spawn        │  │
 │                     │                            │  ┌──────────▼───────────┐  │  │
@@ -462,14 +506,14 @@ Mirrors GitHub Actions' ability to gate merges on agent results.
 │                     │                            │  │  per-task worktrees   │  │  │
 │                     │                            │  └──────────┬───────────┘  │  │
 │                     │                            │  ┌──────────▼───────────┐  │  │
-│                     │                            │  │ Scheduler (node-cron) │  │  │
+│                     │                            │  │ Scheduler (Phase 2)   │  │  │
 │                     │                            │  │  → screening runs     │  │  │
 │                     │                            │  │  → ntfy notifications │  │  │
 │                     │                            │  └──────────────────────┘  │  │
 │                     │                            │  SQLite (data.db)          │  │
 │                     │                            │  + artifacts + secrets     │  │
 │                     │                            └────────────┬───────────────┘  │
-│                     │                                         │ Octokit (PAT)    │
+│                     │                                         │ httpx (PAT vault)│
 └─────────────────────┼─────────────────────────────────────────┼──────────────────┘
                       │                                         ▼
                       └─ webhook registration / check runs ─▶ github.com
@@ -481,88 +525,130 @@ Mirrors GitHub Actions' ability to gate merges on agent results.
 
 | Component                         | Responsibility                                                                                                                                         |
 | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **UI (React)**              | Queue, task detail (timeline/logs/diff/follow-ups), agents catalog editor, screenings config, **triggers**, settings. Consumes REST; subscribes to SSE event stream. |
-| **Orchestrator (Hono)**     | REST + SSE; task queue + worker pool; run lifecycle; publish; follow-up dispatch; reviewer orchestration; baseline bookkeeping; **webhook handling (validate + dedup + match rules)**; **check-run lifecycle**; timeouts/retries; secret masking; artifact capture. |
-| **Adapters**                | Translate a CLI into the`AgentAdapter` interface (start/resume/listModels/parse). Only component that knows the CLI binary.                          |
-| **Git workspace mgr**       | Bare mirrors, worktree create/discard, branch naming (`jalebi/<taskId>`), push with token credential helper, ref-prefetch for screenings.            |
-| **GitHub client (Octokit)** | Issues, PRs, reviews, comments, refs, **webhook registration**, **check runs**; all PAT-authenticated.                                                                                           |
-| **Webhook listener**        | Local endpoint receiving GitHub events (optionally tunneled/reverse-proxied); forwards validated deliveries to the orchestrator. |
-| **Scheduler**               | Cron screening runs + dedup + notifications. (Triggering is webhook-driven, NOT scheduler-driven.)                                                                                           |
-| **Storage**                 | SQLite schema above; secrets file; artifact store.                                                                                                                     |
+| **UI (React)**              | Queue, task detail (timeline/logs/diff/follow-ups/PR card), agents catalog editor, triggers, settings. Consumes REST; subscribes to SSE event stream. |
+| **Orchestrator (Flask)**    | REST + SSE; task queue + worker pool; run lifecycle; auto-recovery; publish; follow-up dispatch; reviewer orchestration; **webhook handling (validate + dedup + match rules)**; **check-run lifecycle** *(Phase 2)*; timeouts/retries; secret masking; artifact capture. |
+| **Adapters**                | Translate a CLI into the `AgentAdapter` protocol (start/resume/list_models/parse). Only component that knows the CLI binary. |
+| **Git workspace mgr**       | Bare mirrors, worktree/review-worktree create/discard, branch naming (`jalebi/<taskId>`), push with token credential helper, ref-prefetch for screenings *(Phase 2)*. |
+| **GitHub client (httpx)**   | Issues, PRs, reviews, comments, refs, **webhook registration**, **check runs** *(Phase 2)*; all PAT-vault-authenticated. |
+| **Webhook listener**        | Local Flask endpoint receiving GitHub events (optionally tunneled/reverse-proxied); forwards validated deliveries to the orchestrator. |
+| **Scheduler**               | *(Phase 2)* Cron screening runs + dedup + notifications. (Triggering is webhook-driven, NOT scheduler-driven.) |
+| **Storage**                 | SQLite schema above (SQLAlchemy 2 + Alembic); secrets file; artifact store. |
 
 **Streaming:** backend pushes normalized `AgentEvent`s over a per-task SSE channel (`GET /api/tasks/:id/events`); the UI renders timeline/logs/diffs live.
 
-**Recommended stack (open to implementer choice):** Node ≥22 + TypeScript + Hono + better-sqlite3 + Drizzle ORM + Octokit + node-cron + React + Vite + Tailwind. SSE for events. Git CLI (not libgit2) for repo ops.
+**Shipped stack:** Python 3.13 + Flask + SQLAlchemy 2 (SQLite) + Alembic + httpx + APScheduler *(Phase 2)*, managed with `uv`; React + Vite + Tailwind. SSE for events. Git CLI (not libgit2) for repo ops. The built UI is served by Flask on the **same port as the API** (default `2052`; `JALEBI_PORT` overrides) — a single origin.
 
 ---
 
 ## 10. Data model (summary)
 
+> Shipped schema (authoritative source: `apps/server/src/jalebi/db.py`). Phase-2 tables marked.
+
 ```
-repos(id, full_name, default_branch, clone_url, pat_scope, webhook_registered, poll_fallback, check_runs_enabled, last_checked_at)
-tasks(id, type[issue_fix|pr_review|freeform|screen_finding|triggered], repo_id, source_branch,
-      target_branch, agent_id, model, cli, prompt, status[queued|running|waiting_review|
-      needs_approval|done|failed|timed_out|interrupted], timeout_minutes, retry_count,
-      pr_number, check_run_id, created_at, updated_at)
-runs(id, task_id, seq, session_id, cli, model, started_at, finished_at, status, steps_json, artifacts_json)
-followups(id, task_id, run_id, body, created_at)
-catalog_agents(id, name, kind[general|reviewer], cli, model, personality_md, skills_json,
-               custom_instructions, enabled, created_at)
-review_assignments(id, task_id, agent_id, run_id, pr_number, status[queued|running|posted|failed])
-trigger_rules(id, repo_id, event, action, branch_filter, label_filter, author_filter,
-              agent_ids_json, custom_instructions, enabled)
-event_deliveries(id, github_delivery_id UNIQUE, event, repo_id, payload_json,
-                 received_at, matched_rule_id, status, result)   -- idempotency + replay
+repos(id, full_name, default_branch, clone_url, pat_scope, pat_name, connected,
+      webhook_registered, poll_fallback, check_runs_enabled, last_checked_at)
+      -- check_runs_enabled: Phase-2 consumption; pat_name = the named vault account for this repo
+
+tasks(id, type[issue_fix|pr_review|freeform|screen_finding|triggered], repo_id,
+      source_branch, target_branch, agent_id, model, cli, prompt,
+      pat_name, issues_json, prs_json, context_json, env_vars_json,
+      status[queued|running|waiting_review|needs_approval|done|failed|timed_out|interrupted|cancelled],
+      timeout_minutes, retry_count, pr_number, check_run_id, publish_mode[auto|manual|NULL],
+      created_at, updated_at)
+      -- agent_id: catalog slug, FK-less by design (SQLite batch-rebuild hazard); validated in service layer
+      -- check_run_id: plain nullable column, FK arrives with check_runs (Phase 2)
+      -- timeout_minutes: ORM default 60; DB server_default 30 (SQLite can't alter in place — deliberate divergence)
+      -- publish_mode: NULL → fall back to global auto_publish; issue_fix defaults auto, others manual
+
+runs(id, task_id, seq, session_id, cli, model, pat_name, pid,
+     started_at, finished_at, status, steps_json, artifacts_json, diff_text)
+
+followups(id, task_id, run_id, body, pat_name, model, created_at)
+
+artifacts(id, run_id, path, size, created_at)
+
+catalog_agents(id [slug PK], name, kind[general|reviewer], cli, model,
+               personality_md, skills_json, custom_instructions, enabled, created_at)
+
+review_assignments(id, task_id, agent_id, run_id, pr_number, repo_id,
+                   status[queued|running|posted|failed], created_at)
+      -- UNIQUE(repo_id, pr_number, agent_id): last line of defense vs concurrent duplicate assignments
+
+trigger_rules(id, repo_id [FK CASCADE], event, action, branch_filter, label_filter,
+              author_filter, agent_ids_json, custom_instructions, enabled, created_at)
+
+event_deliveries(id, github_delivery_id UNIQUE, event, action, repo_id, repo_full_name,
+                 payload_json, received_at, status, result)   -- idempotency + replay (no matched_rule_id)
+
+env_vars(id, name, value, repo_id NULL=global, created_at, updated_at)
+      -- UNIQUE(name, repo_id); values masked at the API
+
+settings(key PK, value)   -- see §10.1 for the key list
+
+-- Phase 2 (not yet in schema):
 check_runs(id, task_id, run_id, repo_id, head_sha, name, status, conclusion)
 screenings(id, repo_id, name, system_prompt, cadence_cron, scope_branch, enabled, notify_ntfy)
 screening_runs(id, screening_id, head_sha, status, started_at, finished_at, findings_json)
-artifacts(id, run_id, path, size, created_at)
-settings(key, value)   -- concurrency, auto_publish, ntfy_topic (merged endpoint),
-                          default_timeout_minutes, retry_policy, secret_patterns_json,
-                          artifact_ttl_days, notify_on_* toggles, etc.
-env_vars(id, name, value, repo_id NULL=global, created_at, updated_at)  -- agent env vars (masked at API)
-tasks.env_vars_json     -- selected env-var names injected into the agent subprocess env
 ```
+
+### 10.1 Settings keys (source: `apps/server/src/jalebi/settings.py`)
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `concurrency` | `4` | Max parallel tasks (0 = paused queue) |
+| `auto_publish` | `true` | Global publish policy (per-task `publish_mode` overrides) |
+| `ntfy_topic` | `""` | Merged ntfy endpoint (bare topic or full URL) |
+| `default_timeout_minutes` | `60` | Base per-task timeout |
+| `retry_policy` | `{"auto_retry": true, "continue_prompt": "continue", "timeout_multiplier": 2, "max_timeout_minutes": 180}` | Auto-recovery config (see §F16) |
+| `stall_timeout_seconds` | `600` | No-output threshold before a run is declared stalled |
+| `secret_patterns` | `[]` | Extra regexes to mask beyond PATs/env vars |
+| `artifact_ttl_days` | `7` | Artifact + worktree retention |
+| `agent_cli` | `"opencode"` | Backend selection (one-line) |
+| `notify_on_done` / `notify_on_failed` / `notify_on_progress` / `notify_on_needs_approval` | `true` | Notification event toggles |
+| `notify_progress_interval_minutes` | `30` | Progress-ping interval |
+| `webhook_url` | `""` | Public base URL GitHub can reach for webhooks (tunnel) |
+| `webhook_secret` | `""` | HMAC secret for `X-Hub-Signature-256` (write-only in the API) |
 
 ---
 
 ## 11. Screens & flows (UI summary)
 
-1. **Settings:** PAT (validate + show granted scopes), concurrency (default 4), publish policy (default auto), **notifications (ntfy endpoint + per-event toggles + progress interval + test button)**, **environment variables (global + per-repo, `.env` import, masked)**, data-dir path, **default timeout (60 min) + retry policy**, **secret patterns**, **tunnel/webhook setup status**.
+1. **Settings:** named PAT vault (validate + show granted scopes), concurrency (default 4), publish policy (default auto), **notifications (ntfy endpoint + per-event toggles + progress interval + test button + failed-login alerts)**, **environment variables (global + per-repo, `.env` import, masked)**, data-dir path, **default timeout (60 min) + retry policy + stall timeout**, **secret patterns**, **tunnel/webhook setup status**.
 2. **Agents:** catalog list; create/edit agent (name, kind, cli, model, personality, skills, custom instructions). Skills come from a library of markdown files the user uploads or references by path.
-3. **New Task modal:** repo → type → source/target branches → agent (default build agent or catalog agent) → model → instructions (issue #, PR #, or free text). For screenings, an explicit "run screen now" action.
-4. **Task detail:** timeline, console (with **masked secrets**), diff, **artifacts**, PR card (publish status, reviewers, assign reviewers, **check-run status**), follow-up composer, **Re-run** action.
-5. **Triggers tab:** per-repo webhook status, trigger rules editor (event → action → agents → filters), delivery log with replay, polling-fallback toggle.
-6. **Screenings tab:** screen cards with enable/toggle, cadence editor, last run + findings, "new task from finding".
-7. **Notifications:** in-app unread badge + ntfy push for screening findings, reviewer completion, and triggered-task failures.
+3. **New Task modal:** repo → type → branches (per §F8) → agent (default build agent or catalog agent) → model → instructions (issue #, PR #, or free text). Reviewer multi-select for `pr_review`. *(Screenings get an explicit "run screen now" action in Phase 2.)*
+4. **Task detail:** timeline, console (with **masked secrets**), diff, **artifacts**, PR card (publish status + modes, reviewers + assign + **address reviewers** + **check-run status** *(Phase 2)*), follow-up composer, **Re-run** action.
+5. **Triggers tab:** per-repo webhook status, trigger rules editor (event → action → agents → filters), delivery log with replay, polling-fallback toggle (inert).
+6. **Screenings tab** *(Phase 2)*: screen cards with enable/toggle, cadence editor, last run + findings, "new task from finding".
+7. **Notifications:** in-app unread badge + ntfy push for screening findings, reviewer completion, triggered-task failures, and failed-login attempts.
 
 ---
 
 ## 12. Roadmap
 
-**Phase 0 — Foundation (v1, opencode only)**
+**Phase 0 — Foundation (v1, opencode only)** — **complete (hardened).**
 
-- Repo scaffolding, config, SQLite schema, PAT settings + validation.
+- Repo scaffolding, config, SQLite schema, named PAT vault + validation.
 - Git workspace manager (mirror + worktrees + push with token).
 - AgentAdapter interface + **opencode adapter** (`--format json`, `--dir`, `--model`, `--session`).
-- Task queue with default concurrency 4 (configurable); run lifecycle; cancellation.
+- Task queue with default concurrency 4 (configurable); run lifecycle; cancellation; restart recovery.
 - GitHub publish (auto by default; manual override) + `Closes #N`.
 - **Timeouts (default 60 min) + re-run/retry; secret masking in logs; artifact capture + retention; ntfy notifications; env vars for agents.**
-- Minimal-but-Jules-like UI: queue, task detail (timeline + console + diff), follow-up composer.
+- Minimal-but-Jules-like UI: queue, task detail (timeline + console + diff + follow-up composer).
 - Follow-up via `opencode run --session <id>` (openCode resume).
 
-**Phase 1 — Agent catalog & reviewers + event-driven triggers**
+**Phase 1 — Agent catalog & reviewers + event-driven triggers** — **complete.**
 
 - Catalog agents (personality → AGENTS.md injection + skills references + custom instructions).
-- Reviewer workflow: per-reviewer worktrees, PR review comment posting, status tracking.
+- Reviewer workflow: per-reviewer worktrees, PR review comment posting, status tracking, dedup.
 - "Address reviewers' comments" follow-up flow.
-- **Event-driven triggers:** webhook listener + delivery dedup, trigger-rules editor, webhook registration (or polling fallback), and the core flow — `pull_request.opened` ⇒ assigned reviewers auto-start reviewing in real time.
+- **Event-driven triggers:** webhook listener + delivery dedup, trigger-rules editor, webhook registration, delivery log + idempotent replay, and the core flow — `pull_request.opened` ⇒ assigned reviewers auto-start reviewing in real time. (Polling fallback deferred/inert.)
+- Hardening: auto-recovery on failures/stalls + review-worktree re-sync (Steps 49/49b).
 
 **Phase 2 — Branch control + screening + merge gating**
 
-- Source/target branch selectors wired through worktree creation and PR base/head.
-- Screening engine: starter catalog, cron scheduler, HEAD-baseline dedup, structured findings, in-app + ntfy notify, "new task from finding".
-- **Check runs / commit statuses on head SHAs so branch protection can gate merges on agent reviews/fixes.**
+- **Branch selectors:** extend `issue_fix` to full source/target selectors (open decision — the single-target default remains).
+- **Screening engine:** starter catalog, cron scheduler, HEAD-baseline dedup, structured findings, in-app + ntfy notify, "new task from finding".
+- **Check runs / commit statuses on head SHAs** so branch protection can gate merges on agent reviews/fixes.
 - Diff-view polish + task history.
 
 **Phase 3 — Backend parity**
@@ -577,11 +663,11 @@ tasks.env_vars_json     -- selected env-var names injected into the agent subpro
 ## 13. Non-functional requirements
 
 - **Latency:** SSE events render in the UI in near-real-time; console streams without buffering delays. Webhook → task-start latency should be sub-second (validation + dedup only; no slow processing on the webhook path).
-- **Reliability:** runs + sessions persisted; interrupted runs resumable; follow-ups work after restart; webhook deliveries **idempotent** (re-delivery never double-runs); check-run conclusions converge to the final task state.
-- **Resource safety:** worktree cleanup TTL; cap on concurrent children (== configured concurrency); process kill on abort with timeout then SIGKILL; per-task timeout (default 60 min) prevents runaway agents.
-- **Security:** localhost bind; 0600 secrets; PAT never logged/leaked; no secrets interpolated into prompts; optional UI password; **automatic secret masking in logs/console**; webhook signature verification when a secret is configured.
-- **Testability:** adapters unit-tested with mocked CLI output; queue tested with fake agents; Octokit interactions mocked (e.g. via `nock`); screening scheduler tested with fake clocks; webhook handler tested with fixture payloads + delivery-id dedup.
-- **Portability:** must run on Linux and macOS (dev may build on any machine); document Node version + CLI install requirements per adapter.
+- **Reliability:** runs + sessions persisted; interrupted runs resumable; follow-ups work after restart; webhook deliveries **idempotent** (re-delivery never double-runs); check-run conclusions converge to the final task state *(Phase 2)*; runs auto-recover on failure/timeout/stall (see §F16).
+- **Resource safety:** worktree cleanup TTL; cap on concurrent children (== configured concurrency); process kill on abort with timeout then SIGKILL; per-task timeout (default 60 min) prevents runaway agents; stall watchdog bounds runs that stop reporting.
+- **Security:** localhost bind; 0600 secrets; PATs never logged/leaked; no secrets interpolated into prompts; optional UI password + failed-login alerts; **automatic secret masking in logs/console**; webhook signature verification when a secret is configured; agent `gh`-guard + external-directory denial.
+- **Testability:** adapters unit-tested with mocked CLI output; queue tested with fake agents; GitHub interactions mocked via the httpx `_request` seam; screening scheduler tested with fake clocks *(Phase 2)*; webhook handler tested with fixture payloads + delivery-id dedup.
+- **Portability:** must run on Linux and macOS (dev may build on any machine); document Python version + CLI install requirements per adapter.
 
 ---
 
@@ -590,12 +676,13 @@ tasks.env_vars_json     -- selected env-var names injected into the agent subpro
 1. **CLI output drift** — adapter parsers depend on CLI formats (`opencode --format json`, codex `--json`, claude `stream-json`) that may change across CLI versions. Mitigate: pin documented CLI versions, defensive parsing, show raw lines on parse failure.
 2. **Codex resume model lock** — follow-ups on a codex-backed task cannot change the model. Decide in Phase 3: surface as a warning, or auto-fork a fresh run when the user changes the model on a follow-up.
 3. **Auto-publish safety** — default auto-publish means tasks push to GitHub unattended. Keep `auto_publish` toggle prominent; consider a per-repo "require approval" override for sensitive repos.
-4. **PAT scope limits** — fine-grained PATs must include both Contents and Pull requests scopes for the full flow; validation step in Settings should enumerate exactly which scope is missing.
+4. **PAT scope limits** — fine-grained PATs must include both Contents and Pull requests scopes for the full flow; validation step in Settings enumerates exactly which scope is missing.
 5. **Concurrency vs. API rate limits** — 4 parallel agents can burn GitHub/LLM rate limits; consider a per-provider throttle later.
-6. **Screening false positives** — findings are LLM-generated; severity should be labeled and the "new task from finding" flow should let the user edit the prompt before starting.
-7. **Should Jalebi use a GitHub App instead of PAT for higher rate limits & org-install reach?** — deferred, documented as future option.
-8. **Webhook reachability** — a localhost app can't receive GitHub webhooks without a tunnel/reverse proxy. Mitigate: detect unreachable webhook, warn in UI, offer per-repo polling fallback; the tunnel is the owner's responsibility (documented in Settings).
-9. **Missed/reordered webhook events** — dedup handles re-delivery but not "never delivered"; polling fallback and a "replay delivery" log close the gap for critical triggers (e.g. PR opened).
+6. **Screening false positives** — findings are LLM-generated; severity should be labeled and the "new task from finding" flow should let the user edit the prompt before starting. *(Phase 2.)*
+7. **Unbounded auto-recovery** — recovery is intentionally unbounded; each run is bounded only by its escalating timeout (capped at 180 min). Risk: a pathological task loops for a long time. Mitigations: escalating timeout, terminal + progress notifications. Revisit if the owner wants a cap field.
+8. **Should Jalebi use a GitHub App instead of PAT for higher rate limits & org-install reach?** — deferred, documented as future option.
+9. **Webhook reachability** — a localhost app can't receive GitHub webhooks without a tunnel/reverse proxy. Mitigate: detect unreachable webhook, warn in UI, offer per-repo polling fallback (currently inert); the tunnel is the owner's responsibility (documented in Settings).
+10. **Missed/reordered webhook events** — dedup handles re-delivery but not "never delivered"; polling fallback and a "replay delivery" log close the gap for critical triggers (e.g. PR opened).
 
 ---
 
@@ -633,14 +720,14 @@ The projects below are **inspiration, not dependencies.** During development, st
 
 | Project | Repo | Why inspect / what to learn |
 |---|---|---|
-| **Qodo PR-Agent** (CodiumAI) | `qodo-ai/pr-agent` | Standard for automated PR reviews / issue triage / auto-commenting. Learn webhook event parsing (`pull_request`, `synchronize`, `issue_comment`), structuring multi-file git diffs for LLMs, and inline PR comments via Octokit. |
+| **Qodo PR-Agent** (CodiumAI) | `qodo-ai/pr-agent` | Standard for automated PR reviews / issue triage / auto-commenting. Learn webhook event parsing (`pull_request`, `synchronize`, `issue_comment`), structuring multi-file git diffs for LLMs, and inline PR comments via the GitHub API. |
 | **Sweep AI** | `sweepai/sweep` | Early "junior developer" bot for issue→PR workflows. Learn webhook handling, issue parsing, and branch naming (`sweep/...`). |
 
 ### 16.3 Git worktree & workspace management
 
 | Project | Repo | Why inspect / what to learn |
 |---|---|---|
-| **Simple-Git** (Node.js) | `steveukx/simple-git` | Recommended lightweight git client wrapper for the Hono orchestrator. Learn clean `git worktree add/remove`, branch creation, ref fetching, and PAT credential-helper injection without hand-stringing `child_process.exec`. |
+| *(in-repo)* | `apps/server/src/jalebi/git_workspace.py` | Shipped implementation: bare mirror + worktrees + `--force-with-lease` push with a token credential helper. No external git wrapper is used. |
 | *Search* | git worktree wrappers / lifecycle | Look for `git worktree prune` recovery of orphaned worktrees on app restart. |
 
 ### 16.4 UI dashboard & real-time SSE streaming
@@ -655,16 +742,18 @@ The projects below are **inspiration, not dependencies.** During development, st
 
 ## 17. Development guidelines & secrets
 
-### 17.1 GitHub token (placeholder)
+### 17.1 GitHub token(s) — named PAT vault (placeholder)
 
-- Jalebi authenticates to GitHub with a **fine-grained personal access token** supplied by the owner at runtime.
-- **Placeholder:** configure it via a local env file the app loads — e.g. `JALEBI_GITHUB_TOKEN=<FINE_GRAINED_PAT_HERE>` in a `.env` (git-ignored), or the Settings UI field, per §F1. A checked-in `.env.example` documents the key name **without** any real value.
-- All GitHub calls go through Octokit using that token. Validation at startup must confirm the token and list its granted scopes.
+- Jalebi authenticates to GitHub with **named personal access tokens** supplied by the owner at runtime, stored in the `0600` `<data-dir>/secrets.json` vault (see §F1). There is **no single primary token** — the account selected for a task/repo is the one used.
+- **Placeholder while developing/testing:** configure a token via the git-ignored `.env` file — `JALEBI_GITHUB_TOKEN=<PAT>` (see `.env.example` for the key name and required scopes). `JALEBI_GITHUB_TOKEN` is **masking-only** in the app and is never used to resolve which account runs anything.
+- All GitHub calls go through the thin httpx client using the selected account's PAT. Validation at startup/on save confirms the token and lists its granted scopes.
 
 ### 17.2 Do not use the `gh` CLI
 
 - **During development of this repository, the `gh` command must NOT be used** for any testing, verification, or other tasks (no `gh auth`, `gh pr`, `gh api`, etc.).
-- All GitHub interactions during development/testing must go through the **provided fine-grained token** (via Octokit, `curl -H "Authorization: Bearer $JALEBI_GITHUB_TOKEN"`, or git with a credential helper pointing at the token).
+- All GitHub interactions during development/testing must go through the **provided fine-grained token** (via the httpx client, `curl -H "Authorization: Bearer $JALEBI_GITHUB_TOKEN"`, or git with a credential helper pointing at the token).
+- **Owner-authorized exception (commits only):** the `gh` CLI may be used **only** for local git operations on the Jalebi repo itself (staging, committing, pushing). It never extends to testing/verification against the testing account/repo.
+- The same ban is enforced at runtime for agents: the per-worktree `opencode.json` denies `gh`, and the agent env has no `gh` auth (see §F13).
 
 ### 17.3 Testing repo & account
 
