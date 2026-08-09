@@ -460,6 +460,13 @@ def _dispatch_rerun_review(session, queue, repo, context) -> list[dict]:
     summary = []
     for assignment in assignments:
         task = session.get(Task, assignment.task_id)
+        # Re-enqueue only terminal/done statuses. ``needs_approval`` is excluded
+        # by virtue of not being in this inclusion list — a reviewer task that
+        # is awaiting manual publish (a fresh review pass would spawn a new
+        # agent run while the publish hangs waiting for the owner). The test
+        # ``test_dispatch_rerun_review_skips_needs_approval`` in
+        # ``test_webhooks.py`` pins this contract; do NOT add
+        # ``needs_approval`` to the list below.
         if task is None or task.status not in (
             "done",
             "failed",

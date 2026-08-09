@@ -51,7 +51,10 @@ author_filter?, agent_ids_json, custom_instructions?, enabled, created_at)`
   `custom_instructions`, issue embedded).
 - `create_task` — a freeform task with `custom_instructions` as the prompt.
 - `rerun_review` — re-enqueues the PR's existing reviewer tasks (a fresh review
-  pass, e.g. on `pull_request.synchronize`).
+  pass, e.g. on `pull_request.synchronize`). Re-enqueues only terminal statuses
+  (`done` / `failed` / `timed_out` / `interrupted` / `cancelled`); tasks awaiting
+  manual publish (`needs_approval`) are excluded — a fresh review pass would
+  spawn an agent run while the existing publish hangs.
 
 Dispatch is best-effort per rule: one failing rule is recorded in the delivery
 result and never fails the whole delivery.

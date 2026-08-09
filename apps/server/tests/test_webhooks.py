@@ -270,6 +270,57 @@ def test_dispatch_rerun_review_reenqueues_terminal(session) -> None:
     assert fresh.status == "queued"
 
 
+@pytest.mark.parametrize(
+    "status, expect_enqueued",
+    [
+        ("done", True),
+        ("failed", True),
+        ("timed_out", True),
+        ("interrupted", True),
+        ("cancelled", True),
+        ("needs_approval", False),
+    ],
+)
+def test_dispatch_rerun_review_skips_needs_approval(
+    session, status: str, expect_enqueued: bool
+) -> None:
+    """``rerun_review`` re-enqueues tasks in terminal/done statuses but must
+    skip ``needs_approval`` — a task mid-publish would race with its own
+    in-flight publish if a synchronize webhook fired while the publish was
+    running. Other terminal statuses still re-enqueue."""
+    from jalebi import catalog, reviews
+    from jalebi.db import Task
+
+    catalog.create_agent(session, id="auditor-a", name="A", kind="reviewer", enabled=True)
+    repo = _repo(session)
+    (task,) = reviews.assign_reviewers(session, repo, 9, ["auditor-a"])
+    task.status = status
+    session.commit()
+
+    rule = webhooks.create_rule(
+        session, repo_id=repo.id, event="pull_request.synchronize", action="rerun_review"
+    )
+    enqueued: list[int] = []
+
+    class FakeQueue:
+        def enqueue(self, task_id):
+            enqueued.append(task_id)
+
+    summary = webhooks.dispatch_rule(
+        session, FakeQueue(), rule, repo, {"pr_number": 9, "base_ref": "main"}, masker=None
+    )
+    if expect_enqueued:
+        assert summary and summary[0]["type"] == "rerun_review"
+        assert enqueued == [task.id]
+        fresh = session.get(Task, task.id)
+        assert fresh.status == "queued"
+    else:
+        assert summary == []
+        assert enqueued == []
+        fresh = session.get(Task, task.id)
+        assert fresh.status == "needs_approval"
+
+
 def test_delivery_to_dict_roundtrip(session) -> None:
     repo = _repo(session)
     d = webhooks.record_delivery(
