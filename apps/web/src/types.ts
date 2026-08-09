@@ -224,7 +224,6 @@ export interface EventDelivery {
   repo_id: number | null;
   repo_full_name: string | null;
   received_at: string;
-  matched_rule_id: number | null;
   status: string;
   result: unknown;
 }

@@ -341,9 +341,6 @@ class EventDelivery(Base):
     repo_full_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     payload_json: Mapped[str] = mapped_column(Text, nullable=False)
     received_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
-    matched_rule_id: Mapped[int | None] = mapped_column(
-        ForeignKey("trigger_rules.id", ondelete="SET NULL"), nullable=True
-    )
     status: Mapped[str] = mapped_column(
         Text, nullable=False, default="received", server_default=sa.text("'received'")
     )

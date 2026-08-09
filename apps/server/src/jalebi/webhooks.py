@@ -20,7 +20,6 @@ import hashlib
 import hmac
 import json
 
-import sqlalchemy as sa
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -79,7 +78,6 @@ def record_delivery(
     repo_id: int | None,
     repo_full_name: str | None,
     payload_json: str,
-    matched_rule_id: int | None,
     status: str,
     result: dict | None = None,
 ) -> EventDelivery:
@@ -93,7 +91,6 @@ def record_delivery(
         repo_full_name=repo_full_name,
         payload_json=payload_json,
         received_at=utcnow(),
-        matched_rule_id=matched_rule_id,
         status=status,
         result=json.dumps(result) if result else None,
     )
@@ -120,7 +117,6 @@ def delivery_to_dict(delivery: EventDelivery) -> dict[str, object]:
         "repo_id": delivery.repo_id,
         "repo_full_name": delivery.repo_full_name,
         "received_at": delivery.received_at.isoformat(),
-        "matched_rule_id": delivery.matched_rule_id,
         "status": delivery.status,
         "result": json.loads(delivery.result) if delivery.result else None,
     }
@@ -215,14 +211,6 @@ def delete_rule(session: Session, rule_id: int) -> bool:
     row = rule_by_id(session, rule_id)
     if row is None:
         return False
-    # Clear the link from any delivery that matched this rule so deletion isn't
-    # blocked by the FK (SQLite defaults to RESTRICT; ON DELETE SET NULL covers
-    # fresh DBs, this covers the rest).
-    session.execute(
-        sa.update(EventDelivery)
-        .where(EventDelivery.matched_rule_id == rule_id)
-        .values(matched_rule_id=None)
-    )
     session.delete(row)
     session.commit()
     return True

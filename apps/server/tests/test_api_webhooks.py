@@ -472,8 +472,8 @@ def test_all_rules_error_marks_delivery_failed(client, session, repo) -> None:
     ]
     delivery = webhooks.list_deliveries(session)[0]
     assert delivery.status == "failed"
-    assert delivery.matched_rule_id == rule.id
     stored: dict = json.loads(delivery.result or "{}")
+    assert stored["rules"][0]["rule_id"] == rule.id
     assert stored["rules"][0]["work"][0]["type"] == "error"
     assert len(tasks_service.list_tasks(session)) == 0
 
@@ -506,7 +506,8 @@ def test_mixed_one_ok_one_error_keeps_matched(client, session, repo) -> None:
     assert by_id[err_rule.id]["work"][0]["type"] == "error"
     delivery = webhooks.list_deliveries(session)[0]
     assert delivery.status == "matched"
-    assert delivery.matched_rule_id in {ok_rule.id, err_rule.id}
+    stored_mixed: dict = json.loads(delivery.result or "{}")
+    assert {e["rule_id"] for e in stored_mixed["rules"]} == {ok_rule.id, err_rule.id}
     assert len(tasks_service.list_tasks(session)) == 1
 
 
@@ -614,3 +615,34 @@ def test_replay_of_empty_work_delivery_skips_rule(
     assert replay_body["results"][0]["rule_id"] == rule.id
     assert replay_body["results"][0]["note"] == "already dispatched — skipped"
     assert replay_body["results"][0]["work"] == []
+
+
+def test_completed_delivery_with_multiple_rules_stores_all_in_result(
+    client, session, repo
+) -> None:
+    """A delivery matching 2 rules must record BOTH rule_ids in
+    result.rules[] — the single-rule matched_rule_id column was the flaw
+    (Step 45/M5 dropped that column)."""
+    from jalebi import tasks as tasks_service
+
+    r1 = webhooks.create_rule(
+        session, repo_id=repo, event="push", action="create_task",
+        custom_instructions="A",
+    )
+    r2 = webhooks.create_rule(
+        session, repo_id=repo, event="push", action="create_task",
+        custom_instructions="B",
+    )
+
+    res = client.post(
+        "/webhook",
+        headers={"X-GitHub-Delivery": "d-multi", "X-GitHub-Event": "push"},
+        json={"ref": "refs/heads/main", "repository": {"full_name": "owner/repo"}},
+    )
+    assert res.get_json()["matched"] is True
+    delivery = webhooks.list_deliveries(session)[0]
+    stored: dict = json.loads(delivery.result or "{}")
+    assert {e["rule_id"] for e in stored["rules"]} == {r1.id, r2.id}
+    assert len(tasks_service.list_tasks(session)) == 2
+    # matched_rule_id column no longer exists on the model.
+    assert not hasattr(delivery, "matched_rule_id")

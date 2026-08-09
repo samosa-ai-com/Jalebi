@@ -155,7 +155,6 @@ def test_delivery_dedup(session) -> None:
         repo_id=repo.id,
         repo_full_name=repo.full_name,
         payload_json="{}",
-        matched_rule_id=None,
         status="ignored",
     )
     assert webhooks.delivery_exists(session, "abc123") is True
@@ -331,11 +330,13 @@ def test_delivery_to_dict_roundtrip(session) -> None:
         repo_id=repo.id,
         repo_full_name=repo.full_name,
         payload_json='{"a":1}',
-        matched_rule_id=None,
         status="matched",
         result={"rules": []},
     )
     data = webhooks.delivery_to_dict(d)
     assert data["github_delivery_id"] == "d-1"
     assert data["status"] == "matched"
+    # The single-rule matched_rule_id column was dropped (Step 45/M5);
+    # the full set lives in result.rules[].rule_id.
+    assert "matched_rule_id" not in data
     assert data["result"] == {"rules": []}

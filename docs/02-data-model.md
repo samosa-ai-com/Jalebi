@@ -172,12 +172,14 @@ Index: `repo_id`. See `docs/16-triggers.md`.
 | `repo_full_name` | text, null | |
 | `payload_json` | text | raw body (for replay) |
 | `received_at` | datetime | |
-| `matched_rule_id` | int FK → trigger_rules, null | |
 | `status` | text | `received` \| `matched` \| `ignored` \| `failed` |
-| `result` | text, null | JSON summary of what the rule did |
+| `result` | text, null | JSON `{"rules": [{"rule_id", "action", "work"}, ...]}` — full set of matched rules (the source of truth) |
 
 Index: `repo_id`. The UNIQUE `github_delivery_id` makes re-deliveries no-ops;
-the stored payload enables replay.
+the stored payload enables replay. When multiple rules match a single
+delivery, every matched rule's id is recorded in `result.rules[].rule_id`
+(Step 45/M5 dropped the single-value `matched_rule_id` column, which
+could only record `rules[0].id`).
 
 ### `settings`
 

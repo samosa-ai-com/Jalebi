@@ -87,7 +87,7 @@ def webhook() -> ResponseReturnValue:
     # If the repo isn't connected (or the event is unrelated), record + ignore.
     if repo is None:
         _complete_delivery(
-            session, reserved, repo_id=None, matched_rule_id=None, status="ignored",
+            session, reserved, repo_id=None, status="ignored",
             result={"reason": "repo not connected"},
         )
         return jsonify({"ok": True, "matched": False})
@@ -98,7 +98,7 @@ def webhook() -> ResponseReturnValue:
 
     if not rules:
         _complete_delivery(
-            session, reserved, repo_id=repo_id, matched_rule_id=None, status="ignored",
+            session, reserved, repo_id=repo_id, status="ignored",
             result={"reason": "no matching trigger rule"},
         )
         return jsonify({"ok": True, "matched": False})
@@ -125,8 +125,8 @@ def webhook() -> ResponseReturnValue:
     any_work = _any_rule_produced_work(results)
     delivery_status = "matched" if any_work else "failed"
     _complete_delivery(
-        session, reserved, repo_id=repo_id, matched_rule_id=rules[0].id,
-        status=delivery_status, result={"rules": results},
+        session, reserved, repo_id=repo_id, status=delivery_status,
+        result={"rules": results},
     )
     return jsonify({"ok": True, "matched": any_work, "results": results})
 
@@ -174,11 +174,10 @@ def _reserve_delivery(session, delivery_id, event, action, full_name, payload):
 
 
 def _complete_delivery(
-    session, delivery: db.EventDelivery, *, repo_id, matched_rule_id, status, result
+    session, delivery: db.EventDelivery, *, repo_id, status, result
 ) -> None:
     """Update a reserved delivery with the outcome."""
     delivery.repo_id = repo_id
-    delivery.matched_rule_id = matched_rule_id
     delivery.status = status
     delivery.result = json.dumps(result) if result else None
     session.commit()
