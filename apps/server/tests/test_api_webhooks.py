@@ -534,3 +534,83 @@ def test_webhook_empty_work_marks_delivery_failed(client, session, repo) -> None
     assert stored["rules"][0]["work"] == []
     assert len(tasks_service.list_tasks(session)) == 0
     assert rule.id == body["results"][0]["rule_id"]
+
+
+def test_replay_of_errored_delivery_skips_rule(
+    client, session, repo, monkeypatch
+) -> None:
+    """A delivery whose rule stored error work (a failed dispatch) must be a
+    no-op on replay — the rule is NOT re-dispatched (it would only error again)."""
+    from jalebi import tasks as tasks_service
+
+    rule = webhooks.create_rule(
+        session, repo_id=repo, event="push", action="create_task",
+    )
+
+    res = client.post(
+        "/webhook",
+        headers={"X-GitHub-Delivery": "d-h3-err", "X-GitHub-Event": "push"},
+        json={"ref": "refs/heads/main", "repository": {"full_name": "owner/repo"}},
+    )
+    body = res.get_json()
+    assert res.status_code == 200
+    assert body["matched"] is False
+    assert body["results"][0]["work"] == [
+        {"type": "error", "error": "create_task requires custom_instructions"}
+    ]
+    delivery = webhooks.list_deliveries(session)[0]
+    assert delivery.status == "failed"
+    assert len(tasks_service.list_tasks(session)) == 0
+
+    def _must_not_redispatch(*args, **kwargs):
+        raise AssertionError("replay re-dispatched an already-dispatched rule")
+
+    monkeypatch.setattr(webhooks, "dispatch_rule", _must_not_redispatch)
+
+    replay_res = client.post(f"/api/webhooks/deliveries/{delivery.id}/replay")
+    assert replay_res.status_code == 200
+    replay_body = replay_res.get_json()
+    assert replay_body["matched"] == 1
+    assert replay_body["results"][0]["rule_id"] == rule.id
+    assert replay_body["results"][0]["note"] == "already dispatched — skipped"
+    assert replay_body["results"][0]["work"] == []
+    assert len(tasks_service.list_tasks(session)) == 0
+
+
+def test_replay_of_empty_work_delivery_skips_rule(
+    client, session, repo, monkeypatch
+) -> None:
+    """A rule whose stored work is ``[]`` (e.g. rerun_review with nothing to
+    re-run, start_review when all reviewers are already assigned) must also be
+    a no-op on replay. The old ``if entry.get("work")`` predicate treated
+    empty lists as not-dispatched, so replay re-ran ``dispatch_rule`` every
+    time — fixed by presence-of-``work``-key."""
+    rule = webhooks.create_rule(
+        session, repo_id=repo, event="push", action="rerun_review",
+    )
+
+    res = client.post(
+        "/webhook",
+        headers={"X-GitHub-Delivery": "d-h3-emp", "X-GitHub-Event": "push"},
+        json={"ref": "refs/heads/main", "repository": {"full_name": "owner/repo"}},
+    )
+    body = res.get_json()
+    assert res.status_code == 200
+    assert body["matched"] is False
+    delivery = webhooks.list_deliveries(session)[0]
+    assert delivery.status == "failed"
+    stored: dict = json.loads(delivery.result or "{}")
+    assert stored["rules"][0]["work"] == []
+
+    def _must_not_redispatch(*args, **kwargs):
+        raise AssertionError("replay re-dispatched an already-dispatched rule")
+
+    monkeypatch.setattr(webhooks, "dispatch_rule", _must_not_redispatch)
+
+    replay_res = client.post(f"/api/webhooks/deliveries/{delivery.id}/replay")
+    assert replay_res.status_code == 200
+    replay_body = replay_res.get_json()
+    assert replay_body["matched"] == 1
+    assert replay_body["results"][0]["rule_id"] == rule.id
+    assert replay_body["results"][0]["note"] == "already dispatched — skipped"
+    assert replay_body["results"][0]["work"] == []

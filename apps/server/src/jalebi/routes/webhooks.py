@@ -256,7 +256,13 @@ def replay(delivery_id: int) -> ResponseReturnValue:
             prior_rules = []
     for entry in prior_rules:
         if isinstance(entry, dict) and isinstance(entry.get("rule_id"), int):
-            if entry.get("work"):
+            # Treat the rule as already dispatched whenever its stored result
+            # carries a ``work`` key — including empty lists and error-only
+            # lists. The previous ``if entry.get("work"):`` predicate treated
+            # ``work == []`` as not-yet-dispatched and re-ran dispatch_rule on
+            # every replay (no-op rules like ``rerun_review`` with nothing to
+            # re-enqueue would loop forever).
+            if "work" in entry:
                 already_dispatched.add(entry["rule_id"])
 
     event_key = f"{delivery.event}.{delivery.action}" if delivery.action else delivery.event
