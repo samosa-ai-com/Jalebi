@@ -409,6 +409,46 @@ describe("TaskDetail", () => {
     });
   });
 
+  it("hides Address reviewers on a pr_review task (fixer-only action)", async () => {
+    const reviewTask = {
+      ...TASK,
+      type: "pr_review",
+      pr_number: 9,
+      prs: [9],
+      status: "done",
+      run: { ...RUN, status: "done" },
+      reviewers: [],
+    };
+    stubFetch(reviewTask);
+    vi.stubGlobal("EventSource", FakeEventSource);
+
+    renderDetail();
+    await screen.findByText("Follow-up");
+    // The follow-up composer exists, but the fixer-only Address-reviewers
+    // button must NOT be offered on a reviewer task.
+    expect(screen.queryByRole("button", { name: "Address reviewers" })).toBeNull();
+  });
+
+  it("shows Address reviewers on a fix task that has a PR", async () => {
+    const fixTask = {
+      ...TASK,
+      type: "issue_fix",
+      pr_number: 9,
+      prs: [9],
+      status: "done",
+      run: { ...RUN, status: "done" },
+      reviewers: [],
+    };
+    stubFetch(fixTask);
+    vi.stubGlobal("EventSource", FakeEventSource);
+
+    renderDetail();
+    await screen.findByText("Follow-up");
+    expect(
+      await screen.findByRole("button", { name: "Address reviewers" })
+    ).toBeInTheDocument();
+  });
+
   describe("publish modes", () => {
     function doneTask(overrides: Record<string, unknown> = {}) {
       return {

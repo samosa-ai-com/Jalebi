@@ -20,6 +20,12 @@ const AGENTS = [
 
 function makeFetchMock() {
   return vi.fn(async (url: string, init?: RequestInit) => {
+    if (String(url).includes("/api/models")) {
+      return {
+        ok: true,
+        json: async () => ({ cli: "opencode", models: ["opencode-go/deepseek-v4-flash"] }),
+      };
+    }
     if (String(url).includes("/api/agents") && init?.method === "POST") {
       const body = JSON.parse(init.body as string) as Record<string, unknown>;
       return {
@@ -80,6 +86,27 @@ describe("Agents", () => {
       expect(body.id).toBe("docs-guru");
       expect(body.name).toBe("Docs Guru");
     });
+  });
+
+  it("model pin is a dropdown of models from /api/models, empty clears it", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<Agents />);
+    await screen.findByText("security-auditor");
+
+    await userEvent.click(screen.getByRole("button", { name: "+ New agent" }));
+    const modelSelect = screen.getByLabelText("Model pin (optional)") as HTMLSelectElement;
+    expect(await screen.findByRole("option", { name: "no pin (CLI default)" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: "opencode-go/deepseek-v4-flash" })
+    ).toBeInTheDocument();
+
+    // Picking a model sends it as the pin; picking the empty option clears it.
+    await userEvent.selectOptions(modelSelect, "opencode-go/deepseek-v4-flash");
+    expect(modelSelect.value).toBe("opencode-go/deepseek-v4-flash");
+    await userEvent.selectOptions(modelSelect, "");
+    expect(modelSelect.value).toBe("");
   });
 
   it("toggles an agent's enabled state via edit", async () => {

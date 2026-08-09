@@ -293,6 +293,10 @@ function FollowUpComposer({
   const [error, setError] = useState<string | null>(null);
 
   const hasPr = (task.prs?.length ?? 0) > 0 || task.pr_number != null;
+  // "Address reviewers" only makes sense on the fixer task: a pr_review task's
+  // session lives in the detached review worktree, so resuming it there would
+  // never push a commit to the PR.
+  const showAddressReviewers = hasPr && task.type !== "pr_review";
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -376,7 +380,7 @@ function FollowUpComposer({
         />
         {error && <p className="text-xs text-red-400">{error}</p>}
         <div className="flex justify-end gap-2">
-          {hasPr && (
+          {showAddressReviewers && (
             <button
               type="button"
               disabled={busy}

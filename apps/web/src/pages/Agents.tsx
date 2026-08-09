@@ -77,6 +77,14 @@ function AgentForm({
   const [form, setForm] = useState<CatalogAgent>(agent ?? { ...EMPTY });
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [models, setModels] = useState<string[]>([]);
+
+  useEffect(() => {
+    api
+      .getModels()
+      .then((m) => setModels(m.models ?? []))
+      .catch(() => {});
+  }, []);
 
   function set(patch: Partial<CatalogAgent>) {
     setForm((f) => ({ ...f, ...patch }));
@@ -160,12 +168,21 @@ function AgentForm({
         </label>
         <label className="block">
           <span className="mb-1.5 block text-xs font-medium text-ink-400">Model pin (optional)</span>
-          <input
+          <select
             value={form.model ?? ""}
-            onChange={(e) => set({ model: e.target.value })}
-            placeholder="openai/gpt-5.1"
+            onChange={(e) => set({ model: e.target.value || "" })}
             className="field font-mono"
-          />
+          >
+            <option value="">no pin (CLI default)</option>
+            {models.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+            {form.model && !models.includes(form.model) && (
+              <option value={form.model}>{form.model}</option>
+            )}
+          </select>
         </label>
       </div>
 

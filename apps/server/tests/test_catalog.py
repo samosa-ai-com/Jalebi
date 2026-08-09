@@ -97,6 +97,15 @@ def test_update_agent_empty_string_clears_pins(session) -> None:
     assert updated.cli is None
 
 
+def test_create_agent_empty_string_pins_mean_no_override(session) -> None:
+    """Empty-string cli/model on create means 'no override' (the UI's default
+    option sends "" — must not be rejected like an unsupported CLI)."""
+    agent = catalog.create_agent(session, id="auditor", name="A", cli="", model="")
+    assert agent.cli is None
+    assert agent.model is None
+
+
+
 def test_update_agent_rejects_invalid_skill_name(session) -> None:
     """PUT-path skills are validated the same as create — a poisoned name (e.g.
     path traversal) is refused instead of being stored."""

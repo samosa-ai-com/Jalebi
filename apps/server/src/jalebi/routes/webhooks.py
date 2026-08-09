@@ -199,7 +199,14 @@ def deliveries() -> ResponseReturnValue:
 
 @bp.post("/api/webhooks/deliveries/<int:delivery_id>/replay")
 def replay(delivery_id: int) -> ResponseReturnValue:
-    """Re-run a stored delivery through the matcher (a manual re-delivery)."""
+    """Re-run a stored delivery through the matcher (a manual re-delivery).
+
+    Idempotent: a rule that already created work in the *original* delivery is
+    not dispatched again (its stored work is returned as a no-op), so replaying
+    never creates duplicate tasks/PRs — for `start_review` *and* the
+    task-creating actions (`triage_issue`/`create_task`). A rule added *after*
+    the delivery still fires.
+    """
     session = db.get_session()
     delivery = session.get(db.EventDelivery, delivery_id)
     if delivery is None:
@@ -214,12 +221,36 @@ def replay(delivery_id: int) -> ResponseReturnValue:
     if repo is None:
         return jsonify({"error": "repo no longer connected"}), 409
 
+    # Rules already dispatched by this delivery in its original run. result
+    # shape: {"rules": [{"rule_id", "action", "work": [...]}]}.
+    already_dispatched: set[int] = set()
+    prior_rules = []
+    if delivery.result:
+        try:
+            prior_rules = json.loads(delivery.result).get("rules") or []
+        except (ValueError, TypeError):
+            prior_rules = []
+    for entry in prior_rules:
+        if isinstance(entry, dict) and isinstance(entry.get("rule_id"), int):
+            if entry.get("work"):
+                already_dispatched.add(entry["rule_id"])
+
     event_key = f"{delivery.event}.{delivery.action}" if delivery.action else delivery.event
     context = webhooks.event_context(payload)
     rules = webhooks.matching_rules(session, repo, event_key, context)
     results = []
     masker = _masker(session)
     for rule in rules:
+        if rule.id in already_dispatched:
+            results.append(
+                {
+                    "rule_id": rule.id,
+                    "action": rule.action,
+                    "work": [],
+                    "note": "already dispatched — skipped",
+                }
+            )
+            continue
         try:
             summary = webhooks.dispatch_rule(
                 session, _queue(), rule, repo, context, masker=masker

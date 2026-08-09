@@ -230,6 +230,87 @@ def test_replay_runs_stored_delivery(client, session, repo) -> None:
     assert client.post("/api/webhooks/deliveries/999/replay").status_code == 404
 
 
+def test_replay_triage_issue_is_idempotent(client, session, repo) -> None:
+    """Replaying a delivery that matched a triage_issue rule must NOT create a
+    second issue_fix task (the original delivery's work is replayed as a no-op)."""
+    from jalebi import tasks as tasks_service
+
+    webhooks.create_rule(
+        session, repo_id=repo, event="issues.opened", action="triage_issue",
+        custom_instructions="Fix it.",
+    )
+    client.post(
+        "/webhook",
+        headers={"X-GitHub-Delivery": "d-10", "X-GitHub-Event": "issues"},
+        json={
+            "action": "opened",
+            "repository": {"full_name": "owner/repo"},
+            "issue": {"number": 7, "title": "bug", "body": "breaks", "user": {"login": "bob"}},
+        },
+    )
+    assert len(tasks_service.list_tasks(session)) == 1
+    delivery = webhooks.list_deliveries(session)[0]
+
+    res = client.post(f"/api/webhooks/deliveries/{delivery.id}/replay")
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body["matched"] == 1
+    assert body["results"][0]["note"] == "already dispatched — skipped"
+    assert body["results"][0]["work"] == []
+    assert len(tasks_service.list_tasks(session)) == 1
+
+
+def test_replay_create_task_is_idempotent(client, session, repo) -> None:
+    """Replaying a delivery that matched a create_task rule must NOT create a
+    second freeform task (no duplicate PRs from replay)."""
+    from jalebi import tasks as tasks_service
+
+    webhooks.create_rule(
+        session, repo_id=repo, event="push", action="create_task",
+        custom_instructions="Sync the changelog.",
+    )
+    client.post(
+        "/webhook",
+        headers={"X-GitHub-Delivery": "d-11", "X-GitHub-Event": "push"},
+        json={"ref": "refs/heads/main", "repository": {"full_name": "owner/repo"}},
+    )
+    assert len(tasks_service.list_tasks(session)) == 1
+    delivery = webhooks.list_deliveries(session)[0]
+
+    res = client.post(f"/api/webhooks/deliveries/{delivery.id}/replay")
+    assert res.status_code == 200
+    assert res.get_json()["results"][0]["note"] == "already dispatched — skipped"
+    assert len(tasks_service.list_tasks(session)) == 1
+
+
+def test_replay_runs_rule_added_after_delivery(client, session, repo) -> None:
+    """A rule created AFTER the delivery (so it wasn't in the original result)
+    still fires on replay — the replay no-op only skips rules already dispatched."""
+    from jalebi import tasks as tasks_service
+
+    client.post(
+        "/webhook",
+        headers={"X-GitHub-Delivery": "d-12", "X-GitHub-Event": "issues"},
+        json={
+            "action": "opened",
+            "repository": {"full_name": "owner/repo"},
+            "issue": {"number": 8, "title": "bug", "body": "breaks", "user": {"login": "bob"}},
+        },
+    )
+    assert len(tasks_service.list_tasks(session)) == 0  # no rule yet → ignored
+    delivery = webhooks.list_deliveries(session)[0]
+
+    webhooks.create_rule(
+        session, repo_id=repo, event="issues.opened", action="triage_issue",
+        custom_instructions="Fix it.",
+    )
+    res = client.post(f"/api/webhooks/deliveries/{delivery.id}/replay")
+    assert res.status_code == 200
+    assert res.get_json()["matched"] == 1
+    tasks = tasks_service.list_tasks(session)
+    assert len(tasks) == 1 and tasks[0].type == "issue_fix"
+
+
 def test_deliveries_list(client, session, repo) -> None:
     webhooks.create_rule(
         session, repo_id=repo, event="push", action="create_task",

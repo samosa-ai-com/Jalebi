@@ -128,6 +128,11 @@ def create_agent(
     skills = skills or []
     # Normalize + validate skills (name format, duplicates) — shared with update.
     skills = _load_skills(json.dumps(skills)) if skills else []
+    # An empty string for cli/model means "no override" (the UI's default option
+    # sends ""). Mirror update_agent's empty-clears semantics so create and update
+    # treat "" identically instead of create rejecting it.
+    cli = cli or None
+    model = model or None
     validate_definition(
         name=name,
         kind=kind,

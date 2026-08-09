@@ -63,6 +63,15 @@ result) and shown in the Triggers page's **Delivery log**. A delivery can be
 **replayed** (`POST /api/webhooks/deliveries/<id>/replay`) — re-run through the
 matcher — which closes the "never delivered / missed event" gap (PRD §14 risk 9).
 
+**Replay is idempotent for every action.** A rule that already created work in
+the *original* delivery (its stored `result.rules`) is skipped and reported as
+`already dispatched — skipped`, so replaying never creates duplicate reviewer
+tasks *or* duplicate `issue_fix`/freeform tasks (and thus no duplicate PRs). A
+rule added *after* the delivery is not in the prior result and still fires —
+replay re-runs the matcher with the current rule set, it just never re-runs a
+rule that already acted. Live webhooks are unaffected (they are already deduped
+on `X-GitHub-Delivery`).
+
 ## 5. Webhook registration
 
 `POST /api/repos/<id>/webhook` registers a webhook on the repo via the repo's
