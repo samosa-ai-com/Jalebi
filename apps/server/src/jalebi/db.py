@@ -14,6 +14,7 @@ from sqlalchemy import (
     Index,
     Integer,
     Text,
+    UniqueConstraint,
     create_engine,
     event,
 )
@@ -257,12 +258,23 @@ class ReviewAssignment(Base):
     under the queue's concurrency. The assignment is a lightweight registry
     (task ↔ agent ↔ PR ↔ repo ↔ status) so the PR card and the webhook flow can
     show which reviewers have posted.
+
+    The ``UNIQUE(repo_id, pr_number, agent_id)`` constraint is the last line of
+    defense against duplicate reviewer assignments under concurrent webhook
+    deliveries or manual calls (the application-level ``assignments_for_pr``
+    pre-filter is racy; two threads can both see ``{}`` before either inserts).
+    On IntegrityError, ``reviews.assign_reviewers`` recovers the existing
+    assignment's task rather than re-creating.
     """
 
     __tablename__ = "review_assignments"
     __table_args__ = (
         Index("ix_review_assignments_task_id", "task_id"),
         Index("ix_review_assignments_pr_number", "pr_number"),
+        UniqueConstraint(
+            "repo_id", "pr_number", "agent_id",
+            name="uq_review_assignments_repo_pr_agent",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

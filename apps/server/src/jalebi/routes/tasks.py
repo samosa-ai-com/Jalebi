@@ -222,12 +222,11 @@ def create_task() -> ResponseReturnValue:
             return jsonify({"error": "repo not found"}), 400
         try:
             created = reviews.assign_reviewers(
-                session, repo, int(pr_number), [str(r) for r in reviewers], masker=masker
+                session, repo, int(pr_number), [str(r) for r in reviewers],
+                queue=_queue(), masker=masker,
             )
         except reviews.ReviewError as exc:
             return jsonify({"error": str(exc)}), 400
-        for t in created:
-            _queue().enqueue(t.id)
         return jsonify([_task_dict(session, t) for t in created]), 201
 
     try:
@@ -531,12 +530,11 @@ def assign_reviewers(task_id: int) -> ResponseReturnValue:
     masker = _masker(session)
     try:
         created = reviews.assign_reviewers(
-            session, repo, pr_number, reviewers, masker=masker
+            session, repo, pr_number, reviewers,
+            queue=_queue(), masker=masker,
         )
     except reviews.ReviewError as exc:
         return jsonify({"error": str(exc)}), 400
-    for t in created:
-        _queue().enqueue(t.id)
     return jsonify([_task_dict(session, t) for t in created]), 201
 
 

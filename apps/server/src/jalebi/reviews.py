@@ -11,6 +11,7 @@ import json
 
 import sqlalchemy as sa
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from jalebi import catalog
@@ -101,13 +102,22 @@ def assign_reviewers(
     repo: Repo,
     pr_number: int,
     agent_ids: list[str],
+    *,
+    queue=None,
     masker=None,
 ) -> list[Task]:
     """Assign reviewers to a PR: create one ``pr_review`` task per reviewer.
 
     Each reviewer task uses the catalog agent's pins/instructions, targets the
-    PR, and never auto-publishes. Returns the created tasks. Creates the
-    assignment rows linking task ↔ agent ↔ PR ↔ repo.
+    PR, and never auto-publishes. Returns the combined list of tasks involved
+    — both newly created and any existing tasks recovered when the
+    ``UNIQUE(repo_id, pr_number, agent_id)`` constraint catches a concurrent
+    race. Creates the assignment rows linking task ↔ agent ↔ PR ↔ repo.
+
+    If ``queue`` is provided, only newly created tasks are enqueued onto it —
+    recovered existing tasks are already in flight and would double-enqueue
+    otherwise. Callers that don't need queue side-effects (tests) can pass
+    ``queue=None`` and the returned list is just for inspection.
     """
     if not agent_ids:
         raise ReviewError("no reviewers selected")
@@ -117,27 +127,40 @@ def assign_reviewers(
     seen: set[str] = set()
     reviewers = [a for a in reviewers if not (a.id in seen or seen.add(a.id))]
 
-    tasks_created: list[Task] = []
+    # Per-agent atomic commits. ``create_task`` commits the Task row itself;
+    # the follow-up ReviewAssignment is added and committed as a second
+    # transaction. If a UNIQUE race fires on one agent's assignment, only
+    # that agent's transaction is rolled back — other agents in the batch
+    # are unaffected and the call returns the partial result instead of
+    # silently dropping the whole batch (which is what an outer
+    # all-or-nothing commit would do).
+    new_tasks: list[Task]
+    recovered_existing: list[Task]
     try:
-        tasks_created = _create_review_tasks(session, repo, pr_number, reviewers, masker)
+        new_tasks, recovered_existing = _create_review_tasks(
+            session, repo, pr_number, reviewers, masker
+        )
     except ReviewError:
-        _cleanup_partial(session, tasks_created)
         raise
-    except Exception as exc:
-        _cleanup_partial(session, tasks_created)
-        raise ReviewError(f"failed to create reviewer task: {exc}") from exc
-    session.commit()
-    for task in tasks_created:
+
+    if queue is not None:
+        for task in new_tasks:
+            queue.enqueue(task.id)
+
+    result = new_tasks + recovered_existing
+    for task in result:
         session.refresh(task)
-    return tasks_created
+    return result
 
 
 def _cleanup_partial(session: Session, tasks_created: list[Task]) -> None:
     """Remove any already-created reviewer tasks so a failed batch leaves no orphans.
 
-    ``create_task`` commits per task, so a mid-loop failure would otherwise leave
-    earlier reviewer tasks persisted (queued but never enqueued) with no
-    assignment row. Delete them + their assignments before surfacing the error.
+    Used both by ``_create_review_tasks`` (per-iteration orphan cleanup on
+    IntegrityError) and by callers that need a full cascade (e.g. the
+    ``DELETE /api/tasks/<id>`` path). Delete the assignment row (if any) and
+    the Task row, then commit so the cleanup itself survives a rollbacked
+    parent transaction.
     """
     if not tasks_created:
         return
@@ -147,15 +170,41 @@ def _cleanup_partial(session: Session, tasks_created: list[Task]) -> None:
     session.commit()
 
 
+def _recover_existing_task_for(
+    session: Session, repo_id: int, pr_number: int, agent_id: str
+) -> Task | None:
+    """Find the existing pr_review Task for a (repo, pr, agent) — the winner
+    of a UNIQUE-constraint race. Returns None when no assignment exists (which
+    is itself an inconsistency; callers treat as a hard miss)."""
+    for existing in assignments_for_pr(session, repo_id, pr_number):
+        if existing.agent_id == agent_id:
+            return session.get(Task, existing.task_id)
+    return None
+
+
 def _create_review_tasks(
     session: Session,
     repo: Repo,
     pr_number: int,
     reviewers: list,
     masker=None,
-) -> list[Task]:
-    """Create one pr_review task + assignment per reviewer (single transaction)."""
-    tasks_created: list[Task] = []
+) -> tuple[list[Task], list[Task]]:
+    """Create one pr_review task + assignment per reviewer (per-agent atomic).
+
+    Returns ``(newly_created_tasks, recovered_existing_tasks)``:
+    - ``newly_created_tasks``: tasks this call created (caller enqueues them).
+    - ``recovered_existing_tasks``: tasks whose assignment was found in DB
+      instead of created (the UNIQUE race-loser). The orphan Task this call
+      created for them was cleaned up; no new assignment row is left behind.
+
+    Each agent's pair is its own transaction (Task committed by
+    ``create_task``; assignment flushed+committed by the follow-up
+    ``session.commit()``). An IntegrityError on one agent's assignment rolls
+    back ONLY that transaction — sibling agents in the same batch are
+    unaffected, and the call still returns their work.
+    """
+    new_tasks: list[Task] = []
+    recovered_existing: list[Task] = []
     for agent in reviewers:
         # The task prompt is the default review brief; the queue appends the
         # agent's custom_instructions once (same contract as every catalog
@@ -174,18 +223,39 @@ def _create_review_tasks(
             publish_mode="manual",
             masker=masker,
         )
-        session.add(
-            ReviewAssignment(
-                task_id=task.id,
-                agent_id=agent.id,
-                pr_number=pr_number,
-                repo_id=repo.id,
-                status="queued",
-                created_at=utcnow(),
+        try:
+            session.add(
+                ReviewAssignment(
+                    task_id=task.id,
+                    agent_id=agent.id,
+                    pr_number=pr_number,
+                    repo_id=repo.id,
+                    status="queued",
+                    created_at=utcnow(),
+                )
             )
-        )
-        tasks_created.append(task)
-    return tasks_created
+            session.commit()
+            new_tasks.append(task)
+        except IntegrityError:
+            # UNIQUE race on this agent's assignment — another caller added
+            # the same agent for this PR concurrently. ``create_task`` for
+            # this iteration committed its own Task row in an earlier
+            # transaction; the rollback here only discards the pending
+            # ReviewAssignment insert. The Task row is now an orphan (no
+            # assignment ever landed) — delete it via the same cascade
+            # helper used for task-delete and full-batch cleanup.
+            session.rollback()
+            _cleanup_partial(session, [task])
+            existing_task = _recover_existing_task_for(
+                session, repo.id, pr_number, agent.id
+            )
+            if existing_task is not None:
+                recovered_existing.append(existing_task)
+        except Exception as exc:
+            session.rollback()
+            _cleanup_partial(session, [task])
+            raise ReviewError(f"failed to create reviewer task: {exc}") from exc
+    return new_tasks, recovered_existing
 
 
 def assignment_to_dict(session: Session, assignment: ReviewAssignment) -> dict[str, object]:

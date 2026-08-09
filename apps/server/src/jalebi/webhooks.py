@@ -369,11 +369,10 @@ def _dispatch_start_review(session, queue, rule, repo, context, masker) -> list[
     if not fresh:
         return []
     created = reviews.assign_reviewers(
-        session, repo, int(pr_number), fresh, masker=masker
+        session, repo, int(pr_number), fresh, queue=queue, masker=masker
     )
     summary = []
     for task in created:
-        queue.enqueue(task.id)
         summary.append({"type": "review", "task_id": task.id, "agent_id": task.agent_id})
     return summary
 
