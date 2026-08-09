@@ -820,53 +820,9 @@ class TaskQueue:
             )
             session.commit()
 
-            if run.status != "done":
-                # Any non-done terminal end (failed/timed_out/cancelled) must
-                # resolve the assignment — otherwise it would sit 'running' forever
-                # while the task shows the real terminal status.
-                reviews.set_assignment_status(session, task.id, "failed", run_id=run.id)
-            elif run.status == "done":
-                review_text = self._read_review(wt)
-                if not review_text:
-                    review_text = self._last_message(session, task.id)
-                if not review_text:
-                    # A done run with no review content has nothing to post.
-                    reviews.set_assignment_status(session, task.id, "failed", run_id=run.id)
-                else:
-                    review_text = masker(review_text)
-                    review_body = messaging.wrap_pr_review(review_text)
-                    try:
-                        client = GitHubClient(token)
-                        try:
-                            client.post_pr_review(repo.full_name, pr_number, review_body)
-                        finally:
-                            client.close()
-                        steps = json.loads(run.steps_json or "[]")
-                        steps.append(
-                            {
-                                "type": "message",
-                                "phase": None,
-                                "text": f"Review posted to PR #{pr_number}.",
-                                "ts": utcnow().isoformat(),
-                            }
-                        )
-                        run.steps_json = json.dumps(steps[-MAX_STEPS:])
-                        session.commit()
-                        reviews.set_assignment_status(session, task.id, "posted", run_id=run.id)
-                    except Exception as exc:
-                        logger.warning("posting review for task %s failed: %s", task.id, exc)
-                        steps = json.loads(run.steps_json or "[]")
-                        steps.append(
-                            {
-                                "type": "error",
-                                "phase": None,
-                                "text": f"posting review to PR #{pr_number} failed: {exc}",
-                                "ts": utcnow().isoformat(),
-                            }
-                        )
-                        run.steps_json = json.dumps(steps[-MAX_STEPS:])
-                        session.commit()
-                        reviews.set_assignment_status(session, task.id, "failed", run_id=run.id)
+            self._post_review(
+                session, task, repo, pr_number, wt, run, token, masker
+            )
         except Exception:
             logger.exception("pr_review task %s failed", task.id)
             run_id = run.id
@@ -885,6 +841,98 @@ class TaskQueue:
             session.commit()
             reviews.set_assignment_status(session, task.id, "failed", run_id=run_id)
         return run
+
+    def _post_review(
+        self,
+        session,
+        task: Task,
+        repo: Repo,
+        pr_number: int,
+        worktree: Path,
+        run: Run,
+        token: str,
+        masker,
+    ) -> None:
+        """Post a ``pr_review`` run's deliverable to GitHub and reconcile the assignment.
+
+        Shared by the initial review run and follow-up resumes, which both finish
+        with ``run.status`` decided and the review written to the review
+        worktree's ``.jalebi/review.md`` (or the last assistant message):
+
+        - non-``done`` run → assignment resolved to ``failed`` (else it would sit
+          ``running`` forever while the task shows the real terminal status);
+        - ``done`` run with no review content → the run/task are **flipped to
+          ``failed``** with a diagnostic step, because a review task that produced
+          no review has no deliverable (previously this silently stayed ``done``);
+        - ``done`` run with content → review posted to the PR; assignment →
+          ``posted`` (or ``failed`` if the GitHub post errors).
+        """
+        if run.status != "done":
+            reviews.set_assignment_status(session, task.id, "failed", run_id=run.id)
+            return
+
+        review_text = self._read_review(worktree)
+        if not review_text:
+            review_text = self._last_message(session, task.id)
+        if not review_text:
+            # A done run with no review content has nothing to post. Flip the run
+            # AND the task so the timeline/status never claim a review was
+            # delivered that does not exist.
+            run.status = "failed"
+            run.finished_at = utcnow()
+            task.status = "failed"
+            task.updated_at = utcnow()
+            steps = json.loads(run.steps_json or "[]")
+            steps.append(
+                {
+                    "type": "error",
+                    "phase": None,
+                    "text": (
+                        "Run finished without writing a review; nothing to post "
+                        "to the PR."
+                    ),
+                    "ts": utcnow().isoformat(),
+                }
+            )
+            run.steps_json = json.dumps(steps[-MAX_STEPS:])
+            session.commit()
+            reviews.set_assignment_status(session, task.id, "failed", run_id=run.id)
+            return
+
+        review_text = masker(review_text)
+        review_body = messaging.wrap_pr_review(review_text)
+        try:
+            client = GitHubClient(token)
+            try:
+                client.post_pr_review(repo.full_name, pr_number, review_body)
+            finally:
+                client.close()
+            steps = json.loads(run.steps_json or "[]")
+            steps.append(
+                {
+                    "type": "message",
+                    "phase": None,
+                    "text": f"Review posted to PR #{pr_number}.",
+                    "ts": utcnow().isoformat(),
+                }
+            )
+            run.steps_json = json.dumps(steps[-MAX_STEPS:])
+            session.commit()
+            reviews.set_assignment_status(session, task.id, "posted", run_id=run.id)
+        except Exception as exc:
+            logger.warning("posting review for task %s failed: %s", task.id, exc)
+            steps = json.loads(run.steps_json or "[]")
+            steps.append(
+                {
+                    "type": "error",
+                    "phase": None,
+                    "text": f"posting review to PR #{pr_number} failed: {exc}",
+                    "ts": utcnow().isoformat(),
+                }
+            )
+            run.steps_json = json.dumps(steps[-MAX_STEPS:])
+            session.commit()
+            reviews.set_assignment_status(session, task.id, "failed", run_id=run.id)
 
     @staticmethod
     def _task_pr_number(task: Task) -> int | None:
@@ -1104,9 +1152,28 @@ class TaskQueue:
             if state.reason == "cancelled":
                 _kill_proc(state.handle.proc)
 
+            # Review follow-ups never push code: the resumed agent only edits the
+            # review worktree (publish=False), and artifacts are captured from that
+            # worktree so a freshly written review.md is not missed.
             self._stream_and_finish(
-                session, task, repo, run, git, token, masker, state.handle, state
+                session,
+                task,
+                repo,
+                run,
+                git,
+                token,
+                masker,
+                state.handle,
+                state,
+                publish=task.type != "pr_review",
+                worktree=wt,
             )
+            if task.type == "pr_review":
+                pr_number = self._task_pr_number(task)
+                if pr_number is not None:
+                    self._post_review(
+                        session, task, repo, pr_number, wt, run, token, masker
+                    )
             tasks.add_followup(
                 session,
                 task.id,

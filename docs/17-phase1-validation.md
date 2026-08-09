@@ -99,6 +99,15 @@
 2. [X] Expect the fixer session to resume and the timeline to show it reading the embedded review comments (look for "PR review comments to address" content) and amending the branch.
 3. [X] The same PR gains the new commit (no duplicate PR) — the fixer's follow-up run auto-publishes onto the existing PR.
 
+### W-R5 — Follow-up review runs post their review
+
+> A `pr_review` **follow-up** must deliver too: on `done`, Jalebi reads the review worktree's `.jalebi/review.md` (fallback: the last agent message), masks it, and posts it as a PR review comment — the same path as the initial review. A `done` run that produced **no review content** is a failure, not a silent success.
+
+1. [X] Open a reviewer task that has posted, then send it a follow-up (e.g. "expand the security section") and wait for the resume run to finish `done`.
+2. [X] The GitHub PR shows a **second** review comment (the agent's amended review, Jalebi-branded + ⭐ footer), and the task's **Reviewers** card still shows `posted`.
+3. [X] Run's timeline ends with "Review posted to PR #N."; the review body is masked (see W-R3).
+4. [X] Regression: a reviewer task whose follow-up ends `done` **without writing** `.jalebi/review.md` or a final message shows the run/task as `failed` with a "nothing to post" error step — never a misleading `done`/`posted`.
+
 ---
 
 ## 6. Settings — Webhooks section + write-only secret (F14)
