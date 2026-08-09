@@ -9,12 +9,11 @@ from pathlib import Path
 import httpx
 from flask import Blueprint, Response, current_app, jsonify, request, send_file
 from flask.typing import ResponseReturnValue
-from sqlalchemy import delete as sa_delete
 
 from jalebi import artifacts, db, masking, prompts, reviews, secrets, settings, tasks
 from jalebi.catalog import agent_by_slug
 from jalebi.config import Config
-from jalebi.db import Artifact, Followup, Run, Task, utcnow
+from jalebi.db import Artifact, Run, Task, utcnow
 from jalebi.git_workspace import GitWorkspace, PushLeaseFailed
 from jalebi.github import GitHubClient, GitHubError
 from jalebi.queue import PublishConflict, PublishError, TaskQueue
@@ -327,19 +326,10 @@ def delete_task(task_id: int) -> ResponseReturnValue:
         task.status = "cancelled"
         session.commit()
 
-    runs = tasks.runs_for_task(session, task_id)
-    run_ids = [r.id for r in runs]
-    if task_id:
-        session.execute(
-            sa_delete(Followup).where(Followup.task_id == task_id)
-        )
-        session.execute(
-            sa_delete(db.ReviewAssignment).where(db.ReviewAssignment.task_id == task_id)
-        )
-    if run_ids:
-        session.execute(sa_delete(Artifact).where(Artifact.run_id.in_(run_ids)))
-        session.execute(sa_delete(Run).where(Run.id.in_(run_ids)))
-    session.execute(sa_delete(Task).where(Task.id == task_id))
+    # Use the canonical cascade helper so the task + every child row are
+    # removed in the right FK order. Returning ``run_ids`` lets the disk
+    # cleanup below drop the artifact store dirs and the worktree path.
+    run_ids = tasks.delete_tasks_cascade(session, [task_id])
     session.commit()
 
     # Best-effort disk cleanup (outside the DB transaction). The worktree is

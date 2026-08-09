@@ -9,14 +9,13 @@ have posted.
 
 import json
 
-import sqlalchemy as sa
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from jalebi import catalog
 from jalebi.db import Repo, ReviewAssignment, Run, Task, utcnow
-from jalebi.tasks import create_task
+from jalebi.tasks import create_task, delete_tasks_cascade
 
 REVIEWER_STATUSES = ("queued", "running", "posted", "failed")
 
@@ -156,17 +155,20 @@ def assign_reviewers(
 def _cleanup_partial(session: Session, tasks_created: list[Task]) -> None:
     """Remove any already-created reviewer tasks so a failed batch leaves no orphans.
 
-    Used both by ``_create_review_tasks`` (per-iteration orphan cleanup on
-    IntegrityError) and by callers that need a full cascade (e.g. the
-    ``DELETE /api/tasks/<id>`` path). Delete the assignment row (if any) and
-    the Task row, then commit so the cleanup itself survives a rollbacked
-    parent transaction.
+    Used by ``_create_review_tasks`` (per-iteration orphan cleanup on
+    IntegrityError). Routes that need the same full cascade (e.g.
+    ``DELETE /api/tasks/<id>``) call ``tasks.delete_tasks_cascade`` directly
+    and commit their own transaction. The cleanup here commits itself so
+    it survives a rollbacked parent transaction on the IntegrityError path.
+
+    The cascade is the full set (Followup → ReviewAssignment → Artifact →
+    Run → Task) so a task with a partially-executed run doesn't leave
+    dangling runs/followups/artifacts behind when its batch fails.
     """
     if not tasks_created:
         return
     task_ids = [t.id for t in tasks_created]
-    session.execute(sa.delete(ReviewAssignment).where(ReviewAssignment.task_id.in_(task_ids)))
-    session.execute(sa.delete(Task).where(Task.id.in_(task_ids)))
+    delete_tasks_cascade(session, task_ids)
     session.commit()
 
 

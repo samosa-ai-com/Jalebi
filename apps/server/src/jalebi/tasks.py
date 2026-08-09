@@ -3,11 +3,11 @@
 import json
 from collections.abc import Callable
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from jalebi.catalog import agent_by_slug
-from jalebi.db import TASK_TYPES, Artifact, Followup, Repo, Run, Task
+from jalebi.db import TASK_TYPES, Artifact, Followup, Repo, ReviewAssignment, Run, Task
 
 MAX_PROMPT_CHARS = 32_000  # prompts travel via argv; bound them to stay clear of ARG_MAX
 
@@ -221,3 +221,34 @@ def task_to_dict(
         "reviewers": reviewers or [],
     }
     return data
+
+
+def delete_tasks_cascade(session: Session, task_ids: list[int]) -> list[int]:
+    """Delete tasks and everything tied to them (orphan-safe cascade).
+
+    Order is FK-dependency order — children before parents:
+
+    Followup → ReviewAssignment → Artifact → Run → Task
+
+    Followups are deleted first because they reference both ``tasks.id`` and
+    ``runs.id`` (nullable FK). Returns the ids of the deleted runs so callers
+    can reuse them for disk cleanup (artifact store + worktree paths).
+
+    Does NOT commit: transaction control stays with the caller so it can
+    wrap the cascade in its own transaction boundaries. ``_cleanup_partial``
+    is the one caller that commits itself (to survive a rollbacked parent
+    transaction on IntegrityError).
+    """
+    task_ids = list(task_ids)
+    if not task_ids:
+        return []
+    run_ids = list(
+        session.execute(select(Run.id).where(Run.task_id.in_(task_ids))).scalars()
+    )
+    session.execute(delete(Followup).where(Followup.task_id.in_(task_ids)))
+    session.execute(delete(ReviewAssignment).where(ReviewAssignment.task_id.in_(task_ids)))
+    if run_ids:
+        session.execute(delete(Artifact).where(Artifact.run_id.in_(run_ids)))
+        session.execute(delete(Run).where(Run.id.in_(run_ids)))
+    session.execute(delete(Task).where(Task.id.in_(task_ids)))
+    return run_ids
