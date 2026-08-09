@@ -96,7 +96,7 @@ Everything is local, private to the owner, and driven from the dashboard.
 3. **Model freedom.** The user can pick any model available to the selected CLI, per task and per agent (no hard-coded model).
 4. **Agent catalog with personalities & skills.** Users configure named agents (e.g. "Security Auditor", "Backend Reviewer", "Docs Guru", "Conflict Resolver"). Each is just: a **personality** (markdown injected into the task worktree's `AGENTS.md`) + a set of **skill files** (markdown, referenced by path) + an optional **model** + an optional **CLI**. The underlying default agent (opencode build agent) picks these up automatically during execution.
 5. **Reviewer workflow.** Users assign catalog agents as reviewers on a PR. Each reviewer works in its **own local worktree**, validates, then posts its comments on the GitHub PR. The user then manually approves/merges, and can send a follow-up to the original fix agent referencing the reviewers' comments.
-6. **Branch control.** Branch selection is **per task type** (as shipped): `issue_fix` uses a **single target branch** (the PR base); `freeform` exposes **source and target** selectors; `pr_review` uses neither (it checks out the PR head). Full two-selector support for `issue_fix` remains an option for Phase 2 (see §F8).
+6. **Branch control.** Branch selection is **per task type** (as shipped): `issue_fix` uses a **single target branch** (the PR base); `freeform` exposes **source and target** selectors; `pr_review` uses neither (it checks out the PR head).
 7. **Proactive screening.** Scheduled, multi-profile audits ("suggestions for improvements") with **per-profile cadence and system prompt**. Screening is **notify-only — it never auto-acts** on issues; the user explicitly chooses to start work. *(Phase 2.)*
 8. **Privacy & ownership.** Localhost-bound, PAT-authenticated, single-owner. The owner can register **multiple named PAT accounts** (a vault of equal accounts) and select which account runs a given repo/task.
 9. **Event-driven automation (essential).** Repo webhook events can auto-start tasks in real time — e.g. the moment a PR is opened, its assigned reviewers from the catalog begin reviewing automatically. Triggers are **webhook-pushed**, not polled (scheduling is not the mechanism; triggering is).
@@ -336,14 +336,6 @@ Branch selection is **per task type** (shipped behavior; supersedes the earlier 
 - **`issue_fix`** — **single target branch**: the worktree is based on the target (PR-base) branch and the PR opens into it. This was a deliberate owner decision (Step 32) to match how the existing automation works.
 - **`freeform`** — exposes **source and target** selectors: worktree from **source**, PR `base = target`.
 - **`pr_review`** — neither: checks out the PR head directly.
-
-Use cases (relevant where selectors exist):
-
-- Issue filed against `development` → source `development`, target `development`.
-- Issue filed against `main` but the team wants changes staged in `development` → source `main`, target `development`.
-- Feature work always lands in `development` → default target `development` unless the user overrides.
-
-**Phase 2 option (open):** full source/target selectors for `issue_fix` (the shipped single-target behavior remains the default; a selector is the extension).
 
 ### F9. PR publishing policy
 
@@ -644,9 +636,8 @@ screening_runs(id, screening_id, head_sha, status, started_at, finished_at, find
 - **Event-driven triggers:** webhook listener + delivery dedup, trigger-rules editor, webhook registration, delivery log + idempotent replay, and the core flow — `pull_request.opened` ⇒ assigned reviewers auto-start reviewing in real time. (Polling fallback deferred/inert.)
 - Hardening: auto-recovery on failures/stalls + review-worktree re-sync (Steps 49/49b).
 
-**Phase 2 — Branch control + screening + merge gating**
+**Phase 2 — Screening + merge gating**
 
-- **Branch selectors:** extend `issue_fix` to full source/target selectors (open decision — the single-target default remains).
 - **Screening engine:** starter catalog, cron scheduler, HEAD-baseline dedup, structured findings, in-app + ntfy notify, "new task from finding".
 - **Check runs / commit statuses on head SHAs** so branch protection can gate merges on agent reviews/fixes.
 - Diff-view polish + task history.

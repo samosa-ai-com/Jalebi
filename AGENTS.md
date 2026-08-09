@@ -201,7 +201,7 @@ Reference `docs/00-overview.md` and `HANDOFF.md` for current phase and status.
 
 - **Phase 0 — Foundation (v1, opencode only):** scaffolding, config, SQLite schema, PAT settings + validation, git workspace manager, `AgentAdapter` + opencode adapter, task queue (concurrency 4), run lifecycle (cancel/timeout/retry), publish (auto/manual, `Closes #N`), secret masking, artifacts, minimal Jules-like UI (queue + task detail + follow-up composer), follow-up via `opencode run --session`.
 - **Phase 1 — Catalog & reviewers + event-driven triggers:** catalog agents (personality → `AGENTS.md` injection + skills), reviewer workflow (per-reviewer worktrees + PR review comments), "address reviewers" follow-up, webhook listener + dedup + trigger rules + registration/polling fallback.
-- **Phase 2 — Branch control + screening + merge gating:** source/target branch selectors, screening engine (node-cron, HEAD baseline dedup, findings, ntfy, "new task from finding"), check runs for branch protection.
+- **Phase 2 — Screening + merge gating:** screening engine (node-cron, HEAD baseline dedup, findings, ntfy, "new task from finding"), check runs for branch protection.
 - **Phase 3 — Backend parity:** Codex adapter, Claude Code adapter, per-task model dropdown from `listModels()`.
 
 ---
