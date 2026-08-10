@@ -3,17 +3,19 @@
 |                          |                                                                                                                                                 |
 | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Product name**   | Jalebi                                                                                                                                          |
-| **Status**         | Draft v1.1 — reconciled with the shipped implementation (Phases 0–1 complete)                                                                    |
+| **Status**         | Draft v1.2 — reconciled with the shipped implementation (Phases 0–2 complete)                                                                    |
 | **Date**           | 2026-08-09                                                                                                                                      |
 | **Owner**          | Samosa AI (`samosa-ai-com`)                                                                                                                     |
 | **Repo**           | `Rishabh-Bajpai/Jalebi` (current home). This PRD lives in the Jalebi repo.                                                                       |
 | **Versioning**     | Follow this file; feature set is additive                                                                                                       |
 
 > **Reading note (2026-08-09):** this document was reconciled against the shipped
-> implementation after Phases 0–1. It is the **spec of record** for what exists and
-> what is planned. Where the earlier draft specified a Node/TypeScript stack, this
-> version adopts the actual Python/Flask stack. Sections marked **Phase 2** /
-> **Phase 3** describe planned work that is not yet implemented.
+> implementation after Phases 0–1 (Draft v1.1) and Phase 2 (Draft v1.2). It is the
+> **spec of record** for what exists and what is planned. Where the earlier draft
+> specified a Node/TypeScript stack, this version adopts the actual Python/Flask
+> stack. §F15 was owner-authorized to specify **commit statuses** (the check-runs
+> API is GitHub-App-only and PATs cannot write it). Sections marked **Phase 3**
+> describe planned work that is not yet implemented.
 
 ---
 
@@ -21,7 +23,7 @@
 
 Jalebi is a **private, self-hosted, localhost-only web application** that behaves like Google's "Jules (https://jules.google/docs/)": a coding-agent dashboard where the repo owner connects their own GitHub account, creates tasks ("fix this issue", "review this PR", "implement this feature", "audit the security posture of the development branch"), watches the agent work through a live step-by-step timeline, comments to give follow-ups, and gets proactively notified of improvement opportunities. It is also **event-driven**: repo webhooks can auto-start work in real time — the moment a PR is opened, its assigned reviewers from the catalog begin reviewing automatically.
 
-**Current status (2026-08-09):** Phases 0 and 1 are **complete and shipped**. The backend is the **opencode** CLI adapter only; Codex and Claude Code are planned (Phase 3). See §12 Roadmap.
+**Current status (2026-08-09):** Phases 0, 1, and 2 are **complete and shipped**. The backend is the **opencode** CLI adapter only; Codex and Claude Code are planned (Phase 3). See §12 Roadmap.
 
 Unlike the existing **Chanakya** automation in the Gotcha repo (GitHub Actions + self-hosted runner + comment-triggered `opencode github run`), Jalebi is **completely independent**:
 
@@ -641,10 +643,10 @@ screening_runs(id, screening_id, head_sha, status, started_at, finished_at, find
 - **Event-driven triggers:** webhook listener + delivery dedup, trigger-rules editor, webhook registration, delivery log + idempotent replay, and the core flow — `pull_request.opened` ⇒ assigned reviewers auto-start reviewing in real time. (Polling fallback deferred/inert.)
 - Hardening: auto-recovery on failures/stalls + review-worktree re-sync (Steps 49/49b).
 
-**Phase 2 — Screening + merge gating**
+**Phase 2 — Screening + merge gating** — **complete.**
 
-- **Screening engine:** starter catalog, cron scheduler, HEAD-baseline dedup, structured findings, in-app + ntfy notify, "new task from finding".
-- **Commit statuses on head SHAs** so branch protection can gate merges on agent reviews/fixes.
+- **Screening engine:** starter catalog, cron scheduler (built-in, no dependency), HEAD-baseline dedup, structured findings, in-app + ntfy notify, "new task from finding".
+- **Commit statuses on head SHAs** (PAT-writable; the check-runs API is GitHub-App-only) so branch protection can gate merges on agent reviews/fixes.
 - Diff-view polish + task history.
 
 **Phase 3 — Backend parity**
