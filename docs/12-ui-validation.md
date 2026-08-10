@@ -233,6 +233,15 @@ Run against a connected repo with a PAT bound (or the whole flow fails with a cl
 7. **Delete** — confirm → the screen (and its runs) disappears.
 8. **ntfy** — with `ntfy_topic` set and `notify_ntfy` on, a findings run pushes a "N finding(s)" notification.
 
+## 9b. Diff-view + run-history manual QA (Phase 2)
+
+Run against a task with at least two runs (e.g. run a fix, then a follow-up):
+
+1. **Run history** — Task detail with >1 run shows the **Run history** list (not just a dropdown). Each row: `#seq`, status badge, start time, duration (a finished run shows `Xm Ys`; a running one ticks), and `diff`/`artifact` markers where applicable. Clicking a row switches the timeline, console, artifacts, and diff to that run.
+2. **Diff file label + stats** — open a run that captured a diff. The diff header shows a friendly **file label** (e.g. `src/app.ts` instead of the raw `diff --git` line), per-file `+n`/`−n` counts, and a total `N files +n −m` line. Renames render as `a → b`.
+3. **Collapse** — a multi-file diff collapses each file under its label; a single-file diff is auto-open. The raw `diff --git` header is still visible inside each file block.
+4. **Regression** — a run with no diff shows no Diff section; the empty/loading states still render without error.
+
 ---
 
 ## Done checklist

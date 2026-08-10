@@ -230,6 +230,46 @@ describe("TaskDetail", () => {
     expect(await screen.findByText("Diff")).toBeInTheDocument();
     expect(await screen.findByText("diff --git a/f.txt b/f.txt")).toBeInTheDocument();
     expect(screen.getByText("+new")).toBeInTheDocument();
+    // The improved diff view shows a friendly file label + +/- stats.
+    expect(screen.getByText("f.txt")).toBeInTheDocument();
+    expect(screen.getAllByText("+1").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("−1").length).toBeGreaterThan(0);
+  });
+
+  it("shows run history with status, duration, and diff/artifact markers", async () => {
+    const run1 = { ...RUN, id: 1, seq: 1, status: "done", started_at: "2026-08-06T10:00:00", finished_at: "2026-08-06T10:00:30", has_diff: true };
+    const run2 = { ...RUN, id: 2, seq: 2, status: "running", started_at: "2026-08-06T10:01:00", finished_at: null, has_diff: false, model: "m2", artifacts: [{ id: 1, path: "logs/build.log", size: 2048, created_at: "2026-08-06T10:01:00" }] };
+    const task = { ...TASK, run: run2 };
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/runs")) {
+        return { ok: true, json: async () => [run1, run2] };
+      }
+      if (url.includes("/api/tasks")) {
+        return { ok: true, json: async () => task };
+      }
+      if (url.includes("/api/github/tokens")) {
+        return { ok: true, json: async () => ({ accounts: [] }) };
+      }
+      if (url.includes("/api/models")) {
+        return { ok: true, json: async () => ({ cli: "opencode", models: ["m1"] }) };
+      }
+      return { ok: true, json: async () => REPOS };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("EventSource", FakeEventSource);
+
+    renderDetail();
+    expect(await screen.findByText("Run history")).toBeInTheDocument();
+    // Status badges for both runs
+    expect(screen.getByText("#1")).toBeInTheDocument();
+    expect(screen.getByText("#2")).toBeInTheDocument();
+    expect(screen.getByText("done")).toBeInTheDocument();
+    expect(screen.getAllByText("running").length).toBeGreaterThan(0);
+    // Duration of the finished run is rendered
+    expect(screen.getByText("30s")).toBeInTheDocument();
+    // Diff marker on run 1, artifact marker on run 2
+    expect(screen.getByText("diff")).toBeInTheDocument();
+    expect(screen.getByText("1 artifact")).toBeInTheDocument();
   });
 
   it("shows Cancel for a queued task", async () => {
