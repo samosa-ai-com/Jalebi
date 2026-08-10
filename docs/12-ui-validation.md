@@ -212,7 +212,7 @@
 
 ## 9. Known limitations (do NOT expect these yet)
 
-- Triggers/check-run gating — later phases.
+- Triggers gating setup is GitHub-side (branch protection) — later phases.
 - **Artifacts only capture untracked files** — a task that commits all its output shows no artifacts.
 - **Worktree cleanup** (deleting done-task worktrees after N days) is not implemented.
 - `interrupted` tasks are resumable via **Re-run** (fresh session) or **Follow-up** (if a session survived).

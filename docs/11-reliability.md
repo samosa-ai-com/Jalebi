@@ -68,6 +68,7 @@ Settings values are **type-validated** on `POST /api/settings` (rejects `"false"
 - A cancelled/killed agent session may become unresumable (opencode-side session state); the task is still marked `cancelled`/`interrupted`.
 - Single-port localhost only — no TLS; optional Basic-auth UI password when exposed (PRD §F13).
 - **Screening scheduler** is a daemon thread (dies with the process). A run in flight when the server stops is left `running` in the DB; on restart it has no live HEAD comparison until the next cron tick, and a manual "Run now" starts fresh (screening runs have no resume). Runs are persisted and never lost.
+- **Commit statuses** (PRD F15) are best-effort: a status API failure never fails the task, but a failed status leaves the GitHub-side status `pending` until the next run/publish for that head reconciles it. Follow-ups replace the existing status (matched by `(sha, context)`).
 
 ## 6. Reference
 

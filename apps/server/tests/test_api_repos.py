@@ -289,3 +289,35 @@ def test_connect_empty_pat_rejected(client, app, monkeypatch) -> None:
     resp = client.post("/api/repos", json={"full_name": "octocat/hello", "pat_name": ""})
     assert resp.status_code == 400
     assert "account" in resp.get_json()["error"]
+
+
+def test_toggle_check_runs_enabled(client, app, monkeypatch, session) -> None:
+    """PATCH /api/repos/<id> toggles check_runs_enabled (PRD F15)."""
+
+
+    monkeypatch.setattr(routes_repos, "GitHubClient", FakeGitHubClient)
+    created = client.post(
+        "/api/repos", json={"full_name": "octocat/hello", "pat_name": "test"}
+    ).get_json()
+    rid = created["id"]
+    assert created["check_runs_enabled"] is False
+
+    resp = client.patch(f"/api/repos/{rid}", json={"check_runs_enabled": True})
+    assert resp.status_code == 200
+    assert resp.get_json()["check_runs_enabled"] is True
+
+    resp = client.patch(f"/api/repos/{rid}", json={"check_runs_enabled": False})
+    assert resp.status_code == 200
+    assert resp.get_json()["check_runs_enabled"] is False
+
+    # Non-bool rejected
+    resp = client.patch(f"/api/repos/{rid}", json={"check_runs_enabled": "yes"})
+    assert resp.status_code == 400
+
+    # Unknown repo
+    resp = client.patch("/api/repos/999999", json={"check_runs_enabled": True})
+    assert resp.status_code == 404
+
+    # Empty payload rejected
+    resp = client.patch(f"/api/repos/{rid}", json={})
+    assert resp.status_code == 400

@@ -267,6 +267,8 @@ export const api = {
     }),
   disconnectRepo: (id: number) =>
     request<{ disconnected: string }>(`/api/repos/${id}`, { method: "DELETE" }),
+  updateRepo: (id: number, input: { check_runs_enabled?: boolean }) =>
+    request<Repo>(`/api/repos/${id}`, { method: "PATCH", body: JSON.stringify(input) }),
   pruneRepos: () =>
     request<{ removed: string[] }>("/api/repos/prune", { method: "POST" }),
   artifactUrl: (taskId: number, artifactId: number) =>

@@ -82,7 +82,7 @@ Jalebi inverts the control flow:
 
 ```
 Chanakya:  GitHub comment ──▶ GitHub Actions ──▶ self-hosted runner ──▶ opencode github run ──▶ comment back
-Jalebi:    local web UI / GitHub webhook event ──▶ Jalebi orchestrator ──▶ (spawn CLI agent as child process) ──▶ push/PR/check-run via PAT ──▶ UI updates
+Jalebi:    local web UI / GitHub webhook event ──▶ Jalebi orchestrator ──▶ (spawn CLI agent as child process) ──▶ push/PR/commit-status via PAT ──▶ UI updates
 ```
 
 Everything is local, private to the owner, and driven from the dashboard.
@@ -138,7 +138,7 @@ Everything is local, private to the owner, and driven from the dashboard.
 | **Reviewer**         | A catalog agent of kind`reviewer` assigned to a PR.                                  |
 | **Screen/Screening** | A scheduled proactive audit with its own system prompt + cadence.                      |
 | **Webhook trigger**  | A repo webhook event (e.g. `pull_request.opened`) that auto-starts task(s) per user rules. |
-| **Check run**        | A GitHub commit status reporting a task's queued/in-progress/completed state — can gate merges via branch protection. *(Phase 2.)* |
+| **Commit status**    | A GitHub commit status reporting a task's pending/success/failure/error state — can gate merges via branch protection. *(Phase 2.)* |
 | **Artifact**         | A file produced by a run (log, report, coverage) captured and retained per run.        |
 | **Worktree**         | A git worktree — an isolated checkout of a repo for a single task/agent.              |
 | **Publish**          | Push branch + open (or update) a PR.                                                   |
@@ -179,7 +179,7 @@ Everything is local, private to the owner, and driven from the dashboard.
 1. GitHub delivers a **repo webhook event** to Jalebi's local listener (e.g. `pull_request` opened, `issues` opened, PR updated).
 2. The listener validates and **idempotently** dedups the delivery (`X-GitHub-Delivery` / `X-GitHub-Event` headers), then matches it against the user's **trigger rules**.
 3. A matching rule creates and enqueues task(s) immediately — e.g. a PR just opened ⇒ each **assigned reviewer** gets its own review task and starts in real time.
-4. Runs proceed exactly like a manual task (timeline, logs, diffs) and report back via **check runs** on the PR's head commit when configured *(Phase 2)*.
+4. Runs proceed exactly like a manual task (timeline, logs, diffs) and report back via **commit statuses** on the PR's head commit when configured *(Phase 2)*.
 5. No polling involved; the trigger is the event itself. (A manual "replay last delivery" button exists; an optional polling fallback is inert.)
 
 ### 7.5 Recovery loop (auto-recovery)
@@ -202,10 +202,10 @@ Everything is local, private to the owner, and driven from the dashboard.
 
 - The owner registers **one or more named PATs** in Settings. Every token is stored by name in the `0600` secrets file `<data-dir>/secrets.json` (`github_tokens: [{name, token}]`).
 - **All accounts are equal** — there is **no primary/default account and no fallback**. The account selected for a task/repo is the one used; a task without an account is refused.
-- A fine-grained or classic PAT per account. Required scopes (document in UI): classic `repo` (or fine-grained: Contents read/write, Pull requests read/write, Issues read/write, Metadata read, **Commit statuses read/write** for check runs).
+- A fine-grained or classic PAT per account. Required scopes (document in UI): classic `repo` (or fine-grained: Contents read/write, Pull requests read/write, Issues read/write, Metadata read, **Commit statuses read/write** for commit statuses).
 - **`JALEBI_GITHUB_TOKEN`** is **masking-only** (a stray value never survives into logs); it is never used to resolve which account runs anything. While developing/testing it may also be set in the git-ignored `.env` file.
 - Tokens are stored on disk (never in the browser; the backend proxies all GitHub calls). All GitHub calls go through a thin **httpx** client (`github.py`).
-- Capabilities used: repo list & default branch, issues, PRs (create/update/comment/review), refs, clone/push via authenticated git, **repo webhook registration/management**, **commit statuses (check runs)** *(Phase 2)*.
+- Capabilities used: repo list & default branch, issues, PRs (create/update/comment/review), refs, clone/push via authenticated git, **repo webhook registration/management**, **commit statuses** *(Phase 2)*.
 - **Webhook setup:** Jalebi registers repo webhooks via the API (`POST /repos/{owner}/{repo}/hooks`) targeting its local listener (URL + optional secret for signature verification). For a localhost-only install, GitHub cannot reach the machine — the listener must be exposed via a **tunnel (e.g. `cloudflared`/`ngrok`)** or the webhook URL points at a small reverse proxy; the app detects an unreachable webhook and warns, offering the (inert) polling fallback.
 - **Safety:** token values are never exposed to the frontend or to agent prompts; all PAT values are masked from logs/console at ingest (see §F17).
 
@@ -219,7 +219,7 @@ Layout (three areas):
    - **Live console:** streaming stdout of the CLI child process (masked at ingest).
    - **Diff viewer:** incremental file diffs as they appear; today this is the captured `runs.diff_text` (per-file expand/polish is Phase 2).
    - **Follow-up composer:** free-text comment → resumes the session.
-   - **PR card:** status of publish, link to the GitHub PR, reviewers assigned + reviewer comment status, publish modes (`new_pr`/`update_pr`/`push_branch`), **check-run status** *(Phase 2)*.
+   - **PR card:** status of publish, link to the GitHub PR, reviewers assigned + reviewer comment status, publish modes (`new_pr`/`update_pr`/`push_branch`), **commit-status** *(Phase 2)*.
 3. **Top bar — Global nav:** Repos · Tasks · Agents · Triggers · Settings. (*Screenings* lands with Phase 2.)
 
 Non-goal: build nothing on `opencode web`'s chat UI — Jalebi's UI is bespoke and orchestrator-centric (queue + timeline + diffs + reviewers), not a direct agent chat.
@@ -379,7 +379,7 @@ Branch selection is **per task type** (shipped behavior; supersedes the earlier 
 ### F12. Storage
 
 - **SQLite** via **SQLAlchemy 2 + Alembic** (schema managed by migrations; run at startup).
-- Tables (shipped): `repos`, `tasks`, `runs`, `followups`, `artifacts`, `catalog_agents`, `review_assignments`, `trigger_rules`, `event_deliveries`, `env_vars`, `settings` (key-value, see §10 for the full key list). **Phase 2** adds `screenings`, `screening_runs`, `findings`, `check_runs`.
+- Tables (shipped): `repos`, `tasks`, `runs`, `followups`, `artifacts`, `catalog_agents`, `review_assignments`, `trigger_rules`, `event_deliveries`, `env_vars`, `settings` (key-value, see §10 for the full key list). **Phase 2** adds `screenings`, `screening_runs`, `check_runs`.
 - Data dir (default `~/.jalebi/`; `JALEBI_DATA_DIR` overrides): `data.db`, `secrets.json` (0600), `repos/` (bare mirrors), `ws/` (worktrees), `agents/` (catalog agent files), `logs/`.
 - Prune policy: delete task worktrees for `done` tasks after a configurable TTL (default 7 days, `artifact_ttl_days`) unless a PR is still open.
 
@@ -409,18 +409,20 @@ Triggering is a first-class, **webhook-pushed** mechanism (not polling, not sche
 - **Fallback:** if the webhook is unreachable (localhost not exposed), a **polling fallback** can be enabled per repo (interval check for new/updated PRs) — the toggle exists but is currently **inert** (deferred).
 - **Notifications:** triggered tasks appear in the queue in real time; the UI surfaces which event started each task (delivery id, event, timestamp).
 
-### F15. Check runs & merge gating *(Phase 2)*
+### F15. Commit statuses & merge gating *(Phase 2 — owner-authorized edit, 2026-08-09)*
 
-Mirrors GitHub Actions' ability to gate merges on agent results. (Schema placeholders `repos.check_runs_enabled` and `tasks.check_run_id` already exist.)
+Mirrors GitHub Actions' ability to gate merges on agent results. (Schema placeholders `repos.check_runs_enabled` and `tasks.check_run_id` already exist; the `check_runs` table is Jalebi's registry of the statuses it set.)
 
-- Jalebi creates **check runs** (commit statuses) on the head SHA of the branch it's working on, via the PAT (`POST /repos/{owner}/{repo}/check-runs`).
-- Lifecycle mirrors a run: `queued` → `in_progress` (with a friendly name like `Jalebi / review (security-auditor)`) → `completed` with `conclusion` (`success`/`failure`/`neutral`/`cancelled`).
-- Because these are real check runs, **branch protection** can require them — merging is blocked until the agent's review/fix check is green. This is opt-in per repo (user enables "report check runs" for the repo and adds the check to branch protection).
-- Failure/success of the underlying task drives the conclusion; a follow-up updates the existing check rather than creating duplicates (matched by name + head SHA).
+- **Mechanism: commit statuses, not check runs.** GitHub's *check-runs* API is **GitHub-App only** — PATs (classic and fine-grained) cannot write it, and Jalebi is PAT-driven (§F1). Merge gating therefore uses **commit statuses** (`POST /repos/{owner}/{repo}/statuses/{sha}`), which the PAT **can** write ("Commit statuses read/write" is already a required scope) and which **branch protection can require** — the same merge-gating outcome. *(This edits the earlier draft, which specified the check-runs endpoint; the earlier wording is superseded.)*
+- A commit status is keyed by `(sha, context)` on GitHub — posting the same context again **replaces** the previous status for that SHA, which is the "update, don't duplicate" contract. Contexts: `Jalebi / fix` (issue_fix) and `Jalebi / review` (pr_review).
+- **Lifecycle:** run start posts `pending`; run terminal posts the final state from the task status — `done → success`, `failed`/`timed_out → failure`, `cancelled`/`interrupted → error`, `needs_approval`/other → `pending` (GitHub treats pending as "not yet green", so it still blocks a merge).
+- **Head SHA:** `pr_review` → the PR head SHA (available at run start). `issue_fix` → the pushed `jalebi/<taskId>` head, which exists only after the first push — so the status is set at **publish time** (auto or manual) once the branch exists.
+- Because these are real commit statuses, **branch protection** can require them — merging is blocked until the agent's review/fix status is green. Opt-in per repo (user enables "report commit statuses" for the repo via the Repos page and adds the status context to branch protection).
+- Failure/success of the underlying task drives the state; a follow-up updates the existing status for the same head (matched by `(sha, context)`). All status API calls are **best-effort** — a GitHub failure is logged and never fails the task.
 
 ### F16. Timeouts, retries & auto-recovery
 
-- **Per-task timeout (enforced):** each task has a timeout (default **60 minutes**, configurable per task and per repo; the DB-level `server_default` stays 30 only because SQLite cannot alter it in place — the ORM Python default of 60 always applies). On expiry the child process is killed (SIGTERM → SIGKILL), the task marked `failed`/`timed_out`, and the check run (if any) completed with `failure`.
+- **Per-task timeout (enforced):** each task has a timeout (default **60 minutes**, configurable per task and per repo; the DB-level `server_default` stays 30 only because SQLite cannot alter it in place — the ORM Python default of 60 always applies). On expiry the child process is killed (SIGTERM → SIGKILL), the task marked `failed`/`timed_out`, and the commit status (if any) completed with `failure`.
 - **Stall detection:** a **watchdog** (per-run `stall_timeout_seconds`, live setting, default 600) declares a run **stalled** when it stops emitting output; the task is marked `failed` and auto-recovery restarts it **fresh** (a wedged session re-hangs).
 - **Auto-recovery (default ON, unbounded, all task types):** on terminal `failed` (incl. stalled) or `timed_out`, recovery dispatches a new run — **resume the last session** with `continue_prompt` for timeout/other failures, **fresh re-run** for stalls, fresh if no resumable session. See §7.5 for the full loop.
 - **Derived timeout escalation:** the per-run timeout is computed from `task.retry_count` — `base × timeout_multiplier^attempts` (default multiplier 2), capped at `retry_policy.max_timeout_minutes` (180). `task.timeout_minutes` is never mutated; a `done` run **resets `retry_count`**, so a manual rerun after success starts from the base timeout again.
@@ -508,7 +510,7 @@ Mirrors GitHub Actions' ability to gate merges on agent results. (Schema placeho
 │                     │                                         │ httpx (PAT vault)│
 └─────────────────────┼─────────────────────────────────────────┼──────────────────┘
                       │                                         ▼
-                      └─ webhook registration / check runs ─▶ github.com
+                      └─ webhook registration / commit statuses ─▶ github.com
                                           (fetch refs, push branch, open PR,
                                            PR review comments, issues)
 ```
@@ -518,10 +520,10 @@ Mirrors GitHub Actions' ability to gate merges on agent results. (Schema placeho
 | Component                         | Responsibility                                                                                                                                         |
 | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **UI (React)**              | Queue, task detail (timeline/logs/diff/follow-ups/PR card), agents catalog editor, triggers, settings. Consumes REST; subscribes to SSE event stream. |
-| **Orchestrator (Flask)**    | REST + SSE; task queue + worker pool; run lifecycle; auto-recovery; publish; follow-up dispatch; reviewer orchestration; **webhook handling (validate + dedup + match rules)**; **check-run lifecycle** *(Phase 2)*; timeouts/retries; secret masking; artifact capture. |
+| **Orchestrator (Flask)**    | REST + SSE; task queue + worker pool; run lifecycle; auto-recovery; publish; follow-up dispatch; reviewer orchestration; **webhook handling (validate + dedup + match rules)**; **commit-status lifecycle** *(Phase 2)*; timeouts/retries; secret masking; artifact capture. |
 | **Adapters**                | Translate a CLI into the `AgentAdapter` protocol (start/resume/list_models/parse). Only component that knows the CLI binary. |
 | **Git workspace mgr**       | Bare mirrors, worktree/review-worktree create/discard, branch naming (`jalebi/<taskId>`), push with token credential helper, ref-prefetch for screenings *(Phase 2)*. |
-| **GitHub client (httpx)**   | Issues, PRs, reviews, comments, refs, **webhook registration**, **check runs** *(Phase 2)*; all PAT-vault-authenticated. |
+| **GitHub client (httpx)**   | Issues, PRs, reviews, comments, refs, **webhook registration**, **commit statuses** *(Phase 2)*; all PAT-vault-authenticated. |
 | **Webhook listener**        | Local Flask endpoint receiving GitHub events (optionally tunneled/reverse-proxied); forwards validated deliveries to the orchestrator. |
 | **Scheduler**               | *(Phase 2)* Cron screening runs + dedup + notifications. (Triggering is webhook-driven, NOT scheduler-driven.) |
 | **Storage**                 | SQLite schema above (SQLAlchemy 2 + Alembic); secrets file; artifact store. |
@@ -539,7 +541,7 @@ Mirrors GitHub Actions' ability to gate merges on agent results. (Schema placeho
 ```
 repos(id, full_name, default_branch, clone_url, pat_scope, pat_name, connected,
       webhook_registered, poll_fallback, check_runs_enabled, last_checked_at)
-      -- check_runs_enabled: Phase-2 consumption; pat_name = the named vault account for this repo
+      -- check_runs_enabled: report commit statuses (PRD F15); pat_name = the named vault account for this repo
 
 tasks(id, type[issue_fix|pr_review|freeform|screen_finding|triggered], repo_id,
       source_branch, target_branch, agent_id, model, cli, prompt,
@@ -548,7 +550,7 @@ tasks(id, type[issue_fix|pr_review|freeform|screen_finding|triggered], repo_id,
       timeout_minutes, retry_count, pr_number, check_run_id, publish_mode[auto|manual|NULL],
       created_at, updated_at)
       -- agent_id: catalog slug, FK-less by design (SQLite batch-rebuild hazard); validated in service layer
-      -- check_run_id: plain nullable column, FK arrives with check_runs (Phase 2)
+      -- check_run_id: latest commit-status row id (FK-less by design; see check_runs below)
       -- timeout_minutes: ORM default 60; DB server_default 30 (SQLite can't alter in place — deliberate divergence)
       -- publish_mode: NULL → fall back to global auto_publish; issue_fix defaults auto, others manual
 
@@ -577,10 +579,13 @@ env_vars(id, name, value, repo_id NULL=global, created_at, updated_at)
 
 settings(key PK, value)   -- see §10.1 for the key list
 
--- Phase 2 (not yet in schema):
-check_runs(id, task_id, run_id, repo_id, head_sha, name, status, conclusion)
+-- Phase 2 (shipped):
+check_runs(id, task_id, run_id, repo_id, head_sha, name, status, conclusion, github_check_id)
+      -- Jalebi's registry of the commit statuses it set (one row per (task_id, head_sha, context));
+      -- tasks.check_run_id points at the latest row, FK-less by design (SQLite batch-rebuild hazard)
 screenings(id, repo_id, name, system_prompt, cadence_cron, scope_branch, enabled, notify_ntfy)
 screening_runs(id, screening_id, head_sha, status, started_at, finished_at, findings_json)
+      -- findings are stored as JSON on the run (no separate findings table)
 ```
 
 ### 10.1 Settings keys (source: `apps/server/src/jalebi/settings.py`)
@@ -608,7 +613,7 @@ screening_runs(id, screening_id, head_sha, status, started_at, finished_at, find
 1. **Settings:** named PAT vault (validate + show granted scopes), concurrency (default 4), publish policy (default auto), **notifications (ntfy endpoint + per-event toggles + progress interval + test button + failed-login alerts)**, **environment variables (global + per-repo, `.env` import, masked)**, data-dir path, **default timeout (60 min) + retry policy + stall timeout**, **secret patterns**, **tunnel/webhook setup status**.
 2. **Agents:** catalog list; create/edit agent (name, kind, cli, model, personality, skills, custom instructions). Skills come from a library of markdown files the user uploads or references by path.
 3. **New Task modal:** repo → type → branches (per §F8) → agent (default build agent or catalog agent) → model → instructions (issue #, PR #, or free text). Reviewer multi-select for `pr_review`. *(Screenings get an explicit "run screen now" action in Phase 2.)*
-4. **Task detail:** timeline, console (with **masked secrets**), diff, **artifacts**, PR card (publish status + modes, reviewers + assign + **address reviewers** + **check-run status** *(Phase 2)*), follow-up composer, **Re-run** action.
+4. **Task detail:** timeline, console (with **masked secrets**), diff, **artifacts**, PR card (publish status + modes, reviewers + assign + **address reviewers** + **commit-status** *(Phase 2)*), follow-up composer, **Re-run** action.
 5. **Triggers tab:** per-repo webhook status, trigger rules editor (event → action → agents → filters), delivery log with replay, polling-fallback toggle (inert).
 6. **Screenings tab** *(Phase 2)*: screen cards with enable/toggle, cadence editor, last run + findings, "new task from finding".
 7. **Notifications:** in-app unread badge + ntfy push for screening findings, reviewer completion, triggered-task failures, and failed-login attempts.
@@ -639,7 +644,7 @@ screening_runs(id, screening_id, head_sha, status, started_at, finished_at, find
 **Phase 2 — Screening + merge gating**
 
 - **Screening engine:** starter catalog, cron scheduler, HEAD-baseline dedup, structured findings, in-app + ntfy notify, "new task from finding".
-- **Check runs / commit statuses on head SHAs** so branch protection can gate merges on agent reviews/fixes.
+- **Commit statuses on head SHAs** so branch protection can gate merges on agent reviews/fixes.
 - Diff-view polish + task history.
 
 **Phase 3 — Backend parity**
@@ -654,7 +659,7 @@ screening_runs(id, screening_id, head_sha, status, started_at, finished_at, find
 ## 13. Non-functional requirements
 
 - **Latency:** SSE events render in the UI in near-real-time; console streams without buffering delays. Webhook → task-start latency should be sub-second (validation + dedup only; no slow processing on the webhook path).
-- **Reliability:** runs + sessions persisted; interrupted runs resumable; follow-ups work after restart; webhook deliveries **idempotent** (re-delivery never double-runs); check-run conclusions converge to the final task state *(Phase 2)*; runs auto-recover on failure/timeout/stall (see §F16).
+- **Reliability:** runs + sessions persisted; interrupted runs resumable; follow-ups work after restart; webhook deliveries **idempotent** (re-delivery never double-runs); commit-status states converge to the final task state *(Phase 2)*; runs auto-recover on failure/timeout/stall (see §F16).
 - **Resource safety:** worktree cleanup TTL; cap on concurrent children (== configured concurrency); process kill on abort with timeout then SIGKILL; per-task timeout (default 60 min) prevents runaway agents; stall watchdog bounds runs that stop reporting.
 - **Security:** localhost bind; 0600 secrets; PATs never logged/leaked; no secrets interpolated into prompts; optional UI password + failed-login alerts; **automatic secret masking in logs/console**; webhook signature verification when a secret is configured; agent `gh`-guard + external-directory denial.
 - **Testability:** adapters unit-tested with mocked CLI output; queue tested with fake agents; GitHub interactions mocked via the httpx `_request` seam; screening scheduler tested with fake clocks *(Phase 2)*; webhook handler tested with fixture payloads + delivery-id dedup.
@@ -707,7 +712,7 @@ The projects below are **inspiration, not dependencies.** During development, st
 | **Aider** | `Aider-AI/aider` | Standard for programmatic local-git + multi-file LLM editing. Learn diff tracking, automatic commit construction, repo-map graph for token efficiency, and non-interactive flags (`--no-auto-commits`, `--yes`). |
 | **SWE-agent** | `SWE-bench/SWE-agent` | Princeton's agent framework for resolving real GitHub issues. Learn file parser, context-window management, and isolated bash/git tool execution. |
 
-### 16.2 Webhook listener, review automation & check runs
+### 16.2 Webhook listener, review automation & commit statuses
 
 | Project | Repo | Why inspect / what to learn |
 |---|---|---|

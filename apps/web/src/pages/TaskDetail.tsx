@@ -1021,6 +1021,18 @@ export default function TaskDetail() {
               Issue #{n} ↗
             </a>
           ))}
+          {task.check_run_id ? (
+            <a
+              className="btn-ghost !px-3 !py-1 text-xs text-syrup-300"
+              href={`https://github.com/${repoName}/${
+                task.pr_number ? `pull/${task.pr_number}` : `commits/${task.source_branch || task.target_branch || "main"}`
+              }`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              commit status
+            </a>
+          ) : null}
         </div>
 
         <dl className="mt-4 grid grid-cols-2 gap-x-6 gap-y-2 border-t border-ink-800 pt-4 text-xs sm:grid-cols-4">

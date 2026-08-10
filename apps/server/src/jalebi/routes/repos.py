@@ -103,6 +103,30 @@ def reconnect_repo(repo_id: int) -> ResponseReturnValue:
     return jsonify(repos.repo_to_dict(row))
 
 
+@bp.patch("/<int:repo_id>")
+def update_repo(repo_id: int) -> ResponseReturnValue:
+    """Toggle per-repo flags (currently ``check_runs_enabled``, PRD F15).
+
+    Payload: ``{"check_runs_enabled": bool}``. Only the flag(s) present are
+    updated; other repo fields are never mutated through this route.
+    """
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "expected a JSON object"}), 400
+    session = db.get_session()
+    row = session.get(db.Repo, repo_id)
+    if row is None:
+        return jsonify({"error": "repo not found"}), 404
+    if "check_runs_enabled" in payload:
+        if not isinstance(payload["check_runs_enabled"], bool):
+            return jsonify({"error": "check_runs_enabled must be a boolean"}), 400
+        row.check_runs_enabled = payload["check_runs_enabled"]
+    else:
+        return jsonify({"error": "no updatable field supplied"}), 400
+    session.commit()
+    return jsonify(repos.repo_to_dict(row))
+
+
 @bp.post("/prune")
 def prune_repos() -> ResponseReturnValue:
     """Soft-remove connected repos that no longer exist on GitHub (deleted upstream)."""

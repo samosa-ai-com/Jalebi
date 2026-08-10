@@ -406,6 +406,42 @@ class ScreeningRun(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class CheckRun(Base):
+    """Jalebi's registry of the commit statuses it set (PRD F15).
+
+    GitHub's *check-runs* API is GitHub-App-only (PATs cannot write it), so merge
+    gating uses **commit statuses** instead — this table mirrors each status
+    Jalebi posted. ``github_check_id`` is the GitHub-side status id; ``head_sha``
+    is the SHA the status is attached to; ``status``/``conclusion`` mirror the
+    posted state (``conclusion`` holds ``pending``/``success``/``failure``/
+    ``error``). A row is keyed by ``(task_id, head_sha, name/context)`` so a
+    follow-up replaces the same GitHub status (matched by ``(sha, context)``) and
+    a new pushed head gets a fresh row. ``tasks.check_run_id`` points at the
+    latest row and is deliberately **not a real FK** (the SQLite batch-rebuild of
+    ``tasks`` is the Step-37 migration hazard); validity is enforced in the
+    service layer.
+    """
+
+    __tablename__ = "check_runs"
+    __table_args__ = (
+        Index("ix_check_runs_task_id", "task_id"),
+        Index("ix_check_runs_head_sha", "head_sha"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id"), nullable=False)
+    run_id: Mapped[int | None] = mapped_column(ForeignKey("runs.id"), nullable=True)
+    repo_id: Mapped[int] = mapped_column(ForeignKey("repos.id"), nullable=False)
+    head_sha: Mapped[str | None] = mapped_column(Text, nullable=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, default="queued", server_default=sa.text("'queued'")
+    )
+    conclusion: Mapped[str | None] = mapped_column(Text, nullable=True)
+    github_check_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+
+
 class Setting(Base):
     __tablename__ = "settings"
 

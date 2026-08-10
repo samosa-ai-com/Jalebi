@@ -202,6 +202,7 @@ def task_to_dict(
         "retry_count": task.retry_count,
         "pr_number": task.pr_number,
         "publish_mode": task.publish_mode,
+        "check_run_id": task.check_run_id,
         "issues": json.loads(task.issues_json) if task.issues_json else [],
         "prs": json.loads(task.prs_json) if task.prs_json else [],
         "env_vars": json.loads(task.env_vars_json) if task.env_vars_json else [],

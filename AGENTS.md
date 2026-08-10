@@ -169,6 +169,7 @@ Jalebi/
 │   │   │   ├── events.py          # per-task SSE bus
 │   │   │   ├── masking.py         # PAT(s)/pattern redaction at ingest
 │   │   │   ├── queue.py           # TaskQueue: workers, run lifecycle, timeout/cancel, publish, review posting
+│   │   │   ├── checkruns.py       # check-run registry + lifecycle (PRD F15, merge gating)
 │   │   │   ├── repos.py           # connected-repo registry service
 │   │   │   ├── tasks.py           # task service (create/list/detail)
 │   │   │   ├── screening.py       # ScreeningEngine + ScreeningScheduler (cron, read-only audits)

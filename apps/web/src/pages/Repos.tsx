@@ -99,6 +99,29 @@ export default function Repos() {
                   #{r.id}
                 </span>
                 <button
+                  type="button"
+                  title={
+                    r.check_runs_enabled
+                      ? "Commit statuses enabled (PRD F15)"
+                      : "Report commit statuses on PRs"
+                  }
+                  onClick={async () => {
+                    try {
+                      await api.updateRepo(r.id, { check_runs_enabled: !r.check_runs_enabled });
+                      load();
+                    } catch (e) {
+                      setError(e instanceof Error ? e.message : "toggle failed");
+                    }
+                  }}
+                  className={`text-[11px] transition-colors ${
+                    r.check_runs_enabled
+                      ? "text-green-400 hover:text-green-300"
+                      : "text-ink-500 hover:text-ink-300"
+                  }`}
+                >
+                  {r.check_runs_enabled ? "statuses: on" : "statuses: off"}
+                </button>
+                <button
                   onClick={async () => {
                     try {
                       await api.disconnectRepo(r.id);

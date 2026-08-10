@@ -65,6 +65,7 @@ export interface Task {
   retry_count: number;
   pr_number: number | null;
   publish_mode: "auto" | "manual" | null;
+  check_run_id: number | null;
   issues: number[];
   prs: number[];
   env_vars: string[];
