@@ -13,8 +13,8 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from jalebi import catalog
-from jalebi.db import Repo, ReviewAssignment, Run, Task, utcnow
+from jalebi import catalog, clock
+from jalebi.db import Repo, ReviewAssignment, Run, Task, now
 from jalebi.tasks import create_task, delete_tasks_cascade
 
 REVIEWER_STATUSES = ("queued", "running", "posted", "failed")
@@ -233,7 +233,7 @@ def _create_review_tasks(
                     pr_number=pr_number,
                     repo_id=repo.id,
                     status="queued",
-                    created_at=utcnow(),
+                    created_at=now(),
                 )
             )
             session.commit()
@@ -271,7 +271,7 @@ def assignment_to_dict(session: Session, assignment: ReviewAssignment) -> dict[s
         "pr_number": assignment.pr_number,
         "repo_id": assignment.repo_id,
         "status": assignment.status,
-        "created_at": assignment.created_at.isoformat(),
+        "created_at": clock.to_iso(assignment.created_at),
     }
 
 

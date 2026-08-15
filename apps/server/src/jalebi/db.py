@@ -1,6 +1,6 @@
 """SQLAlchemy engine, session factory, and Phase-0 models."""
 
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 
 import sqlalchemy as sa
@@ -29,12 +29,11 @@ from sqlalchemy.orm import (
     Session as OrmSession,
 )
 
+# Wall-clock "now" in the app's configured timezone (see jalebi.clock). Re-exported
+# here so the rest of the codebase imports it from jalebi.db as it did `utcnow`.
+from jalebi.clock import now
+
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
-
-
-def utcnow() -> datetime:
-    """Naive UTC timestamp (SQLite-friendly)."""
-    return datetime.now(UTC).replace(tzinfo=None)
 
 
 class Base(DeclarativeBase):
@@ -139,8 +138,8 @@ class Task(Base):
     # "auto" | "manual" | None (None → fall back to the global auto_publish setting).
     # issue_fix defaults to "auto"; freeform/screen_finding/triggered default to "manual".
     publish_mode: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now)
 
 
 class Run(Base):
@@ -175,7 +174,7 @@ class Followup(Base):
     body: Mapped[str] = mapped_column(Text, nullable=False)
     pat_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     model: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now)
 
 
 class Artifact(Base):
@@ -188,7 +187,7 @@ class Artifact(Base):
     size: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=sa.text("0")
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now)
 
 
 class CatalogAgent(Base):
@@ -224,7 +223,7 @@ class CatalogAgent(Base):
     enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=sa.text("1")
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now)
 
 
 class EnvVar(Base):
@@ -246,8 +245,8 @@ class EnvVar(Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     value: Mapped[str] = mapped_column(Text, nullable=False)
     repo_id: Mapped[int | None] = mapped_column(ForeignKey("repos.id"), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now)
 
 
 class ReviewAssignment(Base):
@@ -286,7 +285,7 @@ class ReviewAssignment(Base):
     status: Mapped[str] = mapped_column(
         Text, nullable=False, default="queued", server_default=sa.text("'queued'")
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now)
 
 
 class TriggerRule(Base):
@@ -317,7 +316,7 @@ class TriggerRule(Base):
     enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=sa.text("1")
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now)
 
 
 class EventDelivery(Base):
@@ -340,7 +339,7 @@ class EventDelivery(Base):
     )
     repo_full_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     payload_json: Mapped[str] = mapped_column(Text, nullable=False)
-    received_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+    received_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now)
     status: Mapped[str] = mapped_column(
         Text, nullable=False, default="received", server_default=sa.text("'received'")
     )
@@ -369,14 +368,19 @@ class Screening(Base):
         Text, nullable=False, default="0 6 * * *", server_default=sa.text("'0 6 * * *'")
     )
     scope_branch: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Optional agent pins for the audit run (like catalog agents): ``cli`` is the
+    # backend (default "opencode"); ``model`` overrides the CLI default. NULL =
+    # no pin.
+    cli: Mapped[str | None] = mapped_column(Text, nullable=True)
+    model: Mapped[str | None] = mapped_column(Text, nullable=True)
     enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=sa.text("1")
     )
     notify_ntfy: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=sa.text("1")
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now)
 
 
 class ScreeningRun(Base):
@@ -439,7 +443,7 @@ class CheckRun(Base):
     )
     conclusion: Mapped[str | None] = mapped_column(Text, nullable=True)
     github_check_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now)
 
 
 class Setting(Base):

@@ -58,8 +58,8 @@
 | `pr_number` | int null | |
 | `publish_mode` | text null | `'auto'` \| `'manual'` \| NULL (fall back to the global `auto_publish` setting). `issue_fix` defaults to `auto`; freeform/manual types to `manual`. |
 | `check_run_id` | int null | **no FK yet**; check_runs table arrives in Phase 2 |
-| `created_at` | datetime | naive UTC |
-| `updated_at` | datetime | naive UTC |
+| `created_at` | datetime | naive local (app timezone, see `jalebi/clock.py`) |
+| `updated_at` | datetime | naive local (app timezone, see `jalebi/clock.py`) |
 
 Indexes: `repo_id`, `status`.
 
@@ -189,8 +189,10 @@ could only record `rules[0].id`).
 | `repo_id` | int FK → repos (CASCADE) | the repo being audited |
 | `name` | text | human-readable screen name |
 | `system_prompt` | text | the audit system prompt |
-| `cadence_cron` | text, default `'0 6 * * *'` | 5-field cron (see `jalebi/cron.py`) |
+| `cadence_cron` | text, default `'0 6 * * *'` | 5-field cron (see `jalebi/cron.py`) — matched against the app's **configured timezone** (default: the machine's local zone) |
 | `scope_branch` | text, null | NULL = repo default branch |
+| `cli` | text, null | optional backend pin (default `opencode`); NULL = default adapter |
+| `model` | text, null | optional model pin; NULL = adapter default |
 | `enabled` | bool | disabled screens never run |
 | `notify_ntfy` | bool | push findings via ntfy |
 | `created_at` / `updated_at` | datetime | |

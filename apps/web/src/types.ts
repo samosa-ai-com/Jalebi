@@ -182,6 +182,7 @@ export interface SettingsMap {
   notify_progress_interval_minutes: number;
   webhook_url: string;
   webhook_secret: string;
+  timezone: string;
 }
 
 export interface EnvVar {
@@ -276,6 +277,8 @@ export interface Screen {
   system_prompt: string;
   cadence_cron: string;
   scope_branch: string | null;
+  cli: string | null;
+  model: string | null;
   enabled: boolean;
   notify_ntfy: boolean;
   created_at: string;

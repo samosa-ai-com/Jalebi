@@ -6,6 +6,7 @@ from collections.abc import Callable
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from jalebi import clock
 from jalebi.catalog import agent_by_slug
 from jalebi.db import TASK_TYPES, Artifact, Followup, Repo, ReviewAssignment, Run, Task
 
@@ -161,8 +162,8 @@ def run_to_dict(run: Run, artifacts: list[Artifact] | None = None) -> dict[str, 
         "model": run.model,
         "pat_name": run.pat_name,
         "status": run.status,
-        "started_at": run.started_at.isoformat() if run.started_at else None,
-        "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+        "started_at": clock.to_iso(run.started_at) if run.started_at else None,
+        "finished_at": clock.to_iso(run.finished_at) if run.finished_at else None,
         "has_diff": bool(run.diff_text),
         "steps": json.loads(run.steps_json) if run.steps_json else [],
         "artifacts": [
@@ -170,7 +171,7 @@ def run_to_dict(run: Run, artifacts: list[Artifact] | None = None) -> dict[str, 
                 "id": a.id,
                 "path": a.path,
                 "size": a.size,
-                "created_at": a.created_at.isoformat(),
+                "created_at": clock.to_iso(a.created_at),
             }
             for a in (artifacts or [])
         ],
@@ -206,8 +207,8 @@ def task_to_dict(
         "issues": json.loads(task.issues_json) if task.issues_json else [],
         "prs": json.loads(task.prs_json) if task.prs_json else [],
         "env_vars": json.loads(task.env_vars_json) if task.env_vars_json else [],
-        "created_at": task.created_at.isoformat(),
-        "updated_at": task.updated_at.isoformat(),
+        "created_at": clock.to_iso(task.created_at),
+        "updated_at": clock.to_iso(task.updated_at),
         "run": run_to_dict(run, artifacts=artifacts) if run is not None else None,
         "followups": [
             {
@@ -215,7 +216,7 @@ def task_to_dict(
                 "body": f.body,
                 "pat_name": f.pat_name,
                 "model": f.model,
-                "created_at": f.created_at.isoformat(),
+                "created_at": clock.to_iso(f.created_at),
             }
             for f in (followups or [])
         ],

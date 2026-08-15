@@ -1191,7 +1191,7 @@ def test_issue_fix_worktree_based_on_target_branch(q, session, repo_row, monkeyp
     """issue_fix uses the SINGLE-target model: the worktree must be created from
     the target branch (the PR base), not the source branch."""
     from jalebi.db import Run as RunRow
-    from jalebi.db import utcnow
+    from jalebi.db import now
 
     task = tasks.create_task(
         session,
@@ -1206,7 +1206,7 @@ def test_issue_fix_worktree_based_on_target_branch(q, session, repo_row, monkeyp
         seq=1,
         cli="opencode",
         model=None,
-        started_at=utcnow(),
+        started_at=now(),
         status="running",
     )
     session.add(run)

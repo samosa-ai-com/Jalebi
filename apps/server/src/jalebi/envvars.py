@@ -6,7 +6,8 @@ import re
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from jalebi.db import EnvVar, Repo, utcnow
+from jalebi import clock
+from jalebi.db import EnvVar, Repo, now
 
 
 def list_env_vars(session: Session, repo_id: int | None = None) -> list[EnvVar]:
@@ -42,7 +43,7 @@ def upsert_env_var(
         session.add(row)
     else:
         row.value = value
-        row.updated_at = utcnow()
+        row.updated_at = now()
     session.commit()
     session.refresh(row)
     return row
@@ -129,5 +130,5 @@ def env_var_to_dict(row: EnvVar, repo_full_name: str | None = None) -> dict[str,
         "masked": masked,
         "repo_id": row.repo_id,
         "repo_full_name": repo_full_name,
-        "created_at": row.created_at.isoformat(),
+        "created_at": clock.to_iso(row.created_at),
     }

@@ -29,6 +29,7 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from jalebi import clock
 from jalebi.db import CheckRun, Repo, Task
 
 logger = logging.getLogger(__name__)
@@ -158,5 +159,5 @@ def check_run_to_dict(check: CheckRun) -> dict[str, object]:
         "status": check.status,
         "conclusion": check.conclusion,
         "github_check_id": check.github_check_id,
-        "created_at": check.created_at.isoformat() if check.created_at else None,
+        "created_at": clock.to_iso(check.created_at) if check.created_at else None,
     }

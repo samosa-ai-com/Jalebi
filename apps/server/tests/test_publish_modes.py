@@ -83,16 +83,16 @@ def _seed_commit(q, task_id: int, repo_row) -> None:
 
 def _seed_run(session, task_id: int) -> None:
     """Create a minimal Run row so publish_task can append a timeline step."""
-    from jalebi.db import Run, utcnow
+    from jalebi.db import Run, now
 
     run = Run(
         task_id=task_id,
         seq=1,
         cli="opencode",
         model=None,
-        started_at=utcnow(),
+        started_at=now(),
         status="done",
-        finished_at=utcnow(),
+        finished_at=now(),
         steps_json="[]",
     )
     session.add(run)

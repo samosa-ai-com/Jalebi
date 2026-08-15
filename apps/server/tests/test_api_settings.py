@@ -1,5 +1,6 @@
 from flask.testing import FlaskClient
 
+from jalebi import clock
 from jalebi.settings import DEFAULTS
 
 
@@ -48,6 +49,21 @@ def test_ntfy_url_no_longer_valid(client: FlaskClient) -> None:
     """ntfy_url was merged into ntfy_topic — the old key is rejected."""
     resp = client.post("/api/settings", json={"key": "ntfy_url", "value": "https://ntfy.sh"})
     assert resp.status_code == 400
+
+
+def test_timezone_setting_validated(client: FlaskClient) -> None:
+    """The timezone setting accepts ``local``/IANA names and rejects unknowns."""
+    assert client.get("/api/settings").get_json()["timezone"] == "local"
+    resp = client.post("/api/settings", json={"key": "timezone", "value": "Asia/Kolkata"})
+    assert resp.status_code == 200
+    assert client.get("/api/settings").get_json()["timezone"] == "Asia/Kolkata"
+    # Saving a timezone applies it live (the wall clock follows it).
+    assert clock.zone_name() == "Asia/Kolkata"
+    resp = client.post("/api/settings", json={"key": "timezone", "value": "Mars/Olympus"})
+    assert resp.status_code == 400
+    resp = client.post("/api/settings", json={"key": "timezone", "value": "local"})
+    assert resp.status_code == 200
+    assert clock.zone_name() == "local"
 
 
 def test_notify_settings_validators(client: FlaskClient) -> None:

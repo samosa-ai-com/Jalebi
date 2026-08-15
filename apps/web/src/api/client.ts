@@ -147,6 +147,8 @@ export const api = {
     system_prompt: string;
     cadence_cron: string;
     scope_branch?: string | null;
+    cli?: string | null;
+    model?: string | null;
     enabled?: boolean;
     notify_ntfy?: boolean;
   }) => request<Screen>("/api/screenings", { method: "POST", body: JSON.stringify(input) }),
@@ -157,6 +159,8 @@ export const api = {
       system_prompt: string;
       cadence_cron: string;
       scope_branch: string | null;
+      cli: string | null;
+      model: string | null;
       enabled: boolean;
       notify_ntfy: boolean;
     }>
@@ -167,6 +171,8 @@ export const api = {
       method: "POST",
     }),
   getScreenRuns: (id: number) => request<ScreeningRun[]>(`/api/screenings/${id}/runs`),
+  getRepoBranches: (repoId: number) =>
+    request<{ full_name: string; branches: string[] }>(`/api/repos/${repoId}/branches`),
   registerWebhook: (repoId: number) =>
     request<{ full_name: string; webhook_url: string; registered: boolean }>(
       `/api/repos/${repoId}/webhook`,

@@ -18,7 +18,8 @@ import re
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from jalebi.db import CatalogAgent, utcnow
+from jalebi import clock
+from jalebi.db import CatalogAgent, now
 
 AGENT_KINDS = ("general", "reviewer")
 ALLOWED_CLIS = ("opencode",)
@@ -157,7 +158,7 @@ def create_agent(
         skills_json=json.dumps(skills) if skills else None,
         custom_instructions=custom_instructions,
         enabled=enabled,
-        created_at=utcnow(),
+        created_at=now(),
     )
     session.add(row)
     session.commit()
@@ -261,5 +262,5 @@ def agent_to_dict(agent: CatalogAgent) -> dict[str, object]:
         "skills": skills(agent),
         "custom_instructions": agent.custom_instructions,
         "enabled": agent.enabled,
-        "created_at": agent.created_at.isoformat(),
+        "created_at": clock.to_iso(agent.created_at),
     }

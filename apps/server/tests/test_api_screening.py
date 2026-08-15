@@ -67,6 +67,32 @@ def test_create_validates(client, repo_row):
     assert "cadence_cron" in res.get_json()["error"]
 
 
+def test_create_update_cli_model_pins(client, repo_row):
+    """Screens accept backend (cli) + model pins; an unknown cli is rejected."""
+    res = client.post(
+        "/api/screenings", json=_payload(repo_row, cli="opencode", model="m-9")
+    )
+    assert res.status_code == 201
+    body = res.get_json()
+    assert body["cli"] == "opencode"
+    assert body["model"] == "m-9"
+
+    res = client.post("/api/screenings", json=_payload(repo_row, cli="codex"))
+    assert res.status_code == 400
+    assert "unsupported agent cli" in res.get_json()["error"]
+
+    # Update pins, then clear them with an empty string.
+    sid = body["id"]
+    res = client.put(f"/api/screenings/{sid}", json={"model": "m-10"})
+    assert res.status_code == 200
+    assert res.get_json()["model"] == "m-10"
+    res = client.put(f"/api/screenings/{sid}", json={"cli": "", "model": ""})
+    assert res.status_code == 200
+    cleared = res.get_json()
+    assert cleared["cli"] is None
+    assert cleared["model"] is None
+
+
 def test_get_update_delete(client, repo_row):
     created = client.post("/api/screenings", json=_payload(repo_row)).get_json()
     sid = created["id"]

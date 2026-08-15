@@ -23,7 +23,8 @@ import json
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from jalebi.db import EventDelivery, Repo, ReviewAssignment, Task, TriggerRule, utcnow
+from jalebi import clock
+from jalebi.db import EventDelivery, Repo, ReviewAssignment, Task, TriggerRule, now
 
 RULE_ACTIONS = ("start_review", "triage_issue", "create_task", "rerun_review")
 
@@ -90,7 +91,7 @@ def record_delivery(
         repo_id=repo_id,
         repo_full_name=repo_full_name,
         payload_json=payload_json,
-        received_at=utcnow(),
+        received_at=now(),
         status=status,
         result=json.dumps(result) if result else None,
     )
@@ -116,7 +117,7 @@ def delivery_to_dict(delivery: EventDelivery) -> dict[str, object]:
         "action": delivery.action,
         "repo_id": delivery.repo_id,
         "repo_full_name": delivery.repo_full_name,
-        "received_at": delivery.received_at.isoformat(),
+        "received_at": clock.to_iso(delivery.received_at),
         "status": delivery.status,
         "result": json.loads(delivery.result) if delivery.result else None,
     }
@@ -168,7 +169,7 @@ def create_rule(
         agent_ids_json=json.dumps(agent_ids) if agent_ids else None,
         custom_instructions=custom_instructions or None,
         enabled=enabled,
-        created_at=utcnow(),
+        created_at=now(),
     )
     session.add(row)
     session.commit()
@@ -228,7 +229,7 @@ def rule_to_dict(rule: TriggerRule) -> dict[str, object]:
         "agent_ids": json.loads(rule.agent_ids_json) if rule.agent_ids_json else [],
         "custom_instructions": rule.custom_instructions,
         "enabled": rule.enabled,
-        "created_at": rule.created_at.isoformat(),
+        "created_at": clock.to_iso(rule.created_at),
     }
 
 
@@ -464,7 +465,7 @@ def _dispatch_rerun_review(session, queue, repo, context) -> list[dict]:
         ):
             continue
         task.status = "queued"
-        task.updated_at = utcnow()
+        task.updated_at = now()
         queue.enqueue(task.id)
         summary.append({"type": "rerun_review", "task_id": task.id})
     session.commit()

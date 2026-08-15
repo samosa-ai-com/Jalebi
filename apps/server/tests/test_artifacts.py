@@ -8,7 +8,7 @@ from sqlalchemy import text
 
 from jalebi import artifacts, repos, secrets, settings, tasks
 from jalebi.adapters.types import AgentEvent
-from jalebi.db import Artifact, Run, utcnow
+from jalebi.db import Artifact, Run, now
 from jalebi.git_workspace import GitWorkspace
 
 FULL_NAME = "owner/repo"
@@ -118,7 +118,7 @@ def test_capture_untracked_files_only(session, repo_row, tmp_path) -> None:
     (worktree / "node_modules").mkdir()
     (worktree / "node_modules" / "x.js").write_text("ignored\n")
 
-    run = Run(task_id=task.id, seq=1, status="done", started_at=utcnow())
+    run = Run(task_id=task.id, seq=1, status="done", started_at=now())
     session.add(run)
     session.commit()
 
@@ -140,7 +140,7 @@ def test_capture_untracked_files_only(session, repo_row, tmp_path) -> None:
 
 def test_prune_removes_expired_artifacts(session, repo_row, tmp_path) -> None:
     task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="p")
-    run = Run(task_id=task.id, seq=1, status="done", started_at=utcnow())
+    run = Run(task_id=task.id, seq=1, status="done", started_at=now())
     session.add(run)
     session.flush()
 
@@ -149,13 +149,14 @@ def test_prune_removes_expired_artifacts(session, repo_row, tmp_path) -> None:
     (store / "old.log").write_text("old")
     (store / "new.log").write_text("new")
 
-    old = Artifact(run_id=run.id, path="old.log", size=3, created_at=utcnow())
-    new = Artifact(run_id=run.id, path="new.log", size=3, created_at=utcnow())
+    old = Artifact(run_id=run.id, path="old.log", size=3, created_at=now())
+    new = Artifact(run_id=run.id, path="new.log", size=3, created_at=now())
     session.add_all([old, new])
     session.flush()
     session.execute(
         text(
-            "UPDATE artifacts SET created_at = datetime('now', '-30 days') WHERE path = 'old.log'"
+            "UPDATE artifacts SET created_at = datetime('now', 'localtime', '-30 days') "
+            "WHERE path = 'old.log'"
         )
     )
     session.commit()
@@ -207,7 +208,7 @@ def test_run_captures_artifacts_from_worktree(q, session, repo_row, monkeypatch)
 def test_download_artifact_endpoint(app, session, repo_row) -> None:
     settings.set_setting(session, "auto_publish", False)
     task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
-    run = Run(task_id=task.id, seq=1, status="done", started_at=utcnow())
+    run = Run(task_id=task.id, seq=1, status="done", started_at=now())
     session.add(run)
     session.commit()
 
@@ -233,7 +234,7 @@ def test_download_artifact_endpoint(app, session, repo_row) -> None:
 def test_run_dict_includes_artifacts(app, session, repo_row) -> None:
     settings.set_setting(session, "auto_publish", False)
     task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
-    run = Run(task_id=task.id, seq=1, status="done", started_at=utcnow())
+    run = Run(task_id=task.id, seq=1, status="done", started_at=now())
     session.add(run)
     session.flush()
     session.add(Artifact(run_id=run.id, path="a.txt", size=3))
@@ -273,7 +274,7 @@ def test_capture_excludes_jalebi_internal(tmp_path, session) -> None:
     (repo / ".jalebi").mkdir(exist_ok=True)
     (repo / ".jalebi" / "pr.md").write_text("# title\n")
 
-    run = Run(task_id=task.id, seq=1, status="done", started_at=utcnow(), finished_at=utcnow())
+    run = Run(task_id=task.id, seq=1, status="done", started_at=now(), finished_at=now())
     session.add(run)
     session.flush()
 
@@ -291,7 +292,7 @@ def test_capture_masks_text_files(session, repo_row, tmp_path) -> None:
     from jalebi.masking import build_masker
 
     task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="p")
-    run = Run(task_id=task.id, seq=1, status="done", started_at=utcnow())
+    run = Run(task_id=task.id, seq=1, status="done", started_at=now())
     session.add(run)
     session.commit()
 
@@ -319,7 +320,7 @@ def test_capture_masks_text_files(session, repo_row, tmp_path) -> None:
 
 def test_capture_skips_oversized_files(session, repo_row, tmp_path, monkeypatch) -> None:
     task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="p")
-    run = Run(task_id=task.id, seq=1, status="done", started_at=utcnow())
+    run = Run(task_id=task.id, seq=1, status="done", started_at=now())
     session.add(run)
     session.commit()
 

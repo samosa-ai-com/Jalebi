@@ -19,7 +19,7 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from jalebi.db import Artifact, utcnow
+from jalebi.db import Artifact, now
 
 ARTIFACT_MAX_BYTES = 10 * 1024 * 1024
 
@@ -101,7 +101,7 @@ def prune_artifacts(session: Session, data_dir: Path, ttl_days: int) -> int:
     """Delete artifact rows (and stored files) older than ``ttl_days``; returns count."""
     if ttl_days <= 0:
         return 0
-    cutoff = utcnow() - timedelta(days=ttl_days)
+    cutoff = now() - timedelta(days=ttl_days)
     rows = list(
         session.execute(select(Artifact).where(Artifact.created_at < cutoff)).scalars()
     )

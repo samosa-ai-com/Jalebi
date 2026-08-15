@@ -9,7 +9,7 @@ import pytest
 
 from jalebi import repos, secrets, settings, tasks
 from jalebi.adapters.types import AgentEvent
-from jalebi.db import Run, utcnow
+from jalebi.db import Run, now
 from jalebi.git_workspace import GitWorkspace
 
 FULL_NAME = "owner/repo"
@@ -153,7 +153,7 @@ def test_recover_marks_interrupted_and_kills_orphan(q, session, repo_row) -> Non
         seq=1,
         status="running",
         pid=99999999,  # nonexistent pid -> _kill_pid is a safe no-op
-        started_at=utcnow(),
+        started_at=now(),
     )
     session.add(run)
     task.status = "running"
@@ -525,8 +525,8 @@ def test_failed_followup_auto_recovers(q, session, repo_row, monkeypatch) -> Non
         seq=1,
         session_id="ses_orig",
         status="done",
-        started_at=utcnow(),
-        finished_at=utcnow(),
+        started_at=now(),
+        finished_at=now(),
     )
     session.add(run)
     task.status = "done"
@@ -564,8 +564,8 @@ def test_auto_recovery_resume_not_recorded_as_user_followup(
         seq=1,
         session_id="ses_orig",
         status="done",
-        started_at=utcnow(),
-        finished_at=utcnow(),
+        started_at=now(),
+        finished_at=now(),
     )
     session.add(run)
     task.status = "done"
@@ -604,11 +604,11 @@ def test_maybe_recover_stalled_restarts_fresh(q, session, repo_row, monkeypatch)
         seq=1,
         session_id="ses_wedged",
         status="failed",
-        started_at=utcnow(),
-        finished_at=utcnow(),
+        started_at=now(),
+        finished_at=now(),
         steps_json=json.dumps(
             [
-                {"type": "message", "text": "working", "ts": utcnow().isoformat()},
+                {"type": "message", "text": "working", "ts": now().isoformat()},
                 {
                     "type": "error",
                     "stall": True,
@@ -617,7 +617,7 @@ def test_maybe_recover_stalled_restarts_fresh(q, session, repo_row, monkeypatch)
                         "and was terminated. Re-run the task or check the "
                         "agent/opencode configuration."
                     ),
-                    "ts": utcnow().isoformat(),
+                    "ts": now().isoformat(),
                 },
             ]
         ),
@@ -656,8 +656,8 @@ def test_maybe_recover_timeout_resumes_session(q, session, repo_row, monkeypatch
         seq=1,
         session_id="ses_ok",
         status="timed_out",
-        started_at=utcnow(),
-        finished_at=utcnow(),
+        started_at=now(),
+        finished_at=now(),
         steps_json="[]",
     )
     session.add(run)
@@ -690,8 +690,8 @@ def test_maybe_recover_no_session_restarts_fresh(q, session, repo_row, monkeypat
         seq=1,
         session_id=None,
         status="failed",
-        started_at=utcnow(),
-        finished_at=utcnow(),
+        started_at=now(),
+        finished_at=now(),
         steps_json="[]",
     )
     session.add(run)
@@ -722,8 +722,8 @@ def test_no_recovery_when_disabled(q, session, repo_row, monkeypatch) -> None:
         seq=1,
         session_id="ses_x",
         status="failed",
-        started_at=utcnow(),
-        finished_at=utcnow(),
+        started_at=now(),
+        finished_at=now(),
         steps_json="[]",
     )
     session.add(run)

@@ -21,6 +21,7 @@ Findings are stored as JSON on each run (`findings_json`), not a separate table.
 
 - `jalebi/screening.py::ScreeningScheduler` — a daemon thread (`jalebi-screening`) started in `app.main()` next to the queue. Wakes every **60s** and runs due screens **one at a time** (screening is low-frequency; it never competes with the task queue's concurrency).
 - Cadence matching uses `jalebi/cron.py`, a minimal 5-field cron matcher (`minute hour dom month dow`; supports `*`, lists, ranges, steps). No new dependency (PRD Goal #10).
+- **Time zone:** cadence is matched against the app's wall clock (`jalebi/clock.py::now`) — the **configured timezone** setting, defaulting to the machine's **local** zone. A cron like `30 1 * * *` fires at 1:30 **local**. (The earlier build matched UTC, so non-UTC owners' cadences never fired.) The `timezone` setting (`local` or an IANA name) is a live setting on the Settings page.
 - **Baseline dedup:** a screen skips a tick when its last terminal run (`done`/`failed`) audited the **same HEAD** (the audited `head_sha` is the dedup watermark). "Run now" (`POST /api/screenings/<id>/run`) forces a run regardless.
 
 ## 4. Run execution (read-only)
@@ -30,7 +31,7 @@ Each screening run:
 1. Resolves the repo's bound PAT account (`secrets.resolve_token`); no account → the run fails with a clear error.
 2. Ensures the mirror, resolves the branch HEAD (`GitWorkspace.current_remote_sha`).
 3. Creates a **detached, read-only worktree** at that HEAD (`GitWorkspace.create_detached_worktree`), with the `gh`-guard `opencode.json` written in (so the agent can never push or act via `gh`).
-4. Drives the opencode adapter with the screen's `system_prompt` + a structured contract: *"return your findings as a single JSON array"*.
+4. Drives the opencode adapter with the screen's `system_prompt` + a structured contract: *"return your findings as a single JSON array"*. Screens can pin a **backend** (`cli`, default `opencode`) and a **model** (optional); the engine resolves `get_adapter(screen.cli or "opencode")` and passes `model=screen.model or None`.
 5. Streams events to a per-run SSE bus (`/api/screenings/runs/<id>/events`), masking all output with the run masker (PATs + `secret_patterns`).
 6. Parses the findings JSON (`screening.parse_findings`, defensive: fenced-block tolerant, string-literal-aware bracket matching, non-array → `[]`), **masks each finding's string fields**, stores `findings_json` + masked `output_json`, and marks the run `done` (or `failed` on agent error / run error).
 7. **Best-effort ntfy push** when `notify_ntfy` and findings exist — a summary of the count + first findings. A dead ntfy server never fails the run.
@@ -54,7 +55,7 @@ Each screening run:
 
 ## 6. UI
 
-`/screenings` (moved from the ComingSoon placeholder to the main nav): screen cards (name, repo+branch scope, cadence, enabled/notify dots, **Run now**, **History**, **Delete**); a create/edit form with the **starter-template picker**; and per-run history with findings rendered by severity, each with a **"New task from finding"** button that creates a prefilled `screen_finding` task.
+`/screenings` (moved from the ComingSoon placeholder to the main nav): screen cards (name, repo+branch scope, cadence, enabled/notify dots, **Run now**, **History**, **Edit**, **Delete**); a create/edit form with the **starter-template picker** (the chosen template stays visible), a **scope-branch dropdown** (from `GET /api/repos/<id>/branches`), **cron presets** plus the editable field, optional **Backend/Model** pins (from `/api/models`), and the Enabled/Notify toggles (reachable via Edit). Run history **polls every 5s** while the section is open, shows a **"Running…"** state for in-flight runs (never a misleading "No findings."), and renders findings by severity with a **"New task from finding"** button that creates a prefilled `screen_finding` task.
 
 ## 7. Reference
 

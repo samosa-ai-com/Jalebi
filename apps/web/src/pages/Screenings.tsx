@@ -1,8 +1,16 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import type { Repo, Screen, ScreenTemplate, ScreeningRun } from "../types";
 
 const DEFAULT_CRON = "0 6 * * 1";
+
+const CRON_PRESETS: { label: string; value: string }[] = [
+  { label: "Every 5 min", value: "*/5 * * * *" },
+  { label: "Hourly", value: "0 * * * *" },
+  { label: "Daily 6 AM", value: "0 6 * * *" },
+  { label: "Weekly Mon 6 AM", value: "0 6 * * 1" },
+  { label: "Weekdays 9 AM", value: "0 9 * * 1-5" },
+];
 
 const SEVERITY_STYLES: Record<string, string> = {
   critical: "bg-red-500/15 text-red-300 ring-red-500/30",
@@ -46,16 +54,44 @@ function ScreenForm({
   const [systemPrompt, setSystemPrompt] = useState(
     editing?.system_prompt ?? (templates[0]?.system_prompt ?? "")
   );
+  const [cli, setCli] = useState(editing?.cli ?? "");
+  const [model, setModel] = useState(editing?.model ?? "");
   const [enabled, setEnabled] = useState(editing?.enabled ?? true);
   const [notify, setNotify] = useState(editing?.notify_ntfy ?? true);
+  const [tpl, setTpl] = useState("");
+  const [branches, setBranches] = useState<string[]>([]);
+  const [models, setModels] = useState<string[]>([]);
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // Models for the Model dropdown (best-effort — a failure just means no options).
+  useEffect(() => {
+    api
+      .getModels()
+      .then((m) => setModels(m.models ?? []))
+      .catch(() => {});
+  }, []);
+
+  // Branch dropdown for the selected repo (best-effort).
+  const repoIdNum = repoId === "" ? null : Number(repoId);
+  useEffect(() => {
+    if (repoIdNum == null) return;
+    let cancelled = false;
+    api
+      .getRepoBranches(repoIdNum)
+      .then((r) => !cancelled && setBranches(r.branches ?? []))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [repoIdNum]);
 
   function applyTemplate(t: ScreenTemplate | undefined) {
     if (!t) return;
     setName(t.name);
     setCron(t.cadence_cron);
     setSystemPrompt(t.system_prompt);
+    setTpl(t.name);
   }
 
   async function save(e: React.FormEvent) {
@@ -73,6 +109,8 @@ function ScreenForm({
         scope_branch: scopeBranch.trim() || null,
         system_prompt: systemPrompt.trim(),
         cadence_cron: cron.trim(),
+        cli: cli || null,
+        model: model || null,
         enabled,
         notify_ntfy: notify,
       };
@@ -100,7 +138,7 @@ function ScreenForm({
         <div>
           <span className="mb-1.5 block text-xs font-medium text-ink-400">Starter template</span>
           <select
-            value=""
+            value={tpl}
             onChange={(e) => {
               const t = templates.find((x) => x.name === e.target.value);
               applyTemplate(t);
@@ -126,7 +164,10 @@ function ScreenForm({
           <span className="mb-1.5 block text-xs font-medium text-ink-400">Repo</span>
           <select
             value={repoId}
-            onChange={(e) => setRepoId(e.target.value === "" ? "" : Number(e.target.value))}
+            onChange={(e) => {
+              setRepoId(e.target.value === "" ? "" : Number(e.target.value));
+              setScopeBranch("");
+            }}
             className="field"
             disabled={isEdit}
           >
@@ -145,12 +186,22 @@ function ScreenForm({
           <span className="mb-1.5 block text-xs font-medium text-ink-400">
             Scope branch <span className="text-ink-600">(blank = default)</span>
           </span>
-          <input
+          <select
             value={scopeBranch}
             onChange={(e) => setScopeBranch(e.target.value)}
-            placeholder="main"
             className="field font-mono"
-          />
+            disabled={repoId === ""}
+          >
+            <option value="">default branch</option>
+            {branches.map((b) => (
+              <option key={b} value={b}>
+                {b}
+              </option>
+            ))}
+            {scopeBranch && !branches.includes(scopeBranch) && (
+              <option value={scopeBranch}>{scopeBranch}</option>
+            )}
+          </select>
         </label>
         <label>
           <span className="mb-1.5 block text-xs font-medium text-ink-400">
@@ -158,6 +209,20 @@ function ScreenForm({
           </span>
           <input value={cron} onChange={(e) => setCron(e.target.value)} className="field font-mono" />
         </label>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        {CRON_PRESETS.map((p) => (
+          <button
+            key={p.value}
+            type="button"
+            onClick={() => setCron(p.value)}
+            className="btn-ghost !px-2.5 !py-1 text-xs"
+          >
+            {p.label}
+          </button>
+        ))}
+        <span className="text-xs text-ink-500">— or type a cron like `30 1 * * *` (1:30 AM local).</span>
       </div>
 
       <label>
@@ -169,6 +234,28 @@ function ScreenForm({
           className="field resize-y"
         />
       </label>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <label>
+          <span className="mb-1.5 block text-xs font-medium text-ink-400">Backend</span>
+          <select value={cli} onChange={(e) => setCli(e.target.value)} className="field">
+            <option value="">default (opencode)</option>
+            <option value="opencode">opencode</option>
+          </select>
+        </label>
+        <label>
+          <span className="mb-1.5 block text-xs font-medium text-ink-400">Model</span>
+          <select value={model} onChange={(e) => setModel(e.target.value)} className="field">
+            <option value="">default (CLI default)</option>
+            {models.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+            {model && !models.includes(model) && <option value={model}>{model}</option>}
+          </select>
+        </label>
+      </div>
 
       <div className="flex flex-wrap items-center gap-6">
         <label className="flex items-center gap-2 text-sm">
@@ -197,16 +284,24 @@ function ScreenForm({
 function RunHistory({ screen }: { screen: Screen }) {
   const [runs, setRuns] = useState<ScreeningRun[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const mounted = useRef(true);
 
   const load = useCallback(() => {
     api
       .getScreenRuns(screen.id)
-      .then(setRuns)
-      .catch((e) => setError(e.message));
+      .then((r) => mounted.current && setRuns(r))
+      .catch((e) => mounted.current && setError(e.message));
   }, [screen.id]);
 
   useEffect(() => {
+    mounted.current = true;
     load();
+    // Poll so a running run's status flips to done without a manual refresh.
+    const id = window.setInterval(load, 5000);
+    return () => {
+      mounted.current = false;
+      window.clearInterval(id);
+    };
   }, [load]);
 
   if (runs.length === 0) {
@@ -215,75 +310,83 @@ function RunHistory({ screen }: { screen: Screen }) {
 
   return (
     <div className="space-y-3">
-      {runs.slice(0, 10).map((run) => (
-        <div key={run.id} className="rounded-lg border border-ink-800 p-3">
-          <div className="flex items-center gap-3">
-            <StatusPill status={run.status} />
-            <span className="font-mono text-xs text-ink-500">
-              {run.head_sha ? run.head_sha.slice(0, 12) : "—"}
-            </span>
-            <span className="ml-auto text-xs text-ink-500">
-              {run.started_at ? new Date(run.started_at).toLocaleString() : ""}
-            </span>
-          </div>
-          {run.findings.length > 0 ? (
-            <ul className="mt-3 space-y-2">
-              {run.findings.map((f, i) => (
-                <li key={i} className="flex flex-col gap-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span
-                      className={`rounded px-1.5 py-0.5 text-[11px] font-medium ring-1 ring-inset ${SEVERITY_STYLES[f.severity] ?? SEVERITY_STYLES.medium}`}
-                    >
-                      {f.severity}
-                    </span>
-                    <span className="text-sm text-ink-200">{f.title}</span>
-                    {f.file && (
-                      <span className="font-mono text-xs text-ink-500">
-                        {f.file}
-                        {f.line != null ? `:${f.line}` : ""}
+      {runs.slice(0, 10).map((run) => {
+        const active = run.status === "running" || run.status === "queued";
+        return (
+          <div key={run.id} className="rounded-lg border border-ink-800 p-3">
+            <div className="flex items-center gap-3">
+              <StatusPill status={run.status} />
+              <span className="font-mono text-xs text-ink-500">
+                {run.head_sha ? run.head_sha.slice(0, 12) : "—"}
+              </span>
+              <span className="ml-auto text-xs text-ink-500">
+                {run.started_at ? new Date(run.started_at).toLocaleString() : ""}
+              </span>
+            </div>
+            {active ? (
+              <p className="mt-2 text-xs text-syrup-300">
+                <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-syrup-400 align-middle" />{" "}
+                Running… check back shortly.
+              </p>
+            ) : run.findings.length > 0 ? (
+              <ul className="mt-3 space-y-2">
+                {run.findings.map((f, i) => (
+                  <li key={i} className="flex flex-col gap-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span
+                        className={`rounded px-1.5 py-0.5 text-[11px] font-medium ring-1 ring-inset ${SEVERITY_STYLES[f.severity] ?? SEVERITY_STYLES.medium}`}
+                      >
+                        {f.severity}
                       </span>
+                      <span className="text-sm text-ink-200">{f.title}</span>
+                      {f.file && (
+                        <span className="font-mono text-xs text-ink-500">
+                          {f.file}
+                          {f.line != null ? `:${f.line}` : ""}
+                        </span>
+                      )}
+                    </div>
+                    {f.detail && <p className="text-xs text-ink-400">{f.detail}</p>}
+                    {f.recommendation && (
+                      <p className="text-xs text-ink-500">
+                        <span className="text-ink-400">Recommendation:</span> {f.recommendation}
+                      </p>
                     )}
-                  </div>
-                  {f.detail && <p className="text-xs text-ink-400">{f.detail}</p>}
-                  {f.recommendation && (
-                    <p className="text-xs text-ink-500">
-                      <span className="text-ink-400">Recommendation:</span> {f.recommendation}
-                    </p>
-                  )}
-                  <button
-                    type="button"
-                    className="btn-ghost mt-1 w-fit !px-2 !py-1 text-xs"
-                    onClick={async () => {
-                      try {
-                        await api.createTask({
-                          repo_id: screen.repo_id,
-                          type: "screen_finding",
-                          prompt: `Fix this ${f.severity} finding from the "${screen.name}" screen${
-                            f.file ? ` in ${f.file}${f.line != null ? `:${f.line}` : ""}` : ""
-                          }:\n\n${f.title}\n\n${f.detail ?? ""}${
-                            f.recommendation ? `\n\nRecommended: ${f.recommendation}` : ""
-                          }`,
-                          target_branch: screen.scope_branch ?? undefined,
-                          publish_mode: "manual",
-                        });
-                        window.alert("Created a screen_finding task.");
-                      } catch (err) {
-                        window.alert(err instanceof Error ? err.message : "failed to create task");
-                      }
-                    }}
-                  >
-                    New task from finding
-                  </button>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="mt-2 text-xs text-ink-500">
-              {run.error ? `Error: ${run.error}` : "No findings."}
-            </p>
-          )}
-        </div>
-      ))}
+                    <button
+                      type="button"
+                      className="btn-ghost mt-1 w-fit !px-2 !py-1 text-xs"
+                      onClick={async () => {
+                        try {
+                          await api.createTask({
+                            repo_id: screen.repo_id,
+                            type: "screen_finding",
+                            prompt: `Fix this ${f.severity} finding from the "${screen.name}" screen${
+                              f.file ? ` in ${f.file}${f.line != null ? `:${f.line}` : ""}` : ""
+                            }:\n\n${f.title}\n\n${f.detail ?? ""}${
+                              f.recommendation ? `\n\nRecommended: ${f.recommendation}` : ""
+                            }`,
+                            target_branch: screen.scope_branch ?? undefined,
+                            publish_mode: "manual",
+                          });
+                          window.alert("Created a screen_finding task.");
+                        } catch (err) {
+                          window.alert(err instanceof Error ? err.message : "failed to create task");
+                        }
+                      }}
+                    >
+                      New task from finding
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-2 text-xs text-ink-500">
+                {run.error ? `Error: ${run.error}` : "No findings."}
+              </p>
+            )}
+          </div>
+        );
+      })}
       {error && <p className="text-sm text-red-400">{error}</p>}
     </div>
   );
@@ -295,12 +398,14 @@ function ScreenCard({
   onEdited,
   onDeleted,
   onOpen,
+  onEdit,
 }: {
   screen: Screen;
   repos: Repo[];
   onEdited: () => void;
   onDeleted: () => void;
   onOpen: () => void;
+  onEdit: () => void;
 }) {
   const [running, setRunning] = useState(false);
   const repo = repos.find((r) => r.id === screen.repo_id);
@@ -334,7 +439,7 @@ function ScreenCard({
           />
           <span
             title={screen.notify_ntfy ? "ntfy on" : "ntfy off"}
-            className={`h-2.5 w-2.5 rounded-full ${screen.notify_ntfy ? "bg-syrup-500" : "bg-ink-600"}`}
+            className={`h-2.5 w-2.5 rounded-full ${screen.notify_ntfy ? "bg-green-400" : "bg-ink-600"}`}
           />
         </div>
       </div>
@@ -347,6 +452,9 @@ function ScreenCard({
         </button>
         <button type="button" onClick={onOpen} className="btn-ghost !px-2.5 !py-1 text-xs">
           History
+        </button>
+        <button type="button" onClick={onEdit} className="btn-ghost !px-2.5 !py-1 text-xs">
+          Edit
         </button>
         <button
           type="button"
@@ -416,6 +524,7 @@ export default function Screenings() {
       {showForm && (
         <div className="animate-fade-up">
           <ScreenForm
+            key={editing?.id ?? "new"}
             repos={repos}
             templates={templates}
             editing={editing}
@@ -460,6 +569,10 @@ export default function Screenings() {
                 onEdited={load}
                 onDeleted={load}
                 onOpen={() => setOpenRuns(openRuns === s.id ? null : s.id)}
+                onEdit={() => {
+                  setEditing(s);
+                  setShowForm(true);
+                }}
               />
               {openRuns === s.id && (
                 <div className="mt-2 rounded-lg border border-ink-800 p-4 animate-fade-up">

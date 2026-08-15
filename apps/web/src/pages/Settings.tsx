@@ -336,6 +336,20 @@ export default function Settings() {
       ),
     },
     {
+      key: "timezone",
+      label: "Timezone",
+      desc: "The app's wall clock (screening cron + all timestamps). `local` = this machine's zone; or an IANA name like Asia/Kolkata.",
+      control: (
+        <input
+          type="text"
+          defaultValue={settings.timezone ?? "local"}
+          placeholder="local"
+          onBlur={(e) => save("timezone", e.target.value.trim() || "local")}
+          className="field w-44 font-mono"
+        />
+      ),
+    },
+    {
       key: "retry_policy",
       label: "Auto-recovery",
       desc: "Re-run failed / timed-out / stalled tasks automatically until they deliver their output (each run still respects the timeout; notifications keep you informed).",

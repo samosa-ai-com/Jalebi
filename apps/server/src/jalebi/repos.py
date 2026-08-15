@@ -9,6 +9,7 @@ the GitHub page) simply flips it back.
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from jalebi import clock
 from jalebi.db import Repo
 
 
@@ -60,5 +61,5 @@ def repo_to_dict(repo: Repo) -> dict[str, object]:
         "webhook_registered": repo.webhook_registered,
         "poll_fallback": repo.poll_fallback,
         "check_runs_enabled": repo.check_runs_enabled,
-        "last_checked_at": repo.last_checked_at.isoformat() if repo.last_checked_at else None,
+        "last_checked_at": clock.to_iso(repo.last_checked_at) if repo.last_checked_at else None,
     }

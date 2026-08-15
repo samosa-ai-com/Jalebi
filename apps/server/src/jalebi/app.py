@@ -6,11 +6,12 @@ import re
 import threading
 import time
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from flask import Flask, Response, current_app, g, jsonify, request, send_from_directory
 from flask.typing import ResponseReturnValue
 
-from jalebi import artifacts, db, masking, notify, secrets, settings
+from jalebi import artifacts, clock, db, masking, notify, secrets, settings
 from jalebi.adapters import get_adapter
 from jalebi.config import Config, load_config, repo_root
 from jalebi.queue import TaskQueue
@@ -66,6 +67,20 @@ def _valid_retry_policy(v) -> bool:
     return True
 
 
+def _valid_timezone(v) -> bool:
+    """``timezone`` setting: ``"local"`` (system zone) or a valid IANA name."""
+    if not isinstance(v, str):
+        return False
+    name = v.strip() or "local"
+    if name == "local":
+        return True
+    try:
+        ZoneInfo(name)
+        return True
+    except ZoneInfoNotFoundError:
+        return False
+
+
 _SETTING_VALIDATORS = {
     "concurrency": lambda v: isinstance(v, int) and 0 <= v <= 64,
     "auto_publish": lambda v: isinstance(v, bool),
@@ -88,6 +103,7 @@ _SETTING_VALIDATORS = {
         v == "" or v.startswith(("http://", "https://"))
     ),
     "webhook_secret": lambda v: isinstance(v, str),
+    "timezone": _valid_timezone,
 }
 
 
@@ -235,6 +251,10 @@ def create_app(config: Config | None = None) -> Flask:
         session = db.get_session()
         try:
             settings.seed_defaults(session)
+            # Sync the app wall clock to the configured timezone (default: the
+            # machine's local zone) so the screening scheduler's cron matching
+            # and every timestamp follow it.
+            clock.set_zone(str(settings.get_setting(session, "timezone") or ""))
         finally:
             session.close()
 
@@ -303,6 +323,10 @@ def create_app(config: Config | None = None) -> Flask:
         settings.set_setting(session, key, value)
         if key == "concurrency" and isinstance(value, int):
             current_app.config["JALEBI_QUEUE"].set_concurrency(value)
+        if key == "timezone":
+            # The wall clock is a module global; re-sync it so the new zone
+            # applies immediately (scheduler cron matching + timestamps).
+            clock.set_zone(str(value or ""))
         response_value = settings.SECRET_MASK if key == "webhook_secret" and value else value
         return jsonify({key: response_value}), 200
 

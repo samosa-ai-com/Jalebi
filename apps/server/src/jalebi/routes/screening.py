@@ -129,6 +129,8 @@ def create_screen_route() -> ResponseReturnValue:
             system_prompt=str(payload.get("system_prompt") or ""),
             cadence_cron=str(payload.get("cadence_cron") or ""),
             scope_branch=payload.get("scope_branch"),
+            cli=payload.get("cli"),
+            model=payload.get("model"),
             enabled=bool(payload.get("enabled", True)),
             notify_ntfy=bool(payload.get("notify_ntfy", True)),
         )
@@ -163,6 +165,8 @@ def update_screen_route(screen_id: int) -> ResponseReturnValue:
             system_prompt=payload.get("system_prompt"),
             cadence_cron=payload.get("cadence_cron"),
             scope_branch=payload.get("scope_branch"),
+            cli=payload.get("cli"),
+            model=payload.get("model"),
             enabled=payload.get("enabled"),
             notify_ntfy=payload.get("notify_ntfy"),
         )

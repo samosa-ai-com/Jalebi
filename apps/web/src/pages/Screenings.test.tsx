@@ -21,6 +21,8 @@ const SCREENS = [
     system_prompt: "Audit security.",
     cadence_cron: "0 6 * * 1",
     scope_branch: null,
+    cli: null,
+    model: null,
     enabled: true,
     notify_ntfy: true,
     created_at: "2026-08-09T10:00:00",
@@ -52,6 +54,20 @@ const RUNS = [
   },
 ];
 
+const RUNNING_RUNS = [
+  {
+    id: 2,
+    screening_id: 7,
+    head_sha: "def456",
+    status: "running",
+    started_at: "2026-08-09T12:00:00",
+    finished_at: null,
+    findings: [],
+    output: null,
+    error: null,
+  },
+];
+
 function makeFetchMock() {
   return vi.fn(async (url: string, init?: RequestInit) => {
     const method = init?.method ?? "GET";
@@ -62,6 +78,12 @@ function makeFetchMock() {
     if (u === "/api/repos") {
       return { ok: true, json: async () => REPOS };
     }
+    if (u === "/api/repos/1/branches") {
+      return { ok: true, json: async () => ({ full_name: "owner/repo", branches: ["main", "dev"] }) };
+    }
+    if (u === "/api/models") {
+      return { ok: true, json: async () => ({ cli: "opencode", models: ["opencode-go/deepseek-v4-flash"] }) };
+    }
     if (u === "/api/screenings") {
       return { ok: true, json: async () => SCREENS };
     }
@@ -69,6 +91,9 @@ function makeFetchMock() {
       return { ok: true, json: async () => RUNS };
     }
     if (u === "/api/screenings/7" && method === "POST") {
+      return { ok: true, json: async () => ({ ok: true }) };
+    }
+    if (u === "/api/screenings/7" && method === "PUT") {
       return { ok: true, json: async () => ({ ok: true }) };
     }
     if (u === "/api/screenings/7" && method === "DELETE") {
@@ -138,5 +163,69 @@ describe("Screenings", () => {
       const body = JSON.parse(call?.[1]?.body as string);
       expect(body.type).toBe("screen_finding");
     });
+  });
+
+  it("shows the selected starter template instead of the placeholder", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Screenings />);
+    await screen.findByText("Security posture");
+    await userEvent.click(screen.getByRole("button", { name: "New screen" }));
+    const tplSelect = screen.getByDisplayValue("Pick a starter screen…") as HTMLSelectElement;
+    await userEvent.selectOptions(tplSelect, "Security posture");
+    expect(tplSelect.value).toBe("Security posture");
+  });
+
+  it("populates the scope branch dropdown from the repo's branches", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Screenings />);
+    await screen.findByText("Security posture");
+    await userEvent.click(screen.getByRole("button", { name: "New screen" }));
+    await userEvent.selectOptions(screen.getByLabelText("Repo"), "1");
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find((c) => c[0] === "/api/repos/1/branches");
+      expect(call).toBeTruthy();
+    });
+    const scope = screen.getByLabelText(/Scope branch/) as HTMLSelectElement;
+    expect([...scope.options].map((o) => o.value)).toEqual(
+      expect.arrayContaining(["main", "dev"])
+    );
+  });
+
+  it("edits a screen from the card and saves via PUT", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Screenings />);
+    await screen.findByText("Security posture");
+    await userEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(await screen.findByText("Edit screen — Security posture")).toBeInTheDocument();
+    await userEvent.clear(screen.getByLabelText("Name"));
+    await userEvent.type(screen.getByLabelText("Name"), "Renamed");
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find((c) => c[0] === "/api/screenings/7" && c[1]?.method === "PUT");
+      expect(call).toBeTruthy();
+      const body = JSON.parse(call?.[1]?.body as string);
+      expect(body.name).toBe("Renamed");
+    });
+  });
+
+  it("shows a running state instead of 'No findings.' for an in-flight run", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      const u = url as string;
+      if (u === "/api/screenings/templates") return { ok: true, json: async () => TEMPLATES };
+      if (u === "/api/repos") return { ok: true, json: async () => REPOS };
+      if (u === "/api/screenings") return { ok: true, json: async () => SCREENS };
+      if (u === "/api/screenings/7/runs") return { ok: true, json: async () => RUNNING_RUNS };
+      throw new Error(`unexpected fetch: ${method} ${u}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Screenings />);
+    await screen.findByText("Security posture");
+    await userEvent.click(screen.getByRole("button", { name: "History" }));
+    expect(await screen.findByText(/Running…/)).toBeInTheDocument();
+    expect(screen.queryByText("No findings.")).not.toBeInTheDocument();
   });
 });

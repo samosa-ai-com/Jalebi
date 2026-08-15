@@ -23,16 +23,16 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from datetime import UTC, datetime
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from jalebi import masking, notify, secrets, settings, worktree_bootstrap
-from jalebi.adapters import get_adapter
+from jalebi import clock, masking, notify, secrets, settings, worktree_bootstrap
+from jalebi.adapters import available_adapters, get_adapter
 from jalebi.config import Config
 from jalebi.cron import CronError, cron_matches_datetime
-from jalebi.db import Repo, Screening, ScreeningRun, utcnow
+from jalebi.db import Repo, Screening, ScreeningRun, now
 from jalebi.events import TaskEvents
 from jalebi.git_workspace import GitWorkspace
 from jalebi.queue import _build_agent_env  # the pinned, gh-guarded agent env
@@ -54,11 +54,6 @@ _TERMINAL = ("done", "failed")
 
 class ScreeningError(Exception):
     """A screening operation failed for a domain reason."""
-
-
-def utc_now() -> datetime:
-    """Naive UTC now (matches ``db.utcnow``)."""
-    return datetime.now(UTC).replace(tzinfo=None)
 
 
 def parse_findings(text: str) -> list[dict[str, object]]:
@@ -191,10 +186,12 @@ def screen_to_dict(screen: Screening) -> dict[str, object]:
         "system_prompt": screen.system_prompt,
         "cadence_cron": screen.cadence_cron,
         "scope_branch": screen.scope_branch,
+        "cli": screen.cli,
+        "model": screen.model,
         "enabled": screen.enabled,
         "notify_ntfy": screen.notify_ntfy,
-        "created_at": screen.created_at.isoformat(),
-        "updated_at": screen.updated_at.isoformat(),
+        "created_at": clock.to_iso(screen.created_at),
+        "updated_at": clock.to_iso(screen.updated_at),
     }
 
 
@@ -220,8 +217,8 @@ def run_to_dict(run: ScreeningRun) -> dict[str, object]:
         "screening_id": run.screening_id,
         "head_sha": run.head_sha,
         "status": run.status,
-        "started_at": run.started_at.isoformat() if run.started_at else None,
-        "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+        "started_at": clock.to_iso(run.started_at) if run.started_at else None,
+        "finished_at": clock.to_iso(run.finished_at) if run.finished_at else None,
         "findings": findings,
         "output": output,
         "error": run.error,
@@ -236,6 +233,19 @@ def get_screen(session: Session, screen_id: int) -> Screening | None:
     return session.get(Screening, screen_id)
 
 
+def _normalize_cli(cli: str | None) -> str | None:
+    """Normalize a screen's backend pin: empty/None → None (default adapter)."""
+    cli = (cli or "").strip() or None
+    if cli is not None and cli not in available_adapters():
+        raise ScreeningError(f"unsupported agent cli: {cli}")
+    return cli
+
+
+def _normalize_model(model: str | None) -> str | None:
+    """Normalize a screen's model pin: empty/None → None (adapter default)."""
+    return (model or "").strip() or None
+
+
 def create_screen(
     session: Session,
     *,
@@ -244,6 +254,8 @@ def create_screen(
     system_prompt: str,
     cadence_cron: str,
     scope_branch: str | None = None,
+    cli: str | None = None,
+    model: str | None = None,
     enabled: bool = True,
     notify_ntfy: bool = True,
 ) -> Screening:
@@ -254,7 +266,7 @@ def create_screen(
     if not cadence_cron or not str(cadence_cron).strip():
         raise ScreeningError("cadence_cron is required")
     try:
-        cron_matches_datetime(cadence_cron, utc_now())
+        cron_matches_datetime(cadence_cron, now())
     except CronError as exc:
         raise ScreeningError(f"invalid cadence_cron: {exc}") from exc
     repo = session.get(Repo, repo_id)
@@ -270,6 +282,8 @@ def create_screen(
         system_prompt=str(system_prompt).strip(),
         cadence_cron=str(cadence_cron).strip(),
         scope_branch=str(scope_branch).strip() if scope_branch else None,
+        cli=_normalize_cli(cli),
+        model=_normalize_model(model),
         enabled=bool(enabled),
         notify_ntfy=bool(notify_ntfy),
     )
@@ -287,6 +301,8 @@ def update_screen(
     system_prompt: str | None = None,
     cadence_cron: str | None = None,
     scope_branch: str | None = None,
+    cli: str | None = None,
+    model: str | None = None,
     enabled: bool | None = None,
     notify_ntfy: bool | None = None,
 ) -> Screening:
@@ -300,17 +316,21 @@ def update_screen(
         screen.system_prompt = str(system_prompt).strip()
     if cadence_cron is not None:
         try:
-            cron_matches_datetime(cadence_cron, utc_now())
+            cron_matches_datetime(cadence_cron, now())
         except CronError as exc:
             raise ScreeningError(f"invalid cadence_cron: {exc}") from exc
         screen.cadence_cron = str(cadence_cron).strip()
     if scope_branch is not None:
         screen.scope_branch = str(scope_branch).strip() or None
+    if cli is not None:
+        screen.cli = _normalize_cli(cli)
+    if model is not None:
+        screen.model = _normalize_model(model)
     if enabled is not None:
         screen.enabled = bool(enabled)
     if notify_ntfy is not None:
         screen.notify_ntfy = bool(notify_ntfy)
-    screen.updated_at = utcnow()
+    screen.updated_at = now()
     session.commit()
     session.refresh(screen)
     return screen
@@ -395,7 +415,7 @@ class ScreeningEngine:
             screening_id=screen.id,
             head_sha=head_sha,
             status="running",
-            started_at=utcnow(),
+            started_at=now(),
         )
         session.add(run)
         session.commit()
@@ -418,8 +438,10 @@ class ScreeningEngine:
             )
             worktree_bootstrap.write_opencode_guard(wt)
             prompt = build_screening_prompt(screen, repo, head_sha)
-            adapter = get_adapter("opencode")
-            handle = adapter.start(str(wt), prompt, env=_build_agent_env(token))
+            adapter = get_adapter(screen.cli or "opencode")
+            handle = adapter.start(
+                str(wt), prompt, model=screen.model or None, env=_build_agent_env(token)
+            )
             raw_messages: list[str] = []
             ended_with_error = False
             for event in handle.events():
@@ -430,7 +452,7 @@ class ScreeningEngine:
                     "type": event.type,
                     "phase": event.phase,
                     "text": masker(text[:MAX_STEP_TEXT]) if text else None,
-                    "ts": utcnow().isoformat(),
+                    "ts": clock.to_iso(now()),
                 }
                 self.events.publish(run.id, entry)
                 if event.type == "message" and text:
@@ -448,7 +470,7 @@ class ScreeningEngine:
                 findings = _mask_findings(parse_findings(output_text), masker)
                 run.findings_json = json.dumps(findings)
                 run.status = "done"
-            run.finished_at = utcnow()
+            run.finished_at = now()
             session.commit()
             if run.status == "done":
                 self._notify_findings(session, screen, repo, run, masker)
@@ -460,7 +482,7 @@ class ScreeningEngine:
                 pass
             run.status = "failed"
             run.error = str(exc)[:2000]
-            run.finished_at = utcnow()
+            run.finished_at = now()
             try:
                 session.commit()
             except Exception:  # noqa: BLE001 - best-effort; the run row is already recorded
@@ -539,13 +561,13 @@ class ScreeningScheduler:
             except Exception:  # noqa: BLE001 - a tick must never kill the loop
                 logger.exception("screening tick failed")
 
-    def tick(self, now: datetime | None = None) -> int:
+    def tick(self, now_dt: datetime | None = None) -> int:
         """Run every enabled, due screen once (baseline-deduped). Returns count run."""
         from jalebi import db  # local import avoids a cycle at module load
 
         session = db.Session()
         try:
-            due = self._due_screens(session, now or utc_now())
+            due = self._due_screens(session, now_dt or now())
             ran = 0
             for screen in due:
                 try:

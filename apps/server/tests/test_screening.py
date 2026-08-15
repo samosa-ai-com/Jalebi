@@ -47,6 +47,37 @@ def _install_adapter(monkeypatch, handle) -> None:
     monkeypatch.setattr("jalebi.screening.get_adapter", lambda cli: FakeAdapter())
 
 
+def test_run_screen_uses_screen_cli_and_model(session, repo_row, engine, monkeypatch):
+    """The engine resolves the screen's backend + model pins on the adapter."""
+    captured: dict[str, object] = {}
+
+    class FakeAdapter:
+        def start(self, cwd, prompt, model=None, env=None):
+            captured["model"] = model
+            return FakeHandle(_done_events("[]"))
+
+        def list_models(self):
+            return []
+
+    def fake_get_adapter(cli):
+        captured["cli"] = cli
+        return FakeAdapter()
+
+    monkeypatch.setattr("jalebi.screening.get_adapter", fake_get_adapter)
+    screen = screening.create_screen(
+        session,
+        repo_id=repo_row.id,
+        name="S",
+        system_prompt="P",
+        cadence_cron="0 6 * * 1",
+        cli="opencode",
+        model="m-9",
+    )
+    engine.run_screen(session, screen, force=True)
+    assert captured["cli"] == "opencode"
+    assert captured["model"] == "m-9"
+
+
 @pytest.fixture
 def git_remote(tmp_path) -> str:
     remote = tmp_path / "remote.git"
@@ -282,7 +313,7 @@ def test_scheduler_due_screens_and_tick(app, session, repo_row, monkeypatch):
 
     # tick runs the due screen (fake adapter) and records a run
     _install_adapter(monkeypatch, FakeHandle(_done_events('[]')))
-    ran = scheduler.tick(now=now)
+    ran = scheduler.tick(now_dt=now)
     assert ran == 1
     runs = screening.list_runs(session, screen.id)
     assert len(runs) == 1
@@ -296,5 +327,5 @@ def test_scheduler_skips_when_none_due(app, session, repo_row, monkeypatch):
 
     _install_adapter(monkeypatch, FakeHandle(_done_events('[]')))
     # Tuesday 08:00 → the Monday 06:00 screen is not due.
-    ran = scheduler.tick(now=datetime(2026, 8, 11, 8, 0))
+    ran = scheduler.tick(now_dt=datetime(2026, 8, 11, 8, 0))
     assert ran == 0

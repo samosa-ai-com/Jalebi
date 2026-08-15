@@ -17,6 +17,7 @@ from jalebi import (
     artifacts,
     catalog,
     checkruns,
+    clock,
     envvars,
     masking,
     messaging,
@@ -31,7 +32,7 @@ from jalebi import (
 from jalebi.adapters import get_adapter
 from jalebi.adapters.types import AgentEvent
 from jalebi.config import Config
-from jalebi.db import CatalogAgent, Repo, Run, Session, Task, utcnow
+from jalebi.db import CatalogAgent, Repo, Run, Session, Task, now
 from jalebi.events import TaskEvents
 from jalebi.git_workspace import GitWorkspace, PushLeaseFailed
 from jalebi.github import GitHubClient
@@ -305,14 +306,14 @@ class TaskQueue:
                 if run.pid:
                     _kill_pid(run.pid)
                 run.status = "interrupted"
-                run.finished_at = utcnow()
+                run.finished_at = now()
             task_ids = {r.task_id for r in running_runs}
             running_tasks = list(
                 session.execute(select(Task).where(Task.status == "running")).scalars()
             )
             for task in running_tasks:
                 task.status = "interrupted"
-                task.updated_at = utcnow()
+                task.updated_at = now()
                 task_ids.add(task.id)
             queued = list(
                 session.execute(select(Task).where(Task.status == "queued")).scalars()
@@ -416,12 +417,12 @@ class TaskQueue:
             seq=seq,
             cli=cli,
             model=task.model,
-            started_at=utcnow(),
+            started_at=now(),
             status="running",
         )
         session.add(run)
         task.status = "running"
-        task.updated_at = utcnow()
+        task.updated_at = now()
         session.commit()
         session.refresh(run)
         # Each run gets a fresh seq + replay buffer so a stale subscriber's seq
@@ -488,12 +489,12 @@ class TaskQueue:
                         "the agent process hung and was terminated. Re-run the task "
                         "or check the agent/opencode configuration."
                     ),
-                    "ts": utcnow().isoformat(),
+                    "ts": clock.to_iso(now()),
                 }
             )
 
         run.session_id = handle.session_id
-        run.finished_at = utcnow()
+        run.finished_at = now()
         run.steps_json = json.dumps(steps[-MAX_STEPS:])
 
         final_status: str = (
@@ -507,7 +508,7 @@ class TaskQueue:
         )
         run.status = final_status
         task.status = final_status
-        task.updated_at = utcnow()
+        task.updated_at = now()
         if final_status == "done":
             # Deliverable met: the auto-recovery escalation (which is derived
             # from retry_count) resets so the next run starts from the base
@@ -532,7 +533,7 @@ class TaskQueue:
                             "type": "error",
                             "phase": None,
                             "text": f"publish failed: {exc}",
-                            "ts": utcnow().isoformat(),
+                            "ts": clock.to_iso(now()),
                         }
                     )
                     run.steps_json = json.dumps(steps[-MAX_STEPS:])
@@ -566,7 +567,7 @@ class TaskQueue:
                         f"Skipped {len(skipped)} artifact(s) — too large or contained "
                         "a secret value: " + ", ".join(skipped[:10])
                     ),
-                    "ts": utcnow().isoformat(),
+                    "ts": clock.to_iso(now()),
                 }
             )
             run.steps_json = json.dumps(steps[-MAX_STEPS:])
@@ -616,7 +617,7 @@ class TaskQueue:
                             f"Agent left {len(dirty)} uncommitted file(s) in the "
                             f"worktree: {names}."
                         ),
-                        "ts": utcnow().isoformat(),
+                        "ts": clock.to_iso(now()),
                     }
                 )
                 if not run.diff_text:
@@ -783,13 +784,13 @@ class TaskQueue:
             task = session.get(Task, task_id)
             if task is not None and task.status != "cancelled":
                 task.status = "failed"
-                task.updated_at = utcnow()
+                task.updated_at = now()
             if run_id is not None:
                 # Re-fetch after rollback — the pre-rollback object may be stale.
                 run = session.get(Run, run_id)
                 if run is not None:
                     run.status = "failed"
-                    run.finished_at = utcnow()
+                    run.finished_at = now()
             session.commit()
         finally:
             session.close()
@@ -887,10 +888,10 @@ class TaskQueue:
             run = session.get(Run, run_id)
             if run is not None:
                 run.status = "failed"
-                run.finished_at = utcnow()
+                run.finished_at = now()
             if task.status not in ("cancelled",):
                 task.status = "failed"
-                task.updated_at = utcnow()
+                task.updated_at = now()
             session.commit()
             reviews.set_assignment_status(session, task.id, "failed", run_id=run_id)
         return run
@@ -932,9 +933,9 @@ class TaskQueue:
             # AND the task so the timeline/status never claim a review was
             # delivered that does not exist.
             run.status = "failed"
-            run.finished_at = utcnow()
+            run.finished_at = now()
             task.status = "failed"
-            task.updated_at = utcnow()
+            task.updated_at = now()
             steps = json.loads(run.steps_json or "[]")
             steps.append(
                 {
@@ -944,7 +945,7 @@ class TaskQueue:
                         "Run finished without writing a review; nothing to post "
                         "to the PR."
                     ),
-                    "ts": utcnow().isoformat(),
+                    "ts": clock.to_iso(now()),
                 }
             )
             run.steps_json = json.dumps(steps[-MAX_STEPS:])
@@ -966,7 +967,7 @@ class TaskQueue:
                     "type": "message",
                     "phase": None,
                     "text": f"Review posted to PR #{pr_number}.",
-                    "ts": utcnow().isoformat(),
+                    "ts": clock.to_iso(now()),
                 }
             )
             run.steps_json = json.dumps(steps[-MAX_STEPS:])
@@ -980,7 +981,7 @@ class TaskQueue:
                     "type": "error",
                     "phase": None,
                     "text": f"posting review to PR #{pr_number} failed: {exc}",
-                    "ts": utcnow().isoformat(),
+                    "ts": clock.to_iso(now()),
                 }
             )
             run.steps_json = json.dumps(steps[-MAX_STEPS:])
@@ -988,9 +989,9 @@ class TaskQueue:
             # flip the run/task so the commit status (set after _post_review)
             # reports failure, not success, and the merge gate stays closed.
             run.status = "failed"
-            run.finished_at = utcnow()
+            run.finished_at = now()
             task.status = "failed"
-            task.updated_at = utcnow()
+            task.updated_at = now()
             session.commit()
             reviews.set_assignment_status(session, task.id, "failed", run_id=run.id)
 
@@ -1269,12 +1270,12 @@ class TaskQueue:
             task = session.get(Task, task_id)
             if task is not None and task.status not in ("cancelled", "done"):
                 task.status = "failed"
-                task.updated_at = utcnow()
+                task.updated_at = now()
             if run_id is not None:
                 run = session.get(Run, run_id)
                 if run is not None:
                     run.status = "failed"
-                    run.finished_at = utcnow()
+                    run.finished_at = now()
             session.commit()
         finally:
             session.close()
@@ -1365,7 +1366,7 @@ class TaskQueue:
             if mode != "push_branch":
                 task.pr_number = pr_number
             task.status = "done"
-            task.updated_at = utcnow()
+            task.updated_at = now()
             self._publish_status(session, task, repo, git, token)
             # Append a timeline step so the owner sees what mode actually ran.
             run = tasks.latest_run(session, task.id)
@@ -1378,7 +1379,7 @@ class TaskQueue:
                 else:  # push_branch
                     text = f"Pushed to branch `{target_branch}`."
                 steps.append(
-                    {"type": "message", "phase": None, "text": text, "ts": utcnow().isoformat()}
+                    {"type": "message", "phase": None, "text": text, "ts": clock.to_iso(now())}
                 )
                 run.steps_json = json.dumps(steps[-MAX_STEPS:])
             session.commit()
@@ -1478,7 +1479,7 @@ class TaskQueue:
         # task.timeout_minutes is never permanently mutated.
         escalated = self._resolve_timeout(session, task)
         task.status = "queued"
-        task.updated_at = utcnow()
+        task.updated_at = now()
 
         # Timestamp the failed run's timeline so the owner sees why a new run
         # suddenly appeared.
@@ -1491,7 +1492,7 @@ class TaskQueue:
                     f"Auto-recovering — re-running with a longer timeout "
                     f"({escalated}m, attempt {task.retry_count})."
                 ),
-                "ts": utcnow().isoformat(),
+                "ts": clock.to_iso(now()),
             }
         )
         run.steps_json = json.dumps(steps[-MAX_STEPS:])
@@ -1707,7 +1708,7 @@ class TaskQueue:
                 "type": event.type,
                 "phase": event.phase,
                 "text": None,
-                "ts": utcnow().isoformat(),
+                "ts": clock.to_iso(now()),
             }
         # Cap BEFORE masking: the masker applies user-supplied regexes to the full
         # text, and an unbounded input on a pathological pattern could backtrack
@@ -1718,7 +1719,7 @@ class TaskQueue:
             "type": event.type,
             "phase": event.phase,
             "text": masked,
-            "ts": utcnow().isoformat(),
+            "ts": clock.to_iso(now()),
         }
 
     def _branch_ahead(self, task: Task, git: GitWorkspace) -> bool:

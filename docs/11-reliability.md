@@ -51,6 +51,7 @@ default only for a key added by a code update before the next restart.
 | `ntfy_topic` | live (per notification; merged endpoint — bare topic or full URL) |
 | `notify_on_done` / `notify_on_failed` / `notify_on_progress` / `notify_on_needs_approval` | live (per run/progress ping) |
 | `notify_progress_interval_minutes` | live (progress watchdog reads it each loop) |
+| `timezone` | **live** (`jalebi/clock.set_zone` on save — screening cron matching + all timestamps follow it immediately; column defaults use a module-global zone synced at startup) |
 
 Settings values are **type-validated** on `POST /api/settings` (rejects `"false"` for a bool, non-integers for numbers, non-list `secret_patterns`, unsupported `agent_cli`); `secret_patterns` must be compilable regexes; `ntfy_topic` must be empty, a bare topic, or an `http(s)://` URL. Only the `opencode` CLI is currently supported.
 

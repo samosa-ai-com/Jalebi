@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 
 from jalebi import catalog, reviews
-from jalebi.db import Repo, ReviewAssignment, Task, utcnow
+from jalebi.db import Repo, ReviewAssignment, Task, now
 from jalebi.reviews import ReviewError
 
 
@@ -245,7 +245,7 @@ def test_unique_constraint_prevents_duplicate_assignment(session) -> None:
             pr_number=23,
             repo_id=repo.id,
             status="queued",
-            created_at=utcnow(),
+            created_at=now(),
         )
     )
     with pytest.raises(IntegrityError):
