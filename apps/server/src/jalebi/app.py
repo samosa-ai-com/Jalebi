@@ -313,14 +313,18 @@ def create_app(config: Config | None = None) -> Flask:
 
     @app.get("/api/models")
     def list_models() -> ResponseReturnValue:
-        """Models available from the configured agent CLI (for the task form).
+        """Models available from an agent CLI (for the model dropdowns).
 
-        An ``adapter_model_lists`` setting entry for the active cli wins over the
-        adapter's own ``list_models()``; otherwise the adapter is asked (missing
-        CLI / not-yet-implemented adapter → empty list).
+        The backend defaults to the ``agent_cli`` setting; a ``?cli=<backend>``
+        query param overrides it (used by the Screenings/Agents forms so the
+        model dropdown follows the backend selected *in that form*). An
+        ``adapter_model_lists`` setting entry for the requested cli wins over
+        the adapter's own ``list_models()``; otherwise the adapter is asked
+        (missing CLI / unknown backend → empty list).
         """
         session = db.get_session()
-        cli = str(settings.get_setting(session, "agent_cli") or "opencode")
+        requested = (request.args.get("cli") or "").strip()
+        cli = requested or str(settings.get_setting(session, "agent_cli") or "opencode")
         overrides = settings.get_setting(session, "adapter_model_lists") or {}
         # ``.get`` returns None only when the key is absent, so an explicit empty
         # list is authoritative (an owner can clear/disable the dropdown).

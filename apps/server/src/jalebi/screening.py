@@ -484,15 +484,24 @@ class ScreeningEngine:
         )
         masker = masking.build_masker(secrets.all_token_values(self.config), patterns)
 
+        # Backend resolution (parity with the task queue, queue.py `_run_task`):
+        # a screen's own cli pin wins; otherwise the global `agent_cli` setting;
+        # otherwise the opencode fallback. Derived only for an actual run (below
+        # the baseline-dedup early return); screens have no run-to-run resume, so
+        # it is re-derived every run (no continuity to preserve).
+        effective_cli = str(
+            screen.cli or settings.get_setting(session, "agent_cli") or "opencode"
+        )
+
         wt = None
         try:
             wt_path = GitWorkspace.screening_worktree_path(self.config.data_dir, run.id)
             wt = git.create_detached_worktree(
                 repo.full_name, branch, wt_path, token
             )
-            worktree_bootstrap.write_guard(wt, screen.cli or "opencode")
+            worktree_bootstrap.write_guard(wt, effective_cli)
             prompt = build_screening_prompt(screen, repo, head_sha)
-            adapter = get_adapter(screen.cli or "opencode")
+            adapter = get_adapter(effective_cli)
             # Screening audits *untrusted* repository code — the highest
             # prompt-injection-exposure agent in the system. It gets NO PAT: the
             # mirror/worktree are prepared by Jalebi above, and a prompt-injected

@@ -58,7 +58,10 @@ export interface CreateTaskInput {
 export const api = {
   getHealth: () => request<Health>("/api/health"),
   getSettings: () => request<SettingsMap>("/api/settings"),
-  getModels: () => request<{ cli: string; models: string[] }>("/api/models"),
+  getModels: (cli?: string) =>
+    request<{ cli: string; models: string[] }>(
+      cli ? `/api/models?cli=${encodeURIComponent(cli)}` : "/api/models"
+    ),
   getAgents: (enabledOnly = false) =>
     request<CatalogAgent[]>(`/api/agents${enabledOnly ? "?enabled=1" : ""}`),
   createAgent: (input: {

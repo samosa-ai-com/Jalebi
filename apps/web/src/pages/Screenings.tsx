@@ -64,13 +64,22 @@ function ScreenForm({
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
 
-  // Models for the Model dropdown (best-effort — a failure just means no options).
+  // Models for the Model dropdown — follow the Backend selected in THIS form
+  // (blank backend = the global agent_cli default). Best-effort: a failure just
+  // means no options. The cancelled guard drops a stale response if the backend
+  // changes again mid-fetch.
   useEffect(() => {
+    let cancelled = false;
     api
-      .getModels()
-      .then((m) => setModels(m.models ?? []))
+      .getModels(cli || undefined)
+      .then((m) => {
+        if (!cancelled) setModels(m.models ?? []);
+      })
       .catch(() => {});
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [cli]);
 
   // Branch dropdown for the selected repo (best-effort).
   const repoIdNum = repoId === "" ? null : Number(repoId);
@@ -239,7 +248,7 @@ function ScreenForm({
         <label>
           <span className="mb-1.5 block text-xs font-medium text-ink-400">Backend</span>
           <select value={cli} onChange={(e) => setCli(e.target.value)} className="field">
-            <option value="">default (opencode)</option>
+            <option value="">default (global setting)</option>
             <option value="opencode">opencode</option>
             <option value="codex">codex</option>
             <option value="claude">claude</option>

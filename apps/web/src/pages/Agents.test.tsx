@@ -21,10 +21,10 @@ const AGENTS = [
 function makeFetchMock() {
   return vi.fn(async (url: string, init?: RequestInit) => {
     if (String(url).includes("/api/models")) {
-      return {
-        ok: true,
-        json: async () => ({ cli: "opencode", models: ["opencode-go/deepseek-v4-flash"] }),
-      };
+      const models = String(url).includes("cli=codex")
+        ? ["gpt-5.4-mini", "gpt-5.5"]
+        : ["opencode-go/deepseek-v4-flash"];
+      return { ok: true, json: async () => ({ cli: "opencode", models }) };
     }
     if (String(url).includes("/api/agents") && init?.method === "POST") {
       const body = JSON.parse(init.body as string) as Record<string, unknown>;
@@ -161,5 +161,29 @@ describe("Agents", () => {
     expect([...cliSelect.options].map((o) => o.value)).toEqual(
       expect.arrayContaining(["", "opencode", "codex", "claude"])
     );
+  });
+
+  it("refetches the Model dropdown when the CLI override changes", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Agents />);
+    await screen.findByText("security-auditor");
+    await userEvent.click(screen.getByRole("button", { name: "+ New agent" }));
+
+    const model = screen.getByLabelText("Model pin (optional)") as HTMLSelectElement;
+    expect([...model.options].map((o) => o.value)).toEqual(
+      expect.arrayContaining(["opencode-go/deepseek-v4-flash"])
+    );
+
+    await userEvent.selectOptions(
+      screen.getByLabelText("CLI override (optional)"),
+      "codex"
+    );
+    await waitFor(() => {
+      expect([...model.options].map((o) => o.value)).toEqual(
+        expect.arrayContaining(["gpt-5.4-mini", "gpt-5.5"])
+      );
+    });
+    expect(fetchMock.mock.calls.some(([u]) => String(u).includes("cli=codex"))).toBe(true);
   });
 });

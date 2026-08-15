@@ -137,3 +137,36 @@ def test_agent_cli_accepts_every_registered_adapter(client: FlaskClient) -> None
         assert resp.status_code == 200, f"{cli} should be accepted"
     resp = client.post("/api/settings", json={"key": "agent_cli", "value": "gemini"})
     assert resp.status_code == 400
+
+
+def test_models_endpoint_cli_query_param(client: FlaskClient) -> None:
+    """GET /api/models?cli=<backend> returns that backend's models regardless of
+    the global agent_cli setting (used by the Screenings/Agents forms)."""
+    from jalebi.adapters import get_adapter
+
+    client.post("/api/settings", json={"key": "agent_cli", "value": "opencode"})
+
+    body = client.get("/api/models?cli=claude").get_json()
+    assert body["cli"] == "claude"
+    assert body["models"] == get_adapter("claude").list_models()
+
+    body = client.get("/api/models?cli=codex").get_json()
+    assert body["cli"] == "codex"
+    assert body["models"] == get_adapter("codex").list_models()
+
+    # An unknown backend is a clean empty list, never a 500.
+    resp = client.get("/api/models?cli=gemini")
+    assert resp.status_code == 200
+    assert resp.get_json()["models"] == []
+
+    # The per-cli override still wins for the requested backend.
+    client.post(
+        "/api/settings",
+        json={"key": "adapter_model_lists", "value": {"claude": ["claude-override"]}},
+    )
+    body = client.get("/api/models?cli=claude").get_json()
+    assert body["models"] == ["claude-override"]
+
+    # No param → the global setting's backend.
+    body = client.get("/api/models").get_json()
+    assert body["cli"] == "opencode"
