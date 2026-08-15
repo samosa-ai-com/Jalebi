@@ -188,9 +188,7 @@ def test_unknown_cli_rejected() -> None:
     assert get_adapter("opencode").id == "opencode"
     assert get_adapter("codex").id == "codex"
     assert get_adapter("claude").id == "claude"
-    # Scaffolded adapters exist but are not ready yet.
-    with pytest.raises(NotImplementedError):
-        get_adapter("codex").start("/tmp", "hi")
+    # claude is scaffolded but not implemented yet.
     with pytest.raises(NotImplementedError):
         get_adapter("claude").list_models()
 

@@ -100,6 +100,8 @@ def test_adapter_model_lists_validated_and_stored(client: FlaskClient) -> None:
 
 def test_models_endpoint_uses_adapter_model_lists_override(client: FlaskClient) -> None:
     """GET /api/models returns the owner override for the active cli before the adapter."""
+    from jalebi.adapters import get_adapter
+
     resp = client.post("/api/settings", json={"key": "agent_cli", "value": "codex"})
     assert resp.status_code == 200
     resp = client.post(
@@ -110,14 +112,14 @@ def test_models_endpoint_uses_adapter_model_lists_override(client: FlaskClient) 
     body = client.get("/api/models").get_json()
     assert body["cli"] == "codex"
     assert body["models"] == ["gpt-override", "gpt-2"]
-    # With no override, a scaffolded adapter yields an empty (not 500) list.
+    # With no override, the adapter's own list is returned.
     resp = client.post(
         "/api/settings", json={"key": "adapter_model_lists", "value": {}}
     )
     assert resp.status_code == 200
     body = client.get("/api/models").get_json()
     assert body["cli"] == "codex"
-    assert body["models"] == []
+    assert body["models"] == get_adapter("codex").list_models()
     # An explicit empty list is authoritative (clears the dropdown), not ignored.
     resp = client.post(
         "/api/settings", json={"key": "adapter_model_lists", "value": {"codex": []}}

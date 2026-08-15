@@ -76,12 +76,13 @@ Top-level JSON `type` values (one object per line) and the adapter mapping. The 
 
 | CLI event | → `AgentEvent` | Notes |
 |-----------|----------------|-------|
-| `thread.started` | — (capture `thread_id`) | first event; `thread_id` is the resume key |
+| `thread.started` | `step` (phase `"step"`) | first event; `thread_id` is the resume key, carried in `data.session_id` |
 | `turn.started` | — (silent) | |
 | `item.started` / `item.updated` | — (silent) | carry partial state |
 | `item.completed` | depends on item subtype (below) | text/tool/file content |
 | `turn.completed` | — (silent) | carries `usage` |
-| `turn.failed` / `error` | `error` | `error.message` |
+| `turn.failed` | `error` | the real failure signal; `error.message` (JSON-unwrapped) |
+| `error` | `message` (notice) | **NOT terminal** — "Skill descriptions were shortened…" / "Model metadata … not found" appear even on success |
 | non-JSON / unknown | `message` (verbatim) | defensive: never crash |
 
 `item.completed` item subtypes:
@@ -93,7 +94,7 @@ Top-level JSON `type` values (one object per line) and the adapter mapping. The 
 | `command_execution` | `tool_call` | `data`: command, aggregated_output, exit_code, status |
 | `file_change` | `tool_call` | `data`: changes (path/kind), status |
 | `mcp_tool_call` | `tool_call` | `data`: server, tool, arguments, result/error, status |
-| `error` | `error` | `item.message` |
+| `error` | `message` (notice) | `item.message` — never terminal |
 
 ### claude stream-json mapping (2.1.233)
 
@@ -117,7 +118,7 @@ Top-level JSON `type` values (one object per line, `--verbose` required) and the
 - **opencode:** resuming keeps the session's original model unless `--model` is passed on resume (supported). The adapter's `resume(…, model=…)` appends `--model` when set, so the follow-up Model dropdown is honored. `--fork` can fork instead of continuing. `OPENCODE_DISABLE_AUTOUPDATE=1` is set on spawn.
 - **opencode (spawn quirk, observed):** `opencode run --session <id>` **stalls with an empty stream when exec'd directly** by `subprocess.Popen` (the agent loop exits immediately after step 1), but runs correctly when spawned through a shell. The adapter therefore wraps every command in `/bin/bash -c 'cd <worktree> && exec opencode …'` (arguments are `shlex`-quoted). `--dir` starts are unaffected by the direct-spawn bug but use the same wrapper for consistency.
 - **opencode (resume directory mismatch, observed Aug 2026):** headless `opencode run --session <id>` **hangs forever when resumed from a different worktree than the one the session was created in** — the model stream comes back empty, opencode logs `exiting loop`, and the process never exits. `resume` therefore passes `--dir <cwd>` (parity with `start`) **and** Jalebi always resumes from the session's own worktree: pr_review sessions live in the review worktree (`ws/task-<id>-review`, detached at the PR head), so `_run_followup` runs pr_review follow-ups there rather than in the task worktree. This is a hard requirement, not a nicety — resuming from the wrong worktree silently produces a run that stays `running` with an empty timeline (see `docs/06-task-queue.md` §4 for the stall guard that bounds it anyway).
-- **codex:** `-m/--model` is **honored on resume** in 0.147.0 (source-verified: a resume without `-m` keeps the original session model; with `-m` it switches). `exec resume` has **no `-C/--cd`** — the cwd is wherever you launch it from, so the adapter uses the same `/bin/bash -c 'cd <worktree> && exec …'` shell wrapper as opencode. `exec` requires a git repo (or `--skip-git-repo-check`). **Sandbox:** `-s workspace-write` confines writes to the workspace but has **no network by default** — pass `-c sandbox_workspace_write.network_access=true` for parity with the other adapters' network access. `--dangerously-bypass-approvals-and-sandbox` is the fully-open fallback. **Auth:** reuses `~/.codex/auth.json` automatically; `CODEX_API_KEY` works for `exec` only; `OPENAI_API_KEY` is **not** read at runtime (only via `codex login --with-api-key`). There is **no model-list command** — `list_models` uses the curated list + `adapter_model_lists` override.
+- **codex:** `-m/--model` is **honored on resume** in 0.147.0 (source-verified: a resume without `-m` keeps the original session model; with `-m` it switches). `exec resume` has **no `-C/--cd`** — the cwd is wherever you launch it from, so the adapter uses the same `/bin/bash -c 'cd <worktree> && exec …'` shell wrapper as opencode. `exec` requires a git repo (or `--skip-git-repo-check`). **Sandbox:** applied via `-c` config overrides so it works uniformly on `exec` AND `exec resume` (resume has no `-s` flag). A cached `bwrap` probe decides the mode: sandbox usable → `sandbox_mode=workspace-write` + `sandbox_workspace_write.network_access=true` (network is off by default there); userns blocked (this dev machine: `bwrap: setting up uid map: Permission denied`) → `sandbox_mode=danger-full-access`, since `workspace-write` cannot write without user namespaces. **Auth:** reuses `~/.codex/auth.json` automatically; `CODEX_API_KEY` works for `exec` only; `OPENAI_API_KEY` is **not** read at runtime (only via `codex login --with-api-key`). **Models:** no `codex models` command — `list_models` reads `~/.codex/models_cache.json` (per-account slugs, honors `$CODEX_HOME`) with a curated fallback, overridable via the `adapter_model_lists` setting.
 - **claude:** `--resume <id>` requires the session id captured from the first run (the `system/init` `session_id`). `--continue` resumes the last session only (do not rely on it). `--fork-session` (with `--resume`) creates a **new** session id. `--model` is honored on resume. `--output-format stream-json` **requires `--verbose`**. Auth precedence: `ANTHROPIC_AUTH_TOKEN` → `ANTHROPIC_API_KEY` → OAuth; no auth → exit 1 with `"result":"Not logged in · Please run /login"`. **Claude reads `CLAUDE.md`, not `AGENTS.md`** — a claude-run worktree must also carry the Jalebi rules in `CLAUDE.md` (see §7).
 - Processes must be spawned with a **working directory = the task worktree** so the CLI discovers `AGENTS.md`/skills.
 - Stream output parsing is **defensive & line-buffered**: iterate child `stdout` line-by-line (`text=True, bufsize=1`); unknown/non-parseable lines are shown verbatim in the console rather than crashing. `stderr` is drained in a background thread (bounded tail) to avoid pipe deadlock and to report exit failures.
