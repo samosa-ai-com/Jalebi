@@ -78,6 +78,10 @@ def test_create_update_cli_model_pins(client, repo_row):
     assert body["model"] == "m-9"
 
     res = client.post("/api/screenings", json=_payload(repo_row, cli="codex"))
+    assert res.status_code == 201
+    assert res.get_json()["cli"] == "codex"
+
+    res = client.post("/api/screenings", json=_payload(repo_row, cli="gemini"))
     assert res.status_code == 400
     assert "unsupported agent cli" in res.get_json()["error"]
 

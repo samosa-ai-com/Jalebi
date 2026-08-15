@@ -37,6 +37,23 @@ def test_create_task(client: FlaskClient, repo_id: int) -> None:
     assert body["timeout_minutes"] == 60
 
 
+def test_create_task_cli_widened(client: FlaskClient, repo_id: int) -> None:
+    """The task cli field accepts every registered adapter and rejects unknowns."""
+    for cli in ("opencode", "codex", "claude"):
+        resp = client.post(
+            "/api/tasks",
+            json={"repo_id": repo_id, "type": "freeform", "prompt": "do it", "cli": cli},
+        )
+        assert resp.status_code == 201, f"{cli} should be accepted"
+        assert resp.get_json()["cli"] == cli
+    resp = client.post(
+        "/api/tasks",
+        json={"repo_id": repo_id, "type": "freeform", "prompt": "do it", "cli": "gemini"},
+    )
+    assert resp.status_code == 400
+    assert "unsupported agent cli" in resp.get_json()["error"]
+
+
 def test_create_task_requires_repo(client: FlaskClient) -> None:
     resp = client.post("/api/tasks", json={"prompt": "x"})
     assert resp.status_code == 400

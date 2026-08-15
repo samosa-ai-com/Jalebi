@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import type { EnvVar, Repo, SettingsMap } from "../types";
 
-const AGENT_CLIS = ["opencode"];
+const AGENT_CLIS = ["opencode", "codex", "claude"];
 
 function Toggle({
   checked,

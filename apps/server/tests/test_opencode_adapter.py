@@ -184,8 +184,15 @@ def test_unknown_cli_rejected() -> None:
     from jalebi.adapters import get_adapter
 
     with pytest.raises(ValueError):
-        get_adapter("codex")
+        get_adapter("gemini")
     assert get_adapter("opencode").id == "opencode"
+    assert get_adapter("codex").id == "codex"
+    assert get_adapter("claude").id == "claude"
+    # Scaffolded adapters exist but are not ready yet.
+    with pytest.raises(NotImplementedError):
+        get_adapter("codex").start("/tmp", "hi")
+    with pytest.raises(NotImplementedError):
+        get_adapter("claude").list_models()
 
 
 def test_spawn_wraps_command_in_bash_dash_c(monkeypatch) -> None:

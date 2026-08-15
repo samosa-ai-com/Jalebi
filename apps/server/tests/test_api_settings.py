@@ -83,3 +83,55 @@ def test_notify_settings_validators(client: FlaskClient) -> None:
     assert resp.status_code == 200
     resp = client.post("/api/settings", json={"key": interval, "value": 0})
     assert resp.status_code == 400
+
+
+def test_adapter_model_lists_validated_and_stored(client: FlaskClient) -> None:
+    """adapter_model_lists accepts {cli: [model names]} and rejects unknown/ill-shaped."""
+    resp = client.post(
+        "/api/settings", json={"key": "adapter_model_lists", "value": {"codex": ["m1", "m2"]}}
+    )
+    assert resp.status_code == 200
+    body = client.get("/api/settings").get_json()
+    assert body["adapter_model_lists"] == {"codex": ["m1", "m2"]}
+    # Empty dict (the default) is valid.
+    resp = client.post("/api/settings", json={"key": "adapter_model_lists", "value": {}})
+    assert resp.status_code == 200
+
+
+def test_models_endpoint_uses_adapter_model_lists_override(client: FlaskClient) -> None:
+    """GET /api/models returns the owner override for the active cli before the adapter."""
+    resp = client.post("/api/settings", json={"key": "agent_cli", "value": "codex"})
+    assert resp.status_code == 200
+    resp = client.post(
+        "/api/settings",
+        json={"key": "adapter_model_lists", "value": {"codex": ["gpt-override", "gpt-2"]}},
+    )
+    assert resp.status_code == 200
+    body = client.get("/api/models").get_json()
+    assert body["cli"] == "codex"
+    assert body["models"] == ["gpt-override", "gpt-2"]
+    # With no override, a scaffolded adapter yields an empty (not 500) list.
+    resp = client.post(
+        "/api/settings", json={"key": "adapter_model_lists", "value": {}}
+    )
+    assert resp.status_code == 200
+    body = client.get("/api/models").get_json()
+    assert body["cli"] == "codex"
+    assert body["models"] == []
+    # An explicit empty list is authoritative (clears the dropdown), not ignored.
+    resp = client.post(
+        "/api/settings", json={"key": "adapter_model_lists", "value": {"codex": []}}
+    )
+    assert resp.status_code == 200
+    body = client.get("/api/models").get_json()
+    assert body["cli"] == "codex"
+    assert body["models"] == []
+
+
+def test_agent_cli_accepts_every_registered_adapter(client: FlaskClient) -> None:
+    """The agent_cli setting accepts every registered adapter and rejects unknowns."""
+    for cli in ("opencode", "codex", "claude"):
+        resp = client.post("/api/settings", json={"key": "agent_cli", "value": cli})
+        assert resp.status_code == 200, f"{cli} should be accepted"
+    resp = client.post("/api/settings", json={"key": "agent_cli", "value": "gemini"})
+    assert resp.status_code == 400

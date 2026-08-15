@@ -19,10 +19,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from jalebi import clock
+from jalebi.adapters import available_adapters
 from jalebi.db import CatalogAgent, now
 
 AGENT_KINDS = ("general", "reviewer")
-ALLOWED_CLIS = ("opencode",)
+ALLOWED_CLIS = tuple(available_adapters())
 SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _\-]{0,63}$")
 MAX_INSTRUCTION_CHARS = 20_000  # custom_instructions ride the task prompt via argv

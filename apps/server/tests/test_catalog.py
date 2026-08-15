@@ -53,7 +53,7 @@ def test_invalid_definition_rejected(session) -> None:
     with pytest.raises(CatalogError, match="kind must be"):
         catalog.create_agent(session, id="x", name="X", kind="robot")
     with pytest.raises(CatalogError, match="unsupported agent cli"):
-        catalog.create_agent(session, id="x", name="X", cli="codex")
+        catalog.create_agent(session, id="x", name="X", cli="gemini")
     with pytest.raises(CatalogError, match="name is required"):
         catalog.create_agent(session, id="x", name="  ")
 

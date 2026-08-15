@@ -47,8 +47,12 @@ def test_create_validates(client) -> None:
     assert res.status_code == 400
     assert "invalid agent id" in res.get_json()["error"]
 
-    res = client.post("/api/agents", json=_agent_payload(cli="codex"))
+    res = client.post("/api/agents", json=_agent_payload(cli="gemini"))
     assert res.status_code == 400
+
+    res = client.post("/api/agents", json=_agent_payload(id="codex-agent", cli="codex"))
+    assert res.status_code == 201
+    assert res.get_json()["cli"] == "codex"
 
     res = client.post("/api/agents", json="not-an-object")
     assert res.status_code == 400

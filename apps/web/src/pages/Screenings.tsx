@@ -241,6 +241,8 @@ function ScreenForm({
           <select value={cli} onChange={(e) => setCli(e.target.value)} className="field">
             <option value="">default (opencode)</option>
             <option value="opencode">opencode</option>
+            <option value="codex">codex</option>
+            <option value="claude">claude</option>
           </select>
         </label>
         <label>

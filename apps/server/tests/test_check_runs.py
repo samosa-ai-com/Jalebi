@@ -1,6 +1,7 @@
 """Commit-status lifecycle tests (PRD F15): registry, state mapping, queue hooks."""
 
 import subprocess
+import time
 
 import pytest
 
@@ -136,6 +137,17 @@ class RaisingHandle:
     def events(self):
         raise RuntimeError("boom")
         yield  # pragma: no cover - generator marker
+
+
+def _wait_until(cond, timeout: float = 5.0) -> bool:
+    """Bounded poll (repo idiom) for a condition that settles shortly after a
+    synchronous run finishes — removes load-sensitive flake on the terminal state."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if cond():
+            return True
+        time.sleep(0.05)
+    return False
 
 
 def _add_pr_head_ref(git_remote: str, pr_number: int = 7) -> str:
@@ -310,7 +322,13 @@ def test_exception_path_closes_out_pending_status(app, session, repo_row, monkey
     task = _create_pr_review(session, repo_row)
     _install(monkeypatch, q, RaisingHandle(), client)
     q._run_task(task.id)
+
+    def _settled() -> bool:
+        t = tasks.get_task(session, task.id)
+        return t is not None and t.status == "failed"
+
     session.expire_all()
+    assert _wait_until(_settled), "task did not settle to failed"
     t = tasks.get_task(session, task.id)
     assert t is not None
     assert t.status == "failed"

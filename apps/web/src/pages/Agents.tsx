@@ -164,6 +164,8 @@ function AgentForm({
           >
             <option value="">default (opencode)</option>
             <option value="opencode">opencode</option>
+            <option value="codex">codex</option>
+            <option value="claude">claude</option>
           </select>
         </label>
         <label className="block">

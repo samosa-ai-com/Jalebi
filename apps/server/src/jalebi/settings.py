@@ -37,6 +37,11 @@ DEFAULTS: dict[str, object] = {
     "secret_patterns": [],
     "artifact_ttl_days": 7,
     "agent_cli": "opencode",
+    # Owner override of each adapter's curated model list: {cli: [model names]}.
+    # Consumed by GET /api/models; lets the owner pin the task-form model dropdown
+    # (e.g. for a custom provider) without touching adapter code. {} = adapters'
+    # own defaults.
+    "adapter_model_lists": {},
     "notify_on_done": True,
     "notify_on_failed": True,
     "notify_on_progress": True,

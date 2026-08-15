@@ -11,6 +11,7 @@ from flask import Blueprint, Response, current_app, jsonify, request, send_file
 from flask.typing import ResponseReturnValue
 
 from jalebi import artifacts, db, masking, prompts, reviews, secrets, settings, tasks
+from jalebi.adapters import available_adapters
 from jalebi.catalog import agent_by_slug
 from jalebi.config import Config
 from jalebi.db import Artifact, Run, Task, now
@@ -142,7 +143,7 @@ def create_task() -> ResponseReturnValue:
             return jsonify({"error": f"catalog agent is disabled: {agent_id}"}), 400
 
     cli = payload.get("cli")
-    if cli is not None and cli not in ("opencode",):
+    if cli is not None and cli not in available_adapters():
         return jsonify({"error": f"unsupported agent cli: {cli}"}), 400
 
     model = payload.get("model")
