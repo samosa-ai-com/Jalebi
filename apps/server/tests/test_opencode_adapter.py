@@ -188,9 +188,6 @@ def test_unknown_cli_rejected() -> None:
     assert get_adapter("opencode").id == "opencode"
     assert get_adapter("codex").id == "codex"
     assert get_adapter("claude").id == "claude"
-    # claude is scaffolded but not implemented yet.
-    with pytest.raises(NotImplementedError):
-        get_adapter("claude").list_models()
 
 
 def test_spawn_wraps_command_in_bash_dash_c(monkeypatch) -> None:
