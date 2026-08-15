@@ -93,6 +93,7 @@ function CreateTask({
   const [publishMode, setPublishMode] = useState<"auto" | "manual" | "">("");
   const [context, setContext] = useState<GithubContext | null>(null);
   const [models, setModels] = useState<string[]>([]);
+  const [agentCli, setAgentCli] = useState("opencode");
   const [agents, setAgents] = useState<CatalogAgent[]>([]);
   const [reviewers, setReviewers] = useState<string[]>([]);
   const [envVars, setEnvVars] = useState<string[]>([]);
@@ -118,7 +119,10 @@ function CreateTask({
   useEffect(() => {
     api
       .getModels()
-      .then((m) => setModels(m.models ?? []))
+      .then((m) => {
+        setModels(m.models ?? []);
+        setAgentCli(m.cli || "opencode");
+      })
       .catch(() => {});
     api
       .getAgents(true)
@@ -235,7 +239,7 @@ function CreateTask({
     >
       <div className="flex items-baseline justify-between">
         <h2 className="panel-title">New task</h2>
-        <span className="eyebrow">opencode · local worktree</span>
+        <span className="eyebrow">{agentCli} · runs in a local worktree</span>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2">

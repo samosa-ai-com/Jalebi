@@ -82,6 +82,20 @@ describe("Tasks", () => {
     expect(screen.getByText("done")).toBeInTheDocument();
   });
 
+  it("shows the active agent backend in the New task caption", async () => {
+    stubFetch({
+      ...DEFAULT_HANDLERS,
+      "/api/models": { cli: "codex", models: ["gpt-5.4-mini", "gpt-5.5"] },
+    });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    await screen.findByText("New task");
+    expect(screen.getByText("codex · runs in a local worktree")).toBeInTheDocument();
+  });
+
   it("creates a task and reloads", async () => {
     const fetchMock = stubFetch({ ...DEFAULT_HANDLERS, "/api/tasks": [] });
 
