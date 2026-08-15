@@ -32,6 +32,9 @@ npm-debug.log*
 .DS_Store
 Thumbs.db
 
+# CommandCode user profile (stray tool artifact — never commit)
+.commandcode/
+
 # Editor / IDE
 .idea/
 .vscode/
