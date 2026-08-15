@@ -70,6 +70,13 @@ Implemented via the same client (Phase 0): issue/PR context fetch, publish (crea
 
 **Why commit statuses, not check runs:** GitHub's *check-runs* API is GitHub-App only — PATs cannot write it, and Jalebi is PAT-driven (§F1). Merge gating uses **commit statuses** (`POST /repos/{owner}/{repo}/statuses/{sha}`), which the PAT *can* write ("Commit statuses read/write" is a required scope) and which **branch protection can require** — the same merge-gating outcome.
 
+**What they're for (two purposes):**
+
+1. **Merge gating (primary):** a status is a real, branch-protection-requireable check. Add the `Jalebi / fix` / `Jalebi / review` contexts to the repo's required status checks and GitHub physically blocks merging a PR until Jalebi's status is green.
+2. **Informational signaling:** the status dot on the PR tells anyone looking at it — teammates, or another Jalebi instance — that Jalebi has **already** reviewed/fixed this commit, so they won't re-trigger a review. The `pending → success/failure/error` transition makes work-in-progress and outcome visible on the PR itself without opening Jalebi.
+
+**Accuracy nuance:** the early "review in progress" (`pending`) dot is a **pr_review** behavior — Jalebi posts it on the PR head at run start. `issue_fix` posts its status only at **publish time** (the `jalebi/<id>` branch doesn't exist until the first push), so an issue_fix PR shows `pending` only briefly before flipping terminal.
+
 - **Opt-in per repo:** the **Repos page** has a per-repo "check runs: on/off" toggle (`PATCH /api/repos/<id>` → `repos.check_runs_enabled`). Only `issue_fix` and `pr_review` tasks on such repos report statuses.
 - **Status keying:** a commit status is keyed by `(sha, context)` — posting the same context again **replaces** GitHub's status for that SHA, which is the "update, don't duplicate" contract. Contexts: `Jalebi / fix` and `Jalebi / review`.
 - **Lifecycle:** run start posts `pending`; run terminal posts the final state from `task.status` — `done → success`, `failed`/`timed_out → failure`, `cancelled`/`interrupted → error`, `needs_approval`/other → `pending` (still blocks a merge under branch protection).

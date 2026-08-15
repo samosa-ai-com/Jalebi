@@ -77,6 +77,7 @@ The authoritative behavioral spec is **`JALEBI_PRD.md`** at the repo root. This 
 | `16-triggers.md` | Webhook listener, trigger rules, deliveries, registration, replay. |
 | `17-phase1-validation.md` | Manual UI QA checklist for every Phase 1 feature. |
 | `18-cast-workflows-grid.md` | Design-only plan for the Inbox-as-helm grid dashboard — **not approved** for implementation. |
+| `19-phase2-validation.md` | Manual UI QA checklist for every Phase 2 feature (screening, commit statuses, diff/history). |
 
 ## 6. Roadmap (phases)
 

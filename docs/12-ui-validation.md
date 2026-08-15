@@ -222,6 +222,8 @@
 
 ## 9a. Screenings manual QA (Phase 2)
 
+> The comprehensive, step-by-step Phase 2 checklist now lives in `docs/19-phase2-validation.md`. These 9a/9b checks are the quick version.
+
 Run against a connected repo with a PAT bound (or the whole flow fails with a clear error):
 
 1. **Templates** — `/screenings` → **New screen** → pick a starter template → name/cron/prompt pre-fill.
@@ -234,6 +236,8 @@ Run against a connected repo with a PAT bound (or the whole flow fails with a cl
 8. **ntfy** — with `ntfy_topic` set and `notify_ntfy` on, a findings run pushes a "N finding(s)" notification.
 
 ## 9b. Diff-view + run-history manual QA (Phase 2)
+
+> See `docs/19-phase2-validation.md` §9 for the full checklist (incl. run-duration ticking, renames `a → b`, and the multi-file collapse behavior).
 
 Run against a task with at least two runs (e.g. run a fix, then a follow-up):
 
