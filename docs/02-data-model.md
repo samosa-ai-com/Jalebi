@@ -255,7 +255,7 @@ Settings keys (defaults in `jalebi/settings.py`): `concurrency` (4), `auto_publi
 | `id` | text PK | slug, e.g. `security-auditor` |
 | `name` | text | display name |
 | `kind` | text | `general` \| `reviewer` |
-| `cli` | text, null | backend override (opencode only today) |
+| `cli` | text, null | backend override (opencode/codex/claude) |
 | `model` | text, null | pinned model |
 | `personality_md` | text | markdown merged into the worktree `AGENTS.md` |
 | `skills_json` | text, null | JSON list of `{name, content}` markdown files |

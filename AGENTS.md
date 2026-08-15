@@ -10,7 +10,7 @@ Jalebi is a **private, self-hosted, localhost-only web application** that behave
 
 Key architectural facts:
 
-- **Backend-agnostic agent adapters** — v1 ships the `opencode` CLI; Codex and Claude Code come later. Switching backend = one-line config (`agent.cli`).
+- **Backend-agnostic agent adapters** — opencode, Codex, and Claude Code. Switching backend = one-line config (`agent.cli`).
 - **GitHub PAT** (the owner's own token) drives all GitHub interaction via a thin httpx client. **The `gh` CLI is forbidden.**
 - Agents run as **local child processes** in per-task **git worktrees**.
 - Stack: Python 3.13 + Flask + SQLAlchemy 2 (SQLite) + Alembic + httpx + React + Vite + Tailwind. SSE for events. Git CLI (not libgit2).
@@ -167,7 +167,7 @@ Jalebi/
 │   │   │   ├── git_workspace.py   # bare mirrors + worktrees + review worktrees + token-authenticated push
 │   │   │   ├── prompts.py         # per-task-type AGENTS.md + follow-up prompt builders
 │   │   │   ├── worktree_bootstrap.py  # per-worktree gh-guard (opencode.json) + git identity + AGENTS.md
-│   │   │   ├── adapters/          # types.py (AgentEvent/RunHandle) + opencode.py (codex/claude later)
+│   │   │   ├── adapters/          # types.py (AgentEvent/RunHandle) + opencode.py + codex.py + claude.py
 │   │   │   ├── events.py          # per-task SSE bus
 │   │   │   ├── masking.py         # PAT(s)/pattern redaction at ingest
 │   │   │   ├── queue.py           # TaskQueue: workers, run lifecycle, timeout/cancel, publish, review posting
@@ -207,7 +207,7 @@ Reference `docs/00-overview.md` and `HANDOFF.md` for current phase and status.
 - **Phase 0 — Foundation (v1, opencode only):** scaffolding, config, SQLite schema, PAT settings + validation, git workspace manager, `AgentAdapter` + opencode adapter, task queue (concurrency 4), run lifecycle (cancel/timeout/retry), publish (auto/manual, `Closes #N`), secret masking, artifacts, minimal Jules-like UI (queue + task detail + follow-up composer), follow-up via `opencode run --session`.
 - **Phase 1 — Catalog & reviewers + event-driven triggers:** catalog agents (personality → `AGENTS.md` injection + skills), reviewer workflow (per-reviewer worktrees + PR review comments), "address reviewers" follow-up, webhook listener + dedup + trigger rules + registration/polling fallback.
 - **Phase 2 — Screening + merge gating:** screening engine (cron, HEAD baseline dedup, findings, ntfy, "new task from finding"), commit statuses for branch protection. **complete.**
-- **Phase 3 — Backend parity:** Codex adapter, Claude Code adapter, per-task model dropdown from `listModels()`.
+- **Phase 3 — Backend parity:** Codex adapter, Claude Code adapter, per-task model dropdown from `listModels()`. **complete.** *(Claude Code unit-tested with captured fixtures; not live-auth'd on the dev machine.)*
 
 ---
 

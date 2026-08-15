@@ -231,4 +231,18 @@ describe("Screenings", () => {
     expect(await screen.findByText(/Running…/)).toBeInTheDocument();
     expect(screen.queryByText("No findings.")).not.toBeInTheDocument();
   });
+
+  it("offers opencode/codex/claude in the Backend select", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Screenings />);
+    await screen.findByText("Security posture");
+    await userEvent.click(screen.getByRole("button", { name: "New screen" }));
+
+    const backend = screen.getByLabelText("Backend") as HTMLSelectElement;
+    expect(backend.value).toBe("");
+    expect([...backend.options].map((o) => o.value)).toEqual(
+      expect.arrayContaining(["", "opencode", "codex", "claude"])
+    );
+  });
 });

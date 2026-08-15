@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Settings from "./Settings";
@@ -131,5 +131,22 @@ describe("Settings", () => {
     expect(screen.getByText("Continue prompt")).toBeInTheDocument();
     expect(screen.getByText("Timeout multiplier")).toBeInTheDocument();
     expect(screen.getByText("Max timeout")).toBeInTheDocument();
+  });
+
+  it("offers opencode/codex/claude in the Agent backend select", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<Settings />);
+    await screen.findByText("Agent backend");
+
+    // The select is unlabeled — scope it by its section heading.
+    const section = screen.getByRole("heading", { name: "Agent backend" }).closest("section")!;
+    const agentSelect = within(section).getByRole("combobox") as HTMLSelectElement;
+
+    expect(agentSelect.value).toBe("opencode");
+    expect([...agentSelect.options].map((o) => o.value)).toEqual(
+      expect.arrayContaining(["opencode", "codex", "claude"])
+    );
   });
 });

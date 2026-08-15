@@ -148,4 +148,18 @@ describe("Agents", () => {
       expect(deleteCall).toBeDefined();
     });
   });
+
+  it("offers opencode/codex/claude in the CLI override select", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Agents />);
+    await screen.findByText("security-auditor");
+    await userEvent.click(screen.getByRole("button", { name: "+ New agent" }));
+
+    const cliSelect = screen.getByLabelText("CLI override (optional)") as HTMLSelectElement;
+    expect(cliSelect.value).toBe("");
+    expect([...cliSelect.options].map((o) => o.value)).toEqual(
+      expect.arrayContaining(["", "opencode", "codex", "claude"])
+    );
+  });
 });

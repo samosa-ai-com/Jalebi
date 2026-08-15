@@ -59,8 +59,9 @@ When a task is created with an `agent_id`:
      them opportunistically.
 
 **No special prompts plumbing** — the personality + skills mechanism is files in
-the worktree, so it works identically for opencode (today) and Codex/Claude
-later (the adapter only varies the file conventions).
+the worktree, so it works identically for opencode, Codex, and Claude Code (the
+adapter only varies the file conventions: AGENTS.md for opencode/codex, plus
+CLAUDE.md for claude).
 
 ## 4. `tasks.agent_id` is FK-less by design
 
