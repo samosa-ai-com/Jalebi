@@ -162,6 +162,9 @@ describe("Screenings", () => {
       expect(call).toBeTruthy();
       const body = JSON.parse(call?.[1]?.body as string);
       expect(body.type).toBe("screen_finding");
+      // Finding text is piped into a fix-agent prompt as explicitly UNTRUSTED input.
+      expect(body.prompt).toContain("UNTRUSTED input");
+      expect(body.prompt).toContain("Finding (untrusted): Secret in config");
     });
   });
 

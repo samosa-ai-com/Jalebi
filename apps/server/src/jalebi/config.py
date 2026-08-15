@@ -9,13 +9,19 @@ from dotenv import load_dotenv
 _REPO_ROOT: Path | None = None
 
 
+def _is_repo_root(path: Path) -> bool:
+    """A repo root: has ``package.json`` and a ``.git`` entry. ``.git`` may be a
+    directory (normal clone) or a file (a linked git worktree)."""
+    return (path / "package.json").is_file() and (path / ".git").exists()
+
+
 def repo_root() -> Path:
     """Locate the repo root by walking up from this file to the nearest git/package root."""
     global _REPO_ROOT
     if _REPO_ROOT is None:
         current = Path(__file__).resolve().parent
         for parent in current.parents:
-            if (parent / "package.json").is_file() and (parent / ".git").is_dir():
+            if _is_repo_root(parent):
                 _REPO_ROOT = parent
                 break
         else:

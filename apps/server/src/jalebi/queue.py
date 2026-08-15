@@ -668,6 +668,11 @@ class TaskQueue:
         session = Session()
         run: Run | None = None
         state: _RunState | None = None
+        # Initialized here so the exception path can (best-effort) close out the
+        # commit status even if the failure happened mid-setup.
+        repo: Repo | None = None
+        token: str | None = None
+        git: GitWorkspace | None = None
         try:
             task = session.get(Task, task_id)
             if task is None:
@@ -792,6 +797,20 @@ class TaskQueue:
                     run.status = "failed"
                     run.finished_at = now()
             session.commit()
+            # Close out the commit status so a crashed run doesn't leave a
+            # permanently-blocking `pending` on the head SHA (best-effort; the
+            # status API is non-fatal). Only when setup got far enough to matter.
+            if (
+                task is not None
+                and run is not None
+                and repo is not None
+                and token is not None
+                and git is not None
+            ):
+                try:
+                    self._complete_status(session, task, repo, run, git, token)
+                except Exception:
+                    logger.exception("could not set terminal status after run failure")
         finally:
             session.close()
             self.events.close(task_id)
@@ -821,6 +840,7 @@ class TaskQueue:
         run.pat_name = task.pat_name
         session.commit()
 
+        git: GitWorkspace | None = None
         try:
             # If this reviewer task has an assignment, mark it running (with the run).
             reviews.set_assignment_status(session, task.id, "running", run_id=run.id)
@@ -893,6 +913,13 @@ class TaskQueue:
                 task.status = "failed"
                 task.updated_at = now()
             session.commit()
+            # Best-effort: a crashed review must not leave a forever-`pending`
+            # status on the PR head (never raise out of the handler).
+            if git is not None:
+                try:
+                    self._complete_status(session, task, repo, run, git, token)
+                except Exception:
+                    logger.exception("could not set terminal status after review failure")
             reviews.set_assignment_status(session, task.id, "failed", run_id=run_id)
         return run
 
@@ -1136,6 +1163,9 @@ class TaskQueue:
         session = Session()
         run: Run | None = None
         state: _RunState | None = None
+        repo: Repo | None = None
+        token: str | None = None
+        git: GitWorkspace | None = None
         try:
             task = session.get(Task, task_id)
             if task is None:
@@ -1277,6 +1307,19 @@ class TaskQueue:
                     run.status = "failed"
                     run.finished_at = now()
             session.commit()
+            # Best-effort: close out the pending status on a failed follow-up too
+            # (never raise out of the handler).
+            if (
+                task is not None
+                and run is not None
+                and repo is not None
+                and token is not None
+                and git is not None
+            ):
+                try:
+                    self._complete_status(session, task, repo, run, git, token)
+                except Exception:
+                    logger.exception("could not set terminal status after follow-up failure")
         finally:
             session.close()
             self.events.close(task_id)

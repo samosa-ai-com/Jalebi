@@ -178,7 +178,11 @@ def update_screen_route(screen_id: int) -> ResponseReturnValue:
 @bp.delete("/<int:screen_id>")
 def delete_screen_route(screen_id: int) -> ResponseReturnValue:
     session = db.get_session()
-    if not screening.delete_screen(session, screen_id):
+    try:
+        deleted = screening.delete_screen(session, screen_id)
+    except screening.ScreeningError as exc:
+        return jsonify({"error": str(exc)}), 400
+    if not deleted:
         return jsonify({"error": "screen not found"}), 404
     return jsonify({"ok": True})
 

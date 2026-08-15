@@ -221,4 +221,6 @@ Every comment you left in this checklist was addressed. The rows above already d
 
 **Gate after the fixes:** backend **521 passed** (was 513; +`test_clock`, timezone setting, screen cli/model), web **55 passed** (was 51; +template-selection, branch dropdown, edit-from-card, running-state), typecheck/lint/build clean, migration `a4b6c8d0e2f4` cycle green.
 
+**PR-review follow-up (2026-08-15):** the open PR's review raised 11 further findings, all fixed in the same `phase-2` push — screening watchdog (timeout + stall kill) and failed-run retry cooldown, per-screen concurrency lock, **token-free audit agents** (screening never holds the repo PAT — the header now says so), **findings→task prompts marked `UNTRUSTED input`**, delete-while-running guard, cron Vixie `N/step` + DOM×DOW OR, exception-path commit-status close-out, bounded raw-message memory, and `repo_root()` linked-worktree support. Backend **532 passed**, web **55**.
+
 **Still manual (unchanged):** §5.5 restart, §4.4 failure-path, §7.4 masking, and all of Section 8 (commit statuses) — none were covered in the first pass.

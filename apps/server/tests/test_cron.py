@@ -31,6 +31,28 @@ def test_steps():
     assert not cron_matches("*/15 * * * *", 20, 0, 1, 1, 0)
 
 
+def test_n_step_matches_from_start():
+    """``N/step`` matches N, N+step, … (Vixie), not just the literal N."""
+    assert cron_matches("1/2 * * * *", 1, 0, 1, 1, 0)
+    assert cron_matches("1/2 * * * *", 3, 0, 1, 1, 0)
+    assert cron_matches("1/2 * * * *", 59, 0, 1, 1, 0)
+    assert not cron_matches("1/2 * * * *", 2, 0, 1, 1, 0)
+    assert cron_matches("30/15 * * * *", 30, 0, 1, 1, 0)
+    assert cron_matches("30/15 * * * *", 45, 0, 1, 1, 0)
+
+
+def test_restricted_dom_or_dow():
+    """Vixie rule: when both day-of-month and day-of-week are restricted, a job
+    runs when EITHER matches."""
+    # 1st-of-month OR Monday.
+    assert cron_matches("0 6 1 * 1", 0, 6, 1, 6, 5)  # 1st, not Monday
+    assert cron_matches("0 6 1 * 1", 0, 6, 15, 6, 1)  # Monday, not 1st
+    assert not cron_matches("0 6 1 * 1", 0, 6, 15, 6, 2)  # neither
+    # A single restricted field stays plain AND with the wildcard field.
+    assert cron_matches("0 6 1 * *", 0, 6, 1, 6, 2)  # 1st-of-month, any dow
+    assert not cron_matches("0 6 1 * *", 0, 6, 2, 6, 2)
+
+
 def test_day_of_week_monday_zero_sunday():
     # cron dow: 0=Sunday. Verify a Monday-only (dow=1) schedule.
     assert cron_matches("0 6 * * 1", 0, 6, 3, 6, 1)

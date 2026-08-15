@@ -22,7 +22,8 @@ Findings are stored as JSON on each run (`findings_json`), not a separate table.
 - `jalebi/screening.py::ScreeningScheduler` — a daemon thread (`jalebi-screening`) started in `app.main()` next to the queue. Wakes every **60s** and runs due screens **one at a time** (screening is low-frequency; it never competes with the task queue's concurrency).
 - Cadence matching uses `jalebi/cron.py`, a minimal 5-field cron matcher (`minute hour dom month dow`; supports `*`, lists, ranges, steps). No new dependency (PRD Goal #10).
 - **Time zone:** cadence is matched against the app's wall clock (`jalebi/clock.py::now`) — the **configured timezone** setting, defaulting to the machine's **local** zone. A cron like `30 1 * * *` fires at 1:30 **local**. (The earlier build matched UTC, so non-UTC owners' cadences never fired.) The `timezone` setting (`local` or an IANA name) is a live setting on the Settings page.
-- **Baseline dedup:** a screen skips a tick when its last terminal run (`done`/`failed`) audited the **same HEAD** (the audited `head_sha` is the dedup watermark). "Run now" (`POST /api/screenings/<id>/run`) forces a run regardless.
+- **Baseline dedup:** a screen skips a tick when its last run (`done`) audited the **same HEAD**. A **failed** run is NOT a valid audit — it is retried on the next tick, but only after a cooldown (`FAILED_RETRY_COOLDOWN_SECONDS`, 1h) so a persistent failure isn't hot-looped and a transient flake never permanently silences a screen. "Run now" (`POST /api/screenings/<id>/run`) forces a run regardless.
+- **Concurrency:** screens are serialized by the scheduler, and a per-screen lock in the engine refuses a manual "Run now" that would race a scheduler tick on the same screen (no double-run).
 
 ## 4. Run execution (read-only)
 
@@ -32,10 +33,13 @@ Each screening run:
 2. Ensures the mirror, resolves the branch HEAD (`GitWorkspace.current_remote_sha`).
 3. Creates a **detached, read-only worktree** at that HEAD (`GitWorkspace.create_detached_worktree`), with the `gh`-guard `opencode.json` written in (so the agent can never push or act via `gh`).
 4. Drives the opencode adapter with the screen's `system_prompt` + a structured contract: *"return your findings as a single JSON array"*. Screens can pin a **backend** (`cli`, default `opencode`) and a **model** (optional); the engine resolves `get_adapter(screen.cli or "opencode")` and passes `model=screen.model or None`.
-5. Streams events to a per-run SSE bus (`/api/screenings/runs/<id>/events`), masking all output with the run masker (PATs + `secret_patterns`).
-6. Parses the findings JSON (`screening.parse_findings`, defensive: fenced-block tolerant, string-literal-aware bracket matching, non-array → `[]`), **masks each finding's string fields**, stores `findings_json` + masked `output_json`, and marks the run `done` (or `failed` on agent error / run error).
-7. **Best-effort ntfy push** when `notify_ntfy` and findings exist — a summary of the count + first findings. A dead ntfy server never fails the run.
-8. Removes the worktree in a `finally`.
+5. Streams events to a per-run SSE bus (`/api/screenings/runs/<id>/events`), masking all output with the run masker (PATs + `secret_patterns`). The raw message accumulation is bounded (`MAX_OUTPUT_CHARS`).
+6. **Watchdog:** each run has an absolute timeout (`default_timeout_minutes`) and a no-output stall timer (`stall_timeout_seconds`, both live settings); a hung agent is killed (process group) and the run marked `failed`, so a stuck audit can never block the scheduler thread or leave a forever-`running` row.
+7. Parses the findings JSON (`screening.parse_findings`, defensive: fenced-block tolerant, string-literal-aware bracket matching, non-array → `[]`), **masks each finding's string fields**, stores `findings_json` + masked `output_json`, and marks the run `done` (or `failed` on agent error / run error).
+8. **Best-effort ntfy push** when `notify_ntfy` and findings exist — a summary of the count + first findings. A dead ntfy server never fails the run.
+9. Removes the worktree in a `finally`.
+
+**Security posture:** screening audits potentially **untrusted** repository code — the agent runs **without the repo PAT** (`_build_agent_env(None)`), so even a prompt-injected audit agent cannot use a privileged GitHub token (the mirror/worktree are prepared by Jalebi before the run). Findings from the audit are treated as untrusted when they become task prompts ("New task from finding" labels the finding text `UNTRUSTED input` and caps its length; `publish_mode` stays `manual`). `delete_screen` refuses while a run is in flight.
 
 **Findings shape:** `{severity: critical|high|medium|low, title, file?, line?, detail?, recommendation?}`. Severity is normalized (unknown → `medium`).
 

@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from jalebi.config import Config, load_config, repo_root
+from jalebi.config import Config, _is_repo_root, load_config, repo_root
 
 
 def test_config_defaults() -> None:
@@ -42,3 +42,16 @@ def test_ensure_dirs_creates_data_dirs(config: Config) -> None:
 def test_repo_root_points_at_repo() -> None:
     root = repo_root()
     assert (root / "package.json").is_file()
+
+
+def test_is_repo_root_accepts_linked_worktree(tmp_path) -> None:
+    """A linked git worktree has ``.git`` as a FILE, not a directory — the SPA
+    serve path must still resolve the repo root (previously ``.is_dir()`` missed it)."""
+    root = tmp_path / "worktree"
+    root.mkdir()
+    (root / "package.json").write_text("{}")
+    (root / ".git").write_text("gitdir: /elsewhere/.git/worktrees/wt\n")
+    assert _is_repo_root(root)
+    # Without the git marker it is not a repo root.
+    (root / ".git").unlink()
+    assert not _is_repo_root(root)

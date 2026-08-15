@@ -23,7 +23,11 @@ class CronError(ValueError):
 
 
 def _parse_field(field: str, lo: int, hi: int) -> set[int]:
-    """Parse one cron field into the set of integers it matches."""
+    """Parse one cron field into the set of integers it matches.
+
+    ``N/step`` (e.g. ``1/2``) matches ``N, N+step, …`` up to the field's max
+    (Vixie semantics), not just the literal ``N``.
+    """
     values: set[int] = set()
     for part in field.split(","):
         part = part.strip()
@@ -33,7 +37,8 @@ def _parse_field(field: str, lo: int, hi: int) -> set[int]:
             values.update(range(lo, hi + 1))
             continue
         step = 1
-        if "/" in part:
+        has_step = "/" in part
+        if has_step:
             base, _, step_s = part.partition("/")
             if not step_s.isdigit() or int(step_s) < 1:
                 raise CronError(f"invalid step in cron field: {part}")
@@ -51,6 +56,11 @@ def _parse_field(field: str, lo: int, hi: int) -> set[int]:
             if a < lo or b > hi or a > b:
                 raise CronError(f"range out of bounds in cron field: {part}")
             values.update(range(a, b + 1, step))
+        elif has_step and base.isdigit():
+            v = int(base)
+            if v < lo or v > hi:
+                raise CronError(f"value out of bounds in cron field: {part}")
+            values.update(range(v, hi + 1, step))
         else:
             if not base.isdigit():
                 raise CronError(f"invalid token in cron field: {part}")
@@ -66,6 +76,9 @@ def cron_matches(expr: str, minute: int, hour: int, dom: int, month: int, dow: i
 
     ``dow`` is 0-6 with 0 = Sunday (Python's ``datetime.weekday()`` uses
     Monday = 0, so callers pass ``(dt.weekday() + 1) % 7`` for cron semantics).
+
+    Vixie day rule: when BOTH day-of-month and day-of-week are restricted
+    (non-``*``), a job runs when EITHER matches (not both).
     """
     fields = expr.split()
     if len(fields) != 5:
@@ -77,8 +90,15 @@ def cron_matches(expr: str, minute: int, hour: int, dom: int, month: int, dow: i
         _parse_field(fields[3], *_MONTH),
         _parse_field(fields[4], *_DOW),
     ]
-    clock = (minute, hour, dom, month, dow)
-    return all(v in m for v, m in zip(clock, matchers, strict=True))
+    minute_m, hour_m, dom_m, month_m, dow_m = matchers
+    time_match = minute in minute_m and hour in hour_m and month in month_m
+    dom_restricted = len(dom_m) < 31
+    dow_restricted = len(dow_m) < 7
+    if dom_restricted and dow_restricted:
+        date_match = dom in dom_m or dow in dow_m
+    else:
+        date_match = dom in dom_m and dow in dow_m
+    return time_match and date_match
 
 
 def cron_matches_datetime(expr: str, dt) -> bool:

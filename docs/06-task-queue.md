@@ -69,6 +69,7 @@ Queue items are tagged tuples: `("task", task_id)` or `("followup", task_id, bod
 - **Why statuses, not check runs:** GitHub's check-runs API is GitHub-App only; PATs cannot write it. Commit statuses (`POST /repos/{o}/{r}/statuses/{sha}`) are PAT-writable and branch-protection-requireable — the same merge gate.
 - **Run start:** `_start_status` posts `pending` — `pr_review` on the PR head SHA; `issue_fix` only if the `jalebi/<id>` branch already exists on the remote (re-run/follow-up), else deferred to publish.
 - **Run terminal:** `_complete_status` posts the final state from `task.status` (`done→success`, `failed`/`timed_out→failure`, `cancelled`/`interrupted→error`, else `pending`).
+- **Exception paths:** a worker crash (`_run_task`/`_run_review`/`_run_followup` `except`) now also calls `_complete_status` (best-effort, guarded) after the run is marked `failed`, so a crashed run never leaves a forever-blocking `pending` on the head SHA.
 - **Publish:** `_publish_status` posts the final state on the just-pushed head (auto-publish in `_stream_and_finish`; manual publish in `publish_task`).
 - **Non-fatal:** all status API calls are best-effort; a failure is logged and never fails the task.
 - Registry rows live in `check_runs` (see `docs/02`); `tasks.check_run_id` tracks the latest.

@@ -2,11 +2,15 @@
 
 import json
 import subprocess
+import threading
+import time
+from datetime import timedelta
 
 import pytest
 
 from jalebi import repos, screening, secrets, settings
 from jalebi.adapters.types import AgentEvent
+from jalebi.db import ScreeningRun, now
 from jalebi.screening import ScreeningEngine, ScreeningScheduler
 
 FULL_NAME = "owner/screenrepo"
@@ -76,6 +80,130 @@ def test_run_screen_uses_screen_cli_and_model(session, repo_row, engine, monkeyp
     engine.run_screen(session, screen, force=True)
     assert captured["cli"] == "opencode"
     assert captured["model"] == "m-9"
+
+
+class HangProc:
+    """A fake proc that the watchdog's ``_kill_proc`` can actually kill."""
+
+    def __init__(self) -> None:
+        self.killed = False
+
+    def poll(self):
+        return 0 if self.killed else None
+
+    def wait(self, timeout=None) -> int:
+        return 0
+
+    def terminate(self) -> None:
+        self.killed = True
+
+    def kill(self) -> None:
+        self.killed = True
+
+
+class HangHandle:
+    """A handle whose event stream never produces an event until the process is
+    killed — used to prove the screening watchdog terminates a hung agent."""
+
+    def __init__(self) -> None:
+        self.proc = HangProc()
+        self.session_id = "ses_hang"
+
+    def events(self):
+        while not self.proc.killed:
+            time.sleep(0.05)
+        return
+        yield  # pragma: no cover - generator marker
+
+
+def _error_events() -> list[AgentEvent]:
+    return [AgentEvent(type="error", text="boom")]
+
+
+def test_failed_run_is_retried_after_cooldown(session, repo_row, engine, monkeypatch):
+    """A *failed* run is not a valid audit — after the cooldown the screen runs
+    again at the same HEAD (it is not permanently silenced)."""
+    _install_adapter(monkeypatch, FakeHandle(_error_events()))
+    screen = _make_screen(session, repo_row)
+    first = engine.run_screen(session, screen, force=True)
+    assert first.status == "failed"
+    # Backdate the failure past the retry cooldown.
+    first.finished_at = now() - timedelta(hours=2)
+    session.commit()
+    _install_adapter(monkeypatch, FakeHandle(_done_events("[]")))
+    second = engine.run_screen(session, screen)  # non-force
+    assert second is not None
+    assert second.id != first.id
+    assert second.status == "done"
+
+
+def test_recent_failed_run_suppressed_by_cooldown(session, repo_row, engine, monkeypatch):
+    """A failure within the cooldown window is not hot-looped."""
+    _install_adapter(monkeypatch, FakeHandle(_error_events()))
+    screen = _make_screen(session, repo_row)
+    engine.run_screen(session, screen, force=True)
+    _install_adapter(monkeypatch, FakeHandle(_done_events("[]")))
+    assert engine.run_screen(session, screen) is None
+
+
+def test_screening_audit_env_has_no_token(session, repo_row, engine, monkeypatch):
+    """Screening audits untrusted code — the agent env must never carry the PAT."""
+    captured: dict[str, object] = {}
+
+    class FakeAdapter:
+        def start(self, cwd, prompt, model=None, env=None):
+            captured["env"] = env
+            return FakeHandle(_done_events("[]"))
+
+        def list_models(self):
+            return []
+
+    monkeypatch.setattr("jalebi.screening.get_adapter", lambda cli: FakeAdapter())
+    screen = _make_screen(session, repo_row)
+    engine.run_screen(session, screen, force=True)
+    env = captured["env"]
+    assert isinstance(env, dict)
+    # The key may exist as None (stripped at spawn) — but no token value may leak.
+    assert env.get("JALEBI_GITHUB_TOKEN") is None
+    assert env.get("GH_TOKEN") is None
+    assert env.get("GITHUB_TOKEN") is None
+
+
+def test_concurrent_run_refused(session, repo_row, engine):
+    """A manual 'Run now' racing a scheduler tick on the same screen is refused."""
+    screen = _make_screen(session, repo_row)
+    lock = engine._locks.setdefault(screen.id, threading.Lock())
+    lock.acquire()
+    try:
+        with pytest.raises(screening.ScreeningError, match="already running"):
+            engine.run_screen(session, screen)
+    finally:
+        lock.release()
+
+
+def test_screening_run_stalls_and_fails(session, repo_row, engine, monkeypatch):
+    """A hung agent is killed by the watchdog; the run fails, the scheduler is
+    not blocked, and the worktree is still cleaned up."""
+    settings.set_setting(session, "stall_timeout_seconds", 2)
+    _install_adapter(monkeypatch, HangHandle())
+    screen = _make_screen(session, repo_row)
+    run = engine.run_screen(session, screen, force=True)
+    assert run is not None
+    assert run.status == "failed"
+    assert "no output" in (run.error or "")
+
+
+def test_delete_screen_refuses_while_running(session, repo_row):
+    screen = _make_screen(session, repo_row)
+    session.add(ScreeningRun(screening_id=screen.id, head_sha="abc", status="running"))
+    session.commit()
+    with pytest.raises(screening.ScreeningError, match="still running"):
+        screening.delete_screen(session, screen.id)
+    # A screen with no in-flight run deletes normally.
+    run = session.query(ScreeningRun).filter_by(screening_id=screen.id).one()
+    run.status = "done"
+    session.commit()
+    assert screening.delete_screen(session, screen.id) is True
 
 
 @pytest.fixture

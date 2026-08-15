@@ -126,6 +126,18 @@ def _done_events() -> list[AgentEvent]:
     return [AgentEvent(type="message", text="ok"), AgentEvent(type="done")]
 
 
+class RaisingHandle:
+    """A handle whose stream raises mid-run, exercising the queue's exception path."""
+
+    def __init__(self):
+        self.proc = FakeProc()
+        self.session_id = "ses_raise"
+
+    def events(self):
+        raise RuntimeError("boom")
+        yield  # pragma: no cover - generator marker
+
+
 def _add_pr_head_ref(git_remote: str, pr_number: int = 7) -> str:
     """Create ``refs/pull/<n>/head`` in the bare remote at ``main``'s HEAD."""
     head = _git(["-C", git_remote, "rev-parse", "HEAD"])
@@ -285,3 +297,23 @@ def test_status_failure_is_non_fatal(app, session, repo_row, monkeypatch):
     assert t is not None
     # The task still reached its terminal state despite status failures.
     assert t.status in ("done", "failed")
+
+
+def test_exception_path_closes_out_pending_status(app, session, repo_row, monkeypatch):
+    """An unexpected run failure must flip the pending status to failure, not
+    leave a forever-blocking pending on the PR head."""
+    q = app.config["JALEBI_QUEUE"]
+    settings.set_setting(session, "auto_publish", False)
+    settings.set_setting(session, "retry_policy", {"auto_retry": False})
+    client = RecordingGitHubClient("t")
+    _add_pr_head_ref(repo_row.clone_url, 7)
+    task = _create_pr_review(session, repo_row)
+    _install(monkeypatch, q, RaisingHandle(), client)
+    q._run_task(task.id)
+    session.expire_all()
+    t = tasks.get_task(session, task.id)
+    assert t is not None
+    assert t.status == "failed"
+    # pending was posted at start, then closed out as failure.
+    assert any(c["state"] == STATE_PENDING for c in client.status_calls)
+    assert client.status_calls[-1]["state"] == STATE_FAILURE

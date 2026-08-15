@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import time
 from datetime import datetime
 
 from sqlalchemy import select
@@ -35,7 +36,7 @@ from jalebi.cron import CronError, cron_matches_datetime
 from jalebi.db import Repo, Screening, ScreeningRun, now
 from jalebi.events import TaskEvents
 from jalebi.git_workspace import GitWorkspace
-from jalebi.queue import _build_agent_env  # the pinned, gh-guarded agent env
+from jalebi.queue import _build_agent_env, _kill_proc  # pinned, gh-guarded agent env + kill
 
 logger = logging.getLogger(__name__)
 
@@ -47,13 +48,25 @@ MAX_STEP_TEXT = 2000
 FINDING_KEYS = ("severity", "title", "file", "line", "detail", "recommendation")
 SEVERITIES = ("critical", "high", "medium", "low")
 
-# Terminal run statuses — a run with one of these has an audited HEAD worth
-# comparing against for baseline dedup.
-_TERMINAL = ("done", "failed")
+# How long to wait before re-running a screen whose last run *failed* at the same
+# HEAD. ``done`` is the baseline-dedup watermark; a failed run is retried (a
+# transient flake must not permanently silence a screen), but never hot-looped.
+FAILED_RETRY_COOLDOWN_SECONDS = 3600
 
 
 class ScreeningError(Exception):
     """A screening operation failed for a domain reason."""
+
+
+class _WatchState:
+    """Mutable watchdog state shared between the run loop and its watchdog thread."""
+
+    __slots__ = ("last_event", "reason", "stop")
+
+    def __init__(self) -> None:
+        self.last_event: float = time.monotonic()
+        self.reason: str | None = None
+        self.stop: bool = False
 
 
 def parse_findings(text: str) -> list[dict[str, object]]:
@@ -340,6 +353,23 @@ def delete_screen(session: Session, screen_id: int) -> bool:
     screen = session.get(Screening, screen_id)
     if screen is None:
         return False
+    # Deleting cascades runs — refuse while a run is in flight so an active agent
+    # + worktree doesn't get orphaned (its final commit would silently hit a
+    # cascaded-away row).
+    running = (
+        session.execute(
+            select(ScreeningRun.id)
+            .where(
+                ScreeningRun.screening_id == screen_id,
+                ScreeningRun.status.in_(("queued", "running")),
+            )
+            .limit(1)
+        )
+        .scalars()
+        .first()
+    )
+    if running is not None:
+        raise ScreeningError("screen is still running; wait for it to finish before deleting")
     session.delete(screen)
     session.commit()
     return True
@@ -374,17 +404,33 @@ class ScreeningEngine:
     def __init__(self, config: Config):
         self.config = config
         self.events = TaskEvents()
+        # Per-screen run locks: a manual "Run now" must never race a scheduler
+        # tick on the same screen (which would create two run rows, two agents,
+        # two worktrees on the same path namespace).
+        self._locks: dict[int, threading.Lock] = {}
 
     def run_screen(
         self, session: Session, screen: Screening, *, force: bool = False
     ) -> ScreeningRun | None:
         """Run ``screen`` at the current branch HEAD; ``None`` if baseline-skipped.
 
-        ``force=True`` ignores baseline dedup (manual "run now"). The run row is
-        created/updated within ``session``; failures are recorded on the run and
-        re-raised as ``ScreeningError`` after the run is marked failed (the
-        scheduler logs them; the API surfaces them in run history).
+        ``force=True`` ignores baseline dedup (manual "run now"). A screen that is
+        already running (scheduler tick + manual run-now) is refused, never
+        double-run. Failures are recorded on the run and re-raised as
+        ``ScreeningError``.
         """
+        lock = self._locks.setdefault(screen.id, threading.Lock())
+        if not lock.acquire(blocking=False):
+            raise ScreeningError(f"screen '{screen.name}' is already running")
+        try:
+            return self._run_screen_locked(session, screen, force=force)
+        finally:
+            lock.release()
+
+    def _run_screen_locked(
+        self, session: Session, screen: Screening, *, force: bool = False
+    ) -> ScreeningRun | None:
+        """The actual run — called with the per-screen lock held."""
         repo = session.get(Repo, screen.repo_id)
         if repo is None:
             raise ScreeningError("screen repo not found")
@@ -403,13 +449,21 @@ class ScreeningEngine:
             raise ScreeningError(f"branch {branch} has no remote HEAD")
 
         last = latest_run(session, screen.id)
-        if (
-            not force
-            and last is not None
-            and last.status in _TERMINAL
-            and last.head_sha == head_sha
-        ):
-            return None  # baseline dedup — nothing new to audit
+        if not force and last is not None and last.head_sha == head_sha:
+            # ``done`` is the baseline-dedup watermark: a successful audit of the
+            # same HEAD needs no re-run. A *failed* run is NOT a valid audit — a
+            # transient failure must not permanently silence the screen — so it is
+            # retried, but only after a cooldown to avoid hot-looping a
+            # persistent failure.
+            if last.status == "done":
+                return None
+            if (
+                last.status == "failed"
+                and last.finished_at is not None
+                and (now() - last.finished_at).total_seconds()
+                < FAILED_RETRY_COOLDOWN_SECONDS
+            ):
+                return None
 
         run = ScreeningRun(
             screening_id=screen.id,
@@ -439,12 +493,58 @@ class ScreeningEngine:
             worktree_bootstrap.write_opencode_guard(wt)
             prompt = build_screening_prompt(screen, repo, head_sha)
             adapter = get_adapter(screen.cli or "opencode")
+            # Screening audits *untrusted* repository code — the highest
+            # prompt-injection-exposure agent in the system. It gets NO PAT: the
+            # mirror/worktree are prepared by Jalebi above, and a prompt-injected
+            # audit agent must never hold a privileged GitHub token (curl against
+            # the REST API with it would otherwise be possible).
             handle = adapter.start(
-                str(wt), prompt, model=screen.model or None, env=_build_agent_env(token)
+                str(wt), prompt, model=screen.model or None, env=_build_agent_env(None)
             )
+
+            # Watchdog: a hung agent must never block the single scheduler thread
+            # forever (leaving the worktree behind + a forever-``running`` run).
+            # Absolute deadline + no-output stall → kill the process group and
+            # mark the run failed; the worktree is still removed in ``finally``.
+            raw_timeout = settings.get_setting(session, "default_timeout_minutes")
+            timeout_minutes = int(raw_timeout) if isinstance(raw_timeout, int) else 60
+            raw_stall = settings.get_setting(session, "stall_timeout_seconds")
+            stall_seconds = int(raw_stall) if isinstance(raw_stall, int) else 600
+            deadline = time.monotonic() + timeout_minutes * 60
+            watch = _WatchState()
+            watch_lock = threading.Lock()
+
+            def _watchdog() -> None:
+                while not watch.stop:
+                    time.sleep(1)
+                    if watch.stop:
+                        break
+                    with watch_lock:
+                        elapsed = time.monotonic() - watch.last_event
+                    if time.monotonic() >= deadline:
+                        watch.reason = (
+                            f"screening run exceeded {timeout_minutes} minute timeout"
+                        )
+                        break
+                    if elapsed >= stall_seconds:
+                        watch.reason = (
+                            f"screening run produced no output for {int(stall_seconds)}s"
+                        )
+                        break
+                if watch.reason is not None:
+                    _kill_proc(handle.proc)
+
+            watchdog = threading.Thread(
+                target=_watchdog, daemon=True, name="jalebi-screen-watchdog"
+            )
+            watchdog.start()
+
             raw_messages: list[str] = []
+            raw_chars = 0
             ended_with_error = False
             for event in handle.events():
+                with watch_lock:
+                    watch.last_event = time.monotonic()
                 text = event.text or (json.dumps(event.data) if event.data else None)
                 # Keep the raw text unmasked + untruncated for findings parsing;
                 # only the persisted/streamed copies are capped + masked.
@@ -456,16 +556,23 @@ class ScreeningEngine:
                 }
                 self.events.publish(run.id, entry)
                 if event.type == "message" and text:
-                    raw_messages.append(text)
+                    # Bound the in-memory raw accumulation (the join below slices
+                    # anyway) so a chatty agent can't balloon memory.
+                    if raw_chars < MAX_OUTPUT_CHARS:
+                        raw_messages.append(text)
+                        raw_chars += len(text)
                 if event.type == "error":
                     ended_with_error = True
                 if event.type in ("done", "error"):
                     break
+            watch.stop = True
+            watchdog.join(timeout=2)
+
             output_text = "\n".join(raw_messages)[:MAX_OUTPUT_CHARS]
             run.output_json = json.dumps({"message": masker(output_text)})
-            if ended_with_error:
+            if ended_with_error or watch.reason is not None:
                 run.status = "failed"
-                run.error = "agent exited with an error"
+                run.error = str(watch.reason or "agent exited with an error")
             else:
                 findings = _mask_findings(parse_findings(output_text), masker)
                 run.findings_json = json.dumps(findings)
