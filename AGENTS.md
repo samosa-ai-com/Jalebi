@@ -113,6 +113,7 @@ This is critical and repeated: **all GitHub interaction in this project goes thr
 | `docs/17-phase1-validation.md` | Manual UI QA checklist for every Phase 1 feature. | Feature/UI behavior changes. |
 | `docs/18-cast-workflows-grid.md` | Design-only plan for per-thread cast, reusable workflows, the Inbox-as-helm dashboard, the 4×4 dynamic grid, and future multi-agent orchestration. **Not approved for implementation** — subject to change. | Design discussions only. |
 | `docs/19-phase2-validation.md` | Manual UI QA checklist for every Phase 2 feature (screening, commit statuses, diff/history). | Feature/UI behavior changes. |
+| `docs/20-phase3-validation.md` | Manual UI QA checklist for every Phase 3 feature (codex/claude backends, per-CLI guards, model dropdown). | Feature/UI behavior changes. |
 
 **If you add a doc file, add it to this table.**
 
@@ -152,7 +153,8 @@ Jalebi/
 │   ├── 16-triggers.md
 │   ├── 17-phase1-validation.md
 │   ├── 18-cast-workflows-grid.md   ← design-only, NOT approved for implementation
-│   └── 19-phase2-validation.md
+│   ├── 19-phase2-validation.md
+│   └── 20-phase3-validation.md
 ├── apps/
 │   ├── server/                    # Flask orchestrator (Python 3.13, uv)
 │   │   ├── pyproject.toml         # uv project; `jalebi` console script → jalebi.app:main
