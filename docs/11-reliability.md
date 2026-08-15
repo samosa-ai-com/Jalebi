@@ -51,6 +51,7 @@ default only for a key added by a code update before the next restart.
 | `ntfy_topic` | live (per notification; merged endpoint — bare topic or full URL) |
 | `notify_on_done` / `notify_on_failed` / `notify_on_progress` / `notify_on_needs_approval` | live (per run/progress ping) |
 | `notify_progress_interval_minutes` | live (progress watchdog reads it each loop) |
+| `timezone` | **live** (`jalebi/clock.set_zone` on save — screening cron matching + all timestamps follow it immediately; column defaults use a module-global zone synced at startup) |
 
 Settings values are **type-validated** on `POST /api/settings` (rejects `"false"` for a bool, non-integers for numbers, non-list `secret_patterns`, unsupported `agent_cli`); `secret_patterns` must be compilable regexes; `ntfy_topic` must be empty, a bare topic, or an `http(s)://` URL. Only the `opencode` CLI is currently supported.
 
@@ -67,6 +68,8 @@ Settings values are **type-validated** on `POST /api/settings` (rejects `"false"
 - No per-task `auto_publish` override (global setting only).
 - A cancelled/killed agent session may become unresumable (opencode-side session state); the task is still marked `cancelled`/`interrupted`.
 - Single-port localhost only — no TLS; optional Basic-auth UI password when exposed (PRD §F13).
+- **Screening scheduler** is a daemon thread (dies with the process). A run in flight when the server stops is left `running` in the DB; on restart it has no live HEAD comparison until the next cron tick, and a manual "Run now" starts fresh (screening runs have no resume). Runs are persisted and never lost.
+- **Commit statuses** (PRD F15) are best-effort: a status API failure never fails the task, but a failed status leaves the GitHub-side status `pending` until the next run/publish for that head reconciles it. Follow-ups replace the existing status (matched by `(sha, context)`).
 
 ## 6. Reference
 

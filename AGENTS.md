@@ -99,7 +99,7 @@ This is critical and repeated: **all GitHub interaction in this project goes thr
 | `docs/04-git-workspace.md` | Bare mirrors, worktrees, branch naming, push w/ token. | Git workspace manager changes. |
 | `docs/05-github-integration.md` | GitHub client (httpx), PAT scopes, webhooks, check runs. | GitHub client/webhook/check-run work. |
 | `docs/06-task-queue.md` | Queue, worker pool, run lifecycle, timeouts, retries, publish. | Queue/runner/publish changes. |
-| `docs/07-screening.md` | Screening engine, cron, baseline dedup, findings, ntfy. | Screening work. |
+| `docs/07-screening.md` | Screening engine: starter catalog, cron scheduler, baseline dedup, findings JSON, ntfy, UI. | Screening work. |
 | `docs/08-ui.md` | React app structure, pages, components, SSE consumption. | UI changes. |
 | `docs/09-testing.md` | Test strategy per layer, how to run tests, fixtures. | Test infra changes. |
 | `docs/10-security.md` | Localhost binding, secrets, masking, sandboxing, threat notes. | Security-related changes. |
@@ -112,6 +112,7 @@ This is critical and repeated: **all GitHub interaction in this project goes thr
 | `docs/16-triggers.md` | Webhook listener, delivery dedup, trigger rules, registration, replay. | Webhook/trigger work. |
 | `docs/17-phase1-validation.md` | Manual UI QA checklist for every Phase 1 feature. | Feature/UI behavior changes. |
 | `docs/18-cast-workflows-grid.md` | Design-only plan for per-thread cast, reusable workflows, the Inbox-as-helm dashboard, the 4×4 dynamic grid, and future multi-agent orchestration. **Not approved for implementation** — subject to change. | Design discussions only. |
+| `docs/19-phase2-validation.md` | Manual UI QA checklist for every Phase 2 feature (screening, commit statuses, diff/history). | Feature/UI behavior changes. |
 
 **If you add a doc file, add it to this table.**
 
@@ -150,7 +151,8 @@ Jalebi/
 │   ├── 15-catalog.md
 │   ├── 16-triggers.md
 │   ├── 17-phase1-validation.md
-│   └── 18-cast-workflows-grid.md   ← design-only, NOT approved for implementation
+│   ├── 18-cast-workflows-grid.md   ← design-only, NOT approved for implementation
+│   └── 19-phase2-validation.md
 ├── apps/
 │   ├── server/                    # Flask orchestrator (Python 3.13, uv)
 │   │   ├── pyproject.toml         # uv project; `jalebi` console script → jalebi.app:main
@@ -169,13 +171,16 @@ Jalebi/
 │   │   │   ├── events.py          # per-task SSE bus
 │   │   │   ├── masking.py         # PAT(s)/pattern redaction at ingest
 │   │   │   ├── queue.py           # TaskQueue: workers, run lifecycle, timeout/cancel, publish, review posting
+│   │   │   ├── checkruns.py       # check-run registry + lifecycle (PRD F15, merge gating)
 │   │   │   ├── repos.py           # connected-repo registry service
 │   │   │   ├── tasks.py           # task service (create/list/detail)
-│   │   │   └── routes/            # github.py, repos.py, tasks.py (Flask blueprints)
+│   │   │   ├── screening.py       # ScreeningEngine + ScreeningScheduler (cron, read-only audits)
+│   │   │   ├── cron.py            # minimal 5-field cron matcher for the scheduler
+│   │   │   └── routes/            # github.py, repos.py, tasks.py, screening.py (Flask blueprints)
 │   │   └── tests/                 # pytest (+ conftest)
 │   └── web/                       # React + Vite + Tailwind (built → served by Flask)
 │       └── src/
-│           ├── pages/             # Tasks, TaskDetail
+│           ├── pages/             # Tasks, TaskDetail, Screenings
 │           ├── api/               # REST + SSE client
 │           └── types.ts
 ```
@@ -201,7 +206,7 @@ Reference `docs/00-overview.md` and `HANDOFF.md` for current phase and status.
 
 - **Phase 0 — Foundation (v1, opencode only):** scaffolding, config, SQLite schema, PAT settings + validation, git workspace manager, `AgentAdapter` + opencode adapter, task queue (concurrency 4), run lifecycle (cancel/timeout/retry), publish (auto/manual, `Closes #N`), secret masking, artifacts, minimal Jules-like UI (queue + task detail + follow-up composer), follow-up via `opencode run --session`.
 - **Phase 1 — Catalog & reviewers + event-driven triggers:** catalog agents (personality → `AGENTS.md` injection + skills), reviewer workflow (per-reviewer worktrees + PR review comments), "address reviewers" follow-up, webhook listener + dedup + trigger rules + registration/polling fallback.
-- **Phase 2 — Branch control + screening + merge gating:** source/target branch selectors, screening engine (node-cron, HEAD baseline dedup, findings, ntfy, "new task from finding"), check runs for branch protection.
+- **Phase 2 — Screening + merge gating:** screening engine (cron, HEAD baseline dedup, findings, ntfy, "new task from finding"), commit statuses for branch protection. **complete.**
 - **Phase 3 — Backend parity:** Codex adapter, Claude Code adapter, per-task model dropdown from `listModels()`.
 
 ---

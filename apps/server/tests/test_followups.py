@@ -7,7 +7,7 @@ import pytest
 
 from jalebi import repos, secrets, settings, tasks
 from jalebi.adapters.types import AgentEvent
-from jalebi.db import Run, utcnow
+from jalebi.db import Run, now
 from jalebi.git_workspace import GitWorkspace
 
 FULL_NAME = "owner/repo"
@@ -129,8 +129,8 @@ def _done_task_with_session(
         seq=1,
         session_id=session_id,
         status="done",
-        started_at=utcnow(),
-        finished_at=utcnow(),
+        started_at=now(),
+        finished_at=now(),
     )
     session.add(run)
     task.status = "done"
@@ -200,8 +200,8 @@ def _review_task_with_resumable_session(
         seq=1,
         session_id="ses_orig",
         status="done",
-        started_at=utcnow(),
-        finished_at=utcnow(),
+        started_at=now(),
+        finished_at=now(),
     )
     session.add(run)
     task.status = "done"
@@ -219,7 +219,7 @@ def _with_assignment(session, task, agent_id: str = "reviewer-1", pr_number: int
             pr_number=pr_number,
             repo_id=task.repo_id,
             status="posted",
-            created_at=utcnow(),
+            created_at=now(),
         )
     )
     session.commit()
@@ -406,8 +406,8 @@ def test_pr_review_followup_resumes_in_review_worktree(
         seq=1,
         session_id="ses_orig",
         status="done",
-        started_at=utcnow(),
-        finished_at=utcnow(),
+        started_at=now(),
+        finished_at=now(),
     )
     session.add(run)
     task.status = "done"

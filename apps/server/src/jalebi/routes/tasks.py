@@ -13,7 +13,7 @@ from flask.typing import ResponseReturnValue
 from jalebi import artifacts, db, masking, prompts, reviews, secrets, settings, tasks
 from jalebi.catalog import agent_by_slug
 from jalebi.config import Config
-from jalebi.db import Artifact, Run, Task, utcnow
+from jalebi.db import Artifact, Run, Task, now
 from jalebi.git_workspace import GitWorkspace, PushLeaseFailed
 from jalebi.github import GitHubClient, GitHubError
 from jalebi.queue import PublishConflict, PublishError, TaskQueue
@@ -278,7 +278,7 @@ def cancel_task(task_id: int) -> ResponseReturnValue:
         return jsonify({"error": "task not found"}), 404
     if task.status == "queued":
         task.status = "cancelled"
-        task.updated_at = utcnow()
+        task.updated_at = now()
         session.commit()
         # Also flag any in-flight pickup: if the worker has already registered
         # this task's _RunState (but not yet committed "running"), queue.cancel
@@ -301,7 +301,7 @@ def rerun_task(task_id: int) -> ResponseReturnValue:
     if task.status in ("queued", "running"):
         return jsonify({"error": f"cannot rerun task in state {task.status}"}), 409
     task.status = "queued"
-    task.updated_at = utcnow()
+    task.updated_at = now()
     session.commit()
     _queue().enqueue(task.id)
     return jsonify(_task_dict(session, task))

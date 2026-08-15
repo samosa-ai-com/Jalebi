@@ -252,8 +252,42 @@ class GitHubClient:
             "state": body.get("state"),
             "base": (body.get("base") or {}).get("ref"),
             "head": (body.get("head") or {}).get("ref"),
+            "head_sha": (body.get("head") or {}).get("sha"),
             "author": (body.get("user") or {}).get("login"),
         }
+
+    def set_commit_status(
+        self,
+        full_name: str,
+        sha: str,
+        state: str,
+        context: str,
+        description: str | None = None,
+    ) -> int | None:
+        """Create (or replace) a commit status on ``sha`` (PRD F15).
+
+        GitHub's *check-runs* API is GitHub-App-only (PATs cannot write it), so
+        merge gating uses **commit statuses** instead — the "Commit statuses
+        read/write" scope already required in PRD §F1. A status is keyed by
+        ``(sha, context)``: posting the same context again replaces it, which is
+        exactly the "update, don't duplicate" contract M2 needs. Returns the
+        GitHub status id (or None if the payload lacked one).
+        """
+        payload: dict[str, object] = {"state": state, "context": context}
+        if description is not None:
+            payload["description"] = description
+        status_code, body, _ = self._request(
+            "POST",
+            f"/repos/{full_name}/statuses/{sha}",
+            json=payload,
+        )
+        if status_code != 201:
+            raise GitHubError(
+                f"failed to set commit status '{context}' on {sha[:12]}: HTTP {status_code}"
+            )
+        if isinstance(body, dict) and isinstance(body.get("id"), int):
+            return body["id"]
+        return None
 
     def post_pr_review(self, full_name: str, pr_number: int, body: str) -> None:
         """Post a PR review comment (event COMMENT) — never approves/merges."""

@@ -63,6 +63,17 @@ Queue items are tagged tuples: `("task", task_id)` or `("followup", task_id, bod
 - **pr_review follow-ups post the review too:** both the initial review and a follow-up resume run through the shared `_post_review` — a `done` run posts the review worktree's `.jalebi/review.md` (fallback: the last assistant message) to the PR and sets the assignment to `posted`. A `done` run **with no review content is a failure**, not a silent success: the run/task flip to `failed` with a "nothing to post" diagnostic so a run whose agent ended without a deliverable is never shown as delivered. Follow-up artifacts are captured from the **review** worktree (not the task worktree), so a freshly written `review.md` is not missed.
 - Cancelling a resumed run kills the child; because a cancelled run may capture no `session_id`, follow-ups fall back to the latest run that has one.
 
+## 4c. Commit statuses (PRD F15, Phase 2)
+
+- **Gate:** per-repo opt-in (`repos.check_runs_enabled`) AND task type (`issue_fix`/`pr_review`). Both must hold.
+- **Why statuses, not check runs:** GitHub's check-runs API is GitHub-App only; PATs cannot write it. Commit statuses (`POST /repos/{o}/{r}/statuses/{sha}`) are PAT-writable and branch-protection-requireable — the same merge gate.
+- **Run start:** `_start_status` posts `pending` — `pr_review` on the PR head SHA; `issue_fix` only if the `jalebi/<id>` branch already exists on the remote (re-run/follow-up), else deferred to publish.
+- **Run terminal:** `_complete_status` posts the final state from `task.status` (`done→success`, `failed`/`timed_out→failure`, `cancelled`/`interrupted→error`, else `pending`).
+- **Exception paths:** a worker crash (`_run_task`/`_run_review`/`_run_followup` `except`) now also calls `_complete_status` (best-effort, guarded) after the run is marked `failed`, so a crashed run never leaves a forever-blocking `pending` on the head SHA.
+- **Publish:** `_publish_status` posts the final state on the just-pushed head (auto-publish in `_stream_and_finish`; manual publish in `publish_task`).
+- **Non-fatal:** all status API calls are best-effort; a failure is logged and never fails the task.
+- Registry rows live in `check_runs` (see `docs/02`); `tasks.check_run_id` tracks the latest.
+
 ## 5. Timeouts (PRD F16)
 
 - Per-task `timeout_minutes`, defaulting to `settings.default_timeout_minutes` (**default 60 minutes**; PRD §F16 said 30 — owner-approved deviation). A daemon **watchdog thread** enforces it: on expiry it kills the child (SIGTERM → 5s grace → SIGKILL) and the run resolves to `timed_out`. A timeout of `0` fires immediately (used in tests).

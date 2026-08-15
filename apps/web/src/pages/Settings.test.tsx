@@ -20,6 +20,7 @@ const SETTINGS = {
   notify_progress_interval_minutes: 30,
   webhook_url: "",
   webhook_secret: "",
+  timezone: "local",
 };
 
 function makeFetchMock() {

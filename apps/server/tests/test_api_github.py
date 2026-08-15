@@ -229,7 +229,7 @@ def test_delete_token_reports_affected_repos_and_tasks(
 ) -> None:
     from jalebi import db, repos
     from jalebi import tasks as tasks_svc
-    from jalebi.db import Run, utcnow
+    from jalebi.db import Run, now
 
     monkeypatch.setattr(routes_github, "GitHubClient", FakeClient)
     client.post("/api/github/tokens", json={"name": "work", "token": "ghp_work"})
@@ -247,8 +247,8 @@ def test_delete_token_reports_affected_repos_and_tasks(
         task_id=task.id,
         seq=1,
         status="done",
-        started_at=utcnow(),
-        finished_at=utcnow(),
+        started_at=now(),
+        finished_at=now(),
     )
     session.add(run)
     session.commit()

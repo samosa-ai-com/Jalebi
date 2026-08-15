@@ -160,7 +160,7 @@ def _reserve_delivery(session, delivery_id, event, action, full_name, payload):
         repo_id=None,  # resolved after reservation
         repo_full_name=full_name,
         payload_json=json.dumps(payload),
-        received_at=db.utcnow(),
+        received_at=db.now(),
         status="received",
     )
     session.add(row)

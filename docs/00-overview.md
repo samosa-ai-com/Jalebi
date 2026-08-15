@@ -77,12 +77,13 @@ The authoritative behavioral spec is **`JALEBI_PRD.md`** at the repo root. This 
 | `16-triggers.md` | Webhook listener, trigger rules, deliveries, registration, replay. |
 | `17-phase1-validation.md` | Manual UI QA checklist for every Phase 1 feature. |
 | `18-cast-workflows-grid.md` | Design-only plan for the Inbox-as-helm grid dashboard — **not approved** for implementation. |
+| `19-phase2-validation.md` | Manual UI QA checklist for every Phase 2 feature (screening, commit statuses, diff/history). |
 
 ## 6. Roadmap (phases)
 
 - **Phase 0 — Foundation (v1, opencode only):** scaffolding, config, SQLite schema, PAT settings + validation, git workspace manager, `AgentAdapter` + opencode adapter, task queue (concurrency 4), run lifecycle (cancel/timeout/retry), publish (auto/manual, `Closes #N`), secret masking, minimal Jules-like UI (queue + task detail + live console), follow-up via `opencode run --session`, artifacts (F18), restart recovery + live concurrency. **Status: complete (hardened).**
 - **Phase 1 — Catalog & reviewers + event-driven triggers:** catalog agents, reviewer workflow, "address reviewers" follow-up, webhook listener + dedup + trigger rules + registration. **Status: complete (polling fallback deferred/inert).**
-- **Phase 2 — Branch control + screening + merge gating:** source/target branch selectors, screening engine, check runs for branch protection.
+- **Phase 2 — Screening + merge gating:** screening engine, commit statuses for branch protection, diff-view polish + task history. **Status: complete.**
 - **Phase 3 — Backend parity:** Codex adapter, Claude Code adapter, per-task model dropdown from `listModels()`.
 
 See `HANDOFF.md` for the current phase and live status.

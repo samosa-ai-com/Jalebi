@@ -58,8 +58,8 @@
 | `pr_number` | int null | |
 | `publish_mode` | text null | `'auto'` \| `'manual'` \| NULL (fall back to the global `auto_publish` setting). `issue_fix` defaults to `auto`; freeform/manual types to `manual`. |
 | `check_run_id` | int null | **no FK yet**; check_runs table arrives in Phase 2 |
-| `created_at` | datetime | naive UTC |
-| `updated_at` | datetime | naive UTC |
+| `created_at` | datetime | naive local (app timezone, see `jalebi/clock.py`) |
+| `updated_at` | datetime | naive local (app timezone, see `jalebi/clock.py`) |
 
 Indexes: `repo_id`, `status`.
 
@@ -181,6 +181,64 @@ delivery, every matched rule's id is recorded in `result.rules[].rule_id`
 (Step 45/M5 dropped the single-value `matched_rule_id` column, which
 could only record `rules[0].id`).
 
+### `screenings` (Phase 2 — PRD F10)
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | int PK | |
+| `repo_id` | int FK → repos (CASCADE) | the repo being audited |
+| `name` | text | human-readable screen name |
+| `system_prompt` | text | the audit system prompt |
+| `cadence_cron` | text, default `'0 6 * * *'` | 5-field cron (see `jalebi/cron.py`) — matched against the app's **configured timezone** (default: the machine's local zone) |
+| `scope_branch` | text, null | NULL = repo default branch |
+| `cli` | text, null | optional backend pin (default `opencode`); NULL = default adapter |
+| `model` | text, null | optional model pin; NULL = adapter default |
+| `enabled` | bool | disabled screens never run |
+| `notify_ntfy` | bool | push findings via ntfy |
+| `created_at` / `updated_at` | datetime | |
+
+Index: `repo_id`. Screening is **notify-only** — it never creates tasks/PRs;
+the owner converts findings into `screen_finding` tasks. See `docs/07`.
+
+### `screening_runs` (Phase 2 — PRD F10)
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | int PK | |
+| `screening_id` | int FK → screenings (CASCADE) | |
+| `head_sha` | text, null | the audited HEAD — also the baseline-dedup watermark |
+| `status` | text, default `'queued'` | `queued` \| `running` \| `done` \| `failed` |
+| `started_at` / `finished_at` | datetime, null | |
+| `findings_json` | text, null | parsed JSON array of findings |
+| `output_json` | text, null | masked raw output `{"message": …}` |
+| `error` | text, null | run failure detail |
+
+Index: `screening_id`. A screen skips a tick when its last terminal run
+(`done`/`failed`) audited the same `head_sha` (baseline dedup).
+
+### `check_runs` (Phase 2 — PRD F15)
+
+Jalebi's **registry of the commit statuses it set** (commit statuses, not GitHub check runs — the check-runs API is GitHub-App only). One row per `(task_id, head_sha, context)`.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | int PK | |
+| `task_id` | int FK → tasks | the task reporting this status |
+| `run_id` | int FK → runs, null | the run that set it |
+| `repo_id` | int FK → repos | |
+| `head_sha` | text, null | the SHA the status is attached to |
+| `name` | text | context: `Jalebi / fix` \| `Jalebi / review` |
+| `status` | text, default `'queued'` | `in_progress` (pending) \| `completed` |
+| `conclusion` | text, null | `NULL` while pending; terminal state `success` \| `failure` \| `error` |
+| `github_check_id` | int, null | GitHub-side commit-status id |
+| `created_at` | datetime | |
+
+Indexes: `task_id`, `head_sha`. `tasks.check_run_id` points at the latest row
+and is deliberately **FK-less** (a SQLite batch rebuild of the FK parent
+`tasks` is the Step-37 migration hazard). A follow-up updates the existing row
+(matched by `(task_id, head_sha, name)`); a new pushed head gets a fresh row.
+See `docs/05` §5.
+
 ### `settings`
 
 | Column | Type | Notes |
@@ -238,4 +296,4 @@ runs  0───1 review_assignments  (run_id, set when the reviewer run starts)
 
 ## 5. Not yet implemented (later phases)
 
-`check_runs`, `screenings`, `screening_runs`, `findings` — created by future migrations per PRD §10.
+None — all Phase-0/1/2 tables are materialized. (Phase 3 adds no new tables.)

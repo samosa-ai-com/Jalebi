@@ -227,7 +227,7 @@ def test_delete_task_cascade_handles_all_children(client, session, repo_id: int)
     from sqlalchemy import select
 
     from jalebi import catalog
-    from jalebi.db import Artifact, Followup, ReviewAssignment, Run, Task, utcnow
+    from jalebi.db import Artifact, Followup, ReviewAssignment, Run, Task, now
 
     catalog.create_agent(
         session, id="auditor-cascade", name="A", kind="reviewer",
@@ -238,7 +238,7 @@ def test_delete_task_cascade_handles_all_children(client, session, repo_id: int)
     ).get_json()["id"]
     run = Run(
         task_id=task_id, seq=1, session_id="s1", status="running",
-        started_at=utcnow(),
+        started_at=now(),
     )
     session.add(run)
     session.commit()
@@ -246,7 +246,7 @@ def test_delete_task_cascade_handles_all_children(client, session, repo_id: int)
     session.add(Artifact(run_id=run.id, path="a.txt", size=1))
     session.add(ReviewAssignment(
         task_id=task_id, agent_id="auditor-cascade", pr_number=1,
-        repo_id=repo_id, status="queued", created_at=utcnow(),
+        repo_id=repo_id, status="queued", created_at=now(),
     ))
     session.commit()
 
@@ -356,15 +356,15 @@ def test_followup_uses_task_account_by_default(app, client, session, monkeypatch
         pat_name="test",
     )
     task = tasks.create_task(session, type_="freeform", repo_id=row.id, prompt="do it")
-    from jalebi.db import Run, utcnow
+    from jalebi.db import Run, now
 
     run = Run(
         task_id=task.id,
         seq=1,
         session_id="ses_1",
         status="done",
-        started_at=utcnow(),
-        finished_at=utcnow(),
+        started_at=now(),
+        finished_at=now(),
     )
     session.add(run)
     session.commit()
@@ -398,15 +398,15 @@ def test_followup_rejects_unknown_pat(app, client, session, monkeypatch) -> None
         pat_name="test",
     )
     task = tasks.create_task(session, type_="freeform", repo_id=row.id, prompt="do it")
-    from jalebi.db import Run, utcnow
+    from jalebi.db import Run, now
 
     run = Run(
         task_id=task.id,
         seq=1,
         session_id="ses_1",
         status="done",
-        started_at=utcnow(),
-        finished_at=utcnow(),
+        started_at=now(),
+        finished_at=now(),
     )
     session.add(run)
     session.commit()
@@ -423,7 +423,7 @@ def test_followup_rejects_unknown_pat(app, client, session, monkeypatch) -> None
 
 def test_run_diff_endpoint(client: FlaskClient, session) -> None:
     from jalebi import tasks as tasks_svc
-    from jalebi.db import Run, utcnow
+    from jalebi.db import Run, now
 
     row, _ = repos.upsert_repo(
         session,
@@ -433,7 +433,7 @@ def test_run_diff_endpoint(client: FlaskClient, session) -> None:
         pat_name="test",
     )
     task = tasks_svc.create_task(session, type_="freeform", repo_id=row.id, prompt="x")
-    run = Run(task_id=task.id, seq=1, status="done", started_at=utcnow(), diff_text="+a\n-b\n")
+    run = Run(task_id=task.id, seq=1, status="done", started_at=now(), diff_text="+a\n-b\n")
     session.add(run)
     session.commit()
     run_id = run.id
@@ -451,7 +451,7 @@ def test_run_diff_endpoint(client: FlaskClient, session) -> None:
     assert resp.status_code == 404
 
     # A run with no diff returns "" (not an error).
-    no_diff = Run(task_id=other.id, seq=1, status="done", started_at=utcnow())
+    no_diff = Run(task_id=other.id, seq=1, status="done", started_at=now())
     session.add(no_diff)
     session.commit()
     resp = client.get(f"/api/tasks/{other.id}/runs/{no_diff.id}/diff")

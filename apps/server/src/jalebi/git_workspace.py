@@ -122,6 +122,10 @@ class GitWorkspace:
     def review_worktree_path(data_dir: Path, task_id: int) -> Path:
         return data_dir / "ws" / f"task-{task_id}-review"
 
+    @staticmethod
+    def screening_worktree_path(data_dir: Path, run_id: int) -> Path:
+        return data_dir / "ws" / f"screen-{run_id}"
+
     def _lock_for(self, full_name: str) -> threading.Lock:
         with self._locks_guard:
             if full_name not in self._locks:
@@ -350,6 +354,52 @@ class GitWorkspace:
                         "-d",
                         f"refs/remotes/origin/pr-{pr_number}",
                     ]
+                )
+        return None
+
+    def create_detached_worktree(
+        self,
+        full_name: str,
+        branch: str,
+        worktree_path: Path,
+        token: str | None = None,
+    ) -> Path:
+        """Check out ``origin/<branch>`` into a detached read-only worktree.
+
+        Screening worktrees (PRD F10) audit a branch HEAD with a read-only
+        prompt — the agent never pushes. The worktree is detached at the
+        current ``origin/<branch>`` HEAD; on reuse it is hard-reset to the
+        latest HEAD. Requires the mirror to exist (``ensure_mirror`` first).
+        """
+        mirror = self.mirror_path(self.config.data_dir, full_name)
+        auth = _auth_env(token)
+        ref = f"refs/remotes/origin/{branch}"
+
+        with self._lock_for(full_name):
+            if not mirror.exists():
+                raise GitWorkspaceError(f"mirror missing for {full_name}; call ensure_mirror first")
+            _run_git(
+                ["-C", str(mirror), "fetch", "origin", branch],
+                auth_env=auth,
+            )
+            if not (worktree_path / ".git").is_file():
+                _run_git(
+                    ["-C", str(mirror), "worktree", "add", "--detach", str(worktree_path), ref],
+                    auth_env=auth,
+                )
+            else:
+                _run_git(["-C", str(worktree_path), "reset", "--hard", ref], auth_env=auth)
+        return worktree_path
+
+    def remove_detached_worktree(self, worktree_path: Path, full_name: str) -> None:
+        """Remove a detached screening worktree (no-op if absent)."""
+        mirror = self.mirror_path(self.config.data_dir, full_name)
+        with self._lock_for(full_name):
+            if not mirror.exists():
+                return
+            if (worktree_path / ".git").is_file():
+                _run_git(
+                    ["-C", str(mirror), "worktree", "remove", "--force", str(worktree_path)]
                 )
         return None
 

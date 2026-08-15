@@ -8,6 +8,9 @@ import type {
   Health,
   Repo,
   Run,
+  Screen,
+  ScreeningRun,
+  ScreenTemplate,
   SettingsMap,
   SseEvent,
   Task,
@@ -136,6 +139,40 @@ export const api = {
       `/api/webhooks/deliveries/${id}/replay`,
       { method: "POST" }
     ),
+  getScreenTemplates: () => request<ScreenTemplate[]>("/api/screenings/templates"),
+  getScreens: () => request<Screen[]>("/api/screenings"),
+  createScreen: (input: {
+    repo_id: number;
+    name: string;
+    system_prompt: string;
+    cadence_cron: string;
+    scope_branch?: string | null;
+    cli?: string | null;
+    model?: string | null;
+    enabled?: boolean;
+    notify_ntfy?: boolean;
+  }) => request<Screen>("/api/screenings", { method: "POST", body: JSON.stringify(input) }),
+  updateScreen: (
+    id: number,
+    input: Partial<{
+      name: string;
+      system_prompt: string;
+      cadence_cron: string;
+      scope_branch: string | null;
+      cli: string | null;
+      model: string | null;
+      enabled: boolean;
+      notify_ntfy: boolean;
+    }>
+  ) => request<Screen>(`/api/screenings/${id}`, { method: "PUT", body: JSON.stringify(input) }),
+  deleteScreen: (id: number) => request<{ ok: boolean }>(`/api/screenings/${id}`, { method: "DELETE" }),
+  runScreen: (id: number) =>
+    request<{ ok: boolean; screening_id: number }>(`/api/screenings/${id}/run`, {
+      method: "POST",
+    }),
+  getScreenRuns: (id: number) => request<ScreeningRun[]>(`/api/screenings/${id}/runs`),
+  getRepoBranches: (repoId: number) =>
+    request<{ full_name: string; branches: string[] }>(`/api/repos/${repoId}/branches`),
   registerWebhook: (repoId: number) =>
     request<{ full_name: string; webhook_url: string; registered: boolean }>(
       `/api/repos/${repoId}/webhook`,
@@ -153,8 +190,7 @@ export const api = {
   getEnvVars: (repoId?: number) =>
     request<EnvVar[]>(
       `/api/envvars${repoId ? `?repo_id=${repoId}` : ""}`
-    ),
-  upsertEnvVar: (name: string, value: string, repoId?: number | null) =>
+    ),  upsertEnvVar: (name: string, value: string, repoId?: number | null) =>
     request<EnvVar>(`/api/envvars`, {
       method: "POST",
       body: JSON.stringify({ name, value, repo_id: repoId ?? null }),
@@ -237,6 +273,8 @@ export const api = {
     }),
   disconnectRepo: (id: number) =>
     request<{ disconnected: string }>(`/api/repos/${id}`, { method: "DELETE" }),
+  updateRepo: (id: number, input: { check_runs_enabled?: boolean }) =>
+    request<Repo>(`/api/repos/${id}`, { method: "PATCH", body: JSON.stringify(input) }),
   pruneRepos: () =>
     request<{ removed: string[] }>("/api/repos/prune", { method: "POST" }),
   artifactUrl: (taskId: number, artifactId: number) =>

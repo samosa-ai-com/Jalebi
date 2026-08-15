@@ -48,7 +48,7 @@ Connected-repo registry (`jalebi/routes/repos.py`, `/api/repos`):
 | `POST /api/repos` | `{"full_name": "<owner/repo>"}` → `GitHubClient.get_repo` → upsert into the `repos` table. 201 created / 200 updated; 409 no token; 404 not found; 400 bad body. |
 | `GET /api/repos` | Lists connected repos from the `repos` table (DB, not GitHub). |
 
-Implemented via the same client (Phase 0): issue/PR context fetch, publish (create/reuse PR), issue comments, PR review comments, paginated listing. **Planned (later phases):** webhook registration/management, commit statuses/check runs.
+Implemented via the same client (Phase 0): issue/PR context fetch, publish (create/reuse PR), issue comments, PR review comments, paginated listing. **Phase 1:** webhook registration/management. **Phase 2:** commit statuses (see §5).
 
 ## 4. Webhooks (PRD §F14) — implemented (Phase 1)
 
@@ -64,14 +64,28 @@ Implemented via the same client (Phase 0): issue/PR context fetch, publish (crea
 2. Listener validates (optional `X-Hub-Signature-256` secret) and **idempotently** dedups the delivery.
 3. Matches the event against the user's **trigger rules** (`/api/triggers`).
 4. A matching rule creates and enqueues task(s) immediately (e.g. PR opened ⇒ assigned reviewers auto-start).
-5. Runs proceed exactly like manual tasks (timeline, logs, diffs). **Check runs** arrive in Phase 2.
+5. Runs proceed exactly like manual tasks (timeline, logs, diffs). **Commit statuses** are reported when the repo opts in (Phase 2 — see §5).
 
-## 5. Check runs & merge gating (PRD §F15) — Phase 2, NOT implemented
+## 5. Commit statuses & merge gating (PRD §F15) — implemented (Phase 2)
 
-- **Planned:** Jalebi creates **check runs** (commit statuses) on the head SHA of the branch it's working on, via the PAT (`POST /repos/{owner}/{repo}/check-runs`).
-- Lifecycle mirrors a run: `queued` → `in_progress` (friendly name like `Jalebi / review (security-auditor)`) → `completed` with `conclusion` (`success`/`failure`/`neutral`/`cancelled`). Status updates are posted against the latest pushed HEAD SHA on `jalebi/<taskId>`.
-- Because these are real check runs, **branch protection** can require them — merging is blocked until the agent's review/fix check is green. Opt-in per repo.
-- Failure/success of the underlying task drives the conclusion; a follow-up updates the existing check rather than creating duplicates (matched by name + head SHA).
+**Why commit statuses, not check runs:** GitHub's *check-runs* API is GitHub-App only — PATs cannot write it, and Jalebi is PAT-driven (§F1). Merge gating uses **commit statuses** (`POST /repos/{owner}/{repo}/statuses/{sha}`), which the PAT *can* write ("Commit statuses read/write" is a required scope) and which **branch protection can require** — the same merge-gating outcome.
+
+**What they're for (two purposes):**
+
+1. **Merge gating (primary):** a status is a real, branch-protection-requireable check. Add the `Jalebi / fix` / `Jalebi / review` contexts to the repo's required status checks and GitHub physically blocks merging a PR until Jalebi's status is green.
+2. **Informational signaling:** the status dot on the PR tells anyone looking at it — teammates, or another Jalebi instance — that Jalebi has **already** reviewed/fixed this commit, so they won't re-trigger a review. The `pending → success/failure/error` transition makes work-in-progress and outcome visible on the PR itself without opening Jalebi.
+
+**Accuracy nuance:** the early "review in progress" (`pending`) dot is a **pr_review** behavior — Jalebi posts it on the PR head at run start. `issue_fix` posts its status only at **publish time** (the `jalebi/<id>` branch doesn't exist until the first push), so an issue_fix PR shows `pending` only briefly before flipping terminal.
+
+- **Opt-in per repo:** the **Repos page** has a per-repo "check runs: on/off" toggle (`PATCH /api/repos/<id>` → `repos.check_runs_enabled`). Only `issue_fix` and `pr_review` tasks on such repos report statuses.
+- **Status keying:** a commit status is keyed by `(sha, context)` — posting the same context again **replaces** GitHub's status for that SHA, which is the "update, don't duplicate" contract. Contexts: `Jalebi / fix` and `Jalebi / review`.
+- **Lifecycle:** run start posts `pending`; run terminal posts the final state from `task.status` — `done → success`, `failed`/`timed_out → failure`, `cancelled`/`interrupted → error`, `needs_approval`/other → `pending` (still blocks a merge under branch protection).
+- **Head SHA:** `pr_review` → the PR head SHA (available at run start). `issue_fix` → the pushed `jalebi/<taskId>` head, which exists only after the first push — so the status is set at **publish time** (auto or manual).
+- **Registry:** the `check_runs` table mirrors each status (task, run, head SHA, context, state, GitHub status id). `tasks.check_run_id` points at the latest row (FK-less by design). A follow-up updates the existing status for the same head; a new pushed head gets a fresh one.
+- **Non-fatal:** any status API failure is logged and never fails the underlying task.
+- Because these are real commit statuses, **branch protection** can require them — merging is blocked until the agent's review/fix status is green. The owner enables the per-repo toggle and adds the status context to branch protection in the GitHub UI.
+
+**GitHub client additions** (`jalebi/github.py`): `set_commit_status(full_name, sha, state, context, description=None) → status_id`. `get_pr` now also returns `head_sha`.
 
 ## 6. Reviewer posting (PRD §F7)
 

@@ -48,6 +48,11 @@ DEFAULTS: dict[str, object] = {
     # Optional HMAC secret verified against X-Hub-Signature-256 on POST /webhook.
     # Empty = signature check disabled (only safe on a localhost-only install).
     "webhook_secret": "",
+    # The timezone the app's wall clock lives in: "local" (the machine's system
+    # zone) or an IANA name (e.g. "Asia/Kolkata"). Drives the screening cron
+    # scheduler (cadence = wall clock in this zone) and every stored/displayed
+    # timestamp.
+    "timezone": "local",
 }
 
 SETTING_KEYS = tuple(DEFAULTS)

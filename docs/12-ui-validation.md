@@ -212,11 +212,39 @@
 
 ## 9. Known limitations (do NOT expect these yet)
 
-- Screenings/triggers/agents pages, webhooks, and check-run gating — later phases.
+- Triggers gating setup is GitHub-side (branch protection) — later phases.
 - **Artifacts only capture untracked files** — a task that commits all its output shows no artifacts.
 - **Worktree cleanup** (deleting done-task worktrees after N days) is not implemented.
 - `interrupted` tasks are resumable via **Re-run** (fresh session) or **Follow-up** (if a session survived).
 - Single localhost port, no HTTPS — don't expose the server without the optional `JALEBI_PASSWORD` Basic-auth gate.
+
+---
+
+## 9a. Screenings manual QA (Phase 2)
+
+> The comprehensive, step-by-step Phase 2 checklist now lives in `docs/19-phase2-validation.md`. These 9a/9b checks are the quick version.
+
+Run against a connected repo with a PAT bound (or the whole flow fails with a clear error):
+
+1. **Templates** — `/screenings` → **New screen** → pick a starter template → name/cron/prompt pre-fill.
+2. **Create + validation** — create a screen with a bad cron (e.g. `bogus`) → 400 "invalid cadence_cron". Create with a valid cron on a connected repo → card appears.
+3. **Run now** — click **Run now** → the card's History expands with a `running` → `done` run (the audit actually runs against the repo HEAD).
+4. **Findings** — a run with findings shows severity chips, titles, file:line, detail, recommendation. Empty findings show "No findings."
+5. **New task from finding** — click it → a `screen_finding` task appears in the queue (default manual publish).
+6. **Baseline dedup** — run the screen twice with no new commits on the audited branch → the second tick does not create a new run (only `Run now` forces).
+7. **Delete** — confirm → the screen (and its runs) disappears.
+8. **ntfy** — with `ntfy_topic` set and `notify_ntfy` on, a findings run pushes a "N finding(s)" notification.
+
+## 9b. Diff-view + run-history manual QA (Phase 2)
+
+> See `docs/19-phase2-validation.md` §9 for the full checklist (incl. run-duration ticking, renames `a → b`, and the multi-file collapse behavior).
+
+Run against a task with at least two runs (e.g. run a fix, then a follow-up):
+
+1. **Run history** — Task detail with >1 run shows the **Run history** list (not just a dropdown). Each row: `#seq`, status badge, start time, duration (a finished run shows `Xm Ys`; a running one ticks), and `diff`/`artifact` markers where applicable. Clicking a row switches the timeline, console, artifacts, and diff to that run.
+2. **Diff file label + stats** — open a run that captured a diff. The diff header shows a friendly **file label** (e.g. `src/app.ts` instead of the raw `diff --git` line), per-file `+n`/`−n` counts, and a total `N files +n −m` line. Renames render as `a → b`.
+3. **Collapse** — a multi-file diff collapses each file under its label; a single-file diff is auto-open. The raw `diff --git` header is still visible inside each file block.
+4. **Regression** — a run with no diff shows no Diff section; the empty/loading states still render without error.
 
 ---
 

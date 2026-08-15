@@ -16,6 +16,8 @@ from sqlalchemy import func, select
 from jalebi import (
     artifacts,
     catalog,
+    checkruns,
+    clock,
     envvars,
     masking,
     messaging,
@@ -30,7 +32,7 @@ from jalebi import (
 from jalebi.adapters import get_adapter
 from jalebi.adapters.types import AgentEvent
 from jalebi.config import Config
-from jalebi.db import CatalogAgent, Repo, Run, Session, Task, utcnow
+from jalebi.db import CatalogAgent, Repo, Run, Session, Task, now
 from jalebi.events import TaskEvents
 from jalebi.git_workspace import GitWorkspace, PushLeaseFailed
 from jalebi.github import GitHubClient
@@ -304,14 +306,14 @@ class TaskQueue:
                 if run.pid:
                     _kill_pid(run.pid)
                 run.status = "interrupted"
-                run.finished_at = utcnow()
+                run.finished_at = now()
             task_ids = {r.task_id for r in running_runs}
             running_tasks = list(
                 session.execute(select(Task).where(Task.status == "running")).scalars()
             )
             for task in running_tasks:
                 task.status = "interrupted"
-                task.updated_at = utcnow()
+                task.updated_at = now()
                 task_ids.add(task.id)
             queued = list(
                 session.execute(select(Task).where(Task.status == "queued")).scalars()
@@ -415,12 +417,12 @@ class TaskQueue:
             seq=seq,
             cli=cli,
             model=task.model,
-            started_at=utcnow(),
+            started_at=now(),
             status="running",
         )
         session.add(run)
         task.status = "running"
-        task.updated_at = utcnow()
+        task.updated_at = now()
         session.commit()
         session.refresh(run)
         # Each run gets a fresh seq + replay buffer so a stale subscriber's seq
@@ -487,12 +489,12 @@ class TaskQueue:
                         "the agent process hung and was terminated. Re-run the task "
                         "or check the agent/opencode configuration."
                     ),
-                    "ts": utcnow().isoformat(),
+                    "ts": clock.to_iso(now()),
                 }
             )
 
         run.session_id = handle.session_id
-        run.finished_at = utcnow()
+        run.finished_at = now()
         run.steps_json = json.dumps(steps[-MAX_STEPS:])
 
         final_status: str = (
@@ -506,7 +508,7 @@ class TaskQueue:
         )
         run.status = final_status
         task.status = final_status
-        task.updated_at = utcnow()
+        task.updated_at = now()
         if final_status == "done":
             # Deliverable met: the auto-recovery escalation (which is derived
             # from retry_count) resets so the next run starts from the base
@@ -521,6 +523,8 @@ class TaskQueue:
             if self._branch_ahead(task, git):
                 try:
                     task.pr_number = self._publish(task, repo, token, git, masker=masker)
+                    self._publish_status(session, task, repo, git, token)
+                    session.commit()
                 except Exception as exc:
                     task.status = "needs_approval"
                     logger.warning("auto-publish failed for task %s: %s", task.id, exc)
@@ -529,7 +533,7 @@ class TaskQueue:
                             "type": "error",
                             "phase": None,
                             "text": f"publish failed: {exc}",
-                            "ts": utcnow().isoformat(),
+                            "ts": clock.to_iso(now()),
                         }
                     )
                     run.steps_json = json.dumps(steps[-MAX_STEPS:])
@@ -563,7 +567,7 @@ class TaskQueue:
                         f"Skipped {len(skipped)} artifact(s) — too large or contained "
                         "a secret value: " + ", ".join(skipped[:10])
                     ),
-                    "ts": utcnow().isoformat(),
+                    "ts": clock.to_iso(now()),
                 }
             )
             run.steps_json = json.dumps(steps[-MAX_STEPS:])
@@ -613,7 +617,7 @@ class TaskQueue:
                             f"Agent left {len(dirty)} uncommitted file(s) in the "
                             f"worktree: {names}."
                         ),
-                        "ts": utcnow().isoformat(),
+                        "ts": clock.to_iso(now()),
                     }
                 )
                 if not run.diff_text:
@@ -664,6 +668,11 @@ class TaskQueue:
         session = Session()
         run: Run | None = None
         state: _RunState | None = None
+        # Initialized here so the exception path can (best-effort) close out the
+        # commit status even if the failure happened mid-setup.
+        repo: Repo | None = None
+        token: str | None = None
+        git: GitWorkspace | None = None
         try:
             task = session.get(Task, task_id)
             if task is None:
@@ -756,6 +765,7 @@ class TaskQueue:
             run.pid = getattr(state.handle.proc, "pid", None)
             run.model = effective_model  # record the effective (possibly agent-pinned) model
             session.commit()
+            self._start_status(session, task, repo, run, git, token)
             self._start_watchdog(task, state, timeout, stall_timeout=self._stall_timeout(session))
 
             if state.reason == "cancelled":
@@ -764,6 +774,8 @@ class TaskQueue:
             self._stream_and_finish(
                 session, task, repo, run, git, token, masker, state.handle, state
             )
+            session.commit()
+            self._complete_status(session, task, repo, run, git, token)
             session.commit()
             self._maybe_recover(session, task, run)
         except Exception:
@@ -777,14 +789,28 @@ class TaskQueue:
             task = session.get(Task, task_id)
             if task is not None and task.status != "cancelled":
                 task.status = "failed"
-                task.updated_at = utcnow()
+                task.updated_at = now()
             if run_id is not None:
                 # Re-fetch after rollback — the pre-rollback object may be stale.
                 run = session.get(Run, run_id)
                 if run is not None:
                     run.status = "failed"
-                    run.finished_at = utcnow()
+                    run.finished_at = now()
             session.commit()
+            # Close out the commit status so a crashed run doesn't leave a
+            # permanently-blocking `pending` on the head SHA (best-effort; the
+            # status API is non-fatal). Only when setup got far enough to matter.
+            if (
+                task is not None
+                and run is not None
+                and repo is not None
+                and token is not None
+                and git is not None
+            ):
+                try:
+                    self._complete_status(session, task, repo, run, git, token)
+                except Exception:
+                    logger.exception("could not set terminal status after run failure")
         finally:
             session.close()
             self.events.close(task_id)
@@ -814,6 +840,7 @@ class TaskQueue:
         run.pat_name = task.pat_name
         session.commit()
 
+        git: GitWorkspace | None = None
         try:
             # If this reviewer task has an assignment, mark it running (with the run).
             reviews.set_assignment_status(session, task.id, "running", run_id=run.id)
@@ -840,6 +867,7 @@ class TaskQueue:
             run.pid = getattr(state.handle.proc, "pid", None)
             run.model = effective_model  # record the effective (possibly agent-pinned) model
             session.commit()
+            self._start_status(session, task, repo, run, git, token)
             self._start_watchdog(task, state, timeout, stall_timeout=self._stall_timeout(session))
 
             if state.reason == "cancelled":
@@ -863,6 +891,12 @@ class TaskQueue:
             self._post_review(
                 session, task, repo, pr_number, wt, run, token, masker
             )
+            # Complete AFTER _post_review so a review that failed to post (or a
+            # done run with no review content that was flipped to failed) yields
+            # a failure status — a green status for a failed review would defeat
+            # the merge gate.
+            self._complete_status(session, task, repo, run, git, token)
+            session.commit()
         except Exception:
             logger.exception("pr_review task %s failed", task.id)
             run_id = run.id
@@ -874,11 +908,18 @@ class TaskQueue:
             run = session.get(Run, run_id)
             if run is not None:
                 run.status = "failed"
-                run.finished_at = utcnow()
+                run.finished_at = now()
             if task.status not in ("cancelled",):
                 task.status = "failed"
-                task.updated_at = utcnow()
+                task.updated_at = now()
             session.commit()
+            # Best-effort: a crashed review must not leave a forever-`pending`
+            # status on the PR head (never raise out of the handler).
+            if git is not None:
+                try:
+                    self._complete_status(session, task, repo, run, git, token)
+                except Exception:
+                    logger.exception("could not set terminal status after review failure")
             reviews.set_assignment_status(session, task.id, "failed", run_id=run_id)
         return run
 
@@ -919,9 +960,9 @@ class TaskQueue:
             # AND the task so the timeline/status never claim a review was
             # delivered that does not exist.
             run.status = "failed"
-            run.finished_at = utcnow()
+            run.finished_at = now()
             task.status = "failed"
-            task.updated_at = utcnow()
+            task.updated_at = now()
             steps = json.loads(run.steps_json or "[]")
             steps.append(
                 {
@@ -931,7 +972,7 @@ class TaskQueue:
                         "Run finished without writing a review; nothing to post "
                         "to the PR."
                     ),
-                    "ts": utcnow().isoformat(),
+                    "ts": clock.to_iso(now()),
                 }
             )
             run.steps_json = json.dumps(steps[-MAX_STEPS:])
@@ -953,7 +994,7 @@ class TaskQueue:
                     "type": "message",
                     "phase": None,
                     "text": f"Review posted to PR #{pr_number}.",
-                    "ts": utcnow().isoformat(),
+                    "ts": clock.to_iso(now()),
                 }
             )
             run.steps_json = json.dumps(steps[-MAX_STEPS:])
@@ -967,10 +1008,17 @@ class TaskQueue:
                     "type": "error",
                     "phase": None,
                     "text": f"posting review to PR #{pr_number} failed: {exc}",
-                    "ts": utcnow().isoformat(),
+                    "ts": clock.to_iso(now()),
                 }
             )
             run.steps_json = json.dumps(steps[-MAX_STEPS:])
+            # A review that could not be posted has no deliverable on GitHub —
+            # flip the run/task so the commit status (set after _post_review)
+            # reports failure, not success, and the merge gate stays closed.
+            run.status = "failed"
+            run.finished_at = now()
+            task.status = "failed"
+            task.updated_at = now()
             session.commit()
             reviews.set_assignment_status(session, task.id, "failed", run_id=run.id)
 
@@ -1115,6 +1163,9 @@ class TaskQueue:
         session = Session()
         run: Run | None = None
         state: _RunState | None = None
+        repo: Repo | None = None
+        token: str | None = None
+        git: GitWorkspace | None = None
         try:
             task = session.get(Task, task_id)
             if task is None:
@@ -1193,6 +1244,7 @@ class TaskQueue:
             )
             run.pid = getattr(state.handle.proc, "pid", None)
             session.commit()
+            self._start_status(session, task, repo, run, git, token)
             self._start_watchdog(task, state, timeout, stall_timeout=self._stall_timeout(session))
 
             if state.reason == "cancelled":
@@ -1220,6 +1272,10 @@ class TaskQueue:
                     self._post_review(
                         session, task, repo, pr_number, wt, run, token, masker
                     )
+            # Complete AFTER the review post (see _run_review) so a failed review
+            # yields a failure status, not a green one.
+            self._complete_status(session, task, repo, run, git, token)
+            session.commit()
             if not auto:
                 # Auto-recovery resumes are not user follow-ups; only real
                 # follow-ups get a row (the recovery step is on the failed run).
@@ -1244,13 +1300,26 @@ class TaskQueue:
             task = session.get(Task, task_id)
             if task is not None and task.status not in ("cancelled", "done"):
                 task.status = "failed"
-                task.updated_at = utcnow()
+                task.updated_at = now()
             if run_id is not None:
                 run = session.get(Run, run_id)
                 if run is not None:
                     run.status = "failed"
-                    run.finished_at = utcnow()
+                    run.finished_at = now()
             session.commit()
+            # Best-effort: close out the pending status on a failed follow-up too
+            # (never raise out of the handler).
+            if (
+                task is not None
+                and run is not None
+                and repo is not None
+                and token is not None
+                and git is not None
+            ):
+                try:
+                    self._complete_status(session, task, repo, run, git, token)
+                except Exception:
+                    logger.exception("could not set terminal status after follow-up failure")
         finally:
             session.close()
             self.events.close(task_id)
@@ -1340,7 +1409,8 @@ class TaskQueue:
             if mode != "push_branch":
                 task.pr_number = pr_number
             task.status = "done"
-            task.updated_at = utcnow()
+            task.updated_at = now()
+            self._publish_status(session, task, repo, git, token)
             # Append a timeline step so the owner sees what mode actually ran.
             run = tasks.latest_run(session, task.id)
             if run is not None:
@@ -1352,7 +1422,7 @@ class TaskQueue:
                 else:  # push_branch
                     text = f"Pushed to branch `{target_branch}`."
                 steps.append(
-                    {"type": "message", "phase": None, "text": text, "ts": utcnow().isoformat()}
+                    {"type": "message", "phase": None, "text": text, "ts": clock.to_iso(now())}
                 )
                 run.steps_json = json.dumps(steps[-MAX_STEPS:])
             session.commit()
@@ -1452,7 +1522,7 @@ class TaskQueue:
         # task.timeout_minutes is never permanently mutated.
         escalated = self._resolve_timeout(session, task)
         task.status = "queued"
-        task.updated_at = utcnow()
+        task.updated_at = now()
 
         # Timestamp the failed run's timeline so the owner sees why a new run
         # suddenly appeared.
@@ -1465,7 +1535,7 @@ class TaskQueue:
                     f"Auto-recovering — re-running with a longer timeout "
                     f"({escalated}m, attempt {task.retry_count})."
                 ),
-                "ts": utcnow().isoformat(),
+                "ts": clock.to_iso(now()),
             }
         )
         run.steps_json = json.dumps(steps[-MAX_STEPS:])
@@ -1490,6 +1560,105 @@ class TaskQueue:
                 task.id,
                 task.retry_count,
             )
+
+    def _status_enabled(self, session, task: Task, repo: Repo) -> bool:
+        """Per-repo opt-in (PRD F15): report statuses only for fix/review tasks."""
+        return checkruns.status_enabled(session, task, repo)
+
+    def _status_head_sha(
+        self, session, task: Task, repo: Repo, git: GitWorkspace, token: str
+    ) -> str | None:
+        """The head SHA a status should attach to, or None.
+
+        ``pr_review`` → the PR's head SHA (available at run start). ``issue_fix``
+        → the pushed ``jalebi/<id>`` head, which exists only after the branch has
+        been pushed at least once; None means "not pushed yet" (the status is
+        then set at publish time).
+        """
+        if task.type == "pr_review":
+            pr_number = self._task_pr_number(task)
+            if pr_number is None:
+                return None
+            client = GitHubClient(token)
+            try:
+                pr = client.get_pr(repo.full_name, pr_number)
+            except Exception:
+                return None
+            finally:
+                client.close()
+            return pr.get("head_sha")
+        return git.current_remote_sha(repo.full_name, f"jalebi/{task.id}", token)
+
+    def _set_status(
+        self, session, task: Task, repo: Repo, run: Run | None, git: GitWorkspace, token: str,
+        state: str, *, force_head: str | None = None,
+    ) -> None:
+        """Best-effort: set (or replace) the task's commit status at ``state``.
+
+        Non-fatal — a status API failure or DB error never fails the task. Uses
+        the current head SHA (or ``force_head`` when given, e.g. right after a
+        publish pushed the branch). Posting the same ``(sha, context)`` again
+        replaces GitHub's status, which is the "update, don't duplicate" contract.
+        """
+        try:
+            if not self._status_enabled(session, task, repo):
+                return
+            head_sha = force_head or self._status_head_sha(session, task, repo, git, token)
+            if not head_sha:
+                return
+            context = checkruns.status_context(task)
+            client = GitHubClient(token)
+            try:
+                github_id = client.set_commit_status(
+                    repo.full_name, head_sha, state, context,
+                    description=f"Jalebi {task.type} for {repo.full_name}",
+                )
+            finally:
+                client.close()
+            checkruns.record_status(
+                session,
+                task_id=task.id,
+                run_id=run.id if run is not None else None,
+                repo_id=repo.id,
+                head_sha=head_sha,
+                context=context,
+                state=state,
+                github_check_id=github_id,
+            )
+        except Exception:  # noqa: BLE001 - statuses are best-effort, never fail the task
+            logger.warning("could not set commit status for task %s", task.id)
+
+    def _start_status(
+        self, session, task: Task, repo: Repo, run: Run, git: GitWorkspace, token: str
+    ) -> None:
+        """Set the status to ``pending`` at run start (best-effort)."""
+        self._set_status(session, task, repo, run, git, token, checkruns.STATE_PENDING)
+
+    def _complete_status(
+        self, session, task: Task, repo: Repo, run: Run, git: GitWorkspace, token: str
+    ) -> None:
+        """Set the final status state from ``task.status`` at run terminal (best-effort)."""
+        state = checkruns.state_for_status(task.status)
+        self._set_status(session, task, repo, run, git, token, state)
+
+    def _publish_status(
+        self, session, task: Task, repo: Repo, git: GitWorkspace, token: str
+    ) -> None:
+        """Set the final status on the just-pushed head after a publish (best-effort)."""
+        try:
+            if not self._status_enabled(session, task, repo):
+                return
+            head_sha = git.current_remote_sha(repo.full_name, f"jalebi/{task.id}", token)
+            if not head_sha:
+                return
+            run = tasks.latest_run(session, task.id)
+            self._set_status(
+                session, task, repo, run, git, token,
+                checkruns.state_for_status(task.status),
+                force_head=head_sha,
+            )
+        except Exception:  # noqa: BLE001 - statuses are best-effort
+            logger.warning("could not publish status for task %s", task.id)
 
     def _watchdog_loop(self, deadline: float, state: _RunState) -> None:
         while True:
@@ -1582,7 +1751,7 @@ class TaskQueue:
                 "type": event.type,
                 "phase": event.phase,
                 "text": None,
-                "ts": utcnow().isoformat(),
+                "ts": clock.to_iso(now()),
             }
         # Cap BEFORE masking: the masker applies user-supplied regexes to the full
         # text, and an unbounded input on a pathological pattern could backtrack
@@ -1593,7 +1762,7 @@ class TaskQueue:
             "type": event.type,
             "phase": event.phase,
             "text": masked,
-            "ts": utcnow().isoformat(),
+            "ts": clock.to_iso(now()),
         }
 
     def _branch_ahead(self, task: Task, git: GitWorkspace) -> bool:

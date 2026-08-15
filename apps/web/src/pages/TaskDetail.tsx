@@ -325,6 +325,24 @@ function formatBytes(bytes: number): string {
   return `${(kb / 1024).toFixed(1)} MB`;
 }
 
+function runDuration(startedAt: string | null, finishedAt: string | null): string {
+  if (!startedAt) return "—";
+  const start = new Date(startedAt).getTime();
+  const end = finishedAt ? new Date(finishedAt).getTime() : Date.now();
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return "—";
+  const totalSec = Math.round((end - start) / 1000);
+  if (totalSec < 60) return `${totalSec}s`;
+  const min = Math.floor(totalSec / 60);
+  const sec = totalSec % 60;
+  return `${min}m ${sec}s`;
+}
+
+function formatRunTime(iso: string | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleString();
+}
+
 function extOf(path: string): string {
   const i = path.lastIndexOf(".");
   return i >= 0 ? path.slice(i + 1).toLowerCase() : "";
@@ -678,6 +696,27 @@ function diffLineClass(line: string): string {
   return "text-ink-300";
 }
 
+function fileLabel(header: string): string {
+  // "diff --git a/foo/bar.ts b/foo/bar.ts" -> "foo/bar.ts" (renames shown as a → b).
+  const m = header.match(/^diff --git a\/(.*?) b\/(.*)$/);
+  if (!m) return header;
+  const [a, b] = [m[1], m[2]];
+  if (a === "dev/null") return b;
+  if (b === "dev/null") return a;
+  return a === b ? a : `${a} → ${b}`;
+}
+
+function fileStats(lines: string[]): { add: number; del: number } {
+  let add = 0;
+  let del = 0;
+  for (const line of lines) {
+    if (line.startsWith("+++ ") || line.startsWith("--- ")) continue;
+    if (line.startsWith("+")) add += 1;
+    else if (line.startsWith("-")) del += 1;
+  }
+  return { add, del };
+}
+
 function DiffView({ diff }: { diff: string }) {
   // Split the unified diff into per-file chunks on `diff --git` headers.
   const files = useMemo(() => {
@@ -699,22 +738,46 @@ function DiffView({ diff }: { diff: string }) {
   if (files.length === 0) {
     return <p className="text-sm text-ink-500">No diff.</p>;
   }
+  const totals = files.reduce(
+    (acc, f) => {
+      const s = fileStats(f.lines);
+      return { add: acc.add + s.add, del: acc.del + s.del };
+    },
+    { add: 0, del: 0 }
+  );
   return (
     <div className="space-y-3">
-      {files.map((file, i) => (
-        <details key={`${file.header}-${i}`} open={files.length === 1}>
-          <summary className="cursor-pointer select-none font-mono text-xs text-ink-200 transition-colors hover:text-syrup-300">
-            {file.header}
-          </summary>
-          <pre className="mt-1 max-h-96 overflow-auto whitespace-pre rounded bg-ink-900/60 p-2 font-mono text-[11px] leading-relaxed">
-            {file.lines.map((line, j) => (
-              <div key={j} className={diffLineClass(line)}>
-                {line}
-              </div>
-            ))}
-          </pre>
-        </details>
-      ))}
+      <div className="flex items-center gap-3 text-xs text-ink-500">
+        <span>
+          {files.length} file{files.length > 1 ? "s" : ""}
+        </span>
+        <span className="text-green-400">+{totals.add}</span>
+        <span className="text-red-400">−{totals.del}</span>
+      </div>
+      {files.map((file, i) => {
+        const stats = fileStats(file.lines);
+        return (
+          <details key={`${file.header}-${i}`} open={files.length === 1}>
+            <summary className="cursor-pointer select-none font-mono text-xs text-ink-200 transition-colors hover:text-syrup-300">
+              <span className="text-ink-100">{fileLabel(file.header)}</span>
+              {stats.add > 0 && (
+                <span className="ml-2 text-green-400">+{stats.add}</span>
+              )}
+              {stats.del > 0 && (
+                <span className="ml-2 text-red-400">−{stats.del}</span>
+              )}
+            </summary>
+            <pre className="mt-1 max-h-96 overflow-auto whitespace-pre rounded bg-ink-900/60 p-2 font-mono text-[11px] leading-relaxed">
+              <div className={diffLineClass(file.header)}>{file.header}</div>
+              {file.lines.map((line, j) => (
+                <div key={j} className={diffLineClass(line)}>
+                  {line}
+                </div>
+              ))}
+            </pre>
+          </details>
+        );
+      })}
     </div>
   );
 }
@@ -1021,6 +1084,18 @@ export default function TaskDetail() {
               Issue #{n} ↗
             </a>
           ))}
+          {task.check_run_id ? (
+            <a
+              className="btn-ghost !px-3 !py-1 text-xs text-syrup-300"
+              href={`https://github.com/${repoName}/${
+                task.pr_number ? `pull/${task.pr_number}` : `commits/${task.source_branch || task.target_branch || "main"}`
+              }`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              commit status
+            </a>
+          ) : null}
         </div>
 
         <dl className="mt-4 grid grid-cols-2 gap-x-6 gap-y-2 border-t border-ink-800 pt-4 text-xs sm:grid-cols-4">
@@ -1212,23 +1287,49 @@ export default function TaskDetail() {
       {runs.length > 1 && (
         <section className="surface p-5 animate-fade-up">
           <div className="mb-3 flex items-center justify-between gap-2">
-            <h2 className="panel-title">Runs</h2>
-            <select
-              value={selectedRunId ?? ""}
-              onChange={(e) => setSelectedRunId(Number(e.target.value))}
-              className="field w-auto !py-1 text-sm"
-            >
-              {runs.map((r) => (
-                <option key={r.id} value={r.id}>
-                  Run #{r.seq} — {r.status ?? "—"}
-                  {r.model ? ` · ${r.model}` : ""}
-                </option>
-              ))}
-            </select>
+            <h2 className="panel-title">Run history</h2>
+            <p className="text-xs text-ink-500">
+              The live stream follows the latest run. Click a run to view its logs, diff, and artifacts.
+            </p>
           </div>
-          <p className="text-xs text-ink-500">
-            Viewing run #{selectedRun?.seq ?? "?"} logs above. The live stream follows the latest run.
-          </p>
+          <ol className="divide-y divide-ink-800/70">
+            {runs.map((r) => {
+              const active = r.id === selectedRun?.id;
+              return (
+                <li key={r.id}>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedRunId(r.id)}
+                    className={`flex w-full items-center gap-3 px-2 py-2.5 text-left transition-colors ${
+                      active ? "rounded-lg bg-ink-850/80 ring-1 ring-inset ring-syrup-500/40" : "hover:bg-ink-850/40"
+                    }`}
+                  >
+                    <span className="font-mono text-sm text-ink-200">#{r.seq}</span>
+                    <StatusBadge status={r.status ?? "—"} />
+                    <span className="hidden font-mono text-[11px] text-ink-500 sm:block">
+                      {r.started_at ? formatRunTime(r.started_at) : "—"}
+                    </span>
+                    <span className="font-mono text-[11px] text-ink-400">
+                      {runDuration(r.started_at, r.finished_at)}
+                    </span>
+                    {r.has_diff && (
+                      <span className="rounded bg-ink-850 px-1.5 py-0.5 font-mono text-[10px] text-syrup-300">
+                        diff
+                      </span>
+                    )}
+                    {r.artifacts && r.artifacts.length > 0 && (
+                      <span className="rounded bg-ink-850 px-1.5 py-0.5 font-mono text-[10px] text-chai-300">
+                        {r.artifacts.length} artifact{r.artifacts.length > 1 ? "s" : ""}
+                      </span>
+                    )}
+                    <span className="ml-auto hidden max-w-[16rem] truncate font-mono text-[11px] text-ink-500 md:block">
+                      {r.model ?? r.cli ?? ""}
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ol>
           {runsError && <p className="mt-2 text-xs text-red-400">{runsError}</p>}
         </section>
       )}
