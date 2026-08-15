@@ -82,6 +82,38 @@ def test_run_screen_uses_screen_cli_and_model(session, repo_row, engine, monkeyp
     assert captured["model"] == "m-9"
 
 
+def test_run_screen_writes_per_cli_guard(session, repo_row, engine, monkeypatch):
+    """The audit worktree gets the guard matching the screen's backend."""
+    captured: list[tuple] = []
+    monkeypatch.setattr(
+        "jalebi.screening.worktree_bootstrap.write_guard",
+        lambda wt, cli: captured.append((wt, cli)),
+    )
+    _install_adapter(monkeypatch, FakeHandle(_done_events("[]")))
+
+    codex_screen = screening.create_screen(
+        session,
+        repo_id=repo_row.id,
+        name="Codex Audit",
+        system_prompt="P",
+        cadence_cron="0 6 * * 1",
+        cli="codex",
+    )
+    engine.run_screen(session, codex_screen, force=True)
+    assert captured and captured[-1][1] == "codex"
+
+    default_screen = screening.create_screen(
+        session,
+        repo_id=repo_row.id,
+        name="Default Audit",
+        system_prompt="P",
+        cadence_cron="0 6 * * 2",
+        cli=None,
+    )
+    engine.run_screen(session, default_screen, force=True)
+    assert captured and captured[-1][1] == "opencode"
+
+
 class HangProc:
     """A fake proc that the watchdog's ``_kill_proc`` can actually kill."""
 

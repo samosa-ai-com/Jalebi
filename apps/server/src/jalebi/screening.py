@@ -490,7 +490,7 @@ class ScreeningEngine:
             wt = git.create_detached_worktree(
                 repo.full_name, branch, wt_path, token
             )
-            worktree_bootstrap.write_opencode_guard(wt)
+            worktree_bootstrap.write_guard(wt, screen.cli or "opencode")
             prompt = build_screening_prompt(screen, repo, head_sha)
             adapter = get_adapter(screen.cli or "opencode")
             # Screening audits *untrusted* repository code — the highest

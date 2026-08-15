@@ -131,7 +131,7 @@ Top-level JSON `type` values (one object per line, `--verbose` required) and the
   2. copies the skill files into the worktree (e.g. `.jalebi/agents/<agentId>/skills/*.md`) and **references them from `AGENTS.md` via `@path` links**, plus passes the **directory path** on the run command where the CLI supports it.
 - The **default agent of the CLI** (e.g. opencode's build agent) reads `AGENTS.md` + skills and uses them opportunistically. No custom agent definitions, no special prompts plumbing.
 - For opencode this also works with its `.claude/skills`-compatible loading (`OPENCODE_DISABLE_CLAUDE_CODE_SKILLS` must remain unset) and `AGENTS.md` auto-discovery.
-- Because the mechanism is *files in the worktree*, it works for opencode and Codex (both read `AGENTS.md`). **Claude reads `CLAUDE.md`, not `AGENTS.md`** — a claude-backed run therefore also gets the Jalebi rules written to `CLAUDE.md` (merged via the same marker mechanism), so the isolation contract holds for every backend. *(The `CLAUDE.md` write lands with the Step 3 guard work in `worktree_bootstrap`.)*
+- Because the mechanism is *files in the worktree*, it works for opencode and Codex (both read `AGENTS.md`). **Claude reads `CLAUDE.md`, not `AGENTS.md`** — a claude-backed run also gets the Jalebi rules written to `CLAUDE.md` (same marked block, merged via the same marker mechanism, `bootstrap_worktree(..., cli="claude")`), so the isolation contract holds for every backend.
 
 ## 8. Model selection (PRD §F5)
 

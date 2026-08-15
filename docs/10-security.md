@@ -31,7 +31,10 @@
 ## 4. Sandboxing (PRD §F13)
 
 - Agents execute arbitrary shell code by design — each child process is scoped to its own worktree (cwd).
-- **Worktree-local confinement (config-level, no OS sandbox):** every worktree's `opencode.json` sets **`permission.external_directory: "deny"`** (deep-merged over the owner's global `external_directory: "allow"`). This blocks the built-in `read`/`edit`/`write`/`glob`/`grep` tools and path-bearing `bash` commands (e.g. `cat ~/.jalebi/secrets.json`) for anything outside the worktree, and `.env` files are denied by default. URL-based tools (`webfetch`/`websearch`, MCP URL tools) are unaffected, so the owner's MCP servers keep working.
+- **Worktree-local confinement is per-CLI** (`worktree_bootstrap.write_guard`):
+  - **opencode:** every worktree's `opencode.json` sets **`permission.external_directory: "deny"`** (deep-merged over the owner's global `external_directory: "allow"`). This blocks the built-in `read`/`edit`/`write`/`glob`/`grep` tools and path-bearing `bash` commands (e.g. `cat ~/.jalebi/secrets.json`) for anything outside the worktree, and `.env` files are denied by default. URL-based tools (`webfetch`/`websearch`, MCP URL tools) are unaffected, so the owner's MCP servers keep working.
+  - **codex:** the adapter's sandbox (`-c sandbox_mode=workspace-write` or `danger-full-access`, probed per machine) is the confinement; the worktree's `.codex/rules/default.rules` denies `gh` (loaded for trusted projects).
+  - **claude:** `.claude/settings.json` denies `gh` (applies in every permission mode); there is **no config-level "deny outside cwd"** for claude — worktree confinement relies on `CLAUDE.md`/`AGENTS.md` rules + no GitHub credentials (owner machine is trusted). Documented limitation.
 - **Selected-account agents:** every task runs as the account the owner picked; the agent's `JALEBI_GITHUB_TOKEN` is that account's PAT (GitHub API use only). The agent gets **no git push credentials** (`auth_env` is never applied to agent envs), so it structurally cannot push — Jalebi is the only pusher. There is no default/fallback: a task without an account is refused at creation.
 - **Honest limit (accepted tradeoff):** `external_directory: deny` is an opencode *pattern* gate, not an OS capability boundary. A determined agent obfuscating bash (`python3 -c "open(…)"`, env-var paths) could still reach host files. The agent holds the selected account's PAT (API use), so a fully malicious agent could read the token from its own env; a true OS sandbox (e.g. `bwrap`/`firejail`) remains possible later but was intentionally **not** added (it would break the MCP servers the owner wants available).
 
@@ -58,7 +61,10 @@
 
 Layered defense — **all three must hold** for an agent run:
 
-1. **opencode permission deny** — every worktree gets an `opencode.json` whose `permission.bash` denies `gh`/`gh *`/full-path variants (`worktree_bootstrap.OPENCODE_GUARD`). Project config deep-merges over the user's global config, so the deny wins.
+1. **Per-CLI permission deny** — every worktree gets a guard denying `gh`:
+   - opencode → `opencode.json` `permission.bash` denies `gh`/`gh *`/full-path variants (`worktree_bootstrap.OPENCODE_GUARD`); project config deep-merges over the user's global config, so the deny wins.
+   - codex → `.codex/rules/default.rules` Starlark `prefix_rule(pattern=["gh"], decision="forbidden")` (loaded for trusted projects).
+   - claude → `.claude/settings.json` `permissions.deny` `Bash(gh*)` variants (deny rules apply in every permission mode; skipped when the repo ships its own settings file).
 2. **Env hygiene** — the agent env never has `GH_TOKEN`/`GITHUB_TOKEN` (inherited ones are stripped) or a leaked inherited `JALEBI_GITHUB_TOKEN` (set to `None`, and `_spawn` builds from the passed env so nothing from the server leaks in); `GH_CONFIG_DIR` points at a nonexistent dir. Every task's `JALEBI_GITHUB_TOKEN` is the **selected account's** PAT (GitHub API), and **no git push credentials** are given to any agent. Even a guard bypass cannot authenticate `gh`.
 3. **Instructions** — `AGENTS.md` + follow-up prompts say never to use `gh`/forks, and working git credentials remove any incentive.
 

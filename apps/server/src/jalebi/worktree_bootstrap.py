@@ -1,24 +1,30 @@
 """Per-task worktree bootstrap: gh guard + git identity + AGENTS.md context.
 
 Jalebi never relies on the `gh` CLI — the agent must use the owner PAT via
-git/curl only. This module hardens that contract at the worktree level:
+git/curl only. This module hardens that contract at the worktree level with a
+**per-CLI guard** (selected by ``write_guard(worktree, cli)``):
 
-- ``write_opencode_guard`` places an ``opencode.json`` in the worktree root whose
-  ``permission.bash`` rules DENY ``gh`` invocations and whose
-  ``permission.external_directory`` is ``deny`` (blocks file-tool and bash-path
-  access outside the worktree; overrides the user's global ``"allow"``). Project
-  config overrides the user's global opencode config, so the guard applies to any
-  agent run in the worktree. The guard is adapter-specific: Codex/Claude get
-  their own guard file through the same ``bootstrap_worktree`` hook.
-- ``set_git_identity`` pins the worktree's commit author to Jalebi, so pushes
-  are never authored by a stray local account.
-- ``write_agent_md`` writes the task's ``AGENTS.md`` (built by ``prompts``) that
-  carries the task context and hard constraints. A repo that tracks its own
-  ``AGENTS.md`` keeps that content; Jalebi's section is appended inside markers.
-- ``write_info_exclude`` keeps the bootstrap files out of ``git add .`` and
-  artifact capture via the repo's shared ``info/exclude`` (never touching a
-  tracked ``.gitignore``), and the pre-commit hook backstops the repo-tracked
-  ``AGENTS.md`` case.
+- ``opencode`` → ``opencode.json`` whose ``permission.bash`` rules DENY ``gh``
+  and whose ``permission.external_directory`` is ``deny`` (project config
+  overrides the user's global config; ``gh`` is also blocked by path variants).
+- ``codex`` → ``.codex/rules/default.rules`` (Starlark execpolicy) whose
+  ``prefix_rule`` forbids ``gh`` (loaded for trusted projects; the codex
+  sandbox from the adapter is the confinement, this is the gh-specific deny).
+- ``claude`` → ``.claude/settings.json`` with ``permissions.deny`` for ``gh``
+  variants (deny rules apply in EVERY permission mode, incl. the adapter's
+  ``--permission-mode bypassPermissions``). Skipped when the repo ships its own
+  ``.claude/settings.json`` (never clobber repo config).
+
+``set_git_identity`` pins the worktree's commit author to Jalebi, so pushes
+are never authored by a stray local account. ``write_agent_md`` writes the
+task's ``AGENTS.md`` (built by ``prompts``) that carries the task context and
+hard constraints; claude runs ALSO get the same marked block in ``CLAUDE.md``
+(claude reads ``CLAUDE.md``, not ``AGENTS.md``). A repo that tracks its own
+AGENTS.md/CLAUDE.md keeps that content; Jalebi's section is appended inside
+markers. ``write_info_exclude`` keeps the bootstrap files out of ``git add .``
+and artifact capture via the repo's shared ``info/exclude`` (never touching a
+tracked ``.gitignore``), and the pre-commit hook backstops the repo-tracked
+cases.
 
 These are layered with environment hygiene in the queue (git credential env,
 no ``GH_TOKEN``/``GH_CONFIG_DIR``) — even a bypassed deny has no gh credentials.
@@ -60,6 +66,28 @@ OPENCODE_GUARD = {
             "hash gh*": "deny",
         }
     },
+}
+
+# codex execpolicy project rules (loaded for trusted projects; the codex
+# sandbox from the adapter is the confinement — this is the gh-specific deny).
+# Prefix match on the command token: the single rule covers `gh`, `gh pr view
+# 1`, etc. (verified via `codex execpolicy check`).
+CODEX_RULES_GUARD = (
+    'prefix_rule(pattern=["gh"], decision="forbidden", '
+    'justification="gh is not permitted in this environment")\n'
+)
+
+# claude settings deny rules apply in EVERY permission mode (incl. the
+# adapter's `--permission-mode bypassPermissions`). Deny-only file is valid.
+CLAUDE_GUARD = {
+    "permissions": {
+        "deny": [
+            "Bash(gh *)",
+            "Bash(gh)",
+            "Bash(gh**)",
+            "Bash(gh **)",
+        ]
+    }
 }
 
 GIT_USER_NAME = messaging.CO_AUTHOR_NAME
@@ -115,6 +143,9 @@ INFO_EXCLUDE_LINES = (
     "/opencode.json",
     "/AGENTS.md",
     "/.claude/skills/",
+    "/.codex/",
+    "/CLAUDE.md",
+    "/.claude/settings.json",
 )
 
 PRECOMMIT_HOOK = """#!/bin/sh
@@ -129,6 +160,11 @@ if git diff --cached --name-only | grep -qx 'opencode.json'; then
   echo "Unstage it with: git reset HEAD opencode.json" >&2
   exit 1
 fi
+if git diff --cached --name-only | grep -qx '.codex/rules/default.rules'; then
+  echo "Jalebi: refusing to commit .codex/rules/default.rules (Jalebi codex gh-guard)." >&2
+  echo "Unstage it with: git reset HEAD .codex/rules/default.rules" >&2
+  exit 1
+fi
 # A repo-tracked AGENTS.md that still carries the Jalebi bootstrap section must
 # not be committed (it is Jalebi infrastructure, not repository content).
 if git diff --cached --name-only | grep -qx 'AGENTS.md'; then
@@ -136,6 +172,15 @@ if git diff --cached --name-only | grep -qx 'AGENTS.md'; then
     echo "Jalebi: refusing to commit AGENTS.md (contains the Jalebi bootstrap section)." >&2
     echo "Remove it from the commit with:" >&2
     echo "  git restore --staged AGENTS.md && git restore AGENTS.md" >&2
+    exit 1
+  fi
+fi
+# Same for CLAUDE.md (claude reads CLAUDE.md, not AGENTS.md).
+if git diff --cached --name-only | grep -qx 'CLAUDE.md'; then
+  if git show :CLAUDE.md 2>/dev/null | grep -q 'jalebi:start'; then
+    echo "Jalebi: refusing to commit CLAUDE.md (contains the Jalebi bootstrap section)." >&2
+    echo "Remove it from the commit with:" >&2
+    echo "  git restore --staged CLAUDE.md && git restore CLAUDE.md" >&2
     exit 1
   fi
 fi
@@ -148,6 +193,48 @@ def write_opencode_guard(worktree: Path) -> Path:
     path = worktree / "opencode.json"
     path.write_text(json.dumps(OPENCODE_GUARD, indent=2) + "\n")
     return path
+
+
+def write_codex_guard(worktree: Path) -> Path:
+    """Write ``.codex/rules/default.rules`` denying ``gh`` (codex project rules)."""
+    path = worktree / ".codex" / "rules" / "default.rules"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(CODEX_RULES_GUARD)
+    return path
+
+
+def write_claude_guard(worktree: Path) -> Path | None:
+    """Write ``.claude/settings.json`` denying ``gh``; never clobber a repo-owned file.
+
+    Returns the settings path, or ``None`` when the repo already ships its own
+    ``.claude/settings.json`` (deny skipped there; CLAUDE.md + env hygiene still
+    apply). ``remove_guard`` deletes the file only while it still matches exactly
+    what Jalebi wrote, so repo-owned or repo-edited settings survive.
+    """
+    path = worktree / ".claude" / "settings.json"
+    if path.exists():
+        return None
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(CLAUDE_GUARD, indent=2) + "\n")
+    return path
+
+
+def write_guard(worktree: Path, cli: str) -> None:
+    """Write the per-CLI guard file (opencode/codex/claude); unknown cli → none.
+
+    The guard is the worktree-level confinement: no ``gh``, and (for opencode)
+    no access outside the worktree. Codex's sandbox and claude's (absent) disk
+    confinement live at the adapter layer — this file is the gh-specific deny.
+    """
+    if cli == "opencode":
+        write_opencode_guard(worktree)
+        return
+    if cli == "codex":
+        write_codex_guard(worktree)
+        return
+    if cli == "claude":
+        write_claude_guard(worktree)
+        return
 
 
 def _run_git(args: list[str], cwd: Path) -> str:
@@ -194,16 +281,9 @@ def _jalebi_block_span(raw: str) -> tuple[int, int] | None:
     return start, end + len(JALEBI_MD_END)
 
 
-def write_agent_md(worktree: Path, content: str = DEFAULT_AGENT_MD) -> Path:
-    """Write (or update) the Jalebi ``AGENTS.md`` section, preserving any existing file.
-
-    A repo that already tracks ``AGENTS.md`` keeps its own content; Jalebi's
-    section is appended inside markers so re-bootstrapping is idempotent and the
-    pre-commit hook can detect it. When no file exists, the whole file is the
-    marked block.
-    """
-    path = worktree / "AGENTS.md"
-    raw = path.read_text() if path.exists() else ""
+def _agent_md_body(raw: str, content: str) -> str:
+    """Merge ``content`` into existing ``raw`` text as the marked Jalebi block
+    (replace an existing block, or append one at the end)."""
     span = _jalebi_block_span(raw)
     if span is not None:
         start, end = span
@@ -217,7 +297,32 @@ def write_agent_md(worktree: Path, content: str = DEFAULT_AGENT_MD) -> Path:
     else:
         base = raw.rstrip()
         body = (base + "\n\n" if base else "") + _jalebi_block(content) + "\n"
-    path.write_text(body)
+    return body
+
+
+def write_agent_md(worktree: Path, content: str = DEFAULT_AGENT_MD) -> Path:
+    """Write (or update) the Jalebi ``AGENTS.md`` section, preserving any existing file.
+
+    A repo that already tracks ``AGENTS.md`` keeps its own content; Jalebi's
+    section is appended inside markers so re-bootstrapping is idempotent and the
+    pre-commit hook can detect it. When no file exists, the whole file is the
+    marked block.
+    """
+    path = worktree / "AGENTS.md"
+    raw = path.read_text() if path.exists() else ""
+    path.write_text(_agent_md_body(raw, content))
+    return path
+
+
+def write_claude_md(worktree: Path, content: str = DEFAULT_AGENT_MD) -> Path:
+    """Write the SAME marked Jalebi block to ``CLAUDE.md`` (claude reads it, not AGENTS.md).
+
+    Mirrors ``write_agent_md``: repo-tracked ``CLAUDE.md`` content is preserved
+    and the Jalebi section is appended inside markers.
+    """
+    path = worktree / "CLAUDE.md"
+    raw = path.read_text() if path.exists() else ""
+    path.write_text(_agent_md_body(raw, content))
     return path
 
 
@@ -271,15 +376,10 @@ def write_precommit_hook(worktree: Path) -> Path | None:
 def _write_guard(worktree: Path, cli: str) -> None:
     """Write the per-CLI guard file that confines the agent to the worktree.
 
-    Each adapter gets its own guard file through this hook so the isolation
-    contract (no gh, no access outside the worktree) survives a backend switch:
-    opencode → ``opencode.json`` today; codex/claude → their config files later.
+    Kept as a thin alias so existing callers (queue, tests) are unchanged; the
+    public entry point is ``write_guard``.
     """
-    if cli == "opencode":
-        write_opencode_guard(worktree)
-        return
-    # Future adapters write their own guard here; until then no guard is written
-    # (the env/prompt layers still apply).
+    write_guard(worktree, cli)
 
 
 def write_agent_skills(worktree: Path, skills: list[dict[str, str]]) -> list[Path]:
@@ -338,9 +438,12 @@ def bootstrap_worktree(
     Idempotent.
     """
     worktree.mkdir(parents=True, exist_ok=True)
-    _write_guard(worktree, cli)
+    write_guard(worktree, cli)
     set_git_identity(worktree)
     write_agent_md(worktree, agent_md)
+    if cli == "claude":
+        # Claude reads CLAUDE.md, not AGENTS.md — carry the same rules there.
+        write_claude_md(worktree, agent_md)
     write_info_exclude(worktree)
     write_precommit_hook(worktree)
     _write_skills(worktree, skills)
@@ -378,32 +481,65 @@ def _has_other_worktrees(worktree: Path) -> bool:
     return len(real) > 1
 
 
+def _strip_agent_md_file(worktree: Path, filename: str) -> None:
+    """Strip the Jalebi marker block from ``filename`` (restore or delete)."""
+    md = worktree / filename
+    if not md.is_file():
+        return
+    restored = _strip_agent_md(md.read_text())
+    if restored:
+        md.write_text(restored + "\n")
+    else:
+        try:
+            md.unlink()
+        except FileNotFoundError:
+            pass
+
+
 def remove_guard(worktree: Path) -> None:
     """Remove the Jalebi guard files from a worktree (cleanup).
 
-    ``AGENTS.md`` is restored to its pre-bootstrap content (the marked section is
-    stripped) and ``opencode.json`` is removed. The shared ``info/exclude`` lines
-    and the pre-commit hook are only removed when this is the last live worktree
-    of the repo.
+    ``AGENTS.md`` (and ``CLAUDE.md``) are restored to their pre-bootstrap content
+    (the marked section is stripped); ``opencode.json``, the codex
+    ``.codex/rules/default.rules``, and the Jalebi-written
+    ``.claude/settings.json`` are removed. Only Jalebi's own files are touched —
+    repo-owned content (.codex config/rules, .claude/settings.json, tracked
+    CLAUDE.md) is preserved. The shared ``info/exclude`` lines and the
+    pre-commit hook are only removed when this is the last live worktree of the
+    repo.
     """
     for name in ("opencode.json",):
         try:
             (worktree / name).unlink()
         except FileNotFoundError:
             pass
+    # Codex guard: remove only the file Jalebi writes (a repo may own other
+    # `.codex/` content); prune the dirs only when they become empty.
+    codex_rules = worktree / ".codex" / "rules" / "default.rules"
+    if codex_rules.is_file():
+        try:
+            codex_rules.unlink()
+        except FileNotFoundError:
+            pass
+        for directory in (codex_rules.parent, worktree / ".codex"):
+            try:
+                directory.rmdir()  # OSError when non-empty → leave it (repo-owned)
+            except OSError:
+                pass
+    # Claude guard: remove only the exact file Jalebi wrote — never a repo-owned
+    # or repo-edited `.claude/settings.json`.
+    claude_settings = worktree / ".claude" / "settings.json"
+    if claude_settings.is_file():
+        try:
+            if claude_settings.read_text() == json.dumps(CLAUDE_GUARD, indent=2) + "\n":
+                claude_settings.unlink()
+        except FileNotFoundError:
+            pass
     # Drop only Jalebi's materialized catalog-agent skills — never a repo's own
     # `.claude` content (e.g. settings.json / commands).
     shutil.rmtree(worktree / ".claude" / "skills", ignore_errors=True)
-    md = worktree / "AGENTS.md"
-    if md.is_file():
-        restored = _strip_agent_md(md.read_text())
-        if restored:
-            md.write_text(restored + "\n")
-        else:
-            try:
-                md.unlink()
-            except FileNotFoundError:
-                pass
+    _strip_agent_md_file(worktree, "AGENTS.md")
+    _strip_agent_md_file(worktree, "CLAUDE.md")
     try:
         common = _git_common_dir(worktree)
     except RuntimeError:

@@ -330,3 +330,207 @@ def test_linked_worktrees_share_and_keep_guards(tmp_path) -> None:
     assert all(
         line not in exclude.read_text() for line in worktree_bootstrap.INFO_EXCLUDE_LINES
     )
+
+
+def test_write_codex_guard_denies_gh(tmp_path) -> None:
+    path = worktree_bootstrap.write_codex_guard(tmp_path)
+    text = path.read_text()
+    assert path == tmp_path / ".codex" / "rules" / "default.rules"
+    assert 'prefix_rule(pattern=["gh"], decision="forbidden"' in text
+    assert "gh is not permitted" in text
+
+
+def test_write_claude_guard_denies_gh(tmp_path) -> None:
+    path = worktree_bootstrap.write_claude_guard(tmp_path)
+    assert path is not None
+    assert path == tmp_path / ".claude" / "settings.json"
+    deny = json.loads(path.read_text())["permissions"]["deny"]
+    assert {"Bash(gh *)", "Bash(gh)", "Bash(gh**)", "Bash(gh **)"} <= set(deny)
+
+
+def test_write_claude_guard_does_not_clobber_repo_settings(tmp_path) -> None:
+    _init_repo(tmp_path)
+    settings = tmp_path / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text('{"permissions": {"deny": ["Bash(rm *)"]}}\n')
+    assert worktree_bootstrap.write_claude_guard(tmp_path) is None
+    assert settings.read_text() == '{"permissions": {"deny": ["Bash(rm *)"]}}\n'
+
+
+def test_write_guard_dispatches_per_cli(tmp_path) -> None:
+    for cli, filename in (
+        ("opencode", "opencode.json"),
+        ("codex", ".codex/rules/default.rules"),
+        ("claude", ".claude/settings.json"),
+    ):
+        worktree_bootstrap.write_guard(tmp_path, cli)
+        assert (tmp_path / filename).is_file(), f"{cli} should write {filename}"
+
+
+def test_write_guard_unknown_cli_writes_nothing(tmp_path) -> None:
+    worktree_bootstrap.write_guard(tmp_path, "gemini")
+    assert not (tmp_path / "opencode.json").exists()
+    assert not (tmp_path / ".codex").exists()
+    assert not (tmp_path / ".claude").exists()
+
+
+def test_bootstrap_claude_writes_claude_md_and_settings_guard(tmp_path) -> None:
+    _init_repo(tmp_path)
+    worktree_bootstrap.bootstrap_worktree(tmp_path, "jalebi instructions", cli="claude")
+    for name in ("AGENTS.md", "CLAUDE.md"):
+        text = (tmp_path / name).read_text()
+        assert "jalebi instructions" in text
+        assert worktree_bootstrap.JALEBI_MD_START in text
+        assert worktree_bootstrap.JALEBI_MD_END in text
+    deny = json.loads((tmp_path / ".claude" / "settings.json").read_text())["permissions"]["deny"]
+    assert "Bash(gh *)" in deny
+    # Re-bootstrap is idempotent: one marker block, updated content.
+    worktree_bootstrap.bootstrap_worktree(tmp_path, "updated", cli="claude")
+    text = (tmp_path / "CLAUDE.md").read_text()
+    assert text.count("jalebi:start") == 1
+    assert "updated" in text
+    assert "jalebi instructions" not in text
+
+
+def test_bootstrap_codex_writes_codex_guard(tmp_path) -> None:
+    _init_repo(tmp_path)
+    worktree_bootstrap.bootstrap_worktree(tmp_path, cli="codex")
+    assert (tmp_path / ".codex" / "rules" / "default.rules").is_file()
+    assert not (tmp_path / "opencode.json").exists()
+    assert not (tmp_path / "CLAUDE.md").exists()
+
+
+def test_write_claude_md_preserves_tracked_repo_content(tmp_path) -> None:
+    _init_repo(tmp_path)
+    (tmp_path / "CLAUDE.md").write_text("# Repo\n\nOriginal claude instructions.\n")
+    _git(["add", "CLAUDE.md"], tmp_path)
+    _git(["commit", "-qm", "add claude.md"], tmp_path)
+    worktree_bootstrap.write_claude_md(tmp_path, "jalebi instructions")
+    text = (tmp_path / "CLAUDE.md").read_text()
+    assert "# Repo" in text and "Original claude instructions." in text
+    assert text.count("jalebi:start") == 1
+    # Rewrite replaces the block once.
+    worktree_bootstrap.write_claude_md(tmp_path, "updated")
+    assert (tmp_path / "CLAUDE.md").read_text().count("jalebi:start") == 1
+
+
+def test_remove_guard_removes_codex_and_claude_guards(tmp_path) -> None:
+    _init_repo(tmp_path)
+    worktree_bootstrap.bootstrap_worktree(tmp_path, cli="codex")
+    worktree_bootstrap.remove_guard(tmp_path)
+    assert not (tmp_path / ".codex").exists()
+    assert not (tmp_path / "opencode.json").exists()
+    worktree_bootstrap.bootstrap_worktree(tmp_path, cli="claude")
+    worktree_bootstrap.remove_guard(tmp_path)
+    assert not (tmp_path / ".claude" / "settings.json").exists()
+    assert not (tmp_path / "CLAUDE.md").exists()
+
+
+def test_remove_guard_preserves_repo_codex_content(tmp_path) -> None:
+    _init_repo(tmp_path)
+    codex_dir = tmp_path / ".codex"
+    codex_dir.mkdir()
+    (codex_dir / "config.toml").write_text("model = 'x'\n")
+    _git(["add", ".codex/config.toml"], tmp_path)
+    _git(["commit", "-qm", "add codex config"], tmp_path)
+    worktree_bootstrap.bootstrap_worktree(tmp_path, cli="codex")
+    worktree_bootstrap.remove_guard(tmp_path)
+    assert not (tmp_path / ".codex" / "rules" / "default.rules").exists()
+    assert (codex_dir / "config.toml").read_text() == "model = 'x'\n"
+
+
+def test_remove_guard_restores_repo_claude_md(tmp_path) -> None:
+    _init_repo(tmp_path)
+    original = "# Repo claude\n\nInstructions.\n"
+    (tmp_path / "CLAUDE.md").write_text(original)
+    _git(["add", "CLAUDE.md"], tmp_path)
+    _git(["commit", "-qm", "add claude.md"], tmp_path)
+    worktree_bootstrap.bootstrap_worktree(tmp_path, cli="claude")
+    worktree_bootstrap.remove_guard(tmp_path)
+    assert (tmp_path / "CLAUDE.md").read_text() == original
+
+
+def test_bootstrap_claude_skips_repo_settings_but_writes_claude_md(tmp_path) -> None:
+    _init_repo(tmp_path)
+    settings = tmp_path / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text('{"permissions": {"deny": ["Bash(rm *)"]}}\n')
+    worktree_bootstrap.bootstrap_worktree(tmp_path, "jalebi instructions", cli="claude")
+    # Repo-owned settings preserved (guard skipped), but CLAUDE.md still written
+    # and no opencode.json appears.
+    assert settings.read_text() == '{"permissions": {"deny": ["Bash(rm *)"]}}\n'
+    assert (tmp_path / "CLAUDE.md").is_file()
+    assert not (tmp_path / "opencode.json").exists()
+
+
+def test_precommit_hook_allows_tracked_codex_config(tmp_path) -> None:
+    """A repo that tracks its own .codex/config.toml can still commit it (only
+    the Jalebi-written default.rules is rejected)."""
+    _init_repo(tmp_path)
+    codex_dir = tmp_path / ".codex"
+    codex_dir.mkdir()
+    (codex_dir / "config.toml").write_text("model = 'x'\n")
+    _git(["add", ".codex/config.toml"], tmp_path)
+    proc = subprocess.run(
+        ["git", "commit", "-qm", "track codex config"],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_remove_guard_keeps_repo_owned_claude_settings(tmp_path) -> None:
+    _init_repo(tmp_path)
+    settings = tmp_path / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text('{"permissions": {"deny": ["Bash(rm *)"]}}\n')
+    worktree_bootstrap.bootstrap_worktree(tmp_path, cli="claude")
+    worktree_bootstrap.remove_guard(tmp_path)
+    assert settings.read_text() == '{"permissions": {"deny": ["Bash(rm *)"]}}\n'
+
+
+def test_info_exclude_covers_codex_and_claude(tmp_path) -> None:
+    _init_repo(tmp_path)
+    worktree_bootstrap.bootstrap_worktree(tmp_path, cli="claude")
+    common = worktree_bootstrap._git_common_dir(tmp_path)
+    exclude = (common / "info" / "exclude").read_text()
+    for line in worktree_bootstrap.INFO_EXCLUDE_LINES:
+        assert line in exclude, f"{line} missing from info/exclude"
+    # A plain `git add .` must not stage any guard/bootstrap file.
+    _git(["add", "-A"], tmp_path)
+    staged = _git(["diff", "--cached", "--name-only"], tmp_path)
+    assert staged == ""
+    status = _git(["status", "--porcelain"], tmp_path)
+    for marker in (".codex", "CLAUDE.md", ".claude", "opencode.json"):
+        assert marker not in status, f"{marker} leaked into git status"
+
+
+def test_precommit_hook_rejects_staged_codex_guard(tmp_path) -> None:
+    _init_repo(tmp_path)
+    worktree_bootstrap.bootstrap_worktree(tmp_path, cli="codex")
+    _git(["add", "-f", ".codex/rules/default.rules"], tmp_path)
+    proc = subprocess.run(
+        ["git", "commit", "-qm", "bad"], cwd=str(tmp_path), capture_output=True, text=True
+    )
+    assert proc.returncode != 0
+    assert ".codex" in proc.stderr
+
+
+def test_precommit_hook_rejects_marked_claude_md(tmp_path) -> None:
+    _init_repo(tmp_path)
+    (tmp_path / "CLAUDE.md").write_text("# Repo\n")
+    _git(["add", "CLAUDE.md"], tmp_path)
+    _git(["commit", "-qm", "track claude.md"], tmp_path)
+    worktree_bootstrap.bootstrap_worktree(tmp_path, cli="claude")
+    _git(["add", "CLAUDE.md"], tmp_path)
+    proc = subprocess.run(
+        ["git", "commit", "-qm", "bad"], cwd=str(tmp_path), capture_output=True, text=True
+    )
+    assert proc.returncode != 0
+    assert "CLAUDE.md" in proc.stderr
+    # After remove_guard strips the marker, the staged file has no marker block.
+    worktree_bootstrap.remove_guard(tmp_path)
+    _git(["add", "CLAUDE.md"], tmp_path)
+    staged = _git(["show", ":CLAUDE.md"], tmp_path)
+    assert "jalebi:start" not in staged
