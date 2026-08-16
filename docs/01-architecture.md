@@ -103,6 +103,6 @@ Python 3.13 + Flask + SQLAlchemy 2 (SQLite) + Alembic migrations + httpx (GitHub
 
 ## 6. Key design constraints
 
-- **Backend-agnostic:** the entire system depends on the `AgentAdapter` interface; only the adapter and the `agent_cli` setting know the CLI name (PRD §F4).
+- **Backend-agnostic:** the entire system depends on the `AgentAdapter` interface; only the adapters know the CLI name. The backend is chosen per action (task/follow-up/screen/agent form selects); the Settings `default_backend` is the fallback (PRD §F4).
 - **Simplicity (PRD Goal #10):** no event-bus frameworks, no complex state machines, no distributed abstractions. Borrow only small, specific snippets from reference projects and re-write them in Jalebi's own style.
 - **Localhost-only:** server binds to 127.0.0.1 (one port, 2052); optional UI password if exposed via tunnel (PRD §F13).

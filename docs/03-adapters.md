@@ -6,7 +6,7 @@
 
 ## 1. Principle (PRD §F4, P0)
 
-The entire system depends on **one interface**. The only place that knows the CLI name is the adapter and a one-line config (`agent.cli`). Switching backend = one-line config change; everything else (queue, git, GitHub, UI, screenings, catalog) is untouched.
+The entire system depends on **one interface**. The only place that knows the CLI name is the adapter. The backend for any action is chosen per task/screen/agent (each form has a Backend select); the global `default_backend` setting is the fallback. Everything else (queue, git, GitHub, UI, screenings, catalog) is untouched by a backend change.
 
 ## 2. The `AgentAdapter` interface
 
@@ -29,7 +29,7 @@ class RunHandle:
     def events(self) -> Iterator[AgentEvent]   # streams parsed events; ends with done/error
 ```
 
-Registry (`src/jalebi/adapters/__init__.py`): `get_adapter(cli)`. `agent.cli` setting (default `"opencode"`) is the one-line switch.
+Registry (`src/jalebi/adapters/__init__.py`): `get_adapter(cli)`. `default_backend` (default `"opencode"`) is the global fallback used when an action has no backend of its own.
 
 ## 3. `AgentEvent` normalized vocabulary
 
@@ -43,7 +43,14 @@ Registry (`src/jalebi/adapters/__init__.py`): `get_adapter(cli)`. `agent.cli` se
 
 ## 4. Backend selection
 
-`agent.cli` in config/Settings: `"opencode" | "codex" | "claude"`. One line.
+The backend is chosen **per action**, not globally. Every task/follow-up/screen/
+catalog-agent form has its own **Backend** select (`"opencode" | "codex" |
+"claude"`); the global Settings `default_backend` (default `"opencode"`) is only
+the fallback for operations that don't pick one (triggered tasks, legacy rows,
+unpinned screens). Run-time resolution everywhere: `X.cli or default_backend or
+"opencode"`. A follow-up whose backend differs from the session's own can't
+resume it (each CLI owns its session format) — it starts a fresh run seeded with
+the prior conversation (see §6, and `queue._run_followup`).
 
 ## 5. CLI command references (authoritative, captured 2026-08)
 
@@ -135,10 +142,10 @@ Top-level JSON `type` values (one object per line, `--verbose` required) and the
 
 ## 8. Model selection (PRD §F5)
 
-- No hard-coded model. Each task exposes a model dropdown populated from the active adapter's `listModels()`.
-- Per-task default: the adapter's configured default.
-- A catalog agent may pin a model.
-- UI shows the model used per task/run; follow-ups reuse the run's model by default but allow override where the CLI permits it (see §6 quirks).
+- No hard-coded model. Each action form exposes a **Model dropdown populated from the backend selected in that form** (`GET /api/models?cli=<backend>`; `adapter_model_lists` overrides the list per backend).
+- The global Settings `default_model` is the fallback for an action that doesn't pick one — applied **only when the resolved backend equals `default_backend`** (a single model can't be valid for every backend); other backends use the CLI's own default when unpinned.
+- A catalog agent may pin a model (task override > agent pin > default).
+- UI shows the model used per task/run; follow-ups reuse the run's model by default but allow override (see §6 quirks).
 
 ## 9. Agent subprocess environment
 

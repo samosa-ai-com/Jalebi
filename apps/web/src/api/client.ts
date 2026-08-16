@@ -258,7 +258,7 @@ export const api = {
       },
     );
   },
-  postFollowup: (id: number, prompt: string, opts?: { pat_name?: string; model?: string; include_reviews?: boolean }) =>
+  postFollowup: (id: number, prompt: string, opts?: { pat_name?: string; model?: string; cli?: string; include_reviews?: boolean }) =>
     request<Task>(`/api/tasks/${id}/followup`, {
       method: "POST",
       body: JSON.stringify({ prompt, ...opts }),

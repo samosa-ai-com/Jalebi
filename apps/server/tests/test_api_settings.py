@@ -102,7 +102,7 @@ def test_models_endpoint_uses_adapter_model_lists_override(client: FlaskClient) 
     """GET /api/models returns the owner override for the active cli before the adapter."""
     from jalebi.adapters import get_adapter
 
-    resp = client.post("/api/settings", json={"key": "agent_cli", "value": "codex"})
+    resp = client.post("/api/settings", json={"key": "default_backend", "value": "codex"})
     assert resp.status_code == 200
     resp = client.post(
         "/api/settings",
@@ -130,21 +130,31 @@ def test_models_endpoint_uses_adapter_model_lists_override(client: FlaskClient) 
     assert body["models"] == []
 
 
-def test_agent_cli_accepts_every_registered_adapter(client: FlaskClient) -> None:
-    """The agent_cli setting accepts every registered adapter and rejects unknowns."""
+def test_default_backend_and_model_settings(client: FlaskClient) -> None:
+    """default_backend accepts registered adapters; default_model is required."""
     for cli in ("opencode", "codex", "claude"):
-        resp = client.post("/api/settings", json={"key": "agent_cli", "value": cli})
+        resp = client.post("/api/settings", json={"key": "default_backend", "value": cli})
         assert resp.status_code == 200, f"{cli} should be accepted"
-    resp = client.post("/api/settings", json={"key": "agent_cli", "value": "gemini"})
+    resp = client.post("/api/settings", json={"key": "default_backend", "value": "gemini"})
+    assert resp.status_code == 400
+
+    resp = client.post("/api/settings", json={"key": "default_model", "value": "m-default"})
+    assert resp.status_code == 200
+    body = client.get("/api/settings").get_json()
+    assert body["default_model"] == "m-default"
+    # A default model must always be configured (reject empty / blank).
+    resp = client.post("/api/settings", json={"key": "default_model", "value": ""})
+    assert resp.status_code == 400
+    resp = client.post("/api/settings", json={"key": "default_model", "value": "   "})
     assert resp.status_code == 400
 
 
 def test_models_endpoint_cli_query_param(client: FlaskClient) -> None:
     """GET /api/models?cli=<backend> returns that backend's models regardless of
-    the global agent_cli setting (used by the Screenings/Agents forms)."""
+    the global default_backend setting (used by the forms)."""
     from jalebi.adapters import get_adapter
 
-    client.post("/api/settings", json={"key": "agent_cli", "value": "opencode"})
+    client.post("/api/settings", json={"key": "default_backend", "value": "opencode"})
 
     body = client.get("/api/models?cli=claude").get_json()
     assert body["cli"] == "claude"
@@ -167,6 +177,6 @@ def test_models_endpoint_cli_query_param(client: FlaskClient) -> None:
     body = client.get("/api/models?cli=claude").get_json()
     assert body["models"] == ["claude-override"]
 
-    # No param → the global setting's backend.
+    # No param → the default_backend setting's backend.
     body = client.get("/api/models").get_json()
     assert body["cli"] == "opencode"

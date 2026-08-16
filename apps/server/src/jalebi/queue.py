@@ -246,10 +246,13 @@ class TaskQueue:
         pat_name: str | None = None,
         model: str | None = None,
         auto: bool = False,
+        cli: str | None = None,
     ) -> None:
         """Queue a session resume. ``auto=True`` marks an auto-recovery resume
-        (no ``followups`` row is recorded — it isn't a user follow-up)."""
-        self._queue.put(("followup", task_id, body, pat_name, model, auto))
+        (no ``followups`` row is recorded — it isn't a user follow-up). ``cli``
+        is an optional backend override; a backend different from the task's own
+        starts a fresh session seeded with the prior conversation."""
+        self._queue.put(("followup", task_id, body, pat_name, model, auto, cli))
 
     # -- worker loop -------------------------------------------------------
 
@@ -273,7 +276,10 @@ class TaskQueue:
                 try:
                     if parts[0] == "followup":
                         auto = bool(parts[5]) if len(parts) > 5 else False
-                        self._run_followup(parts[1], parts[2], parts[3], parts[4], auto=auto)
+                        cli = parts[6] if len(parts) > 6 else None
+                        self._run_followup(
+                            parts[1], parts[2], parts[3], parts[4], auto=auto, cli=cli
+                        )
                     else:
                         self._run_task(parts[1])
                 except Exception:
@@ -697,10 +703,24 @@ class TaskQueue:
                 secrets.all_token_values(self.config) + [token] + list(task_env.values()),
                 patterns,
             )
-            cli = str(task.cli or settings.get_setting(session, "agent_cli") or "opencode")
-            cli, agent_skills = self._agent_run_opts(session, task, cli)
+            resolved_cli = str(
+                task.cli
+                or settings.get_setting(session, "default_backend")
+                or "opencode"
+            )
+            cli, agent_skills = self._agent_run_opts(session, task, resolved_cli)
             agent = self._catalog_agent(session, task)
             effective_model = task.model or (agent.model if agent is not None else None)
+            if not effective_model:
+                # The global default model applies only when the resolved backend
+                # IS the default backend (a single model can't be valid for every
+                # backend); other backends use the CLI's own default.
+                default_backend = str(
+                    settings.get_setting(session, "default_backend") or "opencode"
+                )
+                if cli == default_backend:
+                    default_model = settings.get_setting(session, "default_model")
+                    effective_model = str(default_model) if default_model else None
             effective_prompt = task.prompt
             if agent is not None and agent.custom_instructions:
                 effective_prompt = f"{task.prompt}\n\n{agent.custom_instructions}"
@@ -1146,6 +1166,29 @@ class TaskQueue:
             values += [v for v in secret_values if v]
         return masking.build_masker(values, patterns)
 
+    def _prior_conversation(self, run) -> str:
+        """Extract a compact "prior conversation" from a run's (masked) timeline.
+
+        Used when a follow-up's backend differs from the session's own: the new
+        backend can't resume the old session, so its fresh run is seeded with the
+        previous run's assistant messages + tool calls as context.
+        """
+        try:
+            steps = json.loads(run.steps_json or "[]")
+        except (ValueError, TypeError):
+            return ""
+        lines: list[str] = []
+        for s in steps:
+            if not isinstance(s, dict):
+                continue
+            t = s.get("type")
+            text = str(s.get("text") or "").strip()
+            if t == "message" and text:
+                lines.append(text)
+            elif t == "tool_call" and text:
+                lines.append(f"(tool) {text[:400]}")
+        return "\n".join(lines[-40:])
+
     def _run_followup(
         self,
         task_id: int,
@@ -1153,12 +1196,16 @@ class TaskQueue:
         pat_name: str | None = None,
         model: str | None = None,
         auto: bool = False,
+        cli: str | None = None,
     ) -> None:
         """Resume a completed task's session in its own worktree (PRD F11).
 
         ``auto=True`` marks an auto-recovery resume: no ``followups`` row is
         recorded (it isn't a user follow-up; the recovery step is already on the
-        failed run's timeline).
+        failed run's timeline). ``cli`` is an optional backend override: a
+        backend different from the session's own cannot resume it (each CLI owns
+        its session format), so it starts a **fresh run seeded with the prior
+        conversation** instead.
         """
         session = Session()
         run: Run | None = None
@@ -1190,18 +1237,38 @@ class TaskQueue:
                 secrets.all_token_values(self.config) + [token] + list(task_env.values()),
                 patterns,
             )
-            cli = str(
-                task.cli or prev.cli or settings.get_setting(session, "agent_cli") or "opencode"
+            # ``cli`` is the follow-up's backend override; a backend different
+            # from the session's own (``prev.cli``) cannot resume it — each CLI
+            # owns its session format — so it starts a fresh run seeded with the
+            # prior conversation instead (see ``fork`` below).
+            resolved_cli = str(
+                cli
+                or task.cli
+                or prev.cli
+                or settings.get_setting(session, "default_backend")
+                or "opencode"
             )
             timeout = self._resolve_timeout(session, task)
             effective_model = model or task.model or prev.model
 
-            cli, agent_skills = self._agent_run_opts(session, task, cli)
+            cli, agent_skills = self._agent_run_opts(session, task, resolved_cli)
             agent = self._catalog_agent(session, task)
             if agent is not None and agent.model:
                 effective_model = effective_model or agent.model
+            if not effective_model:
+                default_backend = str(
+                    settings.get_setting(session, "default_backend") or "opencode"
+                )
+                if cli == default_backend:
+                    default_model = settings.get_setting(session, "default_model")
+                    effective_model = str(default_model) if default_model else None
             if agent is not None and agent.custom_instructions:
                 body = f"{body}\n\n{agent.custom_instructions}"
+
+            # A backend different from the session's own (``prev.cli``) can't
+            # resume it. Only fork when the session's backend is known — a legacy
+            # run without a stored cli is assumed to match and resumes as before.
+            fork = bool(prev.cli) and cli != prev.cli
 
             state = _RunState(None)
             with self._running_lock:
@@ -1235,13 +1302,26 @@ class TaskQueue:
             )
 
             adapter = get_adapter(cli)
-            state.handle = adapter.resume(
-                str(wt),
-                prev_session_id,
-                prompts.build_followup_prompt(task, repo, body),
-                model=effective_model,
-                env=self._agent_env(session, task, repo, token),
-            )
+            if fork:
+                state.handle = adapter.start(
+                    str(wt),
+                    prompts.build_followup_prompt(
+                        task,
+                        repo,
+                        body,
+                        history=self._prior_conversation(prev),
+                    ),
+                    model=effective_model,
+                    env=self._agent_env(session, task, repo, token),
+                )
+            else:
+                state.handle = adapter.resume(
+                    str(wt),
+                    prev_session_id,
+                    prompts.build_followup_prompt(task, repo, body),
+                    model=effective_model,
+                    env=self._agent_env(session, task, repo, token),
+                )
             run.pid = getattr(state.handle.proc, "pid", None)
             session.commit()
             self._start_status(session, task, repo, run, git, token)

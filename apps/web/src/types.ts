@@ -174,7 +174,8 @@ export interface SettingsMap {
   stall_timeout_seconds: number;
   secret_patterns: string[];
   artifact_ttl_days: number;
-  agent_cli: string;
+  default_backend: string;
+  default_model: string;
   notify_on_done: boolean;
   notify_on_failed: boolean;
   notify_on_progress: boolean;

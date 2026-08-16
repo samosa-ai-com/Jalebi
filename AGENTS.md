@@ -10,7 +10,7 @@ Jalebi is a **private, self-hosted, localhost-only web application** that behave
 
 Key architectural facts:
 
-- **Backend-agnostic agent adapters** — opencode, Codex, and Claude Code. Switching backend = one-line config (`agent.cli`).
+- **Backend-agnostic agent adapters** — opencode, Codex, and Claude Code. The backend + model are chosen **per action** (each task/follow-up/screen/agent form has its own selects); the Settings `default_backend`/`default_model` are only the fallbacks.
 - **GitHub PAT** (the owner's own token) drives all GitHub interaction via a thin httpx client. **The `gh` CLI is forbidden.**
 - Agents run as **local child processes** in per-task **git worktrees**.
 - Stack: Python 3.13 + Flask + SQLAlchemy 2 (SQLite) + Alembic + httpx + React + Vite + Tailwind. SSE for events. Git CLI (not libgit2).

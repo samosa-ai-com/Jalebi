@@ -15,7 +15,7 @@ The authoritative behavioral spec is **`JALEBI_PRD.md`** at the repo root. This 
 ## 2. Core principles
 
 1. **Jules-like experience, self-hosted** — dedicated web UI with a task queue, per-task timeline, live logs, incremental diff, and follow-up panel. Owner-only.
-2. **Pluggable agent backends** — opencode, Codex, and Claude Code. Switching backend = one-line config (`agent.cli`).
+2. **Pluggable agent backends, chosen per action** — opencode, Codex, or Claude Code. Every task/follow-up/screen/agent form has its own Backend + Model selects; the Settings `default_backend`/`default_model` are the fallbacks.
 3. **Model freedom** — any model available to the selected CLI, per task and per agent.
 4. **Agent catalog** — named agents = personality (markdown → `AGENTS.md`) + skills + optional model + optional CLI.
 5. **Reviewer workflow** — catalog reviewers run in their own worktrees and post PR review comments.

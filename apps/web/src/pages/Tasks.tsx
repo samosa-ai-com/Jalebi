@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import { StatusBadge } from "../components/StatusBadge";
-import type { Account, CatalogAgent, GithubContext, Repo, Task } from "../types";
+import type { Account, CatalogAgent, GithubContext, Repo, SettingsMap, Task } from "../types";
 
 function repoName(repos: Repo[], id: number): string {
   return repos.find((r) => r.id === id)?.full_name ?? `repo#${id}`;
@@ -40,7 +40,6 @@ const TASK_TYPES = [
   { value: "freeform", label: "Freeform" },
   { value: "issue_fix", label: "Issue fix" },
   { value: "pr_review", label: "Review PR" },
-  { value: "screen_finding", label: "Screen finding" },
 ];
 
 function Select({
@@ -94,6 +93,7 @@ function CreateTask({
   const [context, setContext] = useState<GithubContext | null>(null);
   const [models, setModels] = useState<string[]>([]);
   const [agentCli, setAgentCli] = useState("opencode");
+  const [settings, setSettings] = useState<SettingsMap | null>(null);
   const [agents, setAgents] = useState<CatalogAgent[]>([]);
   const [reviewers, setReviewers] = useState<string[]>([]);
   const [envVars, setEnvVars] = useState<string[]>([]);
@@ -117,11 +117,15 @@ function CreateTask({
   }
 
   useEffect(() => {
+    // The Backend select defaults to the global default_backend; the Model
+    // dropdown follows the backend selected in THIS form. When the selected
+    // backend is the default backend and a default model is configured, the
+    // Model selection defaults to it (unless the user already picked one).
     api
-      .getModels()
-      .then((m) => {
-        setModels(m.models ?? []);
-        setAgentCli(m.cli || "opencode");
+      .getSettings()
+      .then((s) => {
+        setSettings(s);
+        setAgentCli(s.default_backend || "opencode");
       })
       .catch(() => {});
     api
@@ -129,6 +133,23 @@ function CreateTask({
       .then((a) => setAgents(a ?? []))
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getModels(agentCli || undefined)
+      .then((m) => {
+        if (cancelled) return;
+        setModels(m.models ?? []);
+        if (agentCli === settings?.default_backend && settings?.default_model) {
+          setModel((cur) => cur || settings.default_model);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [agentCli, settings?.default_backend, settings?.default_model]);
 
   useEffect(() => {
     if (!repo) return;
@@ -194,6 +215,7 @@ function CreateTask({
         source_branch: sourceBranch || undefined,
         target_branch: targetBranch || undefined,
         agent_id: agentId || undefined,
+        cli: agentCli || undefined,
         model: model || undefined,
         pat_name: patName || undefined,
         issue_number: issueNumber ? Number(issueNumber) : undefined,
@@ -401,6 +423,13 @@ function CreateTask({
           {agents.map((a) => (
             <option key={a.id} value={a.id}>
               {a.name} ({a.id})
+            </option>
+          ))}
+        </Select>
+        <Select label="Backend" value={agentCli} onChange={setAgentCli}>
+          {["opencode", "codex", "claude"].map((c) => (
+            <option key={c} value={c}>
+              {c}
             </option>
           ))}
         </Select>

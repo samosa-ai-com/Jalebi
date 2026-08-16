@@ -180,9 +180,15 @@ def build_agent_md(task: Task, repo: Repo, agent: CatalogAgent | None = None) ->
     return "\n".join(parts)
 
 
-def build_followup_prompt(task: Task, repo: Repo, body: str) -> str:
-    """The follow-up text with an explicit instruction to fetch current context."""
-    return (
+def build_followup_prompt(task: Task, repo: Repo, body: str, history: str = "") -> str:
+    """The follow-up text with an explicit instruction to fetch current context.
+
+    ``history`` optionally carries the prior conversation (assistant messages
+    from previous runs) — used when a follow-up's backend differs from the
+    session's own, so the new backend starts a fresh run seeded with it instead
+    of resuming.
+    """
+    prompt = (
         body.strip()
         + "\n\n"
         + f"(You are resuming a Jalebi task in `{repo.full_name}`. Follow the hard rules "
@@ -192,6 +198,9 @@ def build_followup_prompt(task: Task, repo: Repo, body: str) -> str:
         "`curl -H \"Authorization: Bearer $JALEBI_GITHUB_TOKEN\" "
         f"https://api.github.com/repos/{repo.full_name}/pulls/<n>/reviews` first.)"
     )
+    if history:
+        prompt += "\n\n## Prior conversation\n" + history
+    return prompt
 
 
 def review_file(worktree: Path) -> Path:

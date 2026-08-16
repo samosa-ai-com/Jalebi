@@ -111,7 +111,8 @@ _SETTING_VALIDATORS = {
     "stall_timeout_seconds": lambda v: isinstance(v, int) and v >= 60,
     "secret_patterns": _valid_secret_patterns,
     "artifact_ttl_days": lambda v: isinstance(v, int) and v >= 1,
-    "agent_cli": lambda v: v in ALLOWED_AGENT_CLIS,
+    "default_backend": lambda v: v in ALLOWED_AGENT_CLIS,
+    "default_model": lambda v: isinstance(v, str) and bool(v.strip()),
     "adapter_model_lists": _valid_adapter_model_lists,
     "notify_on_done": lambda v: isinstance(v, bool),
     "notify_on_failed": lambda v: isinstance(v, bool),
@@ -315,16 +316,17 @@ def create_app(config: Config | None = None) -> Flask:
     def list_models() -> ResponseReturnValue:
         """Models available from an agent CLI (for the model dropdowns).
 
-        The backend defaults to the ``agent_cli`` setting; a ``?cli=<backend>``
-        query param overrides it (used by the Screenings/Agents forms so the
-        model dropdown follows the backend selected *in that form*). An
-        ``adapter_model_lists`` setting entry for the requested cli wins over
-        the adapter's own ``list_models()``; otherwise the adapter is asked
-        (missing CLI / unknown backend → empty list).
+        The backend defaults to the ``default_backend`` setting; a ``?cli=<backend>``
+        query param overrides it (used by the Settings default-model dropdown and
+        the Screenings/Agents/Tasks forms so the model list follows the backend
+        selected *in that form*). An ``adapter_model_lists`` setting entry for
+        the requested cli wins over the adapter's own ``list_models()``;
+        otherwise the adapter is asked (missing CLI / unknown backend → empty
+        list).
         """
         session = db.get_session()
         requested = (request.args.get("cli") or "").strip()
-        cli = requested or str(settings.get_setting(session, "agent_cli") or "opencode")
+        cli = requested or str(settings.get_setting(session, "default_backend") or "opencode")
         overrides = settings.get_setting(session, "adapter_model_lists") or {}
         # ``.get`` returns None only when the key is absent, so an explicit empty
         # list is authoritative (an owner can clear/disable the dropdown).

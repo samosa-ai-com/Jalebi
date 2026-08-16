@@ -435,6 +435,11 @@ def followup_task(task_id: int) -> ResponseReturnValue:
     if pat_name is not None and not _valid_pat(config, pat_name):
         return jsonify({"error": f"unknown PAT: {pat_name}"}), 400
     model = payload.get("model") if isinstance(payload, dict) else None
+    # Optional backend override: a backend different from the task's own starts
+    # a fresh session seeded with the prior conversation (see queue._run_followup).
+    cli = payload.get("cli") if isinstance(payload, dict) else None
+    if cli is not None and cli not in available_adapters():
+        return jsonify({"error": f"unsupported agent cli: {cli}"}), 400
 
     masker = _masker(session)
 
@@ -448,7 +453,7 @@ def followup_task(task_id: int) -> ResponseReturnValue:
     masked = masker(body.strip())
     # The Followup row (incl. PAT/model overrides) is recorded by the worker when
     # the resume actually runs — not here, to avoid duplicates.
-    _queue().enqueue_followup(task_id, masked, pat_name=pat_name, model=model)
+    _queue().enqueue_followup(task_id, masked, pat_name=pat_name, model=model, cli=cli)
     return jsonify(_task_dict(session, task)), 202
 
 

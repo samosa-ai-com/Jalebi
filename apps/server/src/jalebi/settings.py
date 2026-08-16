@@ -36,7 +36,16 @@ DEFAULTS: dict[str, object] = {
     "stall_timeout_seconds": 600,
     "secret_patterns": [],
     "artifact_ttl_days": 7,
-    "agent_cli": "opencode",
+    # Default backend + model used when an operation doesn't pick its own.
+    # Every task/follow-up/screen/agent form has its own Backend + Model selects
+    # (which is the primary path) — these are only the fallbacks (triggered
+    # tasks, legacy rows, unpinned screens). The default model is applied only
+    # when the resolved backend == default_backend (a single model can't be
+    # valid for every backend); other backends use the CLI's own default when
+    # unpinned. ``default_model`` is required (validator rejects empty) so a
+    # default is always configured.
+    "default_backend": "opencode",
+    "default_model": "",
     # Owner override of each adapter's curated model list: {cli: [model names]}.
     # Consumed by GET /api/models; lets the owner pin the task-form model dropdown
     # (e.g. for a custom provider) without touching adapter code. {} = adapters'

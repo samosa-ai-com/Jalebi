@@ -42,7 +42,7 @@ default only for a key added by a code update before the next restart.
 |---|---|
 | `concurrency` | **live** (pool resizes immediately) |
 | `auto_publish` | live (checked per run) |
-| `agent_cli` | live (per run) |
+| `default_backend` / `default_model` | live (resolved per run when an action doesn't pick its own) |
 | `secret_patterns` | live (per run/prompt ingest) |
 | `default_timeout_minutes` | live (used for new tasks / watchdog fallback) |
 | `retry_policy` (`auto_retry`, `continue_prompt`, `timeout_multiplier`, `max_timeout_minutes`) | live (per run completion) |
@@ -53,7 +53,7 @@ default only for a key added by a code update before the next restart.
 | `notify_progress_interval_minutes` | live (progress watchdog reads it each loop) |
 | `timezone` | **live** (`jalebi/clock.set_zone` on save — screening cron matching + all timestamps follow it immediately; column defaults use a module-global zone synced at startup) |
 
-Settings values are **type-validated** on `POST /api/settings` (rejects `"false"` for a bool, non-integers for numbers, non-list `secret_patterns`, unsupported `agent_cli`); `secret_patterns` must be compilable regexes; `ntfy_topic` must be empty, a bare topic, or an `http(s)://` URL. Only the `opencode` CLI is currently supported.
+Settings values are **type-validated** on `POST /api/settings` (rejects `"false"` for a bool, non-integers for numbers, non-list `secret_patterns`, unsupported `default_backend`, empty `default_model`); `secret_patterns` must be compilable regexes; `ntfy_topic` must be empty, a bare topic, or an `http(s)://` URL. Backends: opencode, codex, claude.
 
 ## 4. Security hardening
 

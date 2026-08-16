@@ -12,7 +12,8 @@ const SETTINGS = {
   stall_timeout_seconds: 600,
   secret_patterns: [],
   artifact_ttl_days: 7,
-  agent_cli: "opencode",
+  default_backend: "opencode",
+  default_model: "",
   notify_on_done: true,
   notify_on_failed: true,
   notify_on_progress: true,
@@ -133,19 +134,19 @@ describe("Settings", () => {
     expect(screen.getByText("Max timeout")).toBeInTheDocument();
   });
 
-  it("offers opencode/codex/claude in the Agent backend select", async () => {
+  it("offers opencode/codex/claude in the Default backend select", async () => {
     const fetchMock = makeFetchMock();
     vi.stubGlobal("fetch", fetchMock);
 
     render(<Settings />);
-    await screen.findByText("Agent backend");
+    await screen.findByText("Default backend");
 
     // The select is unlabeled — scope it by its section heading.
-    const section = screen.getByRole("heading", { name: "Agent backend" }).closest("section")!;
-    const agentSelect = within(section).getByRole("combobox") as HTMLSelectElement;
+    const section = screen.getByRole("heading", { name: "Default backend" }).closest("section")!;
+    const backendSelect = within(section).getByRole("combobox") as HTMLSelectElement;
 
-    expect(agentSelect.value).toBe("opencode");
-    expect([...agentSelect.options].map((o) => o.value)).toEqual(
+    expect(backendSelect.value).toBe("opencode");
+    expect([...backendSelect.options].map((o) => o.value)).toEqual(
       expect.arrayContaining(["opencode", "codex", "claude"])
     );
   });

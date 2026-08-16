@@ -393,7 +393,9 @@ def test_followup_uses_task_account_by_default(app, client, session, monkeypatch
     monkeypatch.setattr(
         q,
         "enqueue_followup",
-        lambda tid, body, pat_name=None, model=None: enqueued.append((tid, body, pat_name)),
+        lambda tid, body, pat_name=None, model=None, cli=None: enqueued.append(
+            (tid, body, pat_name)
+        ),
     )
     resp = client.post(
         f"/api/tasks/{task.id}/followup",

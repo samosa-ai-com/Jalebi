@@ -485,12 +485,14 @@ class ScreeningEngine:
         masker = masking.build_masker(secrets.all_token_values(self.config), patterns)
 
         # Backend resolution (parity with the task queue, queue.py `_run_task`):
-        # a screen's own cli pin wins; otherwise the global `agent_cli` setting;
-        # otherwise the opencode fallback. Derived only for an actual run (below
-        # the baseline-dedup early return); screens have no run-to-run resume, so
-        # it is re-derived every run (no continuity to preserve).
+        # a screen's own cli pin wins; otherwise the global `default_backend`
+        # setting; otherwise the opencode fallback. Derived only for an actual
+        # run (below the baseline-dedup early return); screens have no run-to-run
+        # resume, so it is re-derived every run (no continuity to preserve).
         effective_cli = str(
-            screen.cli or settings.get_setting(session, "agent_cli") or "opencode"
+            screen.cli
+            or settings.get_setting(session, "default_backend")
+            or "opencode"
         )
 
         wt = None
@@ -507,8 +509,16 @@ class ScreeningEngine:
             # mirror/worktree are prepared by Jalebi above, and a prompt-injected
             # audit agent must never hold a privileged GitHub token (curl against
             # the REST API with it would otherwise be possible).
+            effective_model = screen.model or None
+            if not effective_model:
+                default_backend = str(
+                    settings.get_setting(session, "default_backend") or "opencode"
+                )
+                if effective_cli == default_backend:
+                    default_model = settings.get_setting(session, "default_model")
+                    effective_model = str(default_model) if default_model else None
             handle = adapter.start(
-                str(wt), prompt, model=screen.model or None, env=_build_agent_env(None)
+                str(wt), prompt, model=effective_model, env=_build_agent_env(None)
             )
 
             # Watchdog: a hung agent must never block the single scheduler thread

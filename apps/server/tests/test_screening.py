@@ -82,12 +82,12 @@ def test_run_screen_uses_screen_cli_and_model(session, repo_row, engine, monkeyp
     assert captured["model"] == "m-9"
 
 
-def test_unpinned_screen_uses_global_agent_cli(session, repo_row, engine, monkeypatch):
-    """A screen with no backend pin resolves from the agent_cli setting (parity
-    with the task queue) — the global default, not hardcoded opencode."""
+def test_unpinned_screen_uses_global_default_backend(session, repo_row, engine, monkeypatch):
+    """A screen with no backend pin resolves from the default_backend setting
+    (parity with the task queue) — the global default, not hardcoded opencode."""
     from jalebi import settings
 
-    settings.set_setting(session, "agent_cli", "codex")
+    settings.set_setting(session, "default_backend", "codex")
     captured: list[tuple] = []
     monkeypatch.setattr(
         "jalebi.screening.worktree_bootstrap.write_guard",
@@ -119,7 +119,7 @@ def test_unpinned_screen_uses_global_agent_cli(session, repo_row, engine, monkey
     assert adapter_seen == ["codex"]
     assert captured and captured[-1][1] == "codex"
     # A screen with its own pin still wins over the setting.
-    settings.set_setting(session, "agent_cli", "claude")
+    settings.set_setting(session, "default_backend", "claude")
     pinned = screening.create_screen(
         session,
         repo_id=repo_row.id,

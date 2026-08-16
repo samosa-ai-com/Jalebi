@@ -1655,6 +1655,41 @@ def test_catalog_agent_applies_cli_model_custom_instructions(
     assert "@.claude/skills/secure-coding/SKILL.md" in (wt / "AGENTS.md").read_text()
 
 
+def test_default_model_applied_only_for_default_backend(
+    q, session, repo_row, monkeypatch
+) -> None:
+    """The global default model is a fallback only when the resolved backend IS
+    the default backend; a task pinned to another backend uses the CLI's own
+    default (None)."""
+    settings.set_setting(session, "default_backend", "codex")
+    settings.set_setting(session, "default_model", "gpt-default")
+    captured: dict = {}
+
+    class RecordingAdapter:
+        def start(self, cwd, prompt, model=None, env=None):
+            captured["model"] = model
+            return FakeHandle([AgentEvent(type="done")])
+
+        def resume(self, *args, **kwargs):
+            raise NotImplementedError
+
+        def list_models(self):
+            return []
+
+    monkeypatch.setattr("jalebi.queue.get_adapter", lambda cli: RecordingAdapter())
+
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
+    q._run_task(task.id)
+    assert captured["model"] == "gpt-default"
+
+    # A task pinned to a different backend must NOT inherit the default model.
+    task2 = tasks.create_task(
+        session, type_="freeform", repo_id=repo_row.id, prompt="do it", cli="claude"
+    )
+    q._run_task(task2.id)
+    assert captured["model"] is None
+
+
 def test_catalog_agent_disabled_falls_back_to_defaults(q, session, repo_row, monkeypatch) -> None:
     """A task whose catalog agent was disabled/deleted still runs, falling back
     to the default build agent (stored model/cli already on the task)."""

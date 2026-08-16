@@ -352,20 +352,37 @@ function FollowUpComposer({
   task,
   followups,
   accounts,
-  models,
   onSent,
 }: {
   task: Task;
   followups: Followup[];
   accounts: Account[];
-  models: string[];
   onSent: () => void;
 }) {
   const [text, setText] = useState("");
   const [patName, setPatName] = useState("");
   const [model, setModel] = useState("");
+  const [cli, setCli] = useState(task.cli ?? "");
+  const [models, setModels] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // The Model dropdown follows the Backend selected here (blank = the task's
+  // own backend).
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getModels(cli || undefined)
+      .then((m) => {
+        if (!cancelled) setModels(m.models ?? []);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [cli]);
+
+  const backendChanged = cli !== (task.cli ?? "");
 
   const hasPr = (task.prs?.length ?? 0) > 0 || task.pr_number != null;
   // "Address reviewers" only makes sense on the fixer task: a pr_review task's
@@ -383,6 +400,7 @@ function FollowUpComposer({
       await api.postFollowup(task.id, text.trim(), {
         pat_name: patName || undefined,
         model: model || undefined,
+        cli: cli || undefined,
       });
       setText("");
       onSent();
@@ -404,6 +422,7 @@ function FollowUpComposer({
         include_reviews: true,
         pat_name: patName || undefined,
         model: model || undefined,
+        cli: cli || undefined,
       });
       setText("");
       onSent();
@@ -435,6 +454,17 @@ function FollowUpComposer({
             </select>
           </label>
           <label className="block">
+            <span className="mb-1.5 block text-xs font-medium text-ink-400">Backend</span>
+            <select value={cli} onChange={(e) => setCli(e.target.value)} className="field">
+              <option value="">Reuse task backend</option>
+              {["opencode", "codex", "claude"].map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
             <span className="mb-1.5 block text-xs font-medium text-ink-400">Model</span>
             <select value={model} onChange={(e) => setModel(e.target.value)} className="field">
               <option value="">Reuse task model</option>
@@ -446,6 +476,11 @@ function FollowUpComposer({
             </select>
           </label>
         </div>
+        {backendChanged && (
+          <p className="text-xs text-amber-300">
+            Changing the backend starts a fresh session with the previous conversation included.
+          </p>
+        )}
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
@@ -825,7 +860,6 @@ export default function TaskDetail() {
   const [runs, setRuns] = useState<Run[]>([]);
   const [repos, setRepos] = useState<Repo[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
-  const [models, setModels] = useState<string[]>([]);
   const [agents, setAgents] = useState<CatalogAgent[]>([]);
   const [assigning, setAssigning] = useState(false);
   const [assignError, setAssignError] = useState<string | null>(null);
@@ -896,7 +930,6 @@ export default function TaskDetail() {
       .catch(() => {});
     api.getRepos().then(setRepos).catch(() => {});
     api.getTokens().then((t) => setAccounts(t.accounts ?? [])).catch(() => {});
-    api.getModels().then((m) => setModels(m.models ?? [])).catch(() => {});
   }, [taskId]);
 
   useEffect(() => {
@@ -1192,7 +1225,6 @@ export default function TaskDetail() {
           task={task}
           followups={task.followups ?? []}
           accounts={accounts}
-          models={models}
           onSent={() => {
             load();
             setFollowUpPending(true);

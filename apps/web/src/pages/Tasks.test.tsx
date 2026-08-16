@@ -56,6 +56,7 @@ const DEFAULT_HANDLERS = {
   "/api/tasks": TASKS,
   "/api/repos": REPOS,
   "/api/models": { cli: "opencode", models: ["opencode-go/deepseek-v4-flash"] },
+  "/api/settings": { default_backend: "opencode", default_model: "opencode-go/deepseek-v4-flash" },
   "/api/github/tokens": {
 
     accounts: [
@@ -80,20 +81,6 @@ describe("Tasks", () => {
     expect(await screen.findByText("do the thing")).toBeInTheDocument();
     expect(screen.getAllByText("owner/repo").length).toBeGreaterThan(0);
     expect(screen.getByText("done")).toBeInTheDocument();
-  });
-
-  it("shows the active agent backend in the New task caption", async () => {
-    stubFetch({
-      ...DEFAULT_HANDLERS,
-      "/api/models": { cli: "codex", models: ["gpt-5.4-mini", "gpt-5.5"] },
-    });
-    render(
-      <MemoryRouter>
-        <Tasks />
-      </MemoryRouter>
-    );
-    await screen.findByText("New task");
-    expect(screen.getByText("codex · runs in a local worktree")).toBeInTheDocument();
   });
 
   it("creates a task and reloads", async () => {
@@ -257,5 +244,40 @@ describe("Tasks", () => {
       const body = JSON.parse(postCall![1]!.body as string) as Record<string, unknown>;
       expect(body.env_vars).toEqual(["DATABASE_URL"]);
     });
+  });
+
+  it("shows the selected agent backend in the New task caption", async () => {
+    stubFetch({
+      ...DEFAULT_HANDLERS,
+      "/api/settings": { default_backend: "codex", default_model: "gpt-5.4-mini" },
+      "/api/models": { cli: "codex", models: ["gpt-5.4-mini", "gpt-5.5"] },
+    });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    await screen.findByText("New task");
+    expect(screen.getByText("codex · runs in a local worktree")).toBeInTheDocument();
+    // The Backend select lets the user override per task; changing it updates
+    // the caption and the model list.
+    await userEvent.selectOptions(screen.getByLabelText("Backend"), "claude");
+    await waitFor(() => {
+      expect(screen.getByText("claude · runs in a local worktree")).toBeInTheDocument();
+    });
+  });
+
+  it("does not offer Screen finding as a manually creatable task type", async () => {
+    stubFetch({ ...DEFAULT_HANDLERS });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    await screen.findByText("New task");
+    const typeSelect = screen.getByLabelText("Task type") as HTMLSelectElement;
+    const values = [...typeSelect.options].map((o) => o.value);
+    expect(values).toContain("freeform");
+    expect(values).not.toContain("screen_finding");
   });
 });
