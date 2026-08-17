@@ -653,6 +653,61 @@ def test_followup_backend_change_forks_fresh_session_with_history(
     assert run.cli == "codex"
 
 
+def test_followup_legacy_backend_override_forks_fresh_session(
+    q, session, repo_row, monkeypatch
+) -> None:
+    """A legacy run (prev.cli is NULL) + an explicit follow-up backend override
+    must fork a fresh session, not attempt a resume on the wrong backend.
+
+    Previously, ``fork = bool(prev.cli) and cli != prev.cli`` meant a legacy
+    run with a user-supplied follow-up backend would call
+    ``adapter.resume(prev_session_id)`` on a backend whose session id format
+    didn't match — the run failed mid-stream. Treat the explicit override as
+    authoritative: fork and seed the prior conversation.
+    """
+    settings.set_setting(session, "auto_publish", False)
+    task = _done_task_with_session(session, repo_row.id, session_id="ses_legacy")
+    # No `run.cli` — a legacy run predating the per-run cli column.
+    run = tasks.latest_run(session, task.id)
+    assert run is not None
+    run.cli = None
+    run.steps_json = json.dumps(
+        [{"type": "message", "text": "legacy action", "phase": None, "ts": "t"}]
+    )
+    session.commit()
+
+    started: list[dict[str, object]] = []
+    resumed: list[dict[str, object]] = []
+
+    class StartAdapter:
+        def start(self, cwd, prompt, model=None, env=None):
+            started.append({"cwd": cwd, "prompt": prompt, "model": model})
+            return FakeHandle([AgentEvent(type="done")], session_id="ses_new")
+
+        def resume(self, cwd, session_id, prompt, model=None, env=None):
+            resumed.append({"session_id": session_id, "prompt": prompt})
+            return FakeHandle([AgentEvent(type="done")], session_id="ses_legacy")
+
+        def list_models(self):
+            return []
+
+    monkeypatch.setattr("jalebi.queue.get_adapter", lambda cli: StartAdapter())
+
+    q._run_followup(task.id, "switch backend on legacy run", cli="codex")
+
+    assert len(started) == 1
+    assert len(resumed) == 0
+    prompt = started[0]["prompt"]
+    assert isinstance(prompt, str)
+    assert "## Prior conversation" in prompt
+    assert "legacy action" in prompt
+    session.expire_all()
+    run = tasks.latest_run(session, task.id)
+    assert run is not None
+    assert run.session_id == "ses_new"
+    assert run.cli == "codex"
+
+
 def test_chained_sequential_followups(q, session, repo_row, monkeypatch) -> None:
     """Two follow-ups in a row each resume the latest resumable run (T-10)."""
     settings.set_setting(session, "auto_publish", False)

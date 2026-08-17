@@ -1198,6 +1198,7 @@ class TaskQueue:
         auto: bool = False,
         cli: str | None = None,
     ) -> None:
+        cli_param = cli
         """Resume a completed task's session in its own worktree (PRD F11).
 
         ``auto=True`` marks an auto-recovery resume: no ``followups`` row is
@@ -1266,9 +1267,18 @@ class TaskQueue:
                 body = f"{body}\n\n{agent.custom_instructions}"
 
             # A backend different from the session's own (``prev.cli``) can't
-            # resume it. Only fork when the session's backend is known — a legacy
-            # run without a stored cli is assumed to match and resumes as before.
-            fork = bool(prev.cli) and cli != prev.cli
+            # resume it. The follow-up's explicit override (the ``cli`` parameter
+            # captured in ``followup_cli`` before catalog resolution) drives the
+            # decision: a user-supplied override always takes precedence — a
+            # legacy run with no stored cli and an explicit follow-up cli is
+            # treated as a backend change (the prior session id is unusable on
+            # the new backend, so the run would otherwise fail mid-stream
+            # rather than fork).
+            followup_cli = cli_param
+            if followup_cli is not None and (prev.cli is None or followup_cli != prev.cli):
+                fork = True
+            else:
+                fork = bool(prev.cli) and cli != prev.cli
 
             state = _RunState(None)
             with self._running_lock:

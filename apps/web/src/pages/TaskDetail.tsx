@@ -366,6 +366,18 @@ function FollowUpComposer({
   const [models, setModels] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [defaultBackend, setDefaultBackend] = useState<string | null>(null);
+
+  // Fetch the global default backend so the "fresh session" warning exactly
+  // matches the queue's resolution (which uses ``cli || task.cli ||
+  // default_backend || "opencode"``). Without this, a task with no pinned
+  // backend + the user picking "Reuse task backend" would warn falsely.
+  useEffect(() => {
+    api
+      .getSettings()
+      .then((s) => setDefaultBackend(s.default_backend ?? null))
+      .catch(() => {});
+  }, []);
 
   // The Model dropdown follows the Backend selected here (blank = the task's
   // own backend).
@@ -382,7 +394,13 @@ function FollowUpComposer({
     };
   }, [cli]);
 
-  const backendChanged = cli !== (task.cli ?? "");
+  // Compare against the value the queue will actually use, not against the
+  // task's pinned backend alone — a task with no pin resolves to
+  // ``default_backend``, so "Reuse task backend" (cli = "") is NOT a change.
+  const resolvedTaskCli = task.cli ?? defaultBackend ?? "opencode";
+  const resolvedCurrentCli = cli || (task.cli ?? defaultBackend ?? "opencode");
+  const backendChanged =
+    cli !== "" && resolvedCurrentCli !== resolvedTaskCli;
 
   const hasPr = (task.prs?.length ?? 0) > 0 || task.pr_number != null;
   // "Address reviewers" only makes sense on the fixer task: a pr_review task's

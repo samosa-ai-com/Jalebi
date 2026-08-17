@@ -258,13 +258,60 @@ describe("Tasks", () => {
       </MemoryRouter>
     );
     await screen.findByText("New task");
-    expect(screen.getByText("codex · runs in a local worktree")).toBeInTheDocument();
+    // The caption only appears once /api/settings has resolved — before that,
+    // the form shows "Loading defaults…" and disables submit so a task can
+    // never be created with a defaulted (opencode) backend in the gap.
+    await waitFor(() => {
+      expect(screen.getByText("codex · runs in a local worktree")).toBeInTheDocument();
+    });
     // The Backend select lets the user override per task; changing it updates
     // the caption and the model list.
     await userEvent.selectOptions(screen.getByLabelText("Backend"), "claude");
     await waitFor(() => {
       expect(screen.getByText("claude · runs in a local worktree")).toBeInTheDocument();
     });
+  });
+
+  it("disables the submit button and shows a loading eyebrow while defaults are unresolved", async () => {
+    // A /api/settings that never resolves keeps the form in the loading state.
+    // /api/models etc. resolve normally so the rest of the form renders.
+    let resolveSettings!: (v: unknown) => void;
+    const settingsPromise = new Promise((r) => (resolveSettings = r));
+    const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
+      if (url.includes("/api/settings")) {
+        await settingsPromise;
+        return { ok: true, json: async () => ({ default_backend: "opencode", default_model: "x" }) };
+      }
+      if (url.includes("/api/models")) {
+        return { ok: true, json: async () => ({ cli: "opencode", models: ["x"] }) };
+      }
+      const handler = Object.entries(DEFAULT_HANDLERS).find(([n]) => url.includes(n));
+      const value = handler ? handler[1] : [];
+      return { ok: true, json: async () => value };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    await screen.findByText("New task");
+    expect(screen.getByText("Loading defaults…")).toBeInTheDocument();
+    const submit = screen.getByRole("button", { name: /Loading|Create/ });
+    expect(submit).toBeDisabled();
+    // The Backend select is also disabled until defaults resolve — a user
+    // can't pick a backend that the form hasn't computed the model list for yet.
+    expect(screen.getByLabelText("Backend")).toBeDisabled();
+
+    // Resolve settings → the form comes alive.
+    resolveSettings(null);
+    await waitFor(() => {
+      expect(screen.getByText("opencode · runs in a local worktree")).toBeInTheDocument();
+    });
+    // Type a prompt so the submit button's other disabled-conditions clear.
+    await userEvent.type(screen.getByPlaceholderText("Instructions…"), "do the thing");
+    expect(screen.getByRole("button", { name: "Create" })).not.toBeDisabled();
   });
 
   it("does not offer Screen finding as a manually creatable task type", async () => {

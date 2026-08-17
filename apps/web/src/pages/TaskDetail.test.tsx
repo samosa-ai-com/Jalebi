@@ -81,13 +81,17 @@ describe("TaskDetail", () => {
     FakeEventSource.instances = [];
   });
 
-  function stubFetch(task: Record<string, unknown>) {
+  function stubFetch(task: Record<string, unknown>, settings: Record<string, unknown> | null = null) {
     const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
       if (url.endsWith("/runs")) {
         return { ok: true, json: async () => [task.run ?? RUN] };
       }
       if (url.includes("/api/tasks")) {
         return { ok: true, json: async () => task };
+      }
+      if (url.includes("/api/settings")) {
+        if (settings) return { ok: true, json: async () => settings };
+        return { ok: true, json: async () => ({ default_backend: "opencode", default_model: "m1" }) };
       }
       if (url.includes("/api/github/tokens")) {
         return { ok: true, json: async () => ({ accounts: [] }) };
@@ -204,6 +208,33 @@ describe("TaskDetail", () => {
         cli: "codex",
       });
     });
+  });
+
+  it("does NOT show the fresh-session note when picking 'Reuse task backend' on an unpinned task", async () => {
+    // A task without a pinned cli (cli: null) — the queue resolves to
+    // default_backend ("codex" below). The "Reuse task backend" option (cli="")
+    // therefore keeps the same backend; the warning must NOT appear.
+    const doneTask = {
+      ...TASK,
+      status: "done",
+      cli: null,
+      run: { ...RUN, status: "done" },
+      followups: [],
+    };
+    stubFetch(doneTask, { default_backend: "codex", default_model: "m1" });
+
+    renderDetail();
+    await screen.findByText("Follow-up");
+
+    // Default selection is the "Reuse task backend" option (value="").
+    const backend = screen.getByLabelText("Backend") as HTMLSelectElement;
+    expect(backend.value).toBe("");
+    // No note — the resolved backend is the same.
+    expect(screen.queryByText(/fresh session/)).not.toBeInTheDocument();
+
+    // Picker is "opencode" — different from the resolved "codex" → note shows.
+    await userEvent.selectOptions(backend, "opencode");
+    expect(screen.getByText(/fresh session/)).toBeInTheDocument();
   });
 
   it("shows captured artifacts with preview and download", async () => {

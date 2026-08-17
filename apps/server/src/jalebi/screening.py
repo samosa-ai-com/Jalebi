@@ -254,6 +254,25 @@ def _normalize_cli(cli: str | None) -> str | None:
     return cli
 
 
+def _codex_sandbox_usable() -> bool:
+    """True if a codex screening can run safely on this host.
+
+    Late-bound import: avoids a hard dependency from screening on the codex
+    adapter module (a host without codex installed still loads screening). The
+    underlying probe is cached per-process inside the adapter. A missing codex
+    binary counts as "unusable" so a codex screening is refused with the same
+    clear error regardless of the cause.
+    """
+    try:
+        from jalebi.adapters.codex import _sandbox_usable
+    except ImportError:
+        return False
+    try:
+        return bool(_sandbox_usable())
+    except RuntimeError:
+        return False
+
+
 def _normalize_model(model: str | None) -> str | None:
     """Normalize a screen's model pin: empty/None → None (adapter default)."""
     return (model or "").strip() or None
@@ -494,6 +513,24 @@ class ScreeningEngine:
             or settings.get_setting(session, "default_backend")
             or "opencode"
         )
+
+        # Screening audits *untrusted* repository code (the highest prompt-injection
+        # exposure in the system) — the agent gets no PAT. Codex is the only backend
+        # whose only disk confinement is the OS sandbox; when bwrap user namespaces
+        # are blocked on the host it falls back to ``danger-full-access`` and the
+        # codex guard denies only ``gh``, leaving the agent free to read
+        # ``~/.jalebi/secrets.json`` / ``~/.ssh`` / ``~/.aws``. Opencode and claude
+        # each have a pattern-gate floor (external_directory: deny / PreToolUse hook)
+        # that still confines a *benign-but-confused* agent to the worktree without
+        # an OS sandbox — codex does not. Refuse a codex screening here so the
+        # highest-risk path keeps at least the pattern-gate floor every other
+        # backend has. (`_sandbox_usable` is cached per process; cheap.)
+        if effective_cli == "codex" and not _codex_sandbox_usable():
+            raise ScreeningError(
+                "codex screening requires a working workspace-write sandbox "
+                "(bwrap with user namespaces); this host has it disabled. "
+                "Pick opencode or claude, or fix bwrap (see server log)."
+            )
 
         wt = None
         try:

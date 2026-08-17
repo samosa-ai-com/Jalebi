@@ -4,22 +4,39 @@ Jalebi never relies on the `gh` CLI — the agent must use the owner PAT via
 git/curl only. This module hardens that contract at the worktree level with a
 **per-CLI guard** (selected by ``write_guard(worktree, cli)``):
 
-- ``opencode`` → ``opencode.json`` whose ``permission.bash`` rules DENY ``gh``
-  and whose ``permission.external_directory`` is ``deny`` (project config
-  overrides the user's global config; ``gh`` is also blocked by path variants).
-  Skipped when the repo ships its own ``opencode.json`` (never clobber repo config).
-- ``codex`` → ``.codex/rules/default.rules`` (Starlark execpolicy) whose
-  ``prefix_rule`` forbids ``gh`` (loaded for trusted projects; the codex
-  sandbox from the adapter is the confinement, this is the gh-specific deny).
-  Skipped when the repo ships its own ``.codex/rules/default.rules`` (never
-  clobber repo rules).
-- ``claude`` → ``.claude/settings.json`` with ``permissions.deny`` for ``gh``
-  variants and sensitive home paths (deny rules apply in EVERY permission mode,
-  incl. the adapter's ``--permission-mode bypassPermissions``), plus a
-  ``PreToolUse`` hook (``.claude/hooks/jalebi_deny_external.py``) that blocks the
-  file tools (Read/Write/Edit/Glob/Grep) from touching paths outside the worktree
-  — the claude equivalent of opencode's ``external_directory: deny``. Skipped
-  when the repo ships its own ``.claude/settings.json`` (never clobber repo config).
+    - ``opencode`` → ``opencode.json`` whose ``permission.bash`` rules DENY ``gh``
+      and whose ``permission.external_directory`` is ``deny`` (project config
+      overrides the user's global config; ``gh`` is also blocked by path variants).
+      Skipped when the repo ships its own ``opencode.json`` (never clobber repo config).
+    - ``codex`` → ``.codex/rules/default.rules`` (Starlark execpolicy) whose
+      ``prefix_rule`` lines forbid ``gh`` + the common absolute install paths
+      (``/usr/bin/gh``, ``/usr/local/bin/gh``, ``/opt/homebrew/bin/gh`` —
+      verified live with ``codex execpolicy check``; ``prefix_rule`` only
+      matches the first token, so multi-token wrapper coverage relies on env
+      hygiene). The codex sandbox from the adapter is the disk confinement —
+      this is the gh-specific deny. Skipped when the repo ships its own
+      ``.codex/rules/default.rules`` (never clobber repo rules).
+    - ``claude`` → ``.claude/settings.json`` with ``permissions.deny`` for ``gh``
+      variants + absolute paths + wrappers (parallel to ``OPENCODE_GUARD``'s
+      bash section) + sensitive home paths (deny rules apply in EVERY permission
+      mode, incl. the adapter's ``--permission-mode bypassPermissions``), plus a
+      ``PreToolUse`` hook (``.claude/hooks/jalebi_deny_external.py``) that blocks the
+      file tools (Read/Write/Edit/NotebookEdit/MultiEdit/Glob/Grep) from touching
+      paths outside the worktree — the claude equivalent of opencode's
+      ``external_directory: deny``. ``Glob``'s ``pattern`` key is honored:
+      absolute (``/``, ``~/``) or parent-ascending (``../``) patterns are
+      treated as outside. Skipped when the repo ships its own ``.claude/settings.json``
+      (never clobber repo config).
+
+**Self-disable note (all three backends):** the guard files live inside the
+worktree and the running agent has full write access to them. The opencode
+agent can rewrite ``opencode.json``; the codex agent can rewrite
+``.codex/rules/default.rules``; the claude agent can rewrite
+``.claude/settings.json`` and ``.claude/hooks/jalebi_deny_external.py``. The
+pattern gates are advisory against a *benign-but-confused* agent, not a
+boundary against a malicious one — exactly the opencode accepted tradeoff,
+now stated explicitly for codex and claude. The real backstop is the env
+hygiene (no credentials). See ``docs/10-security.md`` §4.
 
 ``set_git_identity`` pins the worktree's commit author to Jalebi, so pushes
 are never authored by a stray local account. ``write_agent_md`` writes the
@@ -77,22 +94,57 @@ OPENCODE_GUARD = {
 
 # codex execpolicy project rules (loaded for trusted projects; the codex
 # sandbox from the adapter is the confinement — this is the gh-specific deny).
-# Prefix match on the command token: the single rule covers `gh`, `gh pr view
-# 1`, etc. `match`/`not_match` are inline self-tests (`codex execpolicy check`).
+# ``prefix_rule`` matches the FIRST token of the command (verified live with
+# ``codex execpolicy check``), so the only honest per-token coverage is
+#   - the bare name (``gh``, ``/usr/bin/gh``, ``/usr/local/bin/gh``,
+#     ``/opt/homebrew/bin/gh`` — the common Linux + macOS install paths)
+# Multi-token wrapper coverage (``command gh ...``, ``which gh``, ``bash -c
+# "gh pr view"``) is NOT expressible in this execpolicy grammar (codex 0.147.0
+# only ships ``prefix_rule``; forbidding ``command``/``which``/``type``/``hash``
+# outright would block legitimate shell-script uses that the agent needs).
+# Those wrappers rely on the env-hygiene backstop: ``GH_TOKEN``/``GITHUB_TOKEN``
+# are stripped and ``GH_CONFIG_DIR`` points at a nonexistent dir, so even an
+# un-denied wrapper cannot authenticate against the owner's ``gh``.
+# ``match``/``not_match`` are inline self-tests (``codex execpolicy check``).
 CODEX_RULES_GUARD = (
     'prefix_rule(pattern=["gh"], decision="forbidden", '
     'justification="gh is not permitted in this environment", '
     'match=["gh", "gh pr view 1"], not_match=["git status"])\n'
+    'prefix_rule(pattern=["/usr/bin/gh"], decision="forbidden", '
+    'justification="gh is not permitted in this environment", '
+    'match=["/usr/bin/gh", "/usr/bin/gh pr view 1"], not_match=["git status"])\n'
+    'prefix_rule(pattern=["/usr/local/bin/gh"], decision="forbidden", '
+    'justification="gh is not permitted in this environment", '
+    'match=["/usr/local/bin/gh", "/usr/local/bin/gh pr view 1"], not_match=["git status"])\n'
+    'prefix_rule(pattern=["/opt/homebrew/bin/gh"], decision="forbidden", '
+    'justification="gh is not permitted in this environment", '
+    'match=["/opt/homebrew/bin/gh", "/opt/homebrew/bin/gh pr view 1"], '
+    'not_match=["git status"])\n'
 )
 
 # claude deny rules apply in EVERY permission mode (incl. the adapter's
 # `--permission-mode bypassPermissions`). Deny-only file is valid. The Read/Edit
 # rules also govern recognized Bash file commands (`cat`, `head`, `tail`, `sed`).
+# Bash permission rules support multi-token globs — covers absolute-path and
+# wrapper invocations (``/usr/bin/gh``, ``command gh``/``which gh``/etc.) the
+# bare-name ``Bash(gh*)`` rules miss. Parallel coverage to OPENCODE_GUARD's bash
+# section.
 CLAUDE_DENY_RULES = [
     "Bash(gh *)",
     "Bash(gh)",
     "Bash(gh**)",
     "Bash(gh **)",
+    "Bash(/usr/bin/gh*)",
+    "Bash(/usr/bin/gh **)",
+    "Bash(/usr/local/bin/gh*)",
+    "Bash(/usr/local/bin/gh **)",
+    "Bash(/opt/homebrew/bin/gh*)",
+    "Bash(/opt/homebrew/bin/gh **)",
+    "Bash(command gh*)",
+    "Bash(command gh **)",
+    "Bash(which gh*)",
+    "Bash(type gh*)",
+    "Bash(hash gh*)",
     "Read(~/.ssh/**)",
     "Read(~/.aws/**)",
     "Read(~/.config/**)",
@@ -136,7 +188,21 @@ from pathlib import Path
 
 WORKTREE = Path(__file__).resolve().parents[2]
 _FILE_TOOLS = {"Read", "Write", "Edit", "NotebookEdit", "MultiEdit", "Glob", "Grep"}
-_PATH_KEYS = ("file_path", "path", "output_path", "file_paths")
+# Path-bearing input keys across the file tools:
+#   - file_path: Read / Write / Edit / MultiEdit / Grep
+#   - path:      Grep (target dir), Read for some legacy payloads
+#   - output_path: Write/Edit (alternative)
+#   - file_paths: MultiEdit (list variant)
+#   - pattern:   Glob (the glob itself; absolute or parent-ascending ⇒ outside)
+#   - notebook_path: NotebookEdit (Jupyter notebook path)
+_PATH_KEYS = (
+    "file_path",
+    "path",
+    "output_path",
+    "file_paths",
+    "pattern",
+    "notebook_path",
+)
 
 
 def _inside(target: Path) -> bool:
@@ -148,13 +214,50 @@ def _inside(target: Path) -> bool:
         return False
 
 
-def _candidate_paths(tool_input) -> list[Path]:
+def _glob_pattern_escapes_worktree(pattern: str) -> bool:
+    """A glob pattern whose first path component is absolute (``/``, ``~/``)
+    or parent-ascending (``../``) enumerates files outside the worktree.
+
+    Pattern strings are globs, not plain paths — we don't try to resolve them.
+    We DO treat a leading absolute or ``..`` anchor as "outside" so the same
+    external-directory floor opencode applies is enforced here. Relative
+    patterns without a ``..`` anchor are assumed to start inside the worktree.
+    """
+    if not pattern:
+        return False
+    head = pattern.lstrip()
+    if not head:
+        return False
+    if head.startswith("/"):
+        return True
+    if head.startswith("~"):
+        return True
+    # Split into glob segments; the first non-empty segment is the anchor.
+    # ``..`` segments escape; ``**``/``*`` segments are not anchors.
+    first = None
+    for part in head.replace("\\", "/").split("/"):
+        if part in ("", ".", "*", "**"):
+            continue
+        first = part
+        break
+    if first == "..":
+        return True
+    return False
+
+
+def _candidate_paths(tool_input, tool: str) -> list[Path]:
     if not isinstance(tool_input, dict):
         return []
     paths: list[Path] = []
     for key in _PATH_KEYS:
         value = tool_input.get(key)
         if isinstance(value, str) and value:
+            # Glob's ``pattern`` is a glob, not a path — keep it as a string and
+            # filter it through the absolute / parent-ascending check separately.
+            if key == "pattern" and tool == "Glob":
+                if _glob_pattern_escapes_worktree(value):
+                    paths.append(Path("/__jalebi_glob_escape__"))
+                continue
             paths.append(Path(os.path.expanduser(value)))
         elif isinstance(value, list):
             for item in value:
@@ -173,7 +276,7 @@ def main() -> int:
     tool = payload.get("tool_name")
     if tool not in _FILE_TOOLS:
         return 0
-    for path in _candidate_paths(payload.get("tool_input")):
+    for path in _candidate_paths(payload.get("tool_input"), tool):
         if not _inside(path):
             print(
                 f"Jalebi: {tool} on {path} is outside the worktree and was denied.",

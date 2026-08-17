@@ -48,12 +48,14 @@ function Select({
   onChange,
   children,
   placeholder,
+  disabled,
 }: {
   label: string;
   value: string | number;
   onChange: (v: string) => void;
   children: React.ReactNode;
   placeholder?: string;
+  disabled?: boolean;
 }) {
   return (
     <label className="block">
@@ -61,7 +63,8 @@ function Select({
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="field"
+        className="field disabled:opacity-50"
+        disabled={disabled}
       >
         {placeholder !== undefined && <option value="">{placeholder}</option>}
         {children}
@@ -92,7 +95,7 @@ function CreateTask({
   const [publishMode, setPublishMode] = useState<"auto" | "manual" | "">("");
   const [context, setContext] = useState<GithubContext | null>(null);
   const [models, setModels] = useState<string[]>([]);
-  const [agentCli, setAgentCli] = useState("opencode");
+  const [agentCli, setAgentCli] = useState<string | null>(null);
   const [settings, setSettings] = useState<SettingsMap | null>(null);
   const [agents, setAgents] = useState<CatalogAgent[]>([]);
   const [reviewers, setReviewers] = useState<string[]>([]);
@@ -101,6 +104,7 @@ function CreateTask({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  const settingsLoading = agentCli === null;
   const effectiveRepoId = repoId || repos[0]?.id || 0;
   const repo = repoById(repos, effectiveRepoId);
 
@@ -136,6 +140,7 @@ function CreateTask({
 
   useEffect(() => {
     let cancelled = false;
+    if (agentCli === null) return;
     api
       .getModels(agentCli || undefined)
       .then((m) => {
@@ -197,6 +202,7 @@ function CreateTask({
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!effectiveRepoId || !prompt.trim()) return;
+    if (agentCli === null) return; // settings still loading — refuse submit
     if (type === "issue_fix" && !issueNumber) {
       setError("Pick the issue to fix.");
       return;
@@ -261,7 +267,9 @@ function CreateTask({
     >
       <div className="flex items-baseline justify-between">
         <h2 className="panel-title">New task</h2>
-        <span className="eyebrow">{agentCli} · runs in a local worktree</span>
+        <span className="eyebrow">
+          {agentCli === null ? "Loading defaults…" : `${agentCli} · runs in a local worktree`}
+        </span>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
@@ -426,7 +434,7 @@ function CreateTask({
             </option>
           ))}
         </Select>
-        <Select label="Backend" value={agentCli} onChange={setAgentCli}>
+        <Select label="Backend" value={agentCli ?? ""} onChange={setAgentCli} disabled={settingsLoading}>
           {["opencode", "codex", "claude"].map((c) => (
             <option key={c} value={c}>
               {c}
@@ -517,10 +525,10 @@ function CreateTask({
       <div className="flex justify-end">
         <button
           type="submit"
-          disabled={busy || !effectiveRepoId || !prompt.trim()}
+          disabled={busy || settingsLoading || !effectiveRepoId || !prompt.trim()}
           className="btn-primary"
         >
-          {busy ? "Creating…" : "Create"}
+          {busy ? "Creating…" : settingsLoading ? "Loading…" : "Create"}
         </button>
       </div>
     </form>

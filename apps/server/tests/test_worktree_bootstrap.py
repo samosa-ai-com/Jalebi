@@ -340,9 +340,54 @@ def test_write_codex_guard_denies_gh(tmp_path) -> None:
     assert path == tmp_path / ".codex" / "rules" / "default.rules"
     assert 'prefix_rule(pattern=["gh"], decision="forbidden"' in text
     assert "gh is not permitted" in text
+    # Full-path prefix rules cover the documented Linux + macOS gh install paths
+    # (defense-in-depth against absolute-path bypasses; verified live with
+    # `codex execpolicy check`). Multi-token wrapper coverage is not
+    # expressible in codex's prefix_rule grammar (see module docstring) —
+    # those rely on env hygiene.
+    for fullpath in ('/usr/bin/gh', '/usr/local/bin/gh', '/opt/homebrew/bin/gh'):
+        assert f'prefix_rule(pattern=["{fullpath}"]' in text, fullpath
     # Inline self-tests (`codex execpolicy check`): gh forbidden, git allowed.
     assert 'match=["gh", "gh pr view 1"]' in text
     assert 'not_match=["git status"]' in text
+
+
+def test_codex_guard_full_paths_forbidden_live(tmp_path) -> None:
+    """Live ``codex execpolicy check`` against the actual guard text.
+
+    Skipped when the codex CLI isn't on PATH (e.g. CI without it) — the file
+    content test above covers the syntax in that case.
+    """
+    import shutil
+    import subprocess
+
+    if shutil.which("codex") is None:
+        return
+    path = worktree_bootstrap.write_codex_guard(tmp_path)
+    assert path is not None
+    rules = str(path)
+
+    def check(*args: str) -> str:
+        proc = subprocess.run(
+            ["codex", "execpolicy", "check", "--rules", rules, "--pretty", *args],
+            capture_output=True,
+            text=True,
+        )
+        assert proc.returncode == 0, proc.stderr
+        data = json.loads(proc.stdout)
+        return data.get("decision") or "allowed"
+
+    # Each variant must be forbidden.
+    assert check("gh") == "forbidden"
+    assert check("gh", "pr", "view") == "forbidden"
+    assert check("/usr/bin/gh") == "forbidden"
+    assert check("/usr/bin/gh", "pr", "view") == "forbidden"
+    assert check("/usr/local/bin/gh", "pr", "view") == "forbidden"
+    assert check("/opt/homebrew/bin/gh", "pr", "view") == "forbidden"
+    # Non-gh commands must remain allowed.
+    assert check("git", "status") == "allowed"
+    assert check("/usr/bin/git", "status") == "allowed"
+    assert check("ls", "-la") == "allowed"
 
 
 def test_write_claude_guard_denies_gh(tmp_path) -> None:
@@ -351,6 +396,23 @@ def test_write_claude_guard_denies_gh(tmp_path) -> None:
     assert path == tmp_path / ".claude" / "settings.json"
     deny = json.loads(path.read_text())["permissions"]["deny"]
     assert {"Bash(gh *)", "Bash(gh)", "Bash(gh**)", "Bash(gh **)"} <= set(deny)
+    # Full-path + wrapper coverage (defense-in-depth: mirrors OPENCODE_GUARD's
+    # bash section so a prompt-injected agent can't reach `gh` via absolute
+    # path or shell wrappers).
+    for rule in (
+        "Bash(/usr/bin/gh*)",
+        "Bash(/usr/bin/gh **)",
+        "Bash(/usr/local/bin/gh*)",
+        "Bash(/usr/local/bin/gh **)",
+        "Bash(/opt/homebrew/bin/gh*)",
+        "Bash(/opt/homebrew/bin/gh **)",
+        "Bash(command gh*)",
+        "Bash(command gh **)",
+        "Bash(which gh*)",
+        "Bash(type gh*)",
+        "Bash(hash gh*)",
+    ):
+        assert rule in deny, rule
 
 
 def test_write_claude_guard_does_not_clobber_repo_settings(tmp_path) -> None:
@@ -409,6 +471,32 @@ def test_claude_hook_denies_outside_worktree_and_allows_inside(tmp_path) -> None
         assert run({"tool_name": "Edit", "tool_input": {"file_path": str(outside)}}) == 2
         assert run({"tool_name": "Grep", "tool_input": {"path": str(outside.parent)}}) == 2
         assert run({"tool_name": "Read", "tool_input": {"file_path": "~/.ssh/id_rsa"}}) == 2
+        # NotebookEdit's `notebook_path` is honored (parity with the other file tools).
+        assert run(
+            {"tool_name": "NotebookEdit", "tool_input": {"notebook_path": str(outside)}}
+        ) == 2
+        assert run(
+            {"tool_name": "NotebookEdit", "tool_input": {"notebook_path": str(inside)}}
+        ) == 0
+        # Glob: a relative pattern is allowed; absolute or `..`-anchored patterns are denied.
+        assert run(
+            {"tool_name": "Glob", "tool_input": {"pattern": "src/**/*.py"}}
+        ) == 0
+        assert run(
+            {"tool_name": "Glob", "tool_input": {"pattern": "**/*.py"}}
+        ) == 0
+        assert run(
+            {"tool_name": "Glob", "tool_input": {"pattern": "/etc/**"}}
+        ) == 2
+        assert run(
+            {"tool_name": "Glob", "tool_input": {"pattern": "/home/example/.ssh/**"}}
+        ) == 2
+        assert run(
+            {"tool_name": "Glob", "tool_input": {"pattern": "../../.jalebi/**"}}
+        ) == 2
+        assert run(
+            {"tool_name": "Glob", "tool_input": {"pattern": "~/secrets/**"}}
+        ) == 2
         # Bash is not intercepted (gh is denied by rules; git inside the worktree works).
         assert run({"tool_name": "Bash", "tool_input": {"command": "git status"}}) == 0
         # Malformed input fails open.

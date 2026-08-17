@@ -206,7 +206,7 @@
 
 | Setting                                                                                      | Takes effect        |
 | -------------------------------------------------------------------------------------------- | ------------------- |
-| concurrency, auto_publish, agent_cli, secret_patterns, default_timeout_minutes, retry_policy | Immediately         |
+| concurrency, auto_publish, default_backend, default_model, secret_patterns, default_timeout_minutes, retry_policy | Immediately         |
 | artifact_ttl_days                                                                            | Next start          |
 | ntfy_topic                                                                                   | Phase 2 (no effect) |
 
