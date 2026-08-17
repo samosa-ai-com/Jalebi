@@ -78,6 +78,8 @@ The authoritative behavioral spec is **`JALEBI_PRD.md`** at the repo root. This 
 | `17-phase1-validation.md` | Manual UI QA checklist for every Phase 1 feature. |
 | `18-cast-workflows-grid.md` | Design-only plan for the Inbox-as-helm grid dashboard — **not approved** for implementation. |
 | `19-phase2-validation.md` | Manual UI QA checklist for every Phase 2 feature (screening, commit statuses, diff/history). |
+| `20-phase3-validation.md` | Manual UI QA checklist for every Phase 3 feature (codex/claude backends, per-CLI guards, model dropdown). |
+| `21-phase4-plan.md` | **Approved Phase 4 plan** — visualization/control: agent-waiting UX, hardening, poller+attention, frontend features, deps/nudge/durable-SSE/live view, presentation, IDE connector, file browser. |
 
 ## 6. Roadmap (phases)
 
@@ -85,5 +87,6 @@ The authoritative behavioral spec is **`JALEBI_PRD.md`** at the repo root. This 
 - **Phase 1 — Catalog & reviewers + event-driven triggers:** catalog agents, reviewer workflow, "address reviewers" follow-up, webhook listener + dedup + trigger rules + registration. **Status: complete (polling fallback deferred/inert).**
 - **Phase 2 — Screening + merge gating:** screening engine, commit statuses for branch protection, diff-view polish + task history. **Status: complete.**
 - **Phase 3 — Backend parity:** Codex adapter, Claude Code adapter, per-task model dropdown from `listModels()`. **Status: complete.** *(Claude Code is unit-tested with captured fixtures; it is not live-auth'd on this dev machine.)*
+- **Phase 4 — Visualization & control (in progress):** the approved plan in `docs/21-phase4-plan.md`. Brings task insight and control to the dashboard: agent-"waiting for input" UX + markdown message rendering, backend hardening (env-var blocklist, merge-base/cherry-pick diffs, predictive conflict checks, publish guards, per-run SHA stamping), GitHub polling observer + derived attention status (gated off), frontend features (attention filter, merge-readiness panel, diff upgrade), bigger items (task dependency graph, auto-nudge, durable SSE timeline, live "running now" view), presentation fixes (bounded scrolling timeline/console, per-account repo scrollbars, polish), an IDE connector (open a task's worktree in the configured IDE), and an in-task file browser. **Status: plan approved; implementation not yet started.**
 
 See `HANDOFF.md` for the current phase and live status.
