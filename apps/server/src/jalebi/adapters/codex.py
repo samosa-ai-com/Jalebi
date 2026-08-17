@@ -24,6 +24,7 @@ empirically (see docs/03-adapters.md §5):
 
 import functools
 import json
+import logging
 import os
 import shlex
 import shutil
@@ -31,6 +32,8 @@ import subprocess
 from pathlib import Path
 
 from jalebi.adapters.types import AgentAdapter, AgentEvent, RunHandle
+
+logger = logging.getLogger(__name__)
 
 # Curated fallback when the per-account models cache is missing/unreadable.
 CODE_X_CURATED = ["gpt-5.5", "gpt-5.4-mini", "gpt-5.6-luna", "gpt-5.6-terra"]
@@ -100,17 +103,33 @@ def _sandbox_usable() -> bool:
         return False
 
 
+_sandbox_warned_emitted = False
+
+
 def _sandbox_config_args() -> list[str]:
     """``-c`` config overrides selecting the sandbox policy.
 
     Used on BOTH ``exec`` and ``exec resume`` (resume has no ``-s`` flag). The
-    workspace-write variant also enables network (off by default there).
+    workspace-write variant also enables network (off by default there). When
+    the sandbox is unusable (bwrap user namespaces blocked), ``danger-full-access``
+    is the only honest option — the execpolicy gh-deny + gh-less worktree env
+    remain the actual confinement. The fallback is logged once so an owner on a
+    sandbox-less host knows codex runs unconfined on disk.
     """
+    global _sandbox_warned_emitted
     if _sandbox_usable():
         return [
             "-c", 'sandbox_mode="workspace-write"',
             "-c", "sandbox_workspace_write.network_access=true",
         ]
+    if not _sandbox_warned_emitted:
+        _sandbox_warned_emitted = True
+        logger.warning(
+            "codex workspace-write sandbox is unavailable (bwrap user namespaces "
+            "are blocked on this host); using danger-full-access. To enable the "
+            "sandbox, run `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` "
+            "or `sudo chmod u+s \"$(command -v bwrap)\"`."
+        )
     return ["-c", 'sandbox_mode="danger-full-access"']
 
 
@@ -202,13 +221,23 @@ class CodexAdapter(AgentAdapter):
                 data = json.load(f)
             if not isinstance(data, dict):
                 return sorted(CODE_X_CURATED)
-            slugs = [
+            eligible = [
                 m["slug"]
                 for m in data.get("models", [])
                 if isinstance(m, dict) and m.get("visibility") != "hide" and m.get("slug")
             ]
-            if slugs:
-                return sorted(set(slugs))
+            if eligible:
+                # Prefer API-callable models; fall back to the full visible set
+                # when the cache predates the `supported_in_api` field.
+                api = [
+                    m["slug"]
+                    for m in data.get("models", [])
+                    if isinstance(m, dict)
+                    and m.get("visibility") != "hide"
+                    and m.get("slug")
+                    and m.get("supported_in_api") is True
+                ]
+                return sorted(set(api or eligible))
         except (OSError, ValueError, TypeError, KeyError, AttributeError):
             pass
         return sorted(CODE_X_CURATED)

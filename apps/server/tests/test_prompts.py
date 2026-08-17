@@ -136,6 +136,37 @@ def test_agent_md_merges_personality_and_skills(session) -> None:
     assert "Agent: `Security Auditor` (security-auditor)" in md
 
 
+def test_agent_md_lists_skills_for_codex(session) -> None:
+    repo = Repo(
+        full_name="owner/repo",
+        default_branch="main",
+        clone_url="https://github.com/owner/repo.git",
+        pat_name="test",
+    )
+    session.add(repo)
+    session.commit()
+    agent = catalog.create_agent(
+        session,
+        id="security-auditor",
+        name="Security Auditor",
+        kind="reviewer",
+        personality_md="You are a senior application security engineer.",
+        skills=[
+            {"name": "secure-coding", "content": "# Secure coding\n"},
+            {"name": "owasp-top10", "content": "# OWASP\n"},
+        ],
+    )
+    task = _task(session, repo)
+    md = prompts.build_agent_md(task, repo, agent=agent, cli="codex")
+    # codex does not resolve @path imports; it triggers skills by `$name` and
+    # loads the body from .codex/skills/ (or .agents/skills/).
+    assert "## Skills" in md
+    assert "Use `$secure-coding`" in md
+    assert "Use `$owasp-top10`" in md
+    assert ".codex/skills/secure-coding/SKILL.md" in md
+    assert "@.claude/skills/secure-coding/SKILL.md" not in md
+
+
 def test_agent_md_without_agent_no_personality_section(session) -> None:
     repo = Repo(
         full_name="owner/repo",

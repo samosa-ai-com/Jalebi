@@ -82,12 +82,16 @@ def _review_md_note() -> str:
     )
 
 
-def build_agent_md(task: Task, repo: Repo, agent: CatalogAgent | None = None) -> str:
+def build_agent_md(
+    task: Task, repo: Repo, agent: CatalogAgent | None = None, cli: str | None = None
+) -> str:
     """Build the worktree ``AGENTS.md`` from the task's stored context.
 
     When a catalog ``agent`` is selected, its ``personality_md`` is merged in as
-    its own section and each skill is referenced via ``@path`` links (opencode
-    auto-reads skills next to ``AGENTS.md``).
+    its own section and each skill is referenced per backend: opencode/claude
+    get the ``@.claude/skills/...`` path (opencode resolves ``@path`` imports,
+    claude auto-discovers the dir); codex gets the ``$name`` trigger + the
+    ``.codex/skills/...`` path (codex does NOT resolve ``@path`` in AGENTS.md).
     """
     parts = [
         "# Jalebi task environment",
@@ -120,7 +124,16 @@ def build_agent_md(task: Task, repo: Repo, agent: CatalogAgent | None = None) ->
             parts += ["", "## Skills"]
             for skill in agent_skills:
                 name = skill.get("name")
-                if name:
+                if not name:
+                    continue
+                if cli == "codex":
+                    # codex triggers skills by `$name` and reads the SKILL.md
+                    # body from `.codex/skills/` (or `.agents/skills/`); it does
+                    # NOT resolve `@path` imports in AGENTS.md.
+                    parts.append(
+                        f"- Use `${name}` — `.codex/skills/{name}/SKILL.md`"
+                    )
+                else:
                     parts.append(f"- `@.claude/skills/{name}/SKILL.md`")
 
     ctx = json.loads(task.context_json) if task.context_json else {}

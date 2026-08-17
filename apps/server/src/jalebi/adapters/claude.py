@@ -35,8 +35,9 @@ import subprocess
 from jalebi.adapters.types import AgentAdapter, AgentEvent, RunHandle
 
 # Curated alias list — stable across installs (full model names vary by
-# account/proxy). Overridable via the `adapter_model_lists` setting.
-CLAUDE_CURATED = ["default", "sonnet", "opus", "haiku", "sonnet[1m]", "opus[1m]", "best", "fable"]
+# account/proxy). `fable` was dropped (not a real Claude Code alias).
+# Overridable via the `adapter_model_lists` setting.
+CLAUDE_CURATED = ["default", "sonnet", "opus", "haiku", "sonnet[1m]", "opus[1m]", "best"]
 
 # claude's verbatim no-auth failure message (exit 1; subtype stays "success").
 NO_AUTH_RESULT = "Not logged in · Please run /login"

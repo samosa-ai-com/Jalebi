@@ -45,3 +45,6 @@ Thumbs.db
 # coverage
 .coverage
 apps/server/.coverage
+
+# Reference clones of third-party open-source repos (study only — never commit)
+reference/

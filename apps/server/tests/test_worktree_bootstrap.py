@@ -2,6 +2,7 @@
 
 import json
 import subprocess
+import sys
 
 from jalebi import worktree_bootstrap
 
@@ -334,10 +335,14 @@ def test_linked_worktrees_share_and_keep_guards(tmp_path) -> None:
 
 def test_write_codex_guard_denies_gh(tmp_path) -> None:
     path = worktree_bootstrap.write_codex_guard(tmp_path)
+    assert path is not None
     text = path.read_text()
     assert path == tmp_path / ".codex" / "rules" / "default.rules"
     assert 'prefix_rule(pattern=["gh"], decision="forbidden"' in text
     assert "gh is not permitted" in text
+    # Inline self-tests (`codex execpolicy check`): gh forbidden, git allowed.
+    assert 'match=["gh", "gh pr view 1"]' in text
+    assert 'not_match=["git status"]' in text
 
 
 def test_write_claude_guard_denies_gh(tmp_path) -> None:
@@ -355,6 +360,150 @@ def test_write_claude_guard_does_not_clobber_repo_settings(tmp_path) -> None:
     settings.write_text('{"permissions": {"deny": ["Bash(rm *)"]}}\n')
     assert worktree_bootstrap.write_claude_guard(tmp_path) is None
     assert settings.read_text() == '{"permissions": {"deny": ["Bash(rm *)"]}}\n'
+    # The guard (incl. the PreToolUse hook) is skipped entirely for repo-owned settings.
+    assert not (tmp_path / ".claude" / "hooks").exists()
+
+
+def test_write_claude_guard_writes_hook_and_deny_rules(tmp_path) -> None:
+    settings_path = worktree_bootstrap.write_claude_guard(tmp_path)
+    assert settings_path is not None
+    settings = json.loads(settings_path.read_text())
+    deny = settings["permissions"]["deny"]
+    assert "Bash(gh **)" in deny
+    assert "Read(~/.ssh/**)" in deny
+    assert "Edit(~/.codex/**)" in deny
+    hook_cmd = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+    assert hook_cmd == "python3 " + str(tmp_path / ".claude/hooks/jalebi_deny_external.py")
+    hook = tmp_path / ".claude/hooks/jalebi_deny_external.py"
+    assert hook.is_file()
+    assert hook.read_text() == worktree_bootstrap.CLAUDE_HOOK_SCRIPT
+
+
+def test_claude_hook_denies_outside_worktree_and_allows_inside(tmp_path) -> None:
+    _init_repo(tmp_path)
+    worktree_bootstrap.write_claude_guard(tmp_path)
+    hook = tmp_path / ".claude" / "hooks" / "jalebi_deny_external.py"
+
+    def run(payload: object) -> int:
+        proc = subprocess.run(
+            [sys.executable, str(hook)],
+            input=json.dumps(payload),
+            capture_output=True,
+            text=True,
+        )
+        return proc.returncode
+
+    inside = tmp_path / "src" / "x.py"
+    inside.parent.mkdir()
+    inside.write_text("x")
+    outside = tmp_path.parent / "outside.txt"
+    outside.write_text("secret")
+    try:
+        # In-worktree file tools are allowed.
+        assert run({"tool_name": "Read", "tool_input": {"file_path": str(inside)}}) == 0
+        out = str(tmp_path / "out.txt")
+        assert run({"tool_name": "Write", "tool_input": {"file_path": out}}) == 0
+        assert run({"tool_name": "Grep", "tool_input": {"path": str(tmp_path)}}) == 0
+        # Anything outside the worktree is denied (exit 2); `~` expands to home.
+        assert run({"tool_name": "Read", "tool_input": {"file_path": str(outside)}}) == 2
+        assert run({"tool_name": "Edit", "tool_input": {"file_path": str(outside)}}) == 2
+        assert run({"tool_name": "Grep", "tool_input": {"path": str(outside.parent)}}) == 2
+        assert run({"tool_name": "Read", "tool_input": {"file_path": "~/.ssh/id_rsa"}}) == 2
+        # Bash is not intercepted (gh is denied by rules; git inside the worktree works).
+        assert run({"tool_name": "Bash", "tool_input": {"command": "git status"}}) == 0
+        # Malformed input fails open.
+        assert run("not-json") == 0
+    finally:
+        outside.unlink(missing_ok=True)
+
+
+def test_write_opencode_guard_does_not_clobber_repo_file(tmp_path) -> None:
+    _init_repo(tmp_path)
+    guard = tmp_path / "opencode.json"
+    guard.write_text('{"repo": true}\n')
+    assert worktree_bootstrap.write_opencode_guard(tmp_path) is None
+    assert guard.read_text() == '{"repo": true}\n'
+
+
+def test_write_codex_guard_does_not_clobber_repo_rules(tmp_path) -> None:
+    _init_repo(tmp_path)
+    rules = tmp_path / ".codex" / "rules" / "default.rules"
+    rules.parent.mkdir(parents=True)
+    rules.write_text("repo-owned-rule\n")
+    assert worktree_bootstrap.write_codex_guard(tmp_path) is None
+    assert rules.read_text() == "repo-owned-rule\n"
+
+
+def test_remove_guard_preserves_repo_owned_opencode_and_codex_rules(tmp_path) -> None:
+    _init_repo(tmp_path)
+    guard = tmp_path / "opencode.json"
+    guard.write_text('{"repo": true}\n')
+    rules = tmp_path / ".codex" / "rules" / "default.rules"
+    rules.parent.mkdir(parents=True)
+    rules.write_text("repo-owned-rule\n")
+    worktree_bootstrap.bootstrap_worktree(tmp_path)  # opencode guard skipped (file exists)
+    worktree_bootstrap.remove_guard(tmp_path)
+    assert guard.read_text() == '{"repo": true}\n'
+    assert rules.read_text() == "repo-owned-rule\n"
+
+
+def test_bootstrap_writes_skills_to_all_roots(tmp_path) -> None:
+    _init_repo(tmp_path)
+    worktree_bootstrap.bootstrap_worktree(
+        tmp_path, skills=[{"name": "secure-coding", "content": "# x\n"}]
+    )
+    for root in (".claude", ".codex", ".agents"):
+        path = tmp_path / root / "skills" / "secure-coding" / "SKILL.md"
+        assert path.read_text() == "# x\n", root
+
+
+def test_bootstrap_prunes_stale_skills_from_all_roots(tmp_path) -> None:
+    _init_repo(tmp_path)
+    worktree_bootstrap.bootstrap_worktree(tmp_path, skills=[{"name": "drop", "content": "d"}])
+    worktree_bootstrap.bootstrap_worktree(tmp_path, skills=[{"name": "keep", "content": "k"}])
+    for root in (".claude", ".codex", ".agents"):
+        assert not (tmp_path / root / "skills" / "drop").exists(), root
+        assert (tmp_path / root / "skills" / "keep" / "SKILL.md").read_text() == "k", root
+
+
+def test_precommit_hook_rejects_staged_claude_settings(tmp_path) -> None:
+    _init_repo(tmp_path)
+    worktree_bootstrap.bootstrap_worktree(tmp_path, cli="claude")
+    _git(["add", "-f", ".claude/settings.json"], tmp_path)
+    proc = subprocess.run(
+        ["git", "commit", "-qm", "bad"], cwd=str(tmp_path), capture_output=True, text=True
+    )
+    assert proc.returncode != 0
+    assert ".claude" in proc.stderr
+
+
+def test_precommit_hook_allows_repo_owned_claude_settings(tmp_path) -> None:
+    _init_repo(tmp_path)
+    settings = tmp_path / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text('{"permissions": {"deny": ["Bash(rm *)"]}}\n')
+    worktree_bootstrap.bootstrap_worktree(tmp_path, cli="claude")  # guard skipped
+    _git(["add", "-f", ".claude/settings.json"], tmp_path)
+    proc = subprocess.run(
+        ["git", "commit", "-qm", "track settings"],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_precommit_hook_rejects_staged_skills(tmp_path) -> None:
+    _init_repo(tmp_path)
+    worktree_bootstrap.bootstrap_worktree(
+        tmp_path, skills=[{"name": "secure-coding", "content": "# x\n"}]
+    )
+    _git(["add", "-f", ".claude/skills/secure-coding/SKILL.md"], tmp_path)
+    proc = subprocess.run(
+        ["git", "commit", "-qm", "bad"], cwd=str(tmp_path), capture_output=True, text=True
+    )
+    assert proc.returncode != 0
+    assert "skills" in proc.stderr
 
 
 def test_write_guard_dispatches_per_cli(tmp_path) -> None:

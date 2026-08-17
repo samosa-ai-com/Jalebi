@@ -2,6 +2,7 @@
 
 import io
 import json
+import logging
 
 from jalebi.adapters.codex import CODE_X_CURATED, CodexAdapter
 from jalebi.adapters.types import RunHandle
@@ -163,6 +164,22 @@ def test_list_models_cache_missing_falls_back_curated(monkeypatch, tmp_path) -> 
     assert adapter.list_models() == sorted(CODE_X_CURATED)
 
 
+def test_list_models_prefers_supported_in_api(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    (tmp_path / "models_cache.json").write_text(
+        json.dumps(
+            {
+                "models": [
+                    {"slug": "gpt-5.6-terra", "visibility": "list", "supported_in_api": True},
+                    {"slug": "gpt-5.4-mini", "visibility": "list", "supported_in_api": False},
+                    {"slug": "codex-auto-review", "visibility": "hide", "supported_in_api": True},
+                ]
+            }
+        )
+    )
+    assert adapter.list_models() == ["gpt-5.6-terra"]
+
+
 def test_list_models_corrupt_cache_falls_back(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))
     (tmp_path / "models_cache.json").write_text("{ not json")
@@ -229,6 +246,21 @@ def test_sandbox_config_args_unusable(monkeypatch) -> None:
     codex_mod._sandbox_usable.cache_clear()
     monkeypatch.setattr(codex_mod.subprocess, "run", _probe_subprocess(1))
     assert codex_mod._sandbox_config_args() == ["-c", 'sandbox_mode="danger-full-access"']
+
+
+def test_sandbox_config_args_unusable_logs_once(monkeypatch, caplog) -> None:
+    from jalebi.adapters import codex as codex_mod
+
+    codex_mod._sandbox_usable.cache_clear()
+    codex_mod._sandbox_warned_emitted = False
+    monkeypatch.setattr(codex_mod.subprocess, "run", _probe_subprocess(1))
+    with caplog.at_level(logging.WARNING, logger="jalebi.adapters.codex"):
+        first = codex_mod._sandbox_config_args()
+        second = codex_mod._sandbox_config_args()
+    assert first == second == ["-c", 'sandbox_mode="danger-full-access"']
+    sandbox_logs = [r for r in caplog.records if "sandbox" in r.getMessage().lower()]
+    assert len(sandbox_logs) == 1
+    assert "apparmor_restrict_unprivileged_userns" in sandbox_logs[0].getMessage()
 
 
 def _capture_spawn(monkeypatch) -> list[list[str]]:

@@ -770,7 +770,7 @@ class TaskQueue:
                 )
             worktree_bootstrap.bootstrap_worktree(
                 wt,
-                prompts.build_agent_md(task, repo, agent=agent),
+                prompts.build_agent_md(task, repo, agent=agent, cli=cli),
                 cli=cli,
                 skills=agent_skills,
             )
@@ -875,7 +875,7 @@ class TaskQueue:
             wt = git.create_review_worktree(task.id, repo.full_name, pr_number, token)
             worktree_bootstrap.bootstrap_worktree(
                 wt,
-                prompts.build_agent_md(task, repo, agent=agent),
+                prompts.build_agent_md(task, repo, agent=agent, cli=cli),
                 cli=cli,
                 skills=agent_skills,
             )
@@ -1296,7 +1296,7 @@ class TaskQueue:
                 )
             worktree_bootstrap.bootstrap_worktree(
                 wt,
-                prompts.build_agent_md(task, repo, agent=agent),
+                prompts.build_agent_md(task, repo, agent=agent, cli=cli),
                 cli=cli,
                 skills=agent_skills,
             )

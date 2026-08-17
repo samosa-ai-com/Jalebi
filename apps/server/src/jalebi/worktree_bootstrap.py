@@ -7,13 +7,19 @@ git/curl only. This module hardens that contract at the worktree level with a
 - ``opencode`` → ``opencode.json`` whose ``permission.bash`` rules DENY ``gh``
   and whose ``permission.external_directory`` is ``deny`` (project config
   overrides the user's global config; ``gh`` is also blocked by path variants).
+  Skipped when the repo ships its own ``opencode.json`` (never clobber repo config).
 - ``codex`` → ``.codex/rules/default.rules`` (Starlark execpolicy) whose
   ``prefix_rule`` forbids ``gh`` (loaded for trusted projects; the codex
   sandbox from the adapter is the confinement, this is the gh-specific deny).
+  Skipped when the repo ships its own ``.codex/rules/default.rules`` (never
+  clobber repo rules).
 - ``claude`` → ``.claude/settings.json`` with ``permissions.deny`` for ``gh``
-  variants (deny rules apply in EVERY permission mode, incl. the adapter's
-  ``--permission-mode bypassPermissions``). Skipped when the repo ships its own
-  ``.claude/settings.json`` (never clobber repo config).
+  variants and sensitive home paths (deny rules apply in EVERY permission mode,
+  incl. the adapter's ``--permission-mode bypassPermissions``), plus a
+  ``PreToolUse`` hook (``.claude/hooks/jalebi_deny_external.py``) that blocks the
+  file tools (Read/Write/Edit/Glob/Grep) from touching paths outside the worktree
+  — the claude equivalent of opencode's ``external_directory: deny``. Skipped
+  when the repo ships its own ``.claude/settings.json`` (never clobber repo config).
 
 ``set_git_identity`` pins the worktree's commit author to Jalebi, so pushes
 are never authored by a stray local account. ``write_agent_md`` writes the
@@ -31,6 +37,7 @@ no ``GH_TOKEN``/``GH_CONFIG_DIR``) — even a bypassed deny has no gh credential
 """
 
 import json
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -71,24 +78,142 @@ OPENCODE_GUARD = {
 # codex execpolicy project rules (loaded for trusted projects; the codex
 # sandbox from the adapter is the confinement — this is the gh-specific deny).
 # Prefix match on the command token: the single rule covers `gh`, `gh pr view
-# 1`, etc. (verified via `codex execpolicy check`).
+# 1`, etc. `match`/`not_match` are inline self-tests (`codex execpolicy check`).
 CODEX_RULES_GUARD = (
     'prefix_rule(pattern=["gh"], decision="forbidden", '
-    'justification="gh is not permitted in this environment")\n'
+    'justification="gh is not permitted in this environment", '
+    'match=["gh", "gh pr view 1"], not_match=["git status"])\n'
 )
 
-# claude settings deny rules apply in EVERY permission mode (incl. the
-# adapter's `--permission-mode bypassPermissions`). Deny-only file is valid.
-CLAUDE_GUARD = {
-    "permissions": {
-        "deny": [
-            "Bash(gh *)",
-            "Bash(gh)",
-            "Bash(gh**)",
-            "Bash(gh **)",
-        ]
+# claude deny rules apply in EVERY permission mode (incl. the adapter's
+# `--permission-mode bypassPermissions`). Deny-only file is valid. The Read/Edit
+# rules also govern recognized Bash file commands (`cat`, `head`, `tail`, `sed`).
+CLAUDE_DENY_RULES = [
+    "Bash(gh *)",
+    "Bash(gh)",
+    "Bash(gh**)",
+    "Bash(gh **)",
+    "Read(~/.ssh/**)",
+    "Read(~/.aws/**)",
+    "Read(~/.config/**)",
+    "Read(~/.netrc)",
+    "Read(~/.git-credentials)",
+    "Read(~/.codex/**)",
+    "Read(~/.claude.json)",
+    "Read(~/.claude/**)",
+    "Edit(~/.ssh/**)",
+    "Edit(~/.aws/**)",
+    "Edit(~/.config/**)",
+    "Edit(~/.netrc)",
+    "Edit(~/.git-credentials)",
+    "Edit(~/.codex/**)",
+    "Edit(~/.claude.json)",
+    "Edit(~/.claude/**)",
+]
+
+# The PreToolUse hook blocks the file tools from touching anything outside the
+# worktree — the claude equivalent of opencode's `external_directory: deny`.
+# Runs before every tool call in every permission mode (incl. bypassPermissions
+# and `-p`); exit 2 denies the call. Bash is NOT intercepted here (gh is denied
+# by rules; arbitrary subprocess file I/O is out of scope — same as opencode).
+CLAUDE_HOOK_SCRIPT = r'''#!/usr/bin/env python3
+"""Jalebi external-directory guard for Claude Code (PreToolUse hook).
+
+Blocks the file-access tools (Read/Write/Edit/NotebookEdit/MultiEdit/Glob/Grep)
+when the target path resolves outside the worktree Jalebi prepared for the run.
+Bash is not intercepted: `gh` is denied by permission rules and the model's own
+git/curl commands inside the worktree must keep working. This mirrors opencode's
+`external_directory: deny` for the file tools; arbitrary Bash subprocess file
+I/O (e.g. npm touching ~/.npm) is out of scope, exactly as with opencode.
+
+Exit code 2 (with a message on stderr) blocks the tool call in every permission
+mode, including `--permission-mode bypassPermissions`.
+"""
+import json
+import os
+import sys
+from pathlib import Path
+
+WORKTREE = Path(__file__).resolve().parents[2]
+_FILE_TOOLS = {"Read", "Write", "Edit", "NotebookEdit", "MultiEdit", "Glob", "Grep"}
+_PATH_KEYS = ("file_path", "path", "output_path", "file_paths")
+
+
+def _inside(target: Path) -> bool:
+    try:
+        target = target.resolve()
+        target.relative_to(WORKTREE)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _candidate_paths(tool_input) -> list[Path]:
+    if not isinstance(tool_input, dict):
+        return []
+    paths: list[Path] = []
+    for key in _PATH_KEYS:
+        value = tool_input.get(key)
+        if isinstance(value, str) and value:
+            paths.append(Path(os.path.expanduser(value)))
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, str) and item:
+                    paths.append(Path(os.path.expanduser(item)))
+    return paths
+
+
+def main() -> int:
+    try:
+        payload = json.load(sys.stdin)
+    except (json.JSONDecodeError, OSError):
+        return 0  # fail open: a malformed payload must not break the run
+    if not isinstance(payload, dict):
+        return 0
+    tool = payload.get("tool_name")
+    if tool not in _FILE_TOOLS:
+        return 0
+    for path in _candidate_paths(payload.get("tool_input")):
+        if not _inside(path):
+            print(
+                f"Jalebi: {tool} on {path} is outside the worktree and was denied.",
+                file=sys.stderr,
+            )
+            return 2
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+'''
+
+_FILE_TOOL_MATCHER = "Read|Write|Edit|NotebookEdit|MultiEdit|Glob|Grep"
+
+
+def build_claude_guard(worktree: Path) -> dict:
+    """The ``.claude/settings.json`` Jalebi writes for a claude run (deterministic).
+
+    Deny rules + the PreToolUse hook path both derive from the worktree path, so
+    ``remove_guard`` can rebuild this exact JSON to decide whether the file on
+    disk is Jalebi-owned (never clobber/delete a repo-owned settings file).
+    """
+    hook = worktree / ".claude" / "hooks" / "jalebi_deny_external.py"
+    return {
+        "permissions": {"deny": list(CLAUDE_DENY_RULES)},
+        "hooks": {
+            "PreToolUse": [
+                {
+                    "matcher": _FILE_TOOL_MATCHER,
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": "python3 " + shlex.quote(str(hook)),
+                        }
+                    ],
+                }
+            ]
+        },
     }
-}
 
 GIT_USER_NAME = messaging.CO_AUTHOR_NAME
 GIT_USER_EMAIL = messaging.CO_AUTHOR_EMAIL
@@ -136,14 +261,17 @@ You are working inside a git worktree prepared by Jalebi.
 # `git add .`, `git status`, and artifact capture. Root-anchored: they only hide
 # the worktree-root files Jalebi creates (a repo that *tracks* AGENTS.md is
 # unaffected — excludes never apply to tracked files; the hook covers that case).
-# `.claude/skills/` holds catalog-agent skills materialized into the worktree
-# (opencode's native skills loading) — Jalebi-internal, never committed.
+# `.claude/skills/`, `.codex/skills/`, `.agents/skills/` hold catalog-agent
+# skills materialized into the worktree (opencode/claude discover the first,
+# codex the last two — legacy + current) — Jalebi-internal, never committed.
 INFO_EXCLUDE_LINES = (
     ".jalebi/",
     "/opencode.json",
     "/AGENTS.md",
     "/.claude/skills/",
+    "/.claude/hooks/",
     "/.codex/",
+    "/.agents/skills/",
     "/CLAUDE.md",
     "/.claude/settings.json",
 )
@@ -164,6 +292,24 @@ if git diff --cached --name-only | grep -qx '.codex/rules/default.rules'; then
   echo "Jalebi: refusing to commit .codex/rules/default.rules (Jalebi codex gh-guard)." >&2
   echo "Unstage it with: git reset HEAD .codex/rules/default.rules" >&2
   exit 1
+fi
+# Jalebi-materialized agent skills (all skill roots) are Jalebi-internal.
+for skills_dir in .claude/skills/ .codex/skills/ .agents/skills/; do
+  if git diff --cached --name-only -z | tr '\\0' '\\n' | grep -q "^$skills_dir"; then
+    echo "Jalebi: refusing to commit $skills_dir (Jalebi agent skills)." >&2
+    echo "Unstage them with: git reset HEAD $skills_dir" >&2
+    exit 1
+  fi
+done
+# A Jalebi-written .claude/settings.json (contains the PreToolUse hook command)
+# must not be committed; a repo-owned settings file has no marker and passes.
+if git diff --cached --name-only | grep -qx '.claude/settings.json'; then
+  if git show :.claude/settings.json 2>/dev/null | grep -q 'jalebi_deny_external'; then
+    echo "Jalebi: refusing .claude/settings.json (Jalebi guard + hook)." >&2
+    echo "Remove it from the commit with:" >&2
+    echo "  git restore --staged .claude/settings.json && git restore .claude/settings.json" >&2
+    exit 1
+  fi
 fi
 # A repo-tracked AGENTS.md that still carries the Jalebi bootstrap section must
 # not be committed (it is Jalebi infrastructure, not repository content).
@@ -188,43 +334,70 @@ exit 0
 """
 
 
-def write_opencode_guard(worktree: Path) -> Path:
-    """Write the ``opencode.json`` that denies ``gh`` into ``worktree``."""
+def write_opencode_guard(worktree: Path) -> Path | None:
+    """Write the ``opencode.json`` that denies ``gh`` into ``worktree``.
+
+    Returns the path, or ``None`` when the repo already ships its own
+    ``opencode.json`` (never clobber repo config — the gh-deny is skipped there,
+    exactly as with claude's settings file).
+    """
     path = worktree / "opencode.json"
+    if path.exists():
+        return None
     path.write_text(json.dumps(OPENCODE_GUARD, indent=2) + "\n")
     return path
 
 
-def write_codex_guard(worktree: Path) -> Path:
-    """Write ``.codex/rules/default.rules`` denying ``gh`` (codex project rules)."""
+def write_codex_guard(worktree: Path) -> Path | None:
+    """Write ``.codex/rules/default.rules`` denying ``gh`` (codex project rules).
+
+    Returns the path, or ``None`` when the repo already ships its own
+    ``.codex/rules/default.rules`` (never clobber repo rules; other repo-owned
+    ``.codex/`` content is always preserved).
+    """
     path = worktree / ".codex" / "rules" / "default.rules"
+    if path.exists():
+        return None
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(CODEX_RULES_GUARD)
     return path
 
 
+def write_claude_hook(worktree: Path) -> Path:
+    """Write the ``PreToolUse`` external-directory deny hook for a claude run."""
+    path = worktree / ".claude" / "hooks" / "jalebi_deny_external.py"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(CLAUDE_HOOK_SCRIPT)
+    path.chmod(0o755)
+    return path
+
+
 def write_claude_guard(worktree: Path) -> Path | None:
-    """Write ``.claude/settings.json`` denying ``gh``; never clobber a repo-owned file.
+    """Write ``.claude/settings.json`` denying ``gh`` + external dirs; never clobber.
 
     Returns the settings path, or ``None`` when the repo already ships its own
-    ``.claude/settings.json`` (deny skipped there; CLAUDE.md + env hygiene still
-    apply). ``remove_guard`` deletes the file only while it still matches exactly
-    what Jalebi wrote, so repo-owned or repo-edited settings survive.
+    ``.claude/settings.json`` (guard + hook skipped there; CLAUDE.md + env hygiene
+    still apply). ``remove_guard`` deletes the file only while it still matches
+    exactly what Jalebi wrote (``build_claude_guard`` is deterministic in the
+    worktree path), so repo-owned or repo-edited settings survive.
     """
     path = worktree / ".claude" / "settings.json"
     if path.exists():
         return None
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(CLAUDE_GUARD, indent=2) + "\n")
+    write_claude_hook(worktree)
+    path.write_text(json.dumps(build_claude_guard(worktree), indent=2) + "\n")
     return path
 
 
 def write_guard(worktree: Path, cli: str) -> None:
     """Write the per-CLI guard file (opencode/codex/claude); unknown cli → none.
 
-    The guard is the worktree-level confinement: no ``gh``, and (for opencode)
-    no access outside the worktree. Codex's sandbox and claude's (absent) disk
-    confinement live at the adapter layer — this file is the gh-specific deny.
+    The guard is the worktree-level confinement: no ``gh``, and no file-tool
+    access outside the worktree (opencode via ``external_directory: deny``,
+    claude via the ``PreToolUse`` hook). Codex's OS sandbox (when usable) lives
+    at the adapter layer — the rule file is the gh-specific deny. All three
+    guards skip a repo-owned file of the same path (never clobber).
     """
     if cli == "opencode":
         write_opencode_guard(worktree)
@@ -383,24 +556,30 @@ def _write_guard(worktree: Path, cli: str) -> None:
 
 
 def write_agent_skills(worktree: Path, skills: list[dict[str, str]]) -> list[Path]:
-    """Materialize catalog-agent skills into ``.claude/skills/<name>/SKILL.md``.
+    """Materialize catalog-agent skills into the worktree's skill roots.
 
-    opencode loads skills from ``.claude/skills`` (PRD F6.4 — the
-    ``OPENCODE_DISABLE_CLAUDE_CODE_SKILLS`` env must stay unset, which the queue
-    never sets). Each skill is a SKILL.md so the CLI discovers them like its own.
+    Written to ALL THREE skill roots — ``.claude/skills/``, ``.codex/skills/``
+    and ``.agents/skills/`` — the shared Agent Skills format, so the same
+    SKILL.md serves every backend. opencode and claude discover
+    ``.claude/skills`` natively; codex discovers ``.codex/skills`` (legacy) and
+    ``.agents/skills`` (current) and does NOT resolve ``@path`` imports in
+    AGENTS.md. Writing every root also keeps skills available when a follow-up
+    forks the task onto another backend. All roots are excluded from git (see
+    INFO_EXCLUDE_LINES / pre-commit hook).
     """
     written: list[Path] = []
-    base = worktree / ".claude" / "skills"
-    for skill in skills:
-        name = str(skill.get("name", "")).strip()
-        content = str(skill.get("content", ""))
-        if not name:
-            continue
-        directory = base / name
-        directory.mkdir(parents=True, exist_ok=True)
-        path = directory / "SKILL.md"
-        path.write_text(content)
-        written.append(path)
+    for brand in ("claude", "codex", "agents"):
+        base = worktree / f".{brand}" / "skills"
+        for skill in skills:
+            name = str(skill.get("name", "")).strip()
+            content = str(skill.get("content", ""))
+            if not name:
+                continue
+            directory = base / name
+            directory.mkdir(parents=True, exist_ok=True)
+            path = directory / "SKILL.md"
+            path.write_text(content)
+            written.append(path)
     return written
 
 
@@ -408,23 +587,29 @@ def _write_skills(worktree: Path, skills: list[dict[str, str]] | None) -> None:
     """Write catalog-agent skills into the worktree (dropping stale ones).
 
     When an agent's skill list changes, a re-bootstrap of the same worktree must
-    not leave orphaned ``SKILL.md`` files behind — opencode would keep
-    auto-discovering them, so the run wouldn't match the catalog. Any existing
-    skill subdir not in the new name set is removed.
+    not leave orphaned ``SKILL.md`` files behind — opencode/claude/codex would
+    keep auto-discovering them, so the run wouldn't match the catalog. Any
+    existing skill subdir not in the new name set is removed from ALL three
+    skill roots (``.claude/skills``, ``.codex/skills``, ``.agents/skills``).
     """
-    base = worktree / ".claude" / "skills"
+    names = {str(skill.get("name", "")).strip() for skill in skills} if skills else set()
+    for base in (
+        worktree / ".claude" / "skills",
+        worktree / ".codex" / "skills",
+        worktree / ".agents" / "skills",
+    ):
+        if skills:
+            if base.is_dir():
+                for child in base.iterdir():
+                    if child.is_dir() and child.name not in names:
+                        shutil.rmtree(child, ignore_errors=True)
+        else:
+            # No agent selected: ensure no stale skills linger from a previous run
+            # that used a catalog agent in this worktree.
+            if base.is_dir():
+                shutil.rmtree(base, ignore_errors=True)
     if skills:
-        names = {str(skill.get("name", "")).strip() for skill in skills}
-        if base.is_dir():
-            for child in base.iterdir():
-                if child.is_dir() and child.name not in names:
-                    shutil.rmtree(child, ignore_errors=True)
         write_agent_skills(worktree, skills)
-    else:
-        # No agent selected: ensure no stale skills linger from a previous run
-        # that used a catalog agent in this worktree.
-        if base.is_dir():
-            shutil.rmtree(base, ignore_errors=True)
 
 
 def bootstrap_worktree(
@@ -508,9 +693,13 @@ def remove_guard(worktree: Path) -> None:
     pre-commit hook are only removed when this is the last live worktree of the
     repo.
     """
-    for name in ("opencode.json",):
+    # Each guard is removed only while it still matches EXACTLY what Jalebi
+    # wrote (repo-owned or repo-edited files of the same path survive).
+    opencode_guard = worktree / "opencode.json"
+    if opencode_guard.is_file():
         try:
-            (worktree / name).unlink()
+            if opencode_guard.read_text() == json.dumps(OPENCODE_GUARD, indent=2) + "\n":
+                opencode_guard.unlink()
         except FileNotFoundError:
             pass
     # Codex guard: remove only the file Jalebi writes (a repo may own other
@@ -518,7 +707,8 @@ def remove_guard(worktree: Path) -> None:
     codex_rules = worktree / ".codex" / "rules" / "default.rules"
     if codex_rules.is_file():
         try:
-            codex_rules.unlink()
+            if codex_rules.read_text() == CODEX_RULES_GUARD:
+                codex_rules.unlink()
         except FileNotFoundError:
             pass
         for directory in (codex_rules.parent, worktree / ".codex"):
@@ -531,13 +721,24 @@ def remove_guard(worktree: Path) -> None:
     claude_settings = worktree / ".claude" / "settings.json"
     if claude_settings.is_file():
         try:
-            if claude_settings.read_text() == json.dumps(CLAUDE_GUARD, indent=2) + "\n":
+            expected = json.dumps(build_claude_guard(worktree), indent=2) + "\n"
+            if claude_settings.read_text() == expected:
                 claude_settings.unlink()
         except FileNotFoundError:
             pass
+    # Claude PreToolUse hook: remove only while it still matches what Jalebi wrote.
+    claude_hook = worktree / ".claude" / "hooks" / "jalebi_deny_external.py"
+    if claude_hook.is_file():
+        try:
+            if claude_hook.read_text() == CLAUDE_HOOK_SCRIPT:
+                claude_hook.unlink()
+        except FileNotFoundError:
+            pass
     # Drop only Jalebi's materialized catalog-agent skills — never a repo's own
-    # `.claude` content (e.g. settings.json / commands).
+    # `.claude`/`.codex`/`.agents` content (e.g. settings.json / commands / config).
     shutil.rmtree(worktree / ".claude" / "skills", ignore_errors=True)
+    shutil.rmtree(worktree / ".codex" / "skills", ignore_errors=True)
+    shutil.rmtree(worktree / ".agents" / "skills", ignore_errors=True)
     _strip_agent_md_file(worktree, "AGENTS.md")
     _strip_agent_md_file(worktree, "CLAUDE.md")
     try:
