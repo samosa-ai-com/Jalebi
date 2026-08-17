@@ -251,3 +251,24 @@ def test_agent_md_without_agent_no_personality_section(session) -> None:
     md = prompts.build_agent_md(task, repo, agent=None)
     assert "## Agent personality" not in md
     assert "## Skills" not in md
+
+
+def test_agent_md_never_instructs_working_tree_restore(session) -> None:
+    """Hard-rule #10 must only instruct UNSTAGING (git restore --staged), never
+    a working-tree restore of AGENTS.md — a full restore deletes the Jalebi
+    block and with it the task's linked-PR context (the exact failure that lost
+    task #41's PR review comments)."""
+    repo = Repo(
+        full_name="owner/repo",
+        default_branch="main",
+        clone_url="https://github.com/owner/repo.git",
+        pat_name="test",
+    )
+    session.add(repo)
+    session.commit()
+    task = _task(session, repo)
+    md = prompts.build_agent_md(task, repo)
+    assert "git restore --staged AGENTS.md" in md
+    assert "git restore AGENTS.md" not in md  # full (working-tree) restore forbidden
+    assert "git checkout" in md
+    assert "reset --hard" in md

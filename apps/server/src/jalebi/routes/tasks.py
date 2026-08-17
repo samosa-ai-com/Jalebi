@@ -23,6 +23,12 @@ bp = Blueprint("tasks", __name__, url_prefix="/api/tasks")
 
 TERMINAL_STATUSES = {"done", "failed", "timed_out", "cancelled", "needs_approval", "interrupted"}
 
+# Review comments travel into context_json → the worktree AGENTS.md → the model
+# context. A PR with many/large reviews must not balloon every run's brief, so
+# each comment and the total are truncated (with a marker) at fetch time.
+MAX_REVIEW_CHARS = 8_000  # per review comment embedded into the task context
+MAX_REVIEWS_TOTAL_CHARS = 24_000  # total embedded review text across comments
+
 
 def _queue() -> TaskQueue:
     return current_app.config["JALEBI_QUEUE"]
@@ -103,13 +109,23 @@ def _fetch_context(
         if pr_number is not None:
             pr = client.get_pr(repo.full_name, pr_number)
             reviews: list[dict[str, str]] = []
+            embedded_total = 0
             try:
                 for review in client.list_pr_reviews(repo.full_name, pr_number):
-                    text = review.get("body") or ""
-                    if text.strip():
-                        reviews.append(
-                            {"author": review.get("user") or "unknown", "body": masker(text)}
-                        )
+                    text = (review.get("body") or "").strip()
+                    if not text:
+                        continue
+                    if len(text) > MAX_REVIEW_CHARS:
+                        text = text[:MAX_REVIEW_CHARS] + "\n\n[… review truncated …]"
+                    remaining = MAX_REVIEWS_TOTAL_CHARS - embedded_total
+                    if remaining <= 0:
+                        break
+                    if len(text) > remaining:
+                        text = text[:remaining] + "\n\n[… review truncated …]"
+                    embedded_total += len(text)
+                    reviews.append(
+                        {"author": review.get("user") or "unknown", "body": masker(text)}
+                    )
             except Exception:
                 # Review comments are enrichment, not essential: a failed
                 # reviews fetch must not block task creation (the PR body

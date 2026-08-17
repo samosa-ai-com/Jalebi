@@ -264,6 +264,63 @@ def test_create_freeform_with_linked_pr_fetches_pr_context(
     assert ctx["prs"][0]["reviews"] == [{"author": "carol", "body": "needs tests"}]
 
 
+def test_create_freeform_linked_pr_truncates_oversized_reviews(
+    app, client: FlaskClient, repo_id: int, session, monkeypatch
+) -> None:
+    """An oversized review comment is truncated (per-comment and total caps) so
+    it can't balloon the worktree AGENTS.md / model context."""
+    from jalebi.routes.tasks import MAX_REVIEW_CHARS
+
+    secrets.add_github_token(app.config["JALEBI_CONFIG"], "acct-a", "ghp_a")
+
+    class FakeClient:
+        def __init__(self, token): ...
+
+        def get_pr(self, full_name, number):
+            return {
+                "number": number,
+                "title": "PR title",
+                "body": "PR body",
+                "html_url": "u",
+                "state": "open",
+                "base": "main",
+                "head": "feature",
+                "author": "bob",
+            }
+
+        def list_pr_reviews(self, full_name, number):
+            return [
+                {
+                    "id": 1,
+                    "body": "x" * 20_000,
+                    "user": "carol",
+                    "state": "COMMENTED",
+                    "submitted_at": "t",
+                }
+            ]
+
+        def close(self): ...
+
+    monkeypatch.setattr("jalebi.routes.tasks.GitHubClient", FakeClient)
+    resp = client.post(
+        "/api/tasks",
+        json={
+            "repo_id": repo_id,
+            "type": "freeform",
+            "prompt": "fix the issues",
+            "pr_number": 7,
+            "pat_name": "acct-a",
+        },
+    )
+    assert resp.status_code == 201
+    body = resp.get_json()
+    row = session.get(Task, body["id"])
+    ctx = json.loads(row.context_json)
+    embedded = ctx["prs"][0]["reviews"][0]["body"]
+    assert len(embedded) <= MAX_REVIEW_CHARS + 100
+    assert "review truncated" in embedded
+
+
 def test_create_task_with_env_vars(client: FlaskClient, repo_id: int) -> None:
     """A task stores its selected env-var names; the API reflects them."""
     resp = client.post(
