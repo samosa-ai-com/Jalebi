@@ -198,11 +198,20 @@ def test_create_freeform_with_linked_pr_fetches_pr_context(
     app, client: FlaskClient, repo_id: int, session, monkeypatch
 ) -> None:
     """A freeform task that links a PR gets PR context + review comments fetched
-    and stored (masked), so build_agent_md can embed them."""
+    and stored (masked), so build_agent_md can embed them.
+
+    Auth contract: the context fetch must run as the EXPLICITLY selected
+    account (``pat_name: "acct-a"`` → token ``ghp_a``), never the repo's bound
+    account (``test`` → ``ghp_test``) or any fallback.
+    """
     secrets.add_github_token(app.config["JALEBI_CONFIG"], "acct-a", "ghp_a")
 
+    seen_tokens: list[str] = []
+
     class FakeClient:
-        def __init__(self, token): ...
+        def __init__(self, token):
+            seen_tokens.append(token)
+
         def get_pr(self, full_name, number):
             return {
                 "number": number,
@@ -214,6 +223,7 @@ def test_create_freeform_with_linked_pr_fetches_pr_context(
                 "head": "feature",
                 "author": "bob",
             }
+
         def list_pr_reviews(self, full_name, number):
             return [
                 {
@@ -224,6 +234,7 @@ def test_create_freeform_with_linked_pr_fetches_pr_context(
                     "submitted_at": "x",
                 }
             ]
+
         def close(self): ...
 
     monkeypatch.setattr("jalebi.routes.tasks.GitHubClient", FakeClient)
@@ -240,6 +251,9 @@ def test_create_freeform_with_linked_pr_fetches_pr_context(
     assert resp.status_code == 201
     body = resp.get_json()
     assert body["prs"] == [7]
+    # The selected account's token drove the GitHub context fetch (the repo's
+    # bound account is "test"/ghp_test — it must NOT be the one used).
+    assert seen_tokens == ["ghp_a"]
 
     row = session.get(Task, body["id"])
     assert row is not None and row.context_json is not None
@@ -248,6 +262,9 @@ def test_create_freeform_with_linked_pr_fetches_pr_context(
     assert ctx["prs"][0]["body"] == "PR body"
     assert ctx["prs"][0]["head"] == "feature"
     assert ctx["prs"][0]["reviews"] == [{"author": "carol", "body": "needs tests"}]
+
+
+def test_create_task_with_env_vars(client: FlaskClient, repo_id: int) -> None:
     """A task stores its selected env-var names; the API reflects them."""
     resp = client.post(
         "/api/tasks",
