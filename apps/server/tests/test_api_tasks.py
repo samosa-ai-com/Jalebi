@@ -741,3 +741,173 @@ def test_disconnected_repo_task_detail_keeps_repo_name(client, session) -> None:
     resp = client.get(f"/api/tasks/{task.id}")
     assert resp.status_code == 200
     assert resp.get_json()["repo_full_name"] == "owner/disc"
+
+
+# ---- Phase 4 T1.2 / T1.3 — GET /api/tasks/<id>/diff -------------------------
+
+
+def _seed_git_remote(tmp_path) -> str:
+    """Same helper as test_publish_modes.git_remote, duplicated to keep this
+    file's fixture surface small."""
+    import subprocess as _sp
+
+    remote = tmp_path / "remote.git"
+    work = tmp_path / "work"
+    _sp.run(["git", "init", "--bare", "--initial-branch=main", str(remote)], check=True)
+    _sp.run(["git", "clone", str(remote), str(work)], check=True, capture_output=True)
+    _sp.run(["git", "-C", str(work), "config", "user.email", "s@e.com"], check=True)
+    _sp.run(["git", "-C", str(work), "config", "user.name", "S"], check=True)
+    (work / "f.txt").write_text("seed\n")
+    _sp.run(["git", "-C", str(work), "add", "f.txt"], check=True)
+    _sp.run(["git", "-C", str(work), "commit", "-m", "seed"], check=True)
+    _sp.run(["git", "-C", str(work), "push", "-u", "origin", "main"], check=True)
+    return str(remote)
+
+
+def test_live_diff_default_against_target(
+    client: FlaskClient, session, tmp_path, app
+) -> None:
+    """Without ``?base=1`` the live diff falls back to diff_against_target."""
+    import subprocess as _sp
+
+    from jalebi import tasks as tasks_svc
+    from jalebi.config import Config
+    from jalebi.git_workspace import GitWorkspace
+
+    remote = _seed_git_remote(tmp_path)
+    row, _ = repos.upsert_repo(
+        session,
+        full_name="owner/repo",
+        default_branch="main",
+        clone_url=remote,
+        pat_name="test",
+    )
+    task = tasks_svc.create_task(
+        session, type_="freeform", repo_id=row.id, prompt="x"
+    )
+    config: Config = app.config["JALEBI_CONFIG"]
+    ws = GitWorkspace(config)
+    ws.ensure_mirror("owner/repo", remote)
+    wt = ws.create_worktree(task.id, "owner/repo", "main")
+    _sp.run(
+        ["git", "-C", str(wt), "config", "user.email", "a@b.com"], check=True
+    )
+    _sp.run(["git", "-C", str(wt), "config", "user.name", "A"], check=True)
+    (wt / "new.txt").write_text("agent work\n")
+    _sp.run(["git", "-C", str(wt), "add", "new.txt"], check=True)
+    _sp.run(["git", "-C", str(wt), "commit", "-m", "agent"], check=True)
+
+    resp = client.get(f"/api/tasks/{task.id}/diff")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["base"] is False
+    assert body["untracked"] is False
+    assert "new.txt" in body["diff"]
+
+
+def test_live_diff_untracked_param(
+    client: FlaskClient, session, tmp_path, app
+) -> None:
+    """``?untracked=1`` appends a synthetic add-hunk for the untracked file."""
+
+    from jalebi import tasks as tasks_svc
+    from jalebi.config import Config
+    from jalebi.git_workspace import GitWorkspace
+
+    remote = _seed_git_remote(tmp_path)
+    row, _ = repos.upsert_repo(
+        session,
+        full_name="owner/repo",
+        default_branch="main",
+        clone_url=remote,
+        pat_name="test",
+    )
+    task = tasks_svc.create_task(
+        session, type_="freeform", repo_id=row.id, prompt="x"
+    )
+    config: Config = app.config["JALEBI_CONFIG"]
+    ws = GitWorkspace(config)
+    ws.ensure_mirror("owner/repo", remote)
+    wt = ws.create_worktree(task.id, "owner/repo", "main")
+    (wt / "scratch.txt").write_text("untracked scratch\n")
+
+    resp = client.get(f"/api/tasks/{task.id}/diff?untracked=1")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["untracked"] is True
+    assert "+++ b/scratch.txt" in body["diff"]
+
+
+def test_live_diff_no_worktree_returns_409(client: FlaskClient, session, repo_id) -> None:
+    """A task with no worktree yet returns 409 (not 500)."""
+    from jalebi import tasks as tasks_svc
+
+    task = tasks_svc.create_task(
+        session, type_="freeform", repo_id=repo_id, prompt="x"
+    )
+    resp = client.get(f"/api/tasks/{task.id}/diff")
+    assert resp.status_code == 409
+
+
+# ---- Phase 4 T1.4 — GET /api/tasks/<id>/merge-check -------------------------
+
+
+def test_merge_check_clean_and_conflicting(
+    client: FlaskClient, session, tmp_path, app
+) -> None:
+    import subprocess as _sp
+
+    from jalebi import tasks as tasks_svc
+    from jalebi.config import Config
+    from jalebi.git_workspace import GitWorkspace
+
+    remote = _seed_git_remote(tmp_path)
+    row, _ = repos.upsert_repo(
+        session,
+        full_name="owner/repo",
+        default_branch="main",
+        clone_url=remote,
+        pat_name="test",
+    )
+    task = tasks_svc.create_task(
+        session, type_="freeform", repo_id=row.id, prompt="x"
+    )
+    config: Config = app.config["JALEBI_CONFIG"]
+    ws = GitWorkspace(config)
+    ws.ensure_mirror("owner/repo", remote)
+    wt = ws.create_worktree(task.id, "owner/repo", "main")
+
+    # Clean merge: an unrelated file lands on main.
+    src2 = tmp_path / "src2"
+    _sp.run(["git", "clone", remote, str(src2)], check=True, capture_output=True)
+    _sp.run(["git", "-C", str(src2), "config", "user.email", "a@b.com"], check=True)
+    _sp.run(["git", "-C", str(src2), "config", "user.name", "A"], check=True)
+    (src2 / "other.txt").write_text("target advanced\n")
+    _sp.run(["git", "-C", str(src2), "add", "other.txt"], check=True)
+    _sp.run(["git", "-C", str(src2), "commit", "-m", "advance"], check=True)
+    _sp.run(["git", "-C", str(src2), "push", "origin", "main"], check=True)
+
+    resp = client.get(f"/api/tasks/{task.id}/merge-check")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["ok"] is True
+    assert body["conflicts"] == []
+
+    # Conflicting case: same file diverges on both sides.
+    (wt / "f.txt").write_text("agent side\n")
+    _sp.run(["git", "-C", str(wt), "add", "f.txt"], check=True)
+    _sp.run(["git", "-C", str(wt), "commit", "-m", "agent"], check=True)
+    (src2 / "f.txt").write_text("remote side\n")
+    _sp.run(["git", "-C", str(src2), "add", "f.txt"], check=True)
+    _sp.run(["git", "-C", str(src2), "commit", "-m", "remote"], check=True)
+    _sp.run(["git", "-C", str(src2), "push", "origin", "main"], check=True)
+
+    resp = client.get(f"/api/tasks/{task.id}/merge-check")
+    body = resp.get_json()
+    assert body["ok"] is False
+    assert {"kind": "content", "path": "f.txt"} in body["conflicts"]
+
+
+def test_merge_check_missing_task(client: FlaskClient, session) -> None:
+    resp = client.get("/api/tasks/9999/merge-check")
+    assert resp.status_code == 404

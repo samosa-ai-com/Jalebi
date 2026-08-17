@@ -171,6 +171,8 @@ def run_to_dict(run: Run, artifacts: list[Artifact] | None = None) -> dict[str, 
         "finished_at": clock.to_iso(run.finished_at) if run.finished_at else None,
         "has_diff": bool(run.diff_text),
         "waiting_input": waiting_input,
+        "git_sha_start": run.git_sha_start,
+        "git_sha_end": run.git_sha_end,
         "steps": steps,
         "artifacts": [
             {

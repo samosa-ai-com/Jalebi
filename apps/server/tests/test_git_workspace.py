@@ -368,3 +368,197 @@ def test_review_worktree_detached_at_pr_head(ws: GitWorkspace, remote: str, tmp_
     )
     assert proc.returncode != 0
     assert proc.stdout.strip() == ""
+
+
+# ---- Phase 4 T1.2 — diff_against_base --------------------------------------
+
+
+def test_diff_against_base_shows_only_unique_work(
+    ws: GitWorkspace, remote: str, tmp_path
+) -> None:
+    """The cherry-pick-aware merge-base diff must show the agent's work and NOT
+    show an unrelated main advance that was later picked up by the branch."""
+    ws.ensure_mirror(FULL_NAME, remote)
+    wt = ws.create_worktree(1, FULL_NAME, "main")
+    _add_commit(wt, "agent unique work")  # commit unique to jalebi/1
+
+    # main advances with a DIFFERENT file — would normally appear in a naive
+    # two-dot diff but is invisible to the merge-base diff (it's base-side).
+    src = tmp_path / "src2"
+    _git(["clone", remote, str(src)])
+    (src / "other.txt").write_text("target advanced\n")
+    _git(["-C", str(src), "config", "user.email", "t@example.com"])
+    _git(["-C", str(src), "config", "user.name", "Test"])
+    _git(["-C", str(src), "add", "other.txt"])
+    _git(["-C", str(src), "commit", "-m", "target advanced"])
+    _git(["-C", str(src), "push", "origin", "main"])
+
+    diff = ws.diff_against_base(wt, "main")
+    assert "agent unique work" in diff
+    assert "other.txt" not in diff
+
+
+def test_diff_against_base_collapses_when_merged(
+    ws: GitWorkspace, remote: str, tmp_path
+) -> None:
+    """When ``jalebi/1`` points at the same commit as ``origin/main`` (the
+    branch has been fast-forwarded / rebased onto main, or the only commit was
+    applied as patch-equivalent), the cumulative diff collapses to empty.
+
+    We force the branch to origin/main's SHA to make the collapse
+    deterministic — ``git log --cherry-pick`` is heuristic and can miss
+    trivially-equivalent single-line patches.
+    """
+    ws.ensure_mirror(FULL_NAME, remote)
+    wt = ws.create_worktree(1, FULL_NAME, "main")
+    _add_commit(wt, "agent unique work")  # commit unique to jalebi/1
+
+    # Mirror the same change onto origin/main.
+    src = tmp_path / "src2"
+    _git(["clone", remote, str(src)])
+    (src / "file.txt").write_text("hello agent unique work\n")
+    _git(["-C", str(src), "config", "user.email", "t@example.com"])
+    _git(["-C", str(src), "config", "user.name", "Test"])
+    _git(["-C", str(src), "add", "file.txt"])
+    _git(["-C", str(src), "commit", "-m", "agent unique work on main"])
+    _git(["-C", str(src), "push", "origin", "main"])
+
+    ws.ensure_mirror(FULL_NAME, remote)
+    main_sha = _git(
+        [
+            "-C",
+            str(ws.mirror_path(ws.config.data_dir, FULL_NAME)),
+            "rev-parse",
+            "origin/main",
+        ]
+    )
+    # Force jalebi/1 to main's SHA so the diff is fully collapsed.
+    _run_git = __import__("jalebi.git_workspace", fromlist=["_run_git"])._run_git
+    _run_git(
+        [
+            "-C",
+            str(ws.mirror_path(ws.config.data_dir, FULL_NAME)),
+            "update-ref",
+            "refs/heads/jalebi/1",
+            main_sha,
+        ]
+    )
+
+    diff = ws.diff_against_base(wt, "main")
+    assert diff == ""
+
+
+# ---- Phase 4 T1.3 — diff_with_untracked -------------------------------------
+
+
+def test_diff_with_untracked_appends_pseudo_hunks(ws: GitWorkspace, remote: str) -> None:
+    ws.ensure_mirror(FULL_NAME, remote)
+    wt = ws.create_worktree(1, FULL_NAME, "main")
+    (wt / "new.txt").write_text("hello\nworld\n")
+    (wt / "binary.bin").write_bytes(b"\x00\x01\x03 binary contents")
+    (wt / ".gitignore").write_text("ignored.txt\n")
+    (wt / "ignored.txt").write_text("should be skipped")
+    (wt / "file.txt").write_text("hello\nagent change\n")
+    _git(["-C", str(wt), "add", "file.txt"])
+    _git(
+        [
+            "-C",
+            str(wt),
+            "-c",
+            "user.email=t@example.com",
+            "-c",
+            "user.name=Test",
+            "commit",
+            "-m",
+            "modify file.txt",
+        ]
+    )
+
+    tracked = ws.diff_against_target(wt, "main")
+    combined = ws.diff_with_untracked(wt, tracked)
+
+    # The tracked hunk is preserved (modified file.txt).
+    assert "file.txt" in combined
+    # The new untracked file has a synthetic add-hunk.
+    assert "new file mode" in combined
+    assert "+++ b/new.txt" in combined
+    # Binary is skipped (NUL byte in first 8 KB).
+    assert "binary.bin" not in combined
+    # .gitignore-matched file is skipped (the +++ b/ignored.txt hunk never
+    # appears — only the untracked .gitignore file itself does).
+    assert "+++ b/ignored.txt" not in combined
+
+
+# ---- Phase 4 T1.4 — predict_conflicts ---------------------------------------
+
+
+def test_predict_conflicts_clean_and_conflicting(
+    ws: GitWorkspace, remote: str, tmp_path
+) -> None:
+    """Clean merge → []; same-file divergent change → [('content', 'file.txt')]."""
+    ws.ensure_mirror(FULL_NAME, remote)
+    wt = ws.create_worktree(1, FULL_NAME, "main")
+
+    # Advance main with an unrelated file — should be a clean merge.
+    src = tmp_path / "src2"
+    _git(["clone", remote, str(src)])
+    (src / "other.txt").write_text("target advanced\n")
+    _git(["-C", str(src), "config", "user.email", "t@example.com"])
+    _git(["-C", str(src), "config", "user.name", "Test"])
+    _git(["-C", str(src), "add", "other.txt"])
+    _git(["-C", str(src), "commit", "-m", "target advanced"])
+    _git(["-C", str(src), "push", "origin", "main"])
+
+    # Refetch so origin/main moves on the mirror.
+    ws.ensure_mirror(FULL_NAME, remote)
+    assert ws.predict_conflicts(FULL_NAME, 1, "main") == []
+
+    # Now diverge both sides on the same file.
+    (wt / "file.txt").write_text("hello\nagent side\n")
+    _git(["-C", str(wt), "add", "file.txt"])
+    _git(
+        [
+            "-C",
+            str(wt),
+            "-c",
+            "user.email=t@example.com",
+            "-c",
+            "user.name=Test",
+            "commit",
+            "-m",
+            "agent side",
+        ]
+    )
+    (src / "file.txt").write_text("hello\nremote side\n")
+    _git(["-C", str(src), "add", "file.txt"])
+    _git(["-C", str(src), "commit", "-m", "remote side"])
+    _git(["-C", str(src), "push", "origin", "main"])
+    ws.ensure_mirror(FULL_NAME, remote)
+
+    conflicts = ws.predict_conflicts(FULL_NAME, 1, "main")
+    assert ("content", "file.txt") in conflicts
+
+
+# ---- Phase 4 T1.5 — assert_publish_branch -----------------------------------
+
+
+def test_assert_publish_branch_ok(ws: GitWorkspace, remote: str) -> None:
+    ws.ensure_mirror(FULL_NAME, remote)
+    ws.create_worktree(1, FULL_NAME, "main")
+    # HEAD on jalebi/1 → no-op.
+    ws.assert_publish_branch(1)
+
+
+def test_assert_publish_branch_mismatch_raises(
+    ws: GitWorkspace, remote: str, tmp_path
+) -> None:
+    """If the worktree HEAD is on a different branch (the agent checked out /
+    detached), publishing must refuse with a clear error."""
+    from jalebi.git_workspace import GitWorkspaceError
+
+    ws.ensure_mirror(FULL_NAME, remote)
+    wt = ws.create_worktree(1, FULL_NAME, "main")
+    # Move HEAD off the jalebi branch onto main.
+    _git(["-C", str(wt), "checkout", "main"])
+    with pytest.raises(GitWorkspaceError, match="branch mismatch"):
+        ws.assert_publish_branch(1)

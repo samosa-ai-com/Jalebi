@@ -34,7 +34,7 @@ from jalebi.adapters.types import AgentEvent
 from jalebi.config import Config
 from jalebi.db import CatalogAgent, Repo, Run, Session, Task, now
 from jalebi.events import TaskEvents
-from jalebi.git_workspace import GitWorkspace, PushLeaseFailed
+from jalebi.git_workspace import GitWorkspace, GitWorkspaceError, PushLeaseFailed
 from jalebi.github import GitHubClient
 
 logger = logging.getLogger(__name__)
@@ -502,6 +502,13 @@ class TaskQueue:
         run.session_id = handle.session_id
         run.finished_at = now()
         run.steps_json = json.dumps(steps[-MAX_STEPS:])
+        # T1.6: capture HEAD at run end (with -dirty suffix when the agent left
+        # uncommitted material). Best-effort — never block on a transient git issue.
+        try:
+            end_worktree = worktree or GitWorkspace.worktree_path(self.config.data_dir, task.id)
+            run.git_sha_end = self._stamp_git_sha(git, end_worktree)
+        except Exception:
+            logger.debug("git_sha_end capture failed for task %s", task.id)
 
         final_status: str = (
             "timed_out"
@@ -797,6 +804,7 @@ class TaskQueue:
             )
             run.pid = getattr(state.handle.proc, "pid", None)
             run.model = effective_model  # record the effective (possibly agent-pinned) model
+            run.git_sha_start = self._stamp_git_sha(git, wt)  # T1.6: pre-spawn HEAD
             session.commit()
             self._start_status(session, task, repo, run, git, token)
             self._start_watchdog(task, state, timeout, stall_timeout=self._stall_timeout(session))
@@ -899,6 +907,7 @@ class TaskQueue:
             )
             run.pid = getattr(state.handle.proc, "pid", None)
             run.model = effective_model  # record the effective (possibly agent-pinned) model
+            run.git_sha_start = self._stamp_git_sha(git, wt)  # T1.6: pre-spawn HEAD
             session.commit()
             self._start_status(session, task, repo, run, git, token)
             self._start_watchdog(task, state, timeout, stall_timeout=self._stall_timeout(session))
@@ -1346,6 +1355,7 @@ class TaskQueue:
                     env=self._agent_env(session, task, repo, token),
                 )
             run.pid = getattr(state.handle.proc, "pid", None)
+            run.git_sha_start = self._stamp_git_sha(git, wt)  # T1.6: pre-spawn HEAD
             session.commit()
             self._start_status(session, task, repo, run, git, token)
             self._start_watchdog(task, state, timeout, stall_timeout=self._stall_timeout(session))
@@ -1890,6 +1900,37 @@ class TaskQueue:
             return False
         return bool(settings.get_setting(session, "auto_publish"))
 
+    @staticmethod
+    def _guard_publish_branch(git: GitWorkspace, task_id: int) -> None:
+        """Translate a branch-mismatch from git into a ``PublishError``.
+
+        Runs first in ``_publish`` (and via the manual publish path's
+        pre-checks) so an agent that checked out/detached onto another ref
+        never has its branch pushed.
+        """
+        try:
+            git.assert_publish_branch(task_id)
+        except GitWorkspaceError as exc:
+            raise PublishError(str(exc)) from None
+
+    def _stamp_git_sha(self, git: GitWorkspace, worktree: Path) -> str | None:
+        """HEAD SHA with a ``-dirty`` suffix when the working tree is unclean.
+
+        Best-effort: returns None when the worktree has no commits yet (a
+        freshly-created worktree, or one whose ``HEAD`` is unborn) or when
+        the underlying git helper isn't reachable. Errors are swallowed so a
+        transient git issue never blocks run finalization.
+        """
+        try:
+            sha = git.rev_parse_head(worktree)
+        except (GitWorkspaceError, AttributeError):
+            return None
+        try:
+            dirty = bool(git.working_tree_status(worktree))
+        except (GitWorkspaceError, AttributeError):
+            dirty = False
+        return f"{sha}-dirty" if dirty else sha
+
     def _publish(
         self,
         task: Task,
@@ -1902,6 +1943,8 @@ class TaskQueue:
         target_branch: str | None = None,
         pr_number: int | None = None,
     ) -> int:
+        # Refuse to push when the worktree HEAD is not on jalebi/<id> (T1.5).
+        self._guard_publish_branch(git, task.id)
         if mode == "update_pr":
             return self._publish_update_pr(
                 task, repo, token, git, pr_number=pr_number

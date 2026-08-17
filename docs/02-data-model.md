@@ -297,3 +297,11 @@ runs  0───1 review_assignments  (run_id, set when the reviewer run starts)
 ## 5. Not yet implemented (later phases)
 
 None — all Phase-0/1/2 tables are materialized. (Phase 3 adds no new tables.)
+
+---
+
+## 6. Phase 4 schema additions
+
+- **`runs.git_sha_start`** (`runs.git_sha_start`, `String(64)`, nullable) — added by Alembic migration `7b4c5d6e7f80`. The full SHA of the worktree's HEAD captured pre-spawn in each of `_run_task`, `_run_review`, and `_run_followup`; `None` when the worktree is unborn. Suffix `-dirty` when `git status --porcelain` is non-empty at capture time.
+- **`runs.git_sha_end`** (`runs.git_sha_end`, `String(64)`, nullable) — same migration, captured in `_stream_and_finish` after the agent process exits. Best-effort (a transient git error never blocks run finalization); same `-dirty` suffix semantics.
+- Exposed via `tasks.run_to_dict(run)` keys `"git_sha_start"` and `"git_sha_end"` (`None` when unset).

@@ -259,6 +259,9 @@ def test_publish_update_pr_happy_path(q, session, repo_row, monkeypatch) -> None
         def push_existing_branch(self, full_name, branch, token):
             seen["pushed_branch"] = branch
 
+        def assert_publish_branch(self, task_id):
+            return None
+
     monkeypatch.setattr("jalebi.queue.GitHubClient", OpenClient)
     monkeypatch.setattr("jalebi.queue.GitWorkspace", CapturingGit)
     pr = q.publish_task(task.id, mode="update_pr", pr_number=9)
@@ -303,6 +306,9 @@ def test_publish_push_branch_happy_path(q, session, repo_row, monkeypatch) -> No
 
         def push_existing_branch(self, full_name, branch, token):
             seen["pushed_branch"] = branch
+
+        def assert_publish_branch(self, task_id):
+            return None
 
     monkeypatch.setattr("jalebi.queue.GitWorkspace", CapturingGit)
     pr = q.publish_task(task.id, mode="push_branch", target_branch="feature/manual")
@@ -353,6 +359,9 @@ def test_publish_conflict_propagates(q, session, repo_row, monkeypatch) -> None:
         def push_existing_branch(self, *a, **k):
             raise AssertionError("must not push when conflict")
 
+        def assert_publish_branch(self, task_id):
+            return None
+
     monkeypatch.setattr("jalebi.queue.GitHubClient", OpenClient)
     monkeypatch.setattr("jalebi.queue.GitWorkspace", ConflictGit)
     with pytest.raises(PublishConflict, match="file1.txt"):
@@ -393,6 +402,9 @@ def test_publish_lease_failure_propagates(q, session, repo_row, monkeypatch) -> 
 
         def push_existing_branch(self, *a, **k):
             raise PushLeaseFailed("remote branch moved since last fetch")
+
+        def assert_publish_branch(self, task_id):
+            return None
 
     monkeypatch.setattr("jalebi.queue.GitHubClient", OpenClient)
     monkeypatch.setattr("jalebi.queue.GitWorkspace", LeaseFailedGit)
@@ -547,3 +559,63 @@ def test_push_existing_branch_lease_failure_translates(q, git_remote, tmp_path) 
     # Now a second push from the same mirror state must refuse via lease.
     with pytest.raises(PushLeaseFailed, match="moved"):
         ws.push_existing_branch(FULL_NAME, "feature/lease")
+
+
+# ---- Phase 4 T1.5 — branch-mismatch guard in publish_task ------------------
+
+
+def test_publish_branch_mismatch_raises(q, session, repo_row, monkeypatch, tmp_path) -> None:
+    """If the worktree HEAD is not on jalebi/<id>, publish_task must refuse
+    with a clear PublishError BEFORE any push/merge fires."""
+    from jalebi.git_workspace import GitWorkspaceError
+
+    settings.set_setting(session, "auto_publish", False)
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
+    _seed_commit(q, task.id, repo_row)
+
+    seen: dict[str, object] = {"create_worktree": False, "push_branch": False}
+
+    class OpenClient:
+        def __init__(self, token: str):
+            pass
+
+        def get_pr(self, full_name, number):
+            seen.setdefault("pr_get", number)
+            return {"number": number, "state": "open", "head": "feature"}
+
+        def close(self):
+            pass
+
+    class MismatchGit(GitWorkspace):
+        def __init__(self, config):
+            self.config = config
+
+        def ensure_mirror(self, *a, **k):
+            return None
+
+        def create_worktree(self, *a, **k):
+            seen["create_worktree"] = True
+            return Path("/dev/null")
+
+        def current_remote_sha(self, *a, **k):
+            return "abc"
+
+        def fast_forward_into(self, *a, **k):
+            seen["ff_into"] = True
+            return []
+
+        def push_existing_branch(self, *a, **k):
+            seen["push_branch"] = True
+
+        def assert_publish_branch(self, task_id):
+            raise GitWorkspaceError("branch mismatch; agent left HEAD on main")
+
+    monkeypatch.setattr("jalebi.queue.GitHubClient", OpenClient)
+    monkeypatch.setattr("jalebi.queue.GitWorkspace", MismatchGit)
+    with pytest.raises(PublishError, match="branch mismatch"):
+        q.publish_task(task.id, mode="update_pr", pr_number=9)
+    # Nothing was pushed; nothing was merged. The guard fires before any of
+    # these mocks can record their "did this happen?" flags, so use get() and
+    # default to False (i.e. nothing recorded == not called).
+    assert seen.get("push_branch", False) is False
+    assert seen.get("ff_into", False) is False

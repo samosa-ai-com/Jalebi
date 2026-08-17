@@ -15,7 +15,7 @@ from jalebi.adapters import available_adapters
 from jalebi.catalog import agent_by_slug
 from jalebi.config import Config
 from jalebi.db import Artifact, Run, Task, now
-from jalebi.git_workspace import GitWorkspace, PushLeaseFailed
+from jalebi.git_workspace import GitWorkspace, GitWorkspaceError, PushLeaseFailed
 from jalebi.github import GitHubClient, GitHubError
 from jalebi.queue import PublishConflict, PublishError, TaskQueue
 
@@ -637,6 +637,90 @@ def run_diff(task_id: int, run_id: int) -> ResponseReturnValue:
     if run is None or run.task_id != task_id:
         return jsonify({"error": "run not found"}), 404
     return jsonify({"diff": run.diff_text or ""})
+
+
+# ---- Phase 4 T1.2 / T1.3 — live diff with optional base + untracked --------
+
+
+@bp.get("/<int:task_id>/diff")
+def live_diff(task_id: int) -> ResponseReturnValue:
+    """Live diff of the task's worktree branch.
+
+    Additive query params (all default OFF — zero observable change):
+    - ``?base=1`` → cherry-pick-aware merge-base diff (T1.2).
+    - ``?untracked=1`` → append synthesized hunks for untracked files (T1.3).
+
+    Returns ``{diff, base, untracked}``. The diff is run through the existing
+    masker (a secret the agent wrote to disk is redacted before display).
+    """
+    session = db.get_session()
+    task = tasks.get_task(session, task_id)
+    if task is None:
+        return jsonify({"error": "task not found"}), 404
+    config: Config = current_app.config["JALEBI_CONFIG"]
+    worktree = GitWorkspace.worktree_path(config.data_dir, task.id)
+    if not (worktree / ".git").is_file():
+        return jsonify({"error": "task has no worktree yet"}), 409
+    base_ref = task.target_branch if task.type == "issue_fix" else (
+        task.source_branch or "main"
+    )
+    use_base = request.args.get("base") == "1"
+    use_untracked = request.args.get("untracked") == "1"
+    git = GitWorkspace(config)
+    try:
+        diff = (
+            git.diff_against_base(worktree, base_ref)
+            if use_base
+            else git.diff_against_target(worktree, base_ref)
+        )
+        if use_untracked:
+            diff = git.diff_with_untracked(worktree, diff)
+    except GitWorkspaceError as exc:
+        return jsonify({"error": str(exc)}), 409
+    return jsonify(
+        {"diff": _masker(session)(diff), "base": use_base, "untracked": use_untracked}
+    )
+
+
+# ---- Phase 4 T1.4 — predictive conflict check --------------------------------
+
+
+@bp.get("/<int:task_id>/merge-check")
+def merge_check(task_id: int) -> ResponseReturnValue:
+    """Predict conflicts merging ``jalebi/<taskId>`` into the task's target.
+
+    Reads the mirror only (no worktree mutation, no abort dance). Returns
+    ``{ok, conflicts: [{kind, path}]}``; refuses 409 when the worktree HEAD
+    is not on the canonical branch (T1.5 guard).
+    """
+    session = db.get_session()
+    task = tasks.get_task(session, task_id)
+    if task is None:
+        return jsonify({"error": "task not found"}), 404
+    repo = session.get(db.Repo, task.repo_id)
+    if repo is None:
+        return jsonify({"error": "repo not found"}), 404
+    config: Config = current_app.config["JALEBI_CONFIG"]
+    git = GitWorkspace(config)
+    try:
+        git.assert_publish_branch(task_id)  # T1.5 — refuse a wrong-branch worktree
+    except GitWorkspaceError as exc:
+        return jsonify({"error": str(exc), "kind": "branch_mismatch"}), 409
+    token = secrets.resolve_token(config, task.pat_name)
+    try:
+        git.ensure_mirror(repo.full_name, repo.clone_url, token)  # idempotent fetch
+        base_ref = task.target_branch if task.type == "issue_fix" else (
+            task.source_branch or "main"
+        )
+        conflicts = git.predict_conflicts(repo.full_name, task_id, base_ref)
+    except GitWorkspaceError as exc:
+        return jsonify({"error": str(exc)}), 409
+    return jsonify(
+        {
+            "conflicts": [{"kind": k, "path": p} for k, p in conflicts],
+            "ok": not conflicts,
+        }
+    )
 
 
 @bp.get("/<int:task_id>/events")

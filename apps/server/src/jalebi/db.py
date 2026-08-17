@@ -13,6 +13,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    String,
     Text,
     UniqueConstraint,
     create_engine,
@@ -162,6 +163,8 @@ class Run(Base):
     steps_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     artifacts_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     diff_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    git_sha_start: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    git_sha_end: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class Followup(Base):

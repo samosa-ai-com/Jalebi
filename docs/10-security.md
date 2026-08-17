@@ -81,3 +81,11 @@ Remaining risk (documented): for codex specifically, multi-token wrapper calls (
 - Each saved PAT is a separate account, but **all** PAT values live only in the `0600` `secrets.json`; API/UI never return raw values (masked previews only).
 - All known PAT values are added to the ingest masker — any token echoed by an agent is redacted everywhere.
 - The per-worktree gh-guard and env hygiene apply identically regardless of which account a task runs under.
+
+---
+
+## 12. Phase 4 T1 security additions
+
+- **Env-var block-list (`envvars.ENV_BLOCK_LIST` + `ENV_BLOCK_PREFIXES`, T1.1).** Closes the override hole in `_agent_env` where a stored env var could replace a Jalebi-pinned value (`GIT_CONFIG_KEY_0` re-injecting credential / `url.insteadOf` state, `JALEBI_GITHUB_TOKEN` overriding the queue's account selection, etc.). Block-all for the `GIT_CONFIG_*` prefix — there is no legitimate user surface. See `docs/14-env-vars.md` §8 for the full list and rationale.
+- **Branch-mismatch guard before publish (T1.5).** `GitWorkspace.assert_publish_branch` refuses when the worktree HEAD is not on `jalebi/<taskId>`; an agent that checked out / detached onto another branch would otherwise push the wrong ref. Runs as the first line of `TaskQueue._publish` (covers both the manual `publish_task` route and the auto-publish path in `_stream_and_finish`).
+- **Predictive conflict check via `git merge-tree --write-tree` on the mirror (T1.4).** Read-only (no worktree mutation, no abort dance). Branch is always the canonical `jalebi/<id>` — never client-supplied. Path-safety: paths come from the merge-tree file-info lines (stages 1/2/3), kinds from `CONFLICT (kind)` lines; fallback to `content` when no `CONFLICT` line is found. Requires git ≥ 2.38.

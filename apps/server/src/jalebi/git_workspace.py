@@ -7,6 +7,7 @@ argv, URLs, or logs.
 
 import base64
 import os
+import re
 import subprocess
 import threading
 from pathlib import Path
@@ -461,6 +462,167 @@ class GitWorkspace:
             return _run_git(
                 ["-C", str(worktree), "diff", f"origin/{target_branch}..HEAD"]
             )
+
+    def diff_against_base(self, worktree: Path, base_branch: str) -> str:
+        """Cherry-pick-aware cumulative diff of ``HEAD`` vs the merge-base with
+        ``origin/<base_branch>``.
+
+        Drops patch-equivalent commits (``git log --cherry-pick --right-only``):
+        a commit whose change is on the base (e.g. cherry-picked or rebased onto
+        it) is not shown, and a fully-merged branch collapses to ``""``. Falls
+        back to a plain two-dot range diff if there is no common ancestor
+        (mirrors ``diff_against_target``). Read-only — never mutates the worktree.
+        """
+        try:
+            base = _run_git(
+                ["-C", str(worktree), "merge-base", f"origin/{base_branch}", "HEAD"]
+            )
+        except GitWorkspaceError:
+            return _run_git(
+                ["-C", str(worktree), "diff", f"origin/{base_branch}..HEAD"]
+            )
+        unique = _run_git(
+            [
+                "-C",
+                str(worktree),
+                "log",
+                "--cherry-pick",
+                "--right-only",
+                "--reverse",
+                f"{base}..HEAD",
+                "--format=%H",
+            ]
+        )
+        if not unique.strip():
+            return ""  # every commit is patch-equivalent to the base — already merged
+        return _run_git(["-C", str(worktree), "diff", f"{base}..HEAD"])
+
+    # Untracked files are skipped once they exceed this size; their full content
+    # would dominate the diff and the agent typically does not need them surfaced.
+    _UNTRACKED_DIFF_SIZE_CAP = 1 * 1024 * 1024
+
+    def diff_with_untracked(self, worktree: Path, tracked_diff: str) -> str:
+        """Append synthesized add-file hunks for untracked files to ``tracked_diff``.
+
+        ``git ls-files --others --exclude-standard`` lists untracked, non-ignored
+        files. Each is rendered as a full ``diff --git`` / ``new file mode`` /
+        ``--- /dev/null`` / ``+++ b/<rel>`` hunk so T3's unified-diff parser
+        (which splits on ``diff --git``) renders them in place. Binary files
+        (NUL byte in the first 8 KB) and files over
+        ``_UNTRACKED_DIFF_SIZE_CAP`` are omitted. Pure read of the working tree.
+        """
+        lines = _run_git(
+            ["-C", str(worktree), "ls-files", "--others", "--exclude-standard"]
+        )
+        extra: list[str] = []
+        for rel in (ln.strip() for ln in lines.splitlines() if ln.strip()):
+            if ".git" in Path(rel).parts:
+                continue
+            path = worktree / rel
+            if not path.is_file():
+                continue
+            try:
+                size = path.stat().st_size
+            except OSError:
+                continue
+            if size > self._UNTRACKED_DIFF_SIZE_CAP:
+                continue
+            try:
+                content = path.read_bytes()
+            except OSError:
+                continue
+            if b"\x00" in content[:8192]:
+                continue  # binary
+            text_lines = content.decode("utf-8", "replace").splitlines(keepends=True)
+            extra.append(f"diff --git a/{rel} b/{rel}")
+            extra.append("new file mode 100644")
+            extra.append("--- /dev/null")
+            extra.append(f"+++ b/{rel}")
+            extra.append(f"@@ -0,0 +1,{len(text_lines)} @@")
+            for ln in text_lines:
+                extra.append(f"+{ln}" if ln.endswith("\n") else f"+{ln}")
+        if not extra:
+            return tracked_diff
+        joined = "\n".join(extra) + "\n"
+        return f"{tracked_diff.rstrip()}\n\n{joined}" if tracked_diff.strip() else joined
+
+    # merge-tree output (--write-tree): one file-info line per unmerged path plus
+    # a CONFLICT (<kind>) line. Paths come from the file-info lines (stable
+    # across git versions and conflict kinds), kinds from the CONFLICT lines.
+    # A content conflict lists stages 1+2+3; a modify/delete lists 1+2 or 1+3.
+    # Any stage entry gives the path; we keep each path once.
+    _CONFLICT_FILE_INFO = re.compile(r"^\S+ \S+ [123]\t(.+)$", re.MULTILINE)
+    _CONFLICT_KIND = re.compile(r"^CONFLICT \(([^)]+)\):", re.MULTILINE)
+
+    def predict_conflicts(
+        self, full_name: str, task_id: int, base_ref: str
+    ) -> list[tuple[str, str]]:
+        """Predict merge conflicts between ``origin/<base_ref>`` and ``jalebi/<task_id>``.
+
+        Runs ``git merge-tree --write-tree`` on the **mirror** (never the
+        worktree — no worktree mutation, no abort dance). Returns
+        ``[(kind, path), ...]``; empty when the merge would be clean. Requires
+        git >= 2.38. The caller runs ``ensure_mirror`` first.
+        """
+        mirror = self.mirror_path(self.config.data_dir, full_name)
+        if not mirror.exists():
+            raise GitWorkspaceError(
+                f"mirror missing for {full_name}; call ensure_mirror first"
+            )
+        env = _clean_git_env(os.environ.copy())
+        proc = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(mirror),
+                "merge-tree",
+                "--write-tree",
+                f"origin/{base_ref}",
+                self.task_branch(task_id),
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=GIT_TIMEOUT_SECONDS,
+        )
+        if proc.returncode == 0:
+            return []  # clean merge
+        if proc.returncode != 1:
+            raise GitWorkspaceError(
+                f"git merge-tree failed: {(proc.stderr or proc.stdout or '').strip()}"
+            )
+        out = proc.stdout or ""
+        paths: list[str] = []
+        for m in self._CONFLICT_FILE_INFO.finditer(out):
+            path = m.group(1)
+            if path not in paths:
+                paths.append(path)
+        kinds = self._CONFLICT_KIND.findall(out) or ["content"] * len(paths)
+        return list(zip(kinds[: len(paths)], paths))
+
+    def assert_publish_branch(self, task_id: int) -> None:
+        """Refuse to publish when the worktree HEAD is not on ``jalebi/<taskId>``.
+
+        An agent may checkout/detach onto another branch; publishing would then
+        push the wrong ref. Raises ``GitWorkspaceError`` with a clear message;
+        the queue translates it into ``PublishError``.
+        """
+        ws = self.worktree_path(self.config.data_dir, task_id)
+        expected = self.task_branch(task_id)
+        if not (ws / ".git").is_file():
+            raise GitWorkspaceError(f"worktree missing for task {task_id}")
+        try:
+            head = _run_git(["-C", str(ws), "symbolic-ref", "--short", "HEAD"])
+        except GitWorkspaceError:
+            head = "(detached)"
+        if head != expected:
+            raise GitWorkspaceError(
+                f"branch mismatch; agent left HEAD on {head}, expected {expected}"
+            )
+
+    def rev_parse_head(self, worktree: Path) -> str:
+        """Full SHA of the worktree's HEAD. Raises when the worktree is unborn."""
+        return _run_git(["-C", str(worktree), "rev-parse", "HEAD"])
 
     def push_branch(self, task_id: int, full_name: str, token: str | None = None) -> None:
         """Push ``jalebi/<taskId>`` to the mirror's origin with token auth."""

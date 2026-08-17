@@ -159,3 +159,99 @@ def test_api_envvars_invalid_name(client: FlaskClient, session) -> None:
     _repo(session)
     resp = client.post("/api/envvars", json={"name": "BAD NAME", "value": "x"})
     assert resp.status_code == 400
+
+
+# ---- Phase 4 T1.1: env-var blocklist ---------------------------------------
+
+
+def test_upsert_rejects_blocked_name(session) -> None:
+    import pytest
+
+    with pytest.raises(ValueError, match="blocked"):
+        envvars.upsert_env_var(session, name="PATH", value="/evil", repo_id=None)
+    with pytest.raises(ValueError, match="blocked"):
+        envvars.upsert_env_var(
+            session, name="JALEBI_GITHUB_TOKEN", value="x", repo_id=None
+        )
+    with pytest.raises(ValueError, match="blocked"):
+        envvars.upsert_env_var(
+            session, name="GIT_CONFIG_KEY_0", value="http.extraHeader", repo_id=None
+        )
+
+
+def test_values_for_names_drops_blocked_with_warning(session, caplog) -> None:
+    """A legacy row stored before the blocklist existed must be dropped on read,
+    not silently leaked into the agent subprocess env."""
+    import logging
+
+    # Bypass upsert's new validation to seed a legacy row that pretends to
+    # pre-date the blocklist.
+    from jalebi.db import EnvVar
+
+    row = EnvVar(name="PATH", value="/evil", repo_id=None)
+    session.add(row)
+    session.commit()
+
+    caplog.set_level(logging.WARNING)
+    vals = envvars.values_for_names(session, repo_id=None, names=["PATH", "FOO"])
+    assert "PATH" not in vals
+    assert any("blocked" in rec.message for rec in caplog.records)
+
+
+def test_import_env_file_skips_blocked_line(session) -> None:
+    content = "FOO=bar\nPATH=/evil\nSECRET=v\nGIT_CONFIG_KEY_0=evil\n"
+    imported, skipped = envvars.import_env_file(session, content)
+    assert imported == 2  # FOO + SECRET only
+    assert all("PATH" in s or "GIT_CONFIG_KEY_0" in s for s in skipped)
+    names = {r.name for r in envvars.list_env_vars(session)}
+    assert "PATH" not in names
+    assert "GIT_CONFIG_KEY_0" not in names
+    assert names == {"FOO", "SECRET"}
+
+
+def test_values_for_names_always_drops_jalebi_secrets(session) -> None:
+    """JALEBI_* values must never reach the agent env even if they were
+    accidentally inserted via a direct INSERT."""
+    from jalebi.db import EnvVar
+
+    for n in ("JALEBI_GITHUB_TOKEN", "JALEBI_PORT", "JALEBI_DATA_DIR"):
+        session.add(EnvVar(name=n, value="x", repo_id=None))
+    session.add(EnvVar(name="OK", value="y", repo_id=None))
+    session.commit()
+
+    vals = envvars.values_for_names(
+        session,
+        repo_id=None,
+        names=["JALEBI_GITHUB_TOKEN", "JALEBI_PORT", "JALEBI_DATA_DIR", "OK"],
+    )
+    assert "OK" in vals
+    for n in ("JALEBI_GITHUB_TOKEN", "JALEBI_PORT", "JALEBI_DATA_DIR"):
+        assert n not in vals
+
+
+def test_git_config_prefix_glob_blocks_all(session) -> None:
+    """Every GIT_CONFIG_* variant is blocked — there is no legitimate user
+    surface for the namespace (Jalebi owns all git auth/config)."""
+    blocked_names = [
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_KEY_0",
+        "GIT_CONFIG_VALUE_0",
+        "GIT_CONFIG_NOSYSTEM",
+        "GITCONFIG",  # no underscore → not blocked (negative)
+    ]
+    for name in blocked_names:
+        assert envvars.is_blocked_env_name(name) is name.startswith(
+            "GIT_CONFIG_"
+        ), f"{name} block status mismatch"
+    assert envvars.is_blocked_env_name("PATH") is True
+    assert envvars.is_blocked_env_name("GOOD_VAR") is False
+
+
+def test_api_envvars_rejects_blocked_name(client: FlaskClient, session) -> None:
+    """The route maps ``ValueError`` to 400 — verified end-to-end."""
+    _repo(session)
+    resp = client.post(
+        "/api/envvars", json={"name": "PATH", "value": "/evil"}
+    )
+    assert resp.status_code == 400
+    assert "blocked" in resp.get_json()["error"]
