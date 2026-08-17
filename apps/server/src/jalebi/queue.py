@@ -724,6 +724,19 @@ class TaskQueue:
             effective_prompt = task.prompt
             if agent is not None and agent.custom_instructions:
                 effective_prompt = f"{task.prompt}\n\n{agent.custom_instructions}"
+            linked = self._task_pr_number(task)
+            if linked is not None:
+                effective_prompt = (
+                    f"{effective_prompt}\n\n"
+                    f"(Linked PR: #{linked} in `{repo.full_name}`. Its description and "
+                    "review comments are in the worktree's AGENTS.md under \"Linked pull "
+                    'request" (or `.jalebi/pr.md`). If you cannot see them, fetch the PR '
+                    "and its reviews with the GitHub token in `JALEBI_GITHUB_TOKEN`:\n"
+                    f'  curl -H "Authorization: Bearer $JALEBI_GITHUB_TOKEN" '
+                    f"https://api.github.com/repos/{repo.full_name}/pulls/{linked}\n"
+                    f'  curl -H "Authorization: Bearer $JALEBI_GITHUB_TOKEN" '
+                    f"https://api.github.com/repos/{repo.full_name}/pulls/{linked}/reviews\n)"
+                )
             timeout = self._resolve_timeout(session, task)
 
             # Register cancellation state BEFORE committing "running" so a cancel

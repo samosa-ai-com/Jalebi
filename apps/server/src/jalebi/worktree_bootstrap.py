@@ -352,9 +352,11 @@ You are working inside a git worktree prepared by Jalebi.
    `git reset HEAD .jalebi/`. A pre-commit hook rejects them otherwise.
 10. **Never commit this Jalebi AGENTS.md section** — the block delimited by the
     two HTML-comment markers at the end of ``AGENTS.md``. It is Jalebi
-    infrastructure, not repository content. If you staged it, recover with:
-    `git restore --staged AGENTS.md && git restore AGENTS.md`. The pre-commit
-    hook rejects it otherwise.
+    infrastructure, not repository content, and it carries this task's context.
+    **Never run `git restore`/`git checkout`/`git reset --hard` on ``AGENTS.md``
+    during a run** — that deletes this section and with it this task's context.
+    If you staged it, unstage it with `git restore --staged AGENTS.md` only;
+    the pre-commit hook rejects the commit otherwise.
 11. **Docs:** only update documentation that already exists and is kept in sync
     (e.g. `CHANGELOG.md`, relevant `README.md` sections). Do NOT create new
     documentation/changelog files unless the task explicitly asks for them.
@@ -409,8 +411,8 @@ done
 if git diff --cached --name-only | grep -qx '.claude/settings.json'; then
   if git show :.claude/settings.json 2>/dev/null | grep -q 'jalebi_deny_external'; then
     echo "Jalebi: refusing .claude/settings.json (Jalebi guard + hook)." >&2
-    echo "Remove it from the commit with:" >&2
-    echo "  git restore --staged .claude/settings.json && git restore .claude/settings.json" >&2
+    echo "Remove it from the commit only (keep the working tree - it is the active guard):" >&2
+    echo "  git restore --staged .claude/settings.json" >&2
     exit 1
   fi
 fi
@@ -419,8 +421,8 @@ fi
 if git diff --cached --name-only | grep -qx 'AGENTS.md'; then
   if git show :AGENTS.md 2>/dev/null | grep -q 'jalebi:start'; then
     echo "Jalebi: refusing to commit AGENTS.md (contains the Jalebi bootstrap section)." >&2
-    echo "Remove it from the commit with:" >&2
-    echo "  git restore --staged AGENTS.md && git restore AGENTS.md" >&2
+    echo "Unstage it only (do NOT restore the working tree - it carries the run's context):" >&2
+    echo "  git restore --staged AGENTS.md" >&2
     exit 1
   fi
 fi
@@ -428,8 +430,8 @@ fi
 if git diff --cached --name-only | grep -qx 'CLAUDE.md'; then
   if git show :CLAUDE.md 2>/dev/null | grep -q 'jalebi:start'; then
     echo "Jalebi: refusing to commit CLAUDE.md (contains the Jalebi bootstrap section)." >&2
-    echo "Remove it from the commit with:" >&2
-    echo "  git restore --staged CLAUDE.md && git restore CLAUDE.md" >&2
+    echo "Unstage it only (do NOT restore the working tree - it carries the run's context):" >&2
+    echo "  git restore --staged CLAUDE.md" >&2
     exit 1
   fi
 fi
