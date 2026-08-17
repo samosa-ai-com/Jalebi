@@ -94,3 +94,13 @@ After any code change, run the relevant tests and build before marking work done
   - `apps/web/src/pages/TaskDetail.test.tsx` +2 — Open worktree posts
     `/open-in-ide` when configured; disabled + settings link when not.
 - **Suite delta:** server 752 → 775 (+23); web 93 → 98 (+5). All gates green.
+
+- **Phase 4 T7 deltas (server +11, web +7):**
+  - `tests/test_workspace_files.py` (new, 11) — list root/subdir/empty,
+    `.git` + `..` + symlink rejection, binary → 415, masked content,
+    missing task / no worktree → 404.
+  - `apps/web/src/components/FileBrowser.test.tsx` (new, 5) — entries,
+    folder navigation, markdown viewer, mono pre, binary note.
+  - `apps/web/src/pages/TaskDetail.test.tsx` +2 — FileBrowser mounts with
+    a run; hidden without.
+- **Suite delta:** server 775 → 786 (+11); web 98 → 105 (+7). All gates green.

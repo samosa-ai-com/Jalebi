@@ -3,6 +3,7 @@ import type {
   CatalogSkill,
   EnvVar,
   EventDelivery,
+  FileEntry,
   GithubContext,
   GithubRepo,
   Health,
@@ -248,6 +249,14 @@ export const api = {
     request<{ ok: boolean; path: string }>(`/api/tasks/${id}/open-in-ide`, {
       method: "POST",
     }),
+  getTaskFiles: (id: number, path = "") =>
+    request<{ path: string; entries: FileEntry[] }>(
+      `/api/tasks/${id}/files${path ? `?path=${encodeURIComponent(path)}` : ""}`
+    ),
+  getTaskFileContent: (id: number, path: string) =>
+    request<{ path: string; content: string; binary: boolean }>(
+      `/api/tasks/${id}/files/content?path=${encodeURIComponent(path)}`
+    ),
   createTask: (input: CreateTaskInput) =>
     request<Task>("/api/tasks", { method: "POST", body: JSON.stringify(input) }),
   cancelTask: (id: number) =>

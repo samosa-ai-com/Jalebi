@@ -87,6 +87,12 @@ describe("TaskDetail", () => {
       if (url.endsWith("/runs")) {
         return { ok: true, json: async () => [task.run ?? RUN] };
       }
+      if (url.includes("/files")) {
+        return {
+          ok: true,
+          json: async () => ({ path: "", entries: [] }),
+        };
+      }
       if (url.includes("/api/tasks")) {
         return { ok: true, json: async () => task };
       }
@@ -1029,6 +1035,7 @@ describe("TaskDetail (Phase 4 T6 — open worktree)", () => {
         return { ok: true, json: async () => [waitingTask.run] };
       }
       if (url.includes("/open-in-ide")) {
+        void init;
         return { ok: true, json: async () => ({ ok: true, path: "/tmp/x" }) };
       }
       if (url.includes("/api/settings")) {
@@ -1129,5 +1136,46 @@ describe("TaskDetail (Phase 4 T6 — open worktree)", () => {
     const btn = screen.getByText("Open worktree") as HTMLButtonElement;
     expect(btn.disabled).toBe(true);
     expect(screen.getByText("configure IDE in Settings")).toBeInTheDocument();
+  });
+});
+
+
+
+
+// ---- Phase 4 T7 — FileBrowser mounting ----------------------------------
+
+
+describe("TaskDetail (Phase 4 T7 — file browser)", () => {
+  function renderNoFilesTask(task: Record<string, unknown>) {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/runs")) return { ok: true, json: async () => (task.run ? [task.run] : []) };
+      if (url.includes("/files")) return { ok: true, json: async () => ({ path: "", entries: [] }) };
+      if (url.includes("/api/tasks")) return { ok: true, json: async () => task };
+      if (url.includes("/api/settings")) return { ok: true, json: async () => ({ default_backend: "opencode", default_model: "m1" }) };
+      if (url.includes("/api/github/tokens")) return { ok: true, json: async () => ({ accounts: [] }) };
+      if (url.includes("/api/models")) return { ok: true, json: async () => ({ cli: "opencode", models: ["m1"] }) };
+      return { ok: true, json: async () => REPOS };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return render(
+      <MemoryRouter initialEntries={["/tasks/7"]}>
+        <Routes>
+          <Route path="/tasks/:id" element={<TaskDetail />} />
+        </Routes>
+      </MemoryRouter>
+    );
+  }
+
+  it("mounts FileBrowser when the task has a run", async () => {
+    const doneTask = { ...TASK, status: "done", run: { ...RUN, status: "done" } };
+    renderNoFilesTask(doneTask);
+    expect(await screen.findByText("Files")).toBeInTheDocument();
+  });
+
+  it("does not mount FileBrowser when the task has no run", async () => {
+    const noRun = { ...TASK, run: null };
+    renderNoFilesTask(noRun);
+    await screen.findByText("fix the bug");
+    expect(screen.queryByText("Files")).toBeNull();
   });
 });

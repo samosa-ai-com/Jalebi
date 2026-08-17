@@ -100,3 +100,23 @@ Remaining risk (documented): for codex specifically, multi-token wrapper calls (
 - `open_in_ide(command, path)` resolves the command and spawns `[resolved, str(path)]` via `subprocess.Popen` with `start_new_session=True`, `stdout=DEVNULL`, `stderr=DEVNULL`, `close_fds=True`, and **no shell**. The rendered argv is the only surface an attacker can influence — it's always `[resolved_binary, canonical_worktree_path]`, nothing user-controlled.
 - `POST /api/tasks/<id>/open-in-ide` reads the command from the validated setting only (409 when empty); the worktree path is the canonical `GitWorkspace.worktree_path` (404 when the worktree doesn't exist).
 - `start_new_session=True` detaches the IDE from Jalebi so the user can close their terminal; it survives a server restart. Only mocked in CI — tests never actually launch an IDE.
+
+---
+
+## 14. Phase 4 T7 — in-worktree file serving
+
+`apps/server/src/jalebi/workspace_files.py` serves a task's worktree files
+read-only for the browser. The worktree root is the security boundary:
+
+- **Containment:** `target = (root / rel_path).resolve()`; require
+  `target.is_relative_to(root.resolve())` else `"path escapes worktree"`.
+- **Symlinks refused:** checked on the **raw** (unresolved) path before
+  resolve — `resolve()` would otherwise follow a symlink outside the root
+  and the containment check would reject it first with the wrong message.
+- **`.git` refused:** any `.git` segment in the raw path parts.
+- **Absolute client paths rejected** (`Path(rel_path).is_absolute()`).
+- **Size cap** (256 KB) + **NUL-byte sniff** (binary → 415). Content is
+  masked with the same `_masker` the diff/artifact endpoints use before it
+  reaches the browser.
+- **Read-only:** no write endpoints; editing in the worktree is out of
+  scope for Phase 4.

@@ -13,6 +13,14 @@ export interface Artifact {
   created_at: string;
 }
 
+export interface FileEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  size: number;
+  extension: string;
+}
+
 export interface Run {
   id: number;
   seq: number;

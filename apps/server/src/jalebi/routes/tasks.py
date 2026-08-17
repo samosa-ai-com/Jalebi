@@ -10,7 +10,18 @@ import httpx
 from flask import Blueprint, Response, current_app, jsonify, request, send_file
 from flask.typing import ResponseReturnValue
 
-from jalebi import artifacts, db, ide, masking, prompts, reviews, secrets, settings, tasks
+from jalebi import (
+    artifacts,
+    db,
+    ide,
+    masking,
+    prompts,
+    reviews,
+    secrets,
+    settings,
+    tasks,
+    workspace_files,
+)
 from jalebi.adapters import available_adapters
 from jalebi.catalog import agent_by_slug
 from jalebi.config import Config
@@ -811,6 +822,59 @@ def merge_check(task_id: int) -> ResponseReturnValue:
             "ok": not conflicts,
         }
     )
+
+
+# ---- Phase 4 T7 — in-worktree file browser (read-only) ----------------------
+
+
+@bp.get("/<int:task_id>/files")
+def task_files(task_id: int) -> ResponseReturnValue:
+    """List a directory under the task's worktree (Phase 4 T7).
+
+    ``?path=<rel_dir>`` default root. Read-only. Containment + symlink +
+    .git guards live in ``workspace_files``.
+    """
+    session = db.get_session()
+    task = tasks.get_task(session, task_id)
+    if task is None:
+        return jsonify({"error": "task not found"}), 404
+    rel = request.args.get("path", "")
+    config: Config = current_app.config["JALEBI_CONFIG"]
+    entries, error = workspace_files.list_worktree_dir(config, task.id, rel)
+    if error is not None:
+        status = 404 if error == "task has no worktree yet" else 400
+        return jsonify({"error": error}), status
+    return jsonify({"path": rel, "entries": entries})
+
+
+@bp.get("/<int:task_id>/files/content")
+def task_file_content(task_id: int) -> ResponseReturnValue:
+    """Serve a text file's content (masked) for inline viewing (Phase 4 T7).
+
+    Binary files → 415 (download via the existing artifact flow).
+    """
+    session = db.get_session()
+    task = tasks.get_task(session, task_id)
+    if task is None:
+        return jsonify({"error": "task not found"}), 404
+    rel = request.args.get("path", "")
+    config: Config = current_app.config["JALEBI_CONFIG"]
+    content, error = workspace_files.read_worktree_file(config, task.id, rel)
+    if error is not None:
+        if error == "binary":
+            return (
+                jsonify(
+                    {
+                        "error": "binary — use Artifacts to download",
+                        "binary": True,
+                    }
+                ),
+                415,
+            )
+        status = 404 if error in {"task has no worktree yet", "not a file"} else 400
+        return jsonify({"error": error}), status
+    masked = _masker(session)(content or "")
+    return jsonify({"path": rel, "content": masked, "binary": False})
 
 
 # ---- Phase 4 T3.2 — merge-readiness panel -----------------------------------

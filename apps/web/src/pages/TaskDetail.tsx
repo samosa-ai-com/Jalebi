@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, taskEvents } from "../api/client";
 import { StatusBadge } from "../components/StatusBadge";
+import FileBrowser from "../components/FileBrowser";
 import Markdown from "../components/Markdown";
 import { MergeReadinessPanel } from "../components/MergeReadinessPanel";
 import WaitingCard from "../components/WaitingCard";
@@ -1517,6 +1518,10 @@ export default function TaskDetail() {
           </ol>
           {runsError && <p className="mt-2 text-xs text-red-400">{runsError}</p>}
         </section>
+      )}
+
+      {selectedRun && (
+        <FileBrowser taskId={task.id} refreshSignal={live.length} />
       )}
 
       {preview && (
