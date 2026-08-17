@@ -49,3 +49,11 @@ After any code change, run the relevant tests and build before marking work done
 ## 6. Reference
 
 - PRD §13 (non-functional requirements — testability), §17.2 (no `gh` CLI), §17.3 (testing repo & account).
+
+- **Phase 4 T2 deltas (default OFF):**
+  - `tests/test_poller.py` (new, 12 tests) — pure helpers (`_normalize_ci_state`, `_review_decision_from_reviews`), tick behavior (noop when flag off, build facts, skip non-`jalebi/` branches, malformed head branch, httpx error, 401 drops repo state, ETag reuse + 304 keeps cached payload, stale-PR prune, flag-off prune, ETag cache cap), and thread lifecycle (start/stop clean, double-start no-op).
+  - `tests/test_attention.py` — extended with 10 `attention_for` decision-tree tests (one per branch).
+  - `tests/test_api_tasks.py` — `attention` field on task dicts (default-off path; via poller `record_facts`; without `JALEBI_POLLER`).
+  - `tests/test_api_repos.py` — new `test_toggle_poll_fallback` (boolean validation, 404, empty payload).
+  - `tests/test_github.py` — 5 new tests for `list_open_prs`, `list_check_runs_for_ref`, `list_reviews_for_pr` (with ETag + If-None-Match + 401 → `GitHubUnauthorized`).
+- **Suite delta:** 682 → 720 (+38). No existing tests broken.

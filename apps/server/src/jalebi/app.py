@@ -14,6 +14,7 @@ from flask.typing import ResponseReturnValue
 from jalebi import artifacts, clock, db, masking, notify, secrets, settings
 from jalebi.adapters import available_adapters, get_adapter
 from jalebi.config import Config, load_config, repo_root
+from jalebi.poller import Poller
 from jalebi.queue import TaskQueue
 from jalebi.routes.catalog import bp as catalog_bp
 from jalebi.routes.envvars import bp as envvars_bp
@@ -280,6 +281,7 @@ def create_app(config: Config | None = None) -> Flask:
 
     app.config["JALEBI_QUEUE"] = TaskQueue(config)
     app.config["JALEBI_SCREENING"] = ScreeningScheduler(config)
+    app.config["JALEBI_POLLER"] = Poller(config)  # Phase 4 T2.1 — default OFF
 
     app.register_blueprint(github_bp)
     app.register_blueprint(repos_bp)
@@ -438,7 +440,14 @@ def main() -> None:
     scheduler = app.config["JALEBI_SCREENING"]
     scheduler.start()
     logger.info("screening scheduler started")
-    app.run(host=config.host, port=config.port, threaded=True)
+    poller = app.config["JALEBI_POLLER"]
+    poller.start()
+    logger.info("pr polling observer started (default off; enable per repo)")
+    try:
+        app.run(host=config.host, port=config.port, threaded=True)
+    finally:
+        poller.stop()
+        poller.join(timeout=2)
 
 
 if __name__ == "__main__":

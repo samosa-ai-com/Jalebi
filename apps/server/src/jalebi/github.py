@@ -29,6 +29,18 @@ class GitHubNotFound(GitHubError):
     """Raised when a requested resource does not exist (HTTP 404)."""
 
 
+class GitHubUnauthorized(GitHubError):
+    """Raised when GitHub returns HTTP 401 — token revoked/rotated (T2.1)."""
+
+
+# Polling-observer (T2.1) URL templates. Path strings are also the ETag cache
+# keys; every poller URL begins with ``/repos/{full_name}/``, so the
+# repo-scoped prune (``_prune_repo``) can match by prefix.
+PRS_PATH = "/repos/{full_name}/pulls?state=open&per_page=100"
+PR_STATUS_PATH = "/repos/{full_name}/commits/{ref}/status"
+PR_REVIEWS_PATH = "/repos/{full_name}/pulls/{pr_number}/reviews"
+
+
 @dataclass
 class TokenInfo:
     valid: bool
@@ -315,6 +327,105 @@ class GitHubClient:
             for review in body
             if isinstance(review, dict) and (review.get("body") or "").strip()
         ]
+
+    # -- Phase 4 T2.1: poller-facing read methods with ETag caching ----------
+    # The three new methods accept an ``etag`` argument and return
+    # ``(payload, new_etag, not_modified)``. They share a single helper
+    # (``_request_etag``) for the GET/If-None-Match dance. ETag plumbing is
+    # intentionally scoped to the new methods — retrofitting every existing
+    # client method would break every caller for no write-path benefit.
+
+    def _request_etag(
+        self,
+        path: str,
+        *,
+        etag: str | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> tuple[Any | None, str | None, bool]:
+        """GET ``path`` with optional ETag. Returns ``(body, new_etag, not_modified)``.
+
+        - 200 → ``(body, etag, False)``
+        - 304 → ``(None, etag, True)``
+        - 401 → ``GitHubUnauthorized``
+        - other non-200 → ``GitHubError``
+        """
+        kwargs: dict[str, Any] = {}
+        if params:
+            kwargs["params"] = params
+        if etag:
+            kwargs["headers"] = {"If-None-Match": etag}
+        resp = self._http.request("GET", path, **kwargs)
+        if resp.status_code == 401:
+            raise GitHubUnauthorized(f"HTTP 401 on GET {path}")
+        if resp.status_code == 304:
+            return None, etag, True
+        if resp.status_code != 200:
+            raise GitHubError(f"GET {path}: HTTP {resp.status_code}")
+        try:
+            body = resp.json()
+        except ValueError:
+            body = None
+        new_etag = resp.headers.get("ETag")
+        return body, new_etag, False
+
+    def list_open_prs(
+        self, full_name: str, *, etag: str | None = None
+    ) -> tuple[list[dict[str, Any]], str | None, bool]:
+        """Open PRs with ETag. Maps each PR to ``{number, head, head_sha, mergeable}``."""
+        path = PRS_PATH.format(full_name=full_name)
+        body, new_etag, not_modified = self._request_etag(path, etag=etag)
+        if not_modified or not isinstance(body, list):
+            return [], new_etag, not_modified
+        prs = [
+            {
+                "number": pr.get("number"),
+                "head": ((pr.get("head") or {}).get("ref")),
+                "head_sha": ((pr.get("head") or {}).get("sha")),
+                "mergeable": pr.get("mergeable"),
+            }
+            for pr in body
+            if isinstance(pr, dict)
+        ]
+        return prs, new_etag, False
+
+    def list_check_runs_for_ref(
+        self, full_name: str, ref: str, *, etag: str | None = None
+    ) -> tuple[dict[str, Any], str | None, bool]:
+        """Combined commit status for ``ref`` (PAT-compatible — check-runs are
+        GitHub-App-only). Returns ``{state, total_count, statuses}``.
+        """
+        path = PR_STATUS_PATH.format(full_name=full_name, ref=ref)
+        body, new_etag, not_modified = self._request_etag(path, etag=etag)
+        if not_modified or not isinstance(body, dict):
+            return {"state": None, "total_count": 0, "statuses": []}, new_etag, not_modified
+        return {
+            "state": body.get("state"),
+            "total_count": body.get("total_count") or 0,
+            "statuses": body.get("statuses") or [],
+        }, new_etag, False
+
+    def list_reviews_for_pr(
+        self, full_name: str, pr_number: int, *, etag: str | None = None
+    ) -> tuple[list[dict[str, Any]], str | None, bool]:
+        """All review records for a PR (including empty-body approvals /
+        change-requests — unlike ``list_pr_reviews`` which filters those out).
+
+        Returns the raw review state list for the poller's
+        ``_review_decision`` aggregator.
+        """
+        path = PR_REVIEWS_PATH.format(full_name=full_name, pr_number=pr_number)
+        body, new_etag, not_modified = self._request_etag(path, etag=etag)
+        if not_modified or not isinstance(body, list):
+            return [], new_etag, not_modified
+        reviews = [
+            {
+                "state": r.get("state"),
+                "submitted_at": r.get("submitted_at"),
+            }
+            for r in body
+            if isinstance(r, dict)
+        ]
+        return reviews, new_etag, False
 
     def list_branches(self, full_name: str) -> list[str]:
         """List the repo's branch names (paged)."""

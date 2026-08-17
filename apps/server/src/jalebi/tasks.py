@@ -193,6 +193,7 @@ def task_to_dict(
     artifacts: list[Artifact] | None = None,
     repo_full_name: str | None = None,
     reviewers: list[dict[str, object]] | None = None,
+    pr_facts: attention.PRFacts | None = None,
 ) -> dict[str, object]:
     run_dict = run_to_dict(run, artifacts=artifacts) if run is not None else None
     data: dict[str, object] = {
@@ -209,6 +210,7 @@ def task_to_dict(
         "prompt": task.prompt,
         "status": task.status,
         "waiting_input": bool(run_dict and run_dict["waiting_input"]),
+        "attention": attention.attention_for(task, run, pr_facts),
         "timeout_minutes": task.timeout_minutes,
         "retry_count": task.retry_count,
         "pr_number": task.pr_number,

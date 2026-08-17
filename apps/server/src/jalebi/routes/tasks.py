@@ -44,6 +44,16 @@ def _task_dict(session, task: Task) -> dict[str, object]:
     run = tasks.latest_run(session, task.id)
     reviewers_raw = reviews.reviews_json_for_task(session, task.id)
     reviewers = json.loads(reviewers_raw) if reviewers_raw else []
+    # Look up normalized PR facts from the polling observer (T2.1). The
+    # poller is registered as ``JALEBI_POLLER`` in ``create_app``; tests
+    # without the poller (or with the flag off) get ``None`` and degrade
+    # to the no-PR-facts branch of ``attention_for``.
+    poller = current_app.config.get("JALEBI_POLLER")
+    pr_facts = (
+        poller.pr_facts_for_task(task.repo_id, task.id)
+        if poller is not None
+        else None
+    )
     return tasks.task_to_dict(
         task,
         run=run,
@@ -51,6 +61,7 @@ def _task_dict(session, task: Task) -> dict[str, object]:
         artifacts=tasks.list_artifacts(session, run.id) if run is not None else None,
         repo_full_name=_repo_name(session, task.repo_id),
         reviewers=reviewers,
+        pr_facts=pr_facts,
     )
 
 

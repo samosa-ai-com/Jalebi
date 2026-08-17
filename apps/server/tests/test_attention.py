@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from jalebi import attention
@@ -112,3 +114,208 @@ def test_last_message_text_empty() -> None:
     assert attention.last_message_text([]) == ""
     assert attention.last_message_text([{"type": "message", "text": ""}]) == ""
     assert attention.last_message_text([{"type": "tool_call", "text": "x"}]) == ""
+
+
+# ---- Phase 4 T2.2 — derived attention ----------------------------------------
+
+
+def _run_with_status(*, status: str = "done", steps=None, waiting=False):
+    """Build a Run-like stub for ``attention_for`` tests."""
+    from types import SimpleNamespace
+
+    if steps is None:
+        steps = []
+    if waiting:
+        steps = [
+            {"type": "message", "text": "I have a plan; **waiting for explicit approval**."},
+        ]
+    return SimpleNamespace(
+        status=status,
+        steps_json=json.dumps(steps) if steps else None,
+    )
+
+
+def _task_with_status(status: str):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(status=status, repo_id=1)
+
+
+def test_attention_for_waiting_input_wins_over_everything() -> None:
+    """T0's waiting flag still beats every PR-state branch."""
+    from typing import cast
+
+    from jalebi import attention as _attn
+    from jalebi.db import Run, Task
+
+    run = _run_with_status(waiting=True)
+    task = _task_with_status("done")
+    facts: _attn.PRFacts = {
+        "ci_state": "success",
+        "review_decision": "approved",
+        "mergeable": True,
+        "last_seen_at": "now",
+    }
+    assert _attn.attention_for(cast(Task, task), cast(Run, run), facts) == "needs_you"
+
+
+def test_attention_for_queued_returns_working() -> None:
+    from typing import cast
+
+    from jalebi import attention as _attn
+    from jalebi.db import Task
+
+    task = _task_with_status("queued")
+    assert _attn.attention_for(cast(Task, task), None, None) == "working"
+
+
+def test_attention_for_running_returns_working() -> None:
+    from typing import cast
+
+    from jalebi import attention as _attn
+    from jalebi.db import Run, Task
+
+    task = _task_with_status("running")
+    assert (
+        _attn.attention_for(
+            cast(Task, task),
+            cast(Run, _run_with_status(status="running")),
+            None,
+        )
+        == "working"
+    )
+
+
+def test_attention_for_running_with_ci_failure_needs_you() -> None:
+    """A running task whose open PR already has a failing CI needs the owner."""
+    from typing import cast
+
+    from jalebi import attention as _attn
+    from jalebi.db import Run, Task
+
+    task = _task_with_status("running")
+    run = _run_with_status(status="running")
+    facts: _attn.PRFacts = {
+        "ci_state": "failure",
+        "review_decision": None,
+        "mergeable": None,
+        "last_seen_at": "now",
+    }
+    assert _attn.attention_for(cast(Task, task), cast(Run, run), facts) == "needs_you"
+
+
+def test_attention_for_done_with_no_facts_returns_done() -> None:
+    from typing import cast
+
+    from jalebi import attention as _attn
+    from jalebi.db import Run, Task
+
+    task = _task_with_status("done")
+    assert (
+        _attn.attention_for(
+            cast(Task, task),
+            cast(Run, _run_with_status(status="done")),
+            None,
+        )
+        == "done"
+    )
+
+
+def test_attention_for_done_with_ci_failure_needs_you() -> None:
+    from typing import cast
+
+    from jalebi import attention as _attn
+    from jalebi.db import Run, Task
+
+    task = _task_with_status("done")
+    run = _run_with_status(status="done")
+    facts: _attn.PRFacts = {
+        "ci_state": "failure",
+        "review_decision": "approved",
+        "mergeable": False,
+        "last_seen_at": "now",
+    }
+    assert _attn.attention_for(cast(Task, task), cast(Run, run), facts) == "needs_you"
+
+
+def test_attention_for_done_with_changes_requested_needs_you() -> None:
+    from typing import cast
+
+    from jalebi import attention as _attn
+    from jalebi.db import Run, Task
+
+    task = _task_with_status("done")
+    run = _run_with_status(status="done")
+    facts: _attn.PRFacts = {
+        "ci_state": "success",
+        "review_decision": "changes_requested",
+        "mergeable": False,
+        "last_seen_at": "now",
+    }
+    assert _attn.attention_for(cast(Task, task), cast(Run, run), facts) == "needs_you"
+
+
+def test_attention_for_done_with_mergeable_true_ready_to_merge() -> None:
+    from typing import cast
+
+    from jalebi import attention as _attn
+    from jalebi.db import Run, Task
+
+    task = _task_with_status("done")
+    run = _run_with_status(status="done")
+    facts: _attn.PRFacts = {
+        "ci_state": "success",
+        "review_decision": "approved",
+        "mergeable": True,
+        "last_seen_at": "now",
+    }
+    assert (
+        _attn.attention_for(cast(Task, task), cast(Run, run), facts)
+        == "ready_to_merge"
+    )
+
+
+def test_attention_for_done_with_facts_not_mergeable_in_review() -> None:
+    from typing import cast
+
+    from jalebi import attention as _attn
+    from jalebi.db import Run, Task
+
+    task = _task_with_status("done")
+    run = _run_with_status(status="done")
+    facts: _attn.PRFacts = {
+        "ci_state": "pending",
+        "review_decision": "review_required",
+        "mergeable": False,
+        "last_seen_at": "now",
+    }
+    assert (
+        _attn.attention_for(cast(Task, task), cast(Run, run), facts) == "in_review"
+    )
+
+
+def test_attention_for_failed_terminal_no_facts_needs_you() -> None:
+    from typing import cast
+
+    from jalebi import attention as _attn
+    from jalebi.db import Run, Task
+
+    task = _task_with_status("failed")
+    assert (
+        _attn.attention_for(
+            cast(Task, task),
+            cast(Run, _run_with_status(status="failed")),
+            None,
+        )
+        == "needs_you"
+    )
+
+
+def test_attention_for_interrupted_terminal_no_facts_needs_you() -> None:
+    from typing import cast
+
+    from jalebi import attention as _attn
+    from jalebi.db import Task
+
+    task = _task_with_status("interrupted")
+    assert _attn.attention_for(cast(Task, task), None, None) == "needs_you"

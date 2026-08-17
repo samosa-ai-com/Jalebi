@@ -911,3 +911,72 @@ def test_merge_check_clean_and_conflicting(
 def test_merge_check_missing_task(client: FlaskClient, session) -> None:
     resp = client.get("/api/tasks/9999/merge-check")
     assert resp.status_code == 404
+
+
+# ---- Phase 4 T2.2 — attention field on task dict ----------------------------
+
+
+def test_task_dict_exposes_attention_default_off(client: FlaskClient, repo_id) -> None:
+    """Without any poller facts seeded, attention falls back to the pure
+    task.status derivation."""
+    resp = client.post(
+        "/api/tasks",
+        json={"repo_id": repo_id, "type": "freeform", "prompt": "x"},
+    )
+    assert resp.status_code == 201
+    body = resp.get_json()
+    assert body["attention"] == "working"
+
+    # Detail endpoint likewise.
+    detail = client.get(f"/api/tasks/{body['id']}").get_json()
+    assert detail["attention"] == "working"
+
+
+def test_task_dict_attention_from_poller_facts(client: FlaskClient, app, repo_id) -> None:
+    """A task whose poller has facts consumes them via ``pr_facts_for_task``."""
+
+    resp = client.post(
+        "/api/tasks",
+        json={"repo_id": repo_id, "type": "freeform", "prompt": "x"},
+    )
+    task_id = resp.get_json()["id"]
+    # Manually mark the task as `done` to exercise the terminal-with-facts branch.
+    from jalebi.db import Session as DbSession
+    from jalebi.db import Task
+
+    session = DbSession()
+    try:
+        task = session.get(Task, task_id)
+        task.status = "done"
+        session.commit()
+    finally:
+        session.close()
+
+    poller = app.config["JALEBI_POLLER"]
+    poller.record_facts(
+        repo_id,
+        task_id,
+        pr_number=42,
+        facts={
+            "ci_state": "success",
+            "review_decision": "approved",
+            "mergeable": True,
+            "last_seen_at": "2026-08-17T00:00:00Z",
+        },
+    )
+    detail = client.get(f"/api/tasks/{task_id}").get_json()
+    assert detail["attention"] == "ready_to_merge"
+
+
+def test_task_dict_attention_working_no_poller(app, repo_id) -> None:
+    """With ``JALEBI_POLLER`` missing entirely (no app-key set), the route
+    returns the no-PR-facts branch (working for queued)."""
+
+    app.config.pop("JALEBI_POLLER", None)
+    # Use the app's test client so the route sees the popped config.
+    resp = app.test_client().post(
+        "/api/tasks",
+        json={"repo_id": repo_id, "type": "freeform", "prompt": "y"},
+    )
+    body = resp.get_json()
+    assert body["attention"] == "working"

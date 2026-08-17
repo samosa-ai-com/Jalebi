@@ -131,3 +131,36 @@ Implemented via the same client (Phase 0): issue/PR context fetch, publish (crea
 - Task creation **requires an account**: the user-selected one, else the repo's bound account — never a fallback to anything else. The Credentials dropdown overrides the repo's account.
 - Removing an account **deletes its repos (connected AND soft-disconnected) and the tasks on them** (runs, follow-ups, artifacts, worktrees, mirrors). Queued/running tasks for the account are cancelled first. `DELETE /api/github/tokens/<name>` returns `{removed, repos_affected, tasks_affected}` so the UI can confirm.
 - GitHub list endpoints (`list_repos`/`list_issues`/`list_prs`/`list_branches`) follow `Link: rel="next"` pagination (capped at 10 pages) — nothing silently drops past page 1.
+
+---
+
+## 12. Phase 4 T2.1 — PR/CI polling observer
+
+When a connected repo has `poll_fallback=True`, a daemon thread (`jalebi.poller.Poller`, registered as `JALEBI_POLLER` in `create_app`, started in `main()`) ticks every **30 s** and writes normalized `PRFacts` to an in-memory map keyed by `(repo_id, pr_number)`.
+
+- **Default OFF.** No repo has the flag set on connect. The owner flips it on per-repo via `PATCH /api/repos/<id> {"poll_fallback": true}`. The flag also gates the new toggle for the same route (`check_runs_enabled` and `poll_fallback` may be PATCHed independently or together).
+- **Per-PR fan-out only when the head branch starts with `jalebi/`.** Any other head branch is ignored (the poller still records `last_checked_at` and stores the PR-list ETag, but does not fetch per-PR state).
+- **ETag cache** — a `dict[url_path, etag]` (FIFO eviction at `ETAG_CACHE_CAP = 512`). Three client methods participate:
+  - `list_open_prs(full_name, *, etag=None)` → `(prs, new_etag, not_modified)`.
+  - `list_check_runs_for_ref(full_name, ref, *, etag=None)` → `(state_body, new_etag, not_modified)`. **Reads combined commit-status**, not check-runs — PATs cannot read check-runs (GitHub-App-only). Combined-status is the same source `merge gating` uses, and is PAT-compatible.
+  - `list_reviews_for_pr(full_name, pr_number, *, etag=None)` → `(reviews, new_etag, not_modified)`. Unlike `list_pr_reviews` (the older F7.6 follow-up helper), this returns **all** records including empty-body `APPROVED` / `CHANGES_REQUESTED` so the poller's `_review_decision_from_reviews` aggregator sees the final states.
+- **304 short-circuit** — when the PR list returns 304, the poller skips the per-PR fan-out AND skips the stale-PR prune (the list didn't change, so the cached facts are still authoritative).
+- **PAT rotation (HTTP 401)** — the poller catches `GitHubUnauthorized`, drops that repo's facts + etags, and logs a warning. The next tick re-warms from scratch (the owner re-flips the flag if they want to keep polling).
+- **Transient errors** (`httpx.HTTPError` / non-401 `GitHubError`) — caught at the tick level; the repo is skipped for this tick, facts + etags retained.
+- **Stale-PR prune** — at the end of each successful tick, facts whose PR is no longer in the open-PR list (merged / closed) are dropped.
+- **Per-repo prune** — at the end of every tick, repos that were NOT polled this time (disconnected, or `poll_fallback` flipped off) have their facts + etags cleared. Closes the "stale facts after OFF" risk.
+- **Read API** — `routes/tasks._task_dict` calls `poller.pr_facts_for_task(task.repo_id, task.id)` and passes the result to `tasks.task_to_dict` which derives the `attention` field via `jalebi.attention.attention_for(task, run, pr_facts)`.
+
+### 12.1 `attention` (Phase 4 T2.2)
+
+One-word status consumed by the UI (T3) and `tasks.task_to_dict`:
+
+| Value | When |
+|-------|------|
+| `needs_you` | T0 waiting-for-input; or terminal with CI failure / `changes_requested`; or non-terminal with running CI failure. |
+| `working` | Queued / running / waiting_review (and no running-PR CI failure). |
+| `in_review` | Terminal with facts and no mergeable conflict. |
+| `ready_to_merge` | Terminal with facts and `mergeable == True`. |
+| `done` | Terminal `done` task with no PR facts (poller off, or not published yet). |
+
+T0's `waiting_input` flag takes precedence over everything. The derivation is pure (no network call) and runs at read time; in-memory state survives only as long as the process.
