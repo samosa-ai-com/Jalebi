@@ -2,6 +2,118 @@ import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import type { EnvVar, Repo, SettingsMap } from "../types";
 
+// Phase 4 T6 — IDE connector settings. Self-contained component so the
+// "Detect" button can programmatically fill a controlled command input
+// (the parent's uncontrolled save-on-blur pattern can't be re-filled).
+function IDESettings() {
+  const [command, setCommand] = useState("");
+  const [name, setName] = useState("");
+  const [found, setFound] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+  const [testMsg, setTestMsg] = useState<string | null>(null);
+  const [testErr, setTestErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    api
+      .getIdeStatus()
+      .then((s) => {
+        setCommand(s.command);
+        setName(s.name);
+        setFound(s.found);
+      })
+      .catch(() => {});
+  }, []);
+
+  const saveCommand = (v: string) => {
+    setCommand(v);
+    api
+      .updateSetting("ide_command", v)
+      .then(() => setStatus("saved"))
+      .catch((e) => setStatus(e instanceof Error ? e.message : "save failed"));
+  };
+  const saveName = (v: string) => {
+    setName(v);
+    api.updateSetting("ide_name", v).catch(() => {});
+  };
+
+  const detect = () => {
+    api
+      .detectIde()
+      .then((d) => {
+        if (d.command) {
+          setCommand(d.command);
+          setName(d.name);
+          setFound(true);
+          api.updateSetting("ide_command", d.command).catch(() => {});
+          api.updateSetting("ide_name", d.name).catch(() => {});
+          setStatus("detected");
+        } else {
+          setStatus("no IDE found on PATH");
+        }
+      })
+      .catch(() => setStatus("detect failed"));
+  };
+
+  const test = () => {
+    setTestMsg(null);
+    setTestErr(null);
+    api
+      .testIde()
+      .then((r) => setTestMsg(r.ok ? "launched on a scratch dir" : (r.error ?? "failed")))
+      .catch((e) => setTestErr(e instanceof Error ? e.message : "test failed"));
+  };
+
+  return (
+    <section className="surface p-5 animate-fade-up" style={{ animationDelay: "0.035s" }}>
+      <h2 className="panel-title mb-1">IDE</h2>
+      <p className="mb-4 text-xs leading-relaxed text-ink-500">
+        Configure an IDE binary so you can open a task&apos;s worktree directly
+        from the task detail page. Leave blank to disable.
+      </p>
+      <div className="grid gap-4 md:grid-cols-2">
+        <label className="block">
+          <span className="mb-1.5 block text-xs font-medium text-ink-400">
+            IDE command
+            {command && (
+              <span className={`ml-2 ${found ? "text-green-300" : "text-red-300"}`}>
+                {found ? "found ✓" : "not found ✕"}
+              </span>
+            )}
+          </span>
+          <input
+            value={command}
+            onChange={(e) => saveCommand(e.target.value)}
+            onBlur={(e) => saveCommand(e.target.value.trim())}
+            placeholder="e.g. code, cursor, nvim"
+            className="field max-w-xs font-mono"
+          />
+        </label>
+        <div>
+          <span className="mb-1.5 block text-xs font-medium text-ink-400">Display name</span>
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onBlur={(e) => saveName(e.target.value.trim())}
+            placeholder="e.g. VS Code"
+            className="field max-w-xs"
+          />
+        </div>
+      </div>
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <button type="button" onClick={detect} className="btn-ghost text-xs">
+          Detect
+        </button>
+        <button type="button" onClick={test} className="btn-ghost text-xs">
+          Test open
+        </button>
+        {status && <span className="text-xs text-ink-500">{status}</span>}
+        {testMsg && <span className="text-xs text-green-300">{testMsg}</span>}
+        {testErr && <span className="text-xs text-red-400">{testErr}</span>}
+      </div>
+    </section>
+  );
+}
+
 const AGENT_CLIS = ["opencode", "codex", "claude"];
 
 function Toggle({
@@ -642,6 +754,8 @@ export default function Settings() {
           </div>
         </div>
       </section>
+
+      <IDESettings />
 
       <EnvVarsSection repos={repos} />
 

@@ -29,6 +29,18 @@ function makeFetchMock() {
     if (String(url).includes("/api/notify/test")) {
       return { ok: true, json: async () => ({ ok: true }) };
     }
+    if (String(url).includes("/api/ide/status")) {
+      return {
+        ok: true,
+        json: async () => ({ command: "", name: "", found: false }),
+      };
+    }
+    if (String(url).includes("/api/ide/detect")) {
+      return { ok: true, json: async () => ({ command: "code", name: "code" }) };
+    }
+    if (String(url).includes("/api/ide/test")) {
+      return { ok: true, json: async () => ({ ok: true }) };
+    }
     if (String(url).includes("/api/settings") && init?.method === "POST") {
       const body = JSON.parse(init.body as string) as Record<string, unknown>;
       return { ok: true, json: async () => ({ [String(body.key)]: body.value }) };
@@ -149,5 +161,59 @@ describe("Settings", () => {
     expect([...backendSelect.options].map((o) => o.value)).toEqual(
       expect.arrayContaining(["opencode", "codex", "claude"])
     );
+  });
+});
+
+
+// ---- Phase 4 T6 — IDE settings section ---------------------------------
+
+
+describe("Settings (Phase 4 T6 — IDE)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("renders the IDE section with Detect + Test open buttons", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Settings />);
+    expect(await screen.findByText("IDE")).toBeInTheDocument();
+    expect(screen.getByText("Detect")).toBeInTheDocument();
+    expect(screen.getByText("Test open")).toBeInTheDocument();
+  });
+
+  it("Detect pre-fills the command from /api/ide/detect and saves it", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Settings />);
+    await screen.findByText("IDE");
+    const detectBtn = screen.getByText("Detect");
+    await userEvent.click(detectBtn);
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(
+          ([url, init]) =>
+            String(url).includes("/api/settings") &&
+            init?.method === "POST" &&
+            JSON.parse((init.body as string) as string).key === "ide_command"
+        )
+      ).toBe(true);
+    });
+  });
+
+  it("Test open POSTs to /api/ide/test", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Settings />);
+    await screen.findByText("IDE");
+    await userEvent.click(screen.getByText("Test open"));
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(
+          ([url, init]) =>
+            String(url).includes("/api/ide/test") && init?.method === "POST"
+        )
+      ).toBe(true);
+    });
   });
 });

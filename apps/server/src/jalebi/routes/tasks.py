@@ -10,7 +10,7 @@ import httpx
 from flask import Blueprint, Response, current_app, jsonify, request, send_file
 from flask.typing import ResponseReturnValue
 
-from jalebi import artifacts, db, masking, prompts, reviews, secrets, settings, tasks
+from jalebi import artifacts, db, ide, masking, prompts, reviews, secrets, settings, tasks
 from jalebi.adapters import available_adapters
 from jalebi.catalog import agent_by_slug
 from jalebi.config import Config
@@ -964,6 +964,45 @@ def publish_check(task_id: int) -> ResponseReturnValue:
     status = "blocked" if blocked else ("attention" if attention else "ready")
 
     return jsonify({"status": status, "base_ref": base_ref, "checks": checks})
+
+
+# ---- Phase 4 T6 — open a task's worktree in the configured IDE -------------
+
+
+@bp.post("/<int:task_id>/open-in-ide")
+def open_in_ide(task_id: int) -> ResponseReturnValue:
+    """Spawn the configured IDE on the task's worktree (Phase 4 T6).
+
+    Refuses with 409 when ``ide_command`` is empty or doesn't resolve;
+    404 when the task has no worktree yet. The command comes from the
+    validated setting only — never from a per-request input — so the
+    single security boundary is ``ide.validate_ide_command``.
+    """
+    session = db.get_session()
+    task = tasks.get_task(session, task_id)
+    if task is None:
+        return jsonify({"error": "task not found"}), 404
+    command = str(settings.get_setting(session, "ide_command") or "")
+    if not command:
+        return (
+            jsonify(
+                {
+                    "error": (
+                        "IDE not configured — set an IDE command in Settings"
+                    )
+                }
+            ),
+            409,
+        )
+    config: Config = current_app.config["JALEBI_CONFIG"]
+    worktree = GitWorkspace.worktree_path(config.data_dir, task.id)
+    if not (worktree / ".git").is_file():
+        return jsonify({"error": "task has no worktree yet"}), 404
+    try:
+        ide.open_in_ide(command, worktree)
+    except ide.IdeError as exc:
+        return jsonify({"error": str(exc)}), 500
+    return jsonify({"ok": True, "path": str(worktree)})
 
 
 @bp.get("/<int:task_id>/events")

@@ -238,6 +238,16 @@ export const api = {
     ),
   getPublishCheck: (id: number) =>
     request<PublishCheck>(`/api/tasks/${id}/publish-check`),
+  getIdeStatus: () =>
+    request<{ command: string; name: string; found: boolean }>("/api/ide/status"),
+  detectIde: () =>
+    request<{ command: string; name: string }>("/api/ide/detect"),
+  testIde: () =>
+    request<{ ok: boolean; error?: string }>("/api/ide/test", { method: "POST" }),
+  openInIde: (id: number) =>
+    request<{ ok: boolean; path: string }>(`/api/tasks/${id}/open-in-ide`, {
+      method: "POST",
+    }),
   createTask: (input: CreateTaskInput) =>
     request<Task>("/api/tasks", { method: "POST", body: JSON.stringify(input) }),
   cancelTask: (id: number) =>

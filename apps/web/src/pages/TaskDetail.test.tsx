@@ -999,3 +999,135 @@ describe("TaskDetail (Phase 4 T3.2)", () => {
     ).toBeInTheDocument();
   });
 });
+
+
+// ---- Phase 4 T6 — Open worktree ---------------------------------------
+
+
+describe("TaskDetail (Phase 4 T6 — open worktree)", () => {
+  it("posts /open-in-ide when ide_command is configured", async () => {
+    const waitingTask = {
+      ...TASK,
+      status: "done",
+      attention: "needs_you",
+      run: {
+        ...RUN,
+        status: "done",
+        finished_at: "2026-08-06T10:01:30",
+        waiting_input: true,
+        steps: [
+          {
+            type: "message",
+            text: "# H\n\nPlan. **waiting for explicit approval**.",
+            ts: "2026-08-06T10:01:00",
+          },
+        ],
+      },
+    };
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/runs")) {
+        return { ok: true, json: async () => [waitingTask.run] };
+      }
+      if (url.includes("/open-in-ide")) {
+        return { ok: true, json: async () => ({ ok: true, path: "/tmp/x" }) };
+      }
+      if (url.includes("/api/settings")) {
+        return {
+          ok: true,
+          json: async () => ({
+            default_backend: "opencode",
+            default_model: "m1",
+            ide_command: "code",
+          }),
+        };
+      }
+      if (url.includes("/api/tasks")) {
+        return { ok: true, json: async () => waitingTask };
+      }
+      if (url.includes("/api/github/tokens")) {
+        return { ok: true, json: async () => ({ accounts: [] }) };
+      }
+      if (url.includes("/api/models")) {
+        return { ok: true, json: async () => ({ cli: "opencode", models: ["m1"] }) };
+      }
+      return { ok: true, json: async () => REPOS };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <MemoryRouter initialEntries={["/tasks/7"]}>
+        <Routes>
+          <Route path="/tasks/:id" element={<TaskDetail />} />
+        </Routes>
+      </MemoryRouter>
+    );
+    await screen.findByText("Agent is waiting for your input");
+    await userEvent.click(screen.getByText("Open worktree"));
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(
+          ([url, init]) =>
+            String(url).includes("/api/tasks/7/open-in-ide") &&
+            init?.method === "POST"
+        )
+      ).toBe(true);
+    });
+  });
+
+  it("keeps Open worktree disabled with a settings link when unconfigured", async () => {
+    const waitingTask = {
+      ...TASK,
+      status: "done",
+      attention: "needs_you",
+      run: {
+        ...RUN,
+        status: "done",
+        finished_at: "2026-08-06T10:01:30",
+        waiting_input: true,
+        steps: [
+          {
+            type: "message",
+            text: "waiting for your approval.",
+            ts: "2026-08-06T10:01:00",
+          },
+        ],
+      },
+    };
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/runs")) {
+        return { ok: true, json: async () => [waitingTask.run] };
+      }
+      if (url.includes("/api/settings")) {
+        return {
+          ok: true,
+          json: async () => ({
+            default_backend: "opencode",
+            default_model: "m1",
+            ide_command: "",
+          }),
+        };
+      }
+      if (url.includes("/api/tasks")) {
+        return { ok: true, json: async () => waitingTask };
+      }
+      if (url.includes("/api/github/tokens")) {
+        return { ok: true, json: async () => ({ accounts: [] }) };
+      }
+      if (url.includes("/api/models")) {
+        return { ok: true, json: async () => ({ cli: "opencode", models: ["m1"] }) };
+      }
+      return { ok: true, json: async () => REPOS };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <MemoryRouter initialEntries={["/tasks/7"]}>
+        <Routes>
+          <Route path="/tasks/:id" element={<TaskDetail />} />
+        </Routes>
+      </MemoryRouter>
+    );
+    await screen.findByText("Agent is waiting for your input");
+    const btn = screen.getByText("Open worktree") as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    expect(screen.getByText("configure IDE in Settings")).toBeInTheDocument();
+  });
+});

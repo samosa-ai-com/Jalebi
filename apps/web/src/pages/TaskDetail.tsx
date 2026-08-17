@@ -1128,6 +1128,31 @@ export default function TaskDetail() {
   const consoleRef = useAutoScroll<HTMLDivElement>(previewTimelineLen, followScroll);
   const [replyPrefill, setReplyPrefill] = useState<{ nonce: number; text: string } | null>(null);
   const replyNonce = useRef(0);
+  // Phase 4 T6 — whether an IDE command is configured (for Open worktree).
+  const [ideConfigured, setIdeConfigured] = useState(false);
+  const [ideError, setIdeError] = useState<string | null>(null);
+  const [ideBusy, setIdeBusy] = useState(false);
+
+  // Fetch ide_command once to decide whether "Open worktree" is available.
+  useEffect(() => {
+    api
+      .getSettings()
+      .then((s) => setIdeConfigured(Boolean(s.ide_command)))
+      .catch(() => {});
+  }, []);
+
+  const openInIde = () => {
+    if (ideBusy || !task) return;
+    setIdeBusy(true);
+    setIdeError(null);
+    api
+      .openInIde(task.id)
+      .then(() => {})
+      .catch((e) =>
+        setIdeError(e instanceof Error ? e.message : "failed to open in IDE")
+      )
+      .finally(() => setIdeBusy(false));
+  };
 
   if (error) return <p className="text-red-400">{error}</p>;
   if (!task) return <p className="text-ink-500">Loading…</p>;
@@ -1174,16 +1199,21 @@ export default function TaskDetail() {
       </div>
 
       {finalMessage && selectedRun && (
-        <WaitingCard
-          run={selectedRun}
-          message={finalMessage}
-          canReply={canReply}
-          onReply={() => {
-            const quoted = finalMessage.split("\n").map((l) => `> ${l}`).join("\n");
-            replyNonce.current += 1;
-            setReplyPrefill({ nonce: replyNonce.current, text: `${quoted}\n\n` });
-          }}
-        />
+        <>
+          <WaitingCard
+            run={selectedRun}
+            message={finalMessage}
+            canReply={canReply}
+            onReply={() => {
+              const quoted = finalMessage.split("\n").map((l) => `> ${l}`).join("\n");
+              replyNonce.current += 1;
+              setReplyPrefill({ nonce: replyNonce.current, text: `${quoted}\n\n` });
+            }}
+            ideConfigured={ideConfigured}
+            onOpenWorktree={openInIde}
+          />
+          {ideError && <p className="text-xs text-red-400">{ideError}</p>}
+        </>
       )}
 
       <section className="surface p-6">

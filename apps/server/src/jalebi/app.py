@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from flask import Flask, Response, current_app, g, jsonify, request, send_from_directory
 from flask.typing import ResponseReturnValue
 
-from jalebi import artifacts, clock, db, masking, notify, secrets, settings
+from jalebi import artifacts, clock, db, ide, masking, notify, secrets, settings
 from jalebi.adapters import available_adapters, get_adapter
 from jalebi.config import Config, load_config, repo_root
 from jalebi.poller import Poller
@@ -125,6 +125,9 @@ _SETTING_VALIDATORS = {
     ),
     "webhook_secret": lambda v: isinstance(v, str),
     "timezone": _valid_timezone,
+    # Phase 4 T6 — IDE connector.
+    "ide_command": ide.validate_ide_command,
+    "ide_name": lambda v: isinstance(v, str),
 }
 
 
@@ -397,6 +400,32 @@ def create_app(config: Config | None = None) -> Flask:
         )
         if not ok:
             return jsonify({"ok": False, "error": error or "notification failed"}), 400
+        return jsonify({"ok": True})
+
+    # ---- Phase 4 T6 — IDE connector endpoints -----------------------------
+
+    @app.get("/api/ide/status")
+    def ide_status() -> ResponseReturnValue:
+        """What's currently configured + whether the command resolves."""
+        session = db.get_session()
+        return jsonify(ide.ide_status(session))
+
+    @app.get("/api/ide/detect")
+    def ide_detect() -> ResponseReturnValue:
+        """Probe the short whitelist for an IDE on PATH."""
+        detected = ide.detect_ide()
+        if detected is None:
+            return jsonify({"command": "", "name": ""})
+        command, name = detected
+        return jsonify({"command": command, "name": name})
+
+    @app.post("/api/ide/test")
+    def ide_test() -> ResponseReturnValue:
+        """Open the configured IDE on a scratch dir to confirm it launches."""
+        session = db.get_session()
+        ok, error = ide.test_open(session)
+        if not ok:
+            return jsonify({"ok": False, "error": error}), 400
         return jsonify({"ok": True})
 
     # SPA: serve the built React app (index.html + assets) so the UI lives on the

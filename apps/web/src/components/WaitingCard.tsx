@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import type { Run } from "../types";
 import Markdown from "./Markdown";
 import { StatusBadge } from "./StatusBadge";
@@ -7,11 +8,15 @@ export default function WaitingCard({
   message,
   canReply,
   onReply,
+  ideConfigured,
+  onOpenWorktree,
 }: {
   run: Run;
   message: string;
   canReply: boolean;
   onReply: () => void;
+  ideConfigured: boolean;
+  onOpenWorktree: () => void;
 }) {
   const finished = run.finished_at ? new Date(run.finished_at).toLocaleString() : "—";
   return (
@@ -25,13 +30,31 @@ export default function WaitingCard({
       <div className="mt-3 text-sm leading-snug text-ink-300">
         <Markdown>{message}</Markdown>
       </div>
-      <div className="mt-4 flex flex-wrap gap-2">
+      <div className="mt-4 flex flex-wrap items-center gap-2">
         <button type="button" onClick={onReply} disabled={!canReply} className="btn-primary">
           Reply in follow-up
         </button>
-        <button type="button" disabled className="btn-ghost" title="IDE not configured">
+        <button
+          type="button"
+          onClick={onOpenWorktree}
+          disabled={!ideConfigured}
+          className="btn-ghost disabled:opacity-40"
+          title={
+            ideConfigured
+              ? "Open this task's worktree in your configured IDE"
+              : "IDE not configured"
+          }
+        >
           Open worktree
         </button>
+        {!ideConfigured && (
+          <Link
+            to="/settings"
+            className="text-[11px] text-ink-500 underline-offset-2 hover:text-ink-300 hover:underline"
+          >
+            configure IDE in Settings
+          </Link>
+        )}
       </div>
     </section>
   );

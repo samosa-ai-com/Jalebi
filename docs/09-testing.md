@@ -84,3 +84,13 @@ After any code change, run the relevant tests and build before marking work done
   - `Tasks.test.tsx` — wrapper has `max-h-[60vh]` + `overflow-y-auto`; thead has `sticky`.
   - `Github.test.tsx` — per-account repo list wrapper has `max-h-[26rem]` + `overflow-y-auto`; count line stays outside.
 - **Suite delta:** web 91 → 93 (+2). All gates green (lint, typecheck, build).
+
+- **Phase 4 T6 deltas (server +23, web +5):**
+  - `tests/test_ide.py` (new, 23) — validator accepts/rejects, detect, resolve,
+    test-open, spawn argv assertions (Popen mock), route-level 409/404/200,
+    status/detect/test endpoints, settings validation round-trip.
+  - `apps/web/src/pages/Settings.test.tsx` +3 — IDE section renders, Detect
+    pre-fills + saves, Test open POSTs.
+  - `apps/web/src/pages/TaskDetail.test.tsx` +2 — Open worktree posts
+    `/open-in-ide` when configured; disabled + settings link when not.
+- **Suite delta:** server 752 → 775 (+23); web 93 → 98 (+5). All gates green.

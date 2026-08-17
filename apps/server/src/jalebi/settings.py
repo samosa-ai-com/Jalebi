@@ -17,6 +17,12 @@ from jalebi.db import Setting
 DEFAULTS: dict[str, object] = {
     # Phase 4 T4.2 — auto-nudge when CI/review state changes (default OFF).
     "auto_nudge": False,
+    # Phase 4 T6 — IDE connector (open a task's worktree in the configured
+    # IDE). Empty = feature off. Validated: bare executable name or absolute
+    # path, no whitespace/shell metacharacters, must resolve via shutil.which
+    # (or exist on disk if absolute). ``ide_name`` is a display label only.
+    "ide_command": "",
+    "ide_name": "",
     "concurrency": 4,
     "auto_publish": True,
     # Merged ntfy endpoint: a bare topic ("my-jalebi") or a full URL

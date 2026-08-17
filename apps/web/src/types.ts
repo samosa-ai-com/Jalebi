@@ -213,6 +213,8 @@ export interface SettingsMap {
   webhook_url: string;
   webhook_secret: string;
   timezone: string;
+  ide_command: string;
+  ide_name: string;
 }
 
 export interface EnvVar {
