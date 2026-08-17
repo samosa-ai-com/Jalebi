@@ -48,8 +48,8 @@
 | `cli` | text null | backend override |
 | `pat_name` | text null | the **account** that runs this task (required at creation; no default) |
 | `issues_json` | text null | JSON list of linked issue numbers |
-| `prs_json` | text null | JSON list of PR numbers (review tasks) |
-| `context_json` | text null | masked issue/PR context embedded into the agent brief |
+| `prs_json` | text null | JSON list of linked PR numbers (any type that links a PR, e.g. `pr_review` and freeform "fix the issues in this PR") |
+| `context_json` | text null | masked issue/PR context embedded into the agent brief; fetched at creation for **any** linked issue/PR (not just `issue_fix`/`pr_review`). PR context includes `reviews` — the PR's current review comments (masked), so a freeform task linked to a PR can address them directly |
 | `env_vars_json` | text null | JSON list of env-var **names** injected into the agent subprocess env |
 | `prompt` | text | instructions |
 | `status` | text CHECK, default `'queued'` | `queued` \| `running` \| `waiting_review` \| `needs_approval` \| `done` \| `failed` \| `timed_out` \| `interrupted` \| `cancelled` |

@@ -190,6 +190,68 @@ def build_agent_md(
     if task.type == "freeform" or task.type == "screen_finding":
         parts += ["", _pr_md_note()]
 
+    if task.type != "pr_review" and prs:
+        # A linked PR on a non-review task (e.g. a freeform "fix the issues in
+        # this PR"): embed the PR and its current review comments so the agent
+        # knows exactly which PR and what to address — no hunting.
+        pr = prs[0]
+        reviews = pr.get("reviews") or []
+        parts += ["", "## Linked pull request"]
+        parts += [
+            f"- **PR #{pr.get('number')} — {pr.get('title', '')}** "
+            f"({pr.get('html_url', '')})",
+            f"- Base: `{pr.get('base') or '?'}` ← Head: `{pr.get('head') or '?'}`",
+        ]
+        if reviews:
+            parts += [
+                "",
+                "### PR review comments to address",
+                "The current PR review comments are below. Address them: fix the code, "
+                "and commit your changes (Jalebi pushes).",
+                "",
+            ]
+            for i, review in enumerate(reviews, start=1):
+                parts += [
+                    f"#### Review {i} — {review.get('author') or 'unknown'}",
+                    "",
+                    "  ```",
+                    "  --- BEGIN UNTRUSTED DATA: PR review comment ---",
+                    (review.get("body") or "").strip() or "(no comment body)",
+                    "  --- END UNTRUSTED DATA ---",
+                    "  ```",
+                ]
+        parts += [
+            "",
+            "  ```",
+            "  --- BEGIN UNTRUSTED DATA: PR description ---",
+            pr.get("body") or "(none)",
+            "  --- END UNTRUSTED DATA ---",
+            "  ```",
+        ]
+    elif not prs and not issues and task.prs_json:
+        # The task links a PR but its context was never fetched (a task created
+        # before PR context was supported, or the fetch failed). Tell the agent
+        # which PR is linked and how to fetch its content with the token.
+        try:
+            linked = json.loads(task.prs_json)
+        except (ValueError, TypeError):
+            linked = []
+        if linked:
+            parts += [
+                "",
+                "## Linked pull request",
+                f"The task references PR {', '.join(f'#{n}' for n in linked)} in "
+                f"`{repo.full_name}`, but its content was not pre-fetched. Fetch the "
+                "PR and its review comments yourself with the GitHub token, e.g.:",
+                "",
+                "  ```",
+                f'  curl -H "Authorization: Bearer $JALEBI_GITHUB_TOKEN" '
+                f"https://api.github.com/repos/{repo.full_name}/pulls/{linked[0]}",
+                f'  curl -H "Authorization: Bearer $JALEBI_GITHUB_TOKEN" '
+                f"https://api.github.com/repos/{repo.full_name}/pulls/{linked[0]}/reviews",
+                "  ```",
+            ]
+
     return "\n".join(parts)
 
 

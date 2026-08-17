@@ -64,13 +64,19 @@ def _masker(session) -> Callable[[str], str]:
 def _fetch_context(
     session,
     repo_id: int,
-    type_: str,
     issue_number: int | None,
     pr_number: int | None,
     pat_name: str | None = None,
 ):
-    """Fetch issue/PR context from GitHub for structured task types (masked)."""
-    if type_ not in ("issue_fix", "pr_review"):
+    """Fetch issue/PR context from GitHub for the task's linked targets (masked).
+
+    ``issue_number``/``pr_number`` drive the fetch directly — the route only
+    passes them for task types that accept a link, but a freeform task that
+    links a PR gets the same PR context a ``pr_review`` task does. PR review
+    comments are fetched and embedded too (masked), so "fix the issues in this
+    PR" freeform tasks see exactly what the reviewers said.
+    """
+    if issue_number is None and pr_number is None:
         return {}
     config: Config = current_app.config["JALEBI_CONFIG"]
     repo = session.get(db.Repo, repo_id)
@@ -83,7 +89,7 @@ def _fetch_context(
     context: dict = {}
     client = GitHubClient(token)
     try:
-        if type_ == "issue_fix" and issue_number is not None:
+        if issue_number is not None:
             issue = client.get_issue(repo.full_name, issue_number)
             masked_body = masker(issue["body"]) if issue.get("body") else ""
             context["issues"] = [
@@ -94,8 +100,21 @@ def _fetch_context(
                     "html_url": issue["html_url"],
                 }
             ]
-        if type_ == "pr_review" and pr_number is not None:
+        if pr_number is not None:
             pr = client.get_pr(repo.full_name, pr_number)
+            reviews: list[dict[str, str]] = []
+            try:
+                for review in client.list_pr_reviews(repo.full_name, pr_number):
+                    text = review.get("body") or ""
+                    if text.strip():
+                        reviews.append(
+                            {"author": review.get("user") or "unknown", "body": masker(text)}
+                        )
+            except Exception:
+                # Review comments are enrichment, not essential: a failed
+                # reviews fetch must not block task creation (the PR body
+                # still goes through). Mirrors _with_review_comments.
+                reviews = []
             context["prs"] = [
                 {
                     "number": pr["number"],
@@ -106,6 +125,7 @@ def _fetch_context(
                     "base": pr["base"],
                     "head": pr["head"],
                     "author": pr["author"],
+                    "reviews": reviews,
                 }
             ]
     except (httpx.HTTPError, GitHubError) as exc:
@@ -202,7 +222,7 @@ def create_task() -> ResponseReturnValue:
 
     try:
         context = _fetch_context(
-            session, repo_id, type_, issue_number, pr_number, pat_name=effective_pat
+            session, repo_id, issue_number, pr_number, pat_name=effective_pat
         )
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400

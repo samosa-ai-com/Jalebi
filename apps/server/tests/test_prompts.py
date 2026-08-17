@@ -79,6 +79,10 @@ def test_agent_md_pr_review_embeds_pr(session) -> None:
                     "head": "feature/x",
                     "state": "open",
                     "author": "bob",
+                    # The route now attaches review comments to PR context even
+                    # for pr_review; the review block must ignore them (the
+                    # "Linked pull request" section is for fixer tasks only).
+                    "reviews": [{"author": "carol", "body": "needs tests"}],
                 }
             ]
         },
@@ -89,6 +93,73 @@ def test_agent_md_pr_review_embeds_pr(session) -> None:
     assert "Do **not** modify files or push anything" in md
     assert "BEGIN UNTRUSTED DATA" in md
     assert "Adds x" in md
+    assert "Linked pull request" not in md
+    assert "review comments to address" not in md
+
+
+def test_agent_md_freeform_linked_pr_embeds_pr_and_reviews(session) -> None:
+    """A freeform task that links a PR gets the PR + review comments in AGENTS.md."""
+    repo = Repo(
+        full_name="owner/repo",
+        default_branch="main",
+        clone_url="https://github.com/owner/repo.git",
+        pat_name="test",
+    )
+    session.add(repo)
+    session.commit()
+    task = _task(
+        session,
+        repo,
+        type_="freeform",
+        prs=[7],
+        context={
+            "prs": [
+                {
+                    "number": 7,
+                    "title": "Feature",
+                    "body": "Adds x",
+                    "html_url": "u",
+                    "base": "main",
+                    "head": "feature/x",
+                    "state": "open",
+                    "author": "bob",
+                    "reviews": [
+                        {"author": "carol", "body": "needs tests"},
+                        {"author": "dave", "body": "secret-value-123 in a comment"},
+                    ],
+                }
+            ]
+        },
+    )
+    md = prompts.build_agent_md(task, repo)
+    assert "## Linked pull request" in md
+    assert "PR #7 — Feature" in md
+    assert "Adds x" in md
+    assert "## PR review comments to address" in md
+    assert "### Review 1 — carol" in md
+    assert "needs tests" in md
+    assert "### Review 2 — dave" in md
+    assert "BEGIN UNTRUSTED DATA: PR review comment" in md
+    assert "pr.md" in md  # freeform still gets the PR-description note
+
+
+def test_agent_md_freeform_linked_pr_fallback_mentions_pr_and_curl(session) -> None:
+    """A task whose PR context was never fetched still names the linked PR and
+    tells the agent how to fetch it (the token is in the agent env)."""
+    repo = Repo(
+        full_name="owner/repo",
+        default_branch="main",
+        clone_url="https://github.com/owner/repo.git",
+        pat_name="test",
+    )
+    session.add(repo)
+    session.commit()
+    task = _task(session, repo, type_="freeform", prs=[3])
+    md = prompts.build_agent_md(task, repo)
+    assert "## Linked pull request" in md
+    assert "PR #3" in md
+    assert "owner/repo/pulls/3" in md
+    assert "$JALEBI_GITHUB_TOKEN" in md
 
 
 def test_followup_prompt_includes_constraints(session) -> None:
