@@ -11,6 +11,7 @@ from flask import Blueprint, Response, current_app, jsonify, request, send_file
 from flask.typing import ResponseReturnValue
 
 from jalebi import artifacts, db, masking, prompts, reviews, secrets, settings, tasks
+from jalebi.adapters import available_adapters
 from jalebi.catalog import agent_by_slug
 from jalebi.config import Config
 from jalebi.db import Artifact, Run, Task, now
@@ -21,6 +22,12 @@ from jalebi.queue import PublishConflict, PublishError, TaskQueue
 bp = Blueprint("tasks", __name__, url_prefix="/api/tasks")
 
 TERMINAL_STATUSES = {"done", "failed", "timed_out", "cancelled", "needs_approval", "interrupted"}
+
+# Review comments travel into context_json → the worktree AGENTS.md → the model
+# context. A PR with many/large reviews must not balloon every run's brief, so
+# each comment and the total are truncated (with a marker) at fetch time.
+MAX_REVIEW_CHARS = 8_000  # per review comment embedded into the task context
+MAX_REVIEWS_TOTAL_CHARS = 24_000  # total embedded review text across comments
 
 
 def _queue() -> TaskQueue:
@@ -63,13 +70,19 @@ def _masker(session) -> Callable[[str], str]:
 def _fetch_context(
     session,
     repo_id: int,
-    type_: str,
     issue_number: int | None,
     pr_number: int | None,
     pat_name: str | None = None,
 ):
-    """Fetch issue/PR context from GitHub for structured task types (masked)."""
-    if type_ not in ("issue_fix", "pr_review"):
+    """Fetch issue/PR context from GitHub for the task's linked targets (masked).
+
+    ``issue_number``/``pr_number`` drive the fetch directly — the route only
+    passes them for task types that accept a link, but a freeform task that
+    links a PR gets the same PR context a ``pr_review`` task does. PR review
+    comments are fetched and embedded too (masked), so "fix the issues in this
+    PR" freeform tasks see exactly what the reviewers said.
+    """
+    if issue_number is None and pr_number is None:
         return {}
     config: Config = current_app.config["JALEBI_CONFIG"]
     repo = session.get(db.Repo, repo_id)
@@ -82,7 +95,7 @@ def _fetch_context(
     context: dict = {}
     client = GitHubClient(token)
     try:
-        if type_ == "issue_fix" and issue_number is not None:
+        if issue_number is not None:
             issue = client.get_issue(repo.full_name, issue_number)
             masked_body = masker(issue["body"]) if issue.get("body") else ""
             context["issues"] = [
@@ -93,8 +106,31 @@ def _fetch_context(
                     "html_url": issue["html_url"],
                 }
             ]
-        if type_ == "pr_review" and pr_number is not None:
+        if pr_number is not None:
             pr = client.get_pr(repo.full_name, pr_number)
+            reviews: list[dict[str, str]] = []
+            embedded_total = 0
+            try:
+                for review in client.list_pr_reviews(repo.full_name, pr_number):
+                    text = (review.get("body") or "").strip()
+                    if not text:
+                        continue
+                    if len(text) > MAX_REVIEW_CHARS:
+                        text = text[:MAX_REVIEW_CHARS] + "\n\n[… review truncated …]"
+                    remaining = MAX_REVIEWS_TOTAL_CHARS - embedded_total
+                    if remaining <= 0:
+                        break
+                    if len(text) > remaining:
+                        text = text[:remaining] + "\n\n[… review truncated …]"
+                    embedded_total += len(text)
+                    reviews.append(
+                        {"author": review.get("user") or "unknown", "body": masker(text)}
+                    )
+            except Exception:
+                # Review comments are enrichment, not essential: a failed
+                # reviews fetch must not block task creation (the PR body
+                # still goes through). Mirrors _with_review_comments.
+                reviews = []
             context["prs"] = [
                 {
                     "number": pr["number"],
@@ -105,6 +141,7 @@ def _fetch_context(
                     "base": pr["base"],
                     "head": pr["head"],
                     "author": pr["author"],
+                    "reviews": reviews,
                 }
             ]
     except (httpx.HTTPError, GitHubError) as exc:
@@ -142,7 +179,7 @@ def create_task() -> ResponseReturnValue:
             return jsonify({"error": f"catalog agent is disabled: {agent_id}"}), 400
 
     cli = payload.get("cli")
-    if cli is not None and cli not in ("opencode",):
+    if cli is not None and cli not in available_adapters():
         return jsonify({"error": f"unsupported agent cli: {cli}"}), 400
 
     model = payload.get("model")
@@ -201,7 +238,7 @@ def create_task() -> ResponseReturnValue:
 
     try:
         context = _fetch_context(
-            session, repo_id, type_, issue_number, pr_number, pat_name=effective_pat
+            session, repo_id, issue_number, pr_number, pat_name=effective_pat
         )
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
@@ -434,6 +471,11 @@ def followup_task(task_id: int) -> ResponseReturnValue:
     if pat_name is not None and not _valid_pat(config, pat_name):
         return jsonify({"error": f"unknown PAT: {pat_name}"}), 400
     model = payload.get("model") if isinstance(payload, dict) else None
+    # Optional backend override: a backend different from the task's own starts
+    # a fresh session seeded with the prior conversation (see queue._run_followup).
+    cli = payload.get("cli") if isinstance(payload, dict) else None
+    if cli is not None and cli not in available_adapters():
+        return jsonify({"error": f"unsupported agent cli: {cli}"}), 400
 
     masker = _masker(session)
 
@@ -447,7 +489,7 @@ def followup_task(task_id: int) -> ResponseReturnValue:
     masked = masker(body.strip())
     # The Followup row (incl. PAT/model overrides) is recorded by the worker when
     # the resume actually runs — not here, to avoid duplicates.
-    _queue().enqueue_followup(task_id, masked, pat_name=pat_name, model=model)
+    _queue().enqueue_followup(task_id, masked, pat_name=pat_name, model=model, cli=cli)
     return jsonify(_task_dict(session, task)), 202
 
 

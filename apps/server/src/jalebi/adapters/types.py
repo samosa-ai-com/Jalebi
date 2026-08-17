@@ -32,6 +32,7 @@ class RunHandle:
 
     proc: Any  # duck-typed: .stdout, .stderr, .wait()
     parse: Callable[[str], list[AgentEvent]]
+    name: str = "opencode"  # adapter name, for exit-error text ("<name> exited with code N")
     session_id: str | None = field(default=None, init=False)
     _stderr_lines: list[str] = field(default_factory=list, init=False)
     _stderr_lock: Any = field(default_factory=threading.Lock, init=False)
@@ -53,7 +54,8 @@ class RunHandle:
             return "\n".join(self._stderr_lines[-n:])
 
     def events(self) -> Iterator[AgentEvent]:
-        """Yield parsed events; ends with ``done`` or ``error`` based on exit code."""
+        """Yield parsed events; ends with ``done``, or ``error`` (``{name} exited
+        with code N`` + stderr tail) on non-zero exit."""
         assert self.proc.stdout is not None
         for raw_line in self.proc.stdout:
             line = raw_line.rstrip("\n")
@@ -66,7 +68,7 @@ class RunHandle:
             yield AgentEvent(type="done")
         else:
             tail = self.stderr_tail()
-            yield AgentEvent(type="error", text=f"opencode exited with code {code}: {tail}")
+            yield AgentEvent(type="error", text=f"{self.name} exited with code {code}: {tail}")
 
 
 class AgentAdapter:

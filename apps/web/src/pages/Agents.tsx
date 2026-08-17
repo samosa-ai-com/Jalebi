@@ -80,11 +80,20 @@ function AgentForm({
   const [models, setModels] = useState<string[]>([]);
 
   useEffect(() => {
+    // Follow the CLI override selected in THIS form (blank = global default).
+    // The cancelled guard drops a stale response if the override changes again
+    // mid-fetch.
+    let cancelled = false;
     api
-      .getModels()
-      .then((m) => setModels(m.models ?? []))
+      .getModels(form.cli ?? undefined)
+      .then((m) => {
+        if (!cancelled) setModels(m.models ?? []);
+      })
       .catch(() => {});
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [form.cli]);
 
   function set(patch: Partial<CatalogAgent>) {
     setForm((f) => ({ ...f, ...patch }));
@@ -162,8 +171,10 @@ function AgentForm({
             onChange={(e) => set({ cli: e.target.value })}
             className="field"
           >
-            <option value="">default (opencode)</option>
+            <option value="">default (global setting)</option>
             <option value="opencode">opencode</option>
+            <option value="codex">codex</option>
+            <option value="claude">claude</option>
           </select>
         </label>
         <label className="block">

@@ -1,15 +1,17 @@
-"""Agent catalog service (PRD F6): CRUD + materialization of personality/skills.
+"""Agent catalog service (PRD F6): CRUD + personality/skills for worktree runs.
 
 A catalog agent is deliberately simple — it is *not* a new agent type. It is a
 personality (markdown merged into the worktree ``AGENTS.md``) + skill files
-(referenced by path) + optional ``cli``/``model`` overrides + custom
-instructions appended to the task prompt. The default agent of the CLI reads
-``AGENTS.md`` + skills automatically.
+(materialized into the worktree's skill roots at run time, see
+``worktree_bootstrap.write_agent_skills``) + optional ``cli``/``model``
+overrides + custom instructions appended to the task prompt. The default agent
+of the CLI reads ``AGENTS.md`` + skills automatically.
 
 Skills are stored in the DB as ``[{name, content}]`` and materialized to disk at
-run time (``<data-dir>/agents/<id>/personality.md`` + ``skills/*.md``), matching
-PRD F6.1. ``tasks.agent_id`` references ``catalog_agents.id`` by slug but is
-FK-less — every write path validates the slug here.
+run time into the task worktree's ``.claude/skills/``, ``.codex/skills/`` and
+``.agents/skills/`` (the shared Agent Skills format), matching PRD F6.1.
+``tasks.agent_id`` references ``catalog_agents.id`` by slug but is FK-less —
+every write path validates the slug here.
 """
 
 import json
@@ -19,10 +21,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from jalebi import clock
+from jalebi.adapters import available_adapters
 from jalebi.db import CatalogAgent, now
 
 AGENT_KINDS = ("general", "reviewer")
-ALLOWED_CLIS = ("opencode",)
+ALLOWED_CLIS = tuple(available_adapters())
 SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _\-]{0,63}$")
 MAX_INSTRUCTION_CHARS = 20_000  # custom_instructions ride the task prompt via argv

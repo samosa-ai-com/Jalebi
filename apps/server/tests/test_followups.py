@@ -231,12 +231,14 @@ def _with_assignment(session, task, agent_id: str = "reviewer-1", pr_number: int
 def test_followup_route_enqueues_masked_body(app, session, repo_row, monkeypatch) -> None:
     settings.set_setting(session, "auto_publish", False)
     task = _done_task_with_session(session, repo_row.id)
-    enqueued: list[tuple[int, str, str | None, str | None]] = []
+    enqueued: list[tuple[int, str, str | None, str | None, str | None]] = []
     q = app.config["JALEBI_QUEUE"]
     monkeypatch.setattr(
         q,
         "enqueue_followup",
-        lambda tid, body, pat_name=None, model=None: enqueued.append((tid, body, pat_name, model)),
+        lambda tid, body, pat_name=None, model=None, cli=None: enqueued.append(
+            (tid, body, pat_name, model, cli)
+        ),
     )
 
     client = app.test_client()
@@ -251,8 +253,8 @@ def test_followup_route_enqueues_masked_body(app, session, repo_row, monkeypatch
     # No row at route time — the worker records it when the resume runs.
     session.expire_all()
     assert tasks.list_followups(session, task.id) == []
-    # Masked body is what gets enqueued (no PAT/model override → None).
-    assert enqueued == [(task.id, "use *** here", None, None)]
+    # Masked body is what gets enqueued (no PAT/model/cli override → None).
+    assert enqueued == [(task.id, "use *** here", None, None, None)]
 
 
 def test_followup_route_validations(app, session, repo_row) -> None:
@@ -571,6 +573,139 @@ def test_followup_no_model_uses_task_model(q, session, repo_row, monkeypatch) ->
     q._run_followup(task.id, "keep model")
 
     assert adapter.resume_calls[0]["model"] == "opencode-go/m1"
+
+
+def test_followup_same_backend_resumes(q, session, repo_row, monkeypatch) -> None:
+    """A follow-up backend override matching the session's own still resumes."""
+    settings.set_setting(session, "auto_publish", False)
+    task = _done_task_with_session(session, repo_row.id, session_id="ses_orig")
+    run = tasks.latest_run(session, task.id)
+    assert run is not None
+    run.cli = "opencode"
+    session.commit()
+    handle = FakeHandle([AgentEvent(type="done")], session_id="ses_orig")
+    adapter = ResumeAdapter(handle)
+    monkeypatch.setattr("jalebi.queue.get_adapter", lambda cli: adapter)
+
+    q._run_followup(task.id, "keep backend", cli="opencode")
+
+    assert len(adapter.resume_calls) == 1
+    assert adapter.resume_calls[0]["session_id"] == "ses_orig"
+    prompt = adapter.resume_calls[0]["prompt"]
+    assert isinstance(prompt, str)
+    assert "## Prior conversation" not in prompt
+
+
+def test_followup_backend_change_forks_fresh_session_with_history(
+    q, session, repo_row, monkeypatch
+) -> None:
+    """Changing the backend on a follow-up can't resume the old session (each CLI
+    owns its session format): it starts a fresh run seeded with the prior
+    conversation instead (the UI notes this)."""
+    settings.set_setting(session, "auto_publish", False)
+    task = _done_task_with_session(session, repo_row.id, session_id="ses_orig")
+    run = tasks.latest_run(session, task.id)
+    assert run is not None
+    run.cli = "opencode"
+    run.steps_json = json.dumps(
+        [
+            {"type": "message", "text": "I implemented the fix.", "phase": None, "ts": "t"},
+            {
+                "type": "tool_call",
+                "text": '{"tool": "bash", "command": "pwd"}',
+                "phase": None,
+                "ts": "t",
+            },
+        ]
+    )
+    session.commit()
+
+    started: list[dict[str, object]] = []
+    resumed: list[dict[str, object]] = []
+
+    class StartAdapter:
+        def start(self, cwd, prompt, model=None, env=None):
+            started.append({"cwd": cwd, "prompt": prompt, "model": model})
+            return FakeHandle([AgentEvent(type="done")], session_id="ses_new")
+
+        def resume(self, cwd, session_id, prompt, model=None, env=None):
+            resumed.append({"session_id": session_id, "prompt": prompt})
+            return FakeHandle([AgentEvent(type="done")], session_id="ses_orig")
+
+        def list_models(self):
+            return []
+
+    monkeypatch.setattr("jalebi.queue.get_adapter", lambda cli: StartAdapter())
+
+    q._run_followup(task.id, "switch to codex", cli="codex")
+
+    assert len(started) == 1
+    assert len(resumed) == 0
+    prompt = started[0]["prompt"]
+    assert isinstance(prompt, str)
+    assert "## Prior conversation" in prompt
+    assert "I implemented the fix." in prompt
+    assert "(tool)" in prompt
+    session.expire_all()
+    run = tasks.latest_run(session, task.id)
+    assert run is not None
+    assert run.session_id == "ses_new"
+    assert run.cli == "codex"
+
+
+def test_followup_legacy_backend_override_forks_fresh_session(
+    q, session, repo_row, monkeypatch
+) -> None:
+    """A legacy run (prev.cli is NULL) + an explicit follow-up backend override
+    must fork a fresh session, not attempt a resume on the wrong backend.
+
+    Previously, ``fork = bool(prev.cli) and cli != prev.cli`` meant a legacy
+    run with a user-supplied follow-up backend would call
+    ``adapter.resume(prev_session_id)`` on a backend whose session id format
+    didn't match — the run failed mid-stream. Treat the explicit override as
+    authoritative: fork and seed the prior conversation.
+    """
+    settings.set_setting(session, "auto_publish", False)
+    task = _done_task_with_session(session, repo_row.id, session_id="ses_legacy")
+    # No `run.cli` — a legacy run predating the per-run cli column.
+    run = tasks.latest_run(session, task.id)
+    assert run is not None
+    run.cli = None
+    run.steps_json = json.dumps(
+        [{"type": "message", "text": "legacy action", "phase": None, "ts": "t"}]
+    )
+    session.commit()
+
+    started: list[dict[str, object]] = []
+    resumed: list[dict[str, object]] = []
+
+    class StartAdapter:
+        def start(self, cwd, prompt, model=None, env=None):
+            started.append({"cwd": cwd, "prompt": prompt, "model": model})
+            return FakeHandle([AgentEvent(type="done")], session_id="ses_new")
+
+        def resume(self, cwd, session_id, prompt, model=None, env=None):
+            resumed.append({"session_id": session_id, "prompt": prompt})
+            return FakeHandle([AgentEvent(type="done")], session_id="ses_legacy")
+
+        def list_models(self):
+            return []
+
+    monkeypatch.setattr("jalebi.queue.get_adapter", lambda cli: StartAdapter())
+
+    q._run_followup(task.id, "switch backend on legacy run", cli="codex")
+
+    assert len(started) == 1
+    assert len(resumed) == 0
+    prompt = started[0]["prompt"]
+    assert isinstance(prompt, str)
+    assert "## Prior conversation" in prompt
+    assert "legacy action" in prompt
+    session.expire_all()
+    run = tasks.latest_run(session, task.id)
+    assert run is not None
+    assert run.session_id == "ses_new"
+    assert run.cli == "codex"
 
 
 def test_chained_sequential_followups(q, session, repo_row, monkeypatch) -> None:

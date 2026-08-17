@@ -48,8 +48,8 @@
 | `cli` | text null | backend override |
 | `pat_name` | text null | the **account** that runs this task (required at creation; no default) |
 | `issues_json` | text null | JSON list of linked issue numbers |
-| `prs_json` | text null | JSON list of PR numbers (review tasks) |
-| `context_json` | text null | masked issue/PR context embedded into the agent brief |
+| `prs_json` | text null | JSON list of linked PR numbers (any type that links a PR, e.g. `pr_review` and freeform "fix the issues in this PR") |
+| `context_json` | text null | masked issue/PR context embedded into the agent brief; fetched at creation for **any** linked issue/PR (not just `issue_fix`/`pr_review`). PR context includes `reviews` — the PR's current review comments (masked), so a freeform task linked to a PR can address them directly. Review text is truncated (per-comment and total) with a marker so large reviews can't bloat the agent brief |
 | `env_vars_json` | text null | JSON list of env-var **names** injected into the agent subprocess env |
 | `prompt` | text | instructions |
 | `status` | text CHECK, default `'queued'` | `queued` \| `running` \| `waiting_review` \| `needs_approval` \| `done` \| `failed` \| `timed_out` \| `interrupted` \| `cancelled` |
@@ -246,7 +246,7 @@ See `docs/05` §5.
 | `key` | text PK | |
 | `value` | text | JSON-encoded |
 
-Settings keys (defaults in `jalebi/settings.py`): `concurrency` (4), `auto_publish` (true), `ntfy_topic` ("" — merged: bare topic **or** full URL), `default_timeout_minutes` (60), `retry_policy` (`{"auto_retry": false}`), `secret_patterns` (`[]`), `artifact_ttl_days` (7), `agent_cli` (`"opencode"`), `notify_on_done` (true), `notify_on_failed` (true), `notify_on_progress` (true), `notify_on_needs_approval` (true), `notify_progress_interval_minutes` (30). **Every key is materialized as a row at startup (`seed_defaults`)** — settings are persistent and never held in memory; stored values override the code default.
+Settings keys (defaults in `jalebi/settings.py`): `concurrency` (4), `auto_publish` (true), `ntfy_topic` ("" — merged: bare topic **or** full URL), `default_timeout_minutes` (60), `retry_policy` (`{"auto_retry": false}`), `secret_patterns` (`[]`), `artifact_ttl_days` (7), `default_backend` (`"opencode"`), `default_model` (`""`, required), `notify_on_done` (true), `notify_on_failed` (true), `notify_on_progress` (true), `notify_on_needs_approval` (true), `notify_progress_interval_minutes` (30). **Every key is materialized as a row at startup (`seed_defaults`)** — settings are persistent and never held in memory; stored values override the code default.
 
 ### `catalog_agents` (Phase 1 — PRD F6)
 
@@ -255,7 +255,7 @@ Settings keys (defaults in `jalebi/settings.py`): `concurrency` (4), `auto_publi
 | `id` | text PK | slug, e.g. `security-auditor` |
 | `name` | text | display name |
 | `kind` | text | `general` \| `reviewer` |
-| `cli` | text, null | backend override (opencode only today) |
+| `cli` | text, null | backend override (opencode/codex/claude) |
 | `model` | text, null | pinned model |
 | `personality_md` | text | markdown merged into the worktree `AGENTS.md` |
 | `skills_json` | text, null | JSON list of `{name, content}` markdown files |

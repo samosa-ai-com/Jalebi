@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Settings from "./Settings";
@@ -12,7 +12,8 @@ const SETTINGS = {
   stall_timeout_seconds: 600,
   secret_patterns: [],
   artifact_ttl_days: 7,
-  agent_cli: "opencode",
+  default_backend: "opencode",
+  default_model: "",
   notify_on_done: true,
   notify_on_failed: true,
   notify_on_progress: true,
@@ -131,5 +132,22 @@ describe("Settings", () => {
     expect(screen.getByText("Continue prompt")).toBeInTheDocument();
     expect(screen.getByText("Timeout multiplier")).toBeInTheDocument();
     expect(screen.getByText("Max timeout")).toBeInTheDocument();
+  });
+
+  it("offers opencode/codex/claude in the Default backend select", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<Settings />);
+    await screen.findByText("Default backend");
+
+    // The select is unlabeled — scope it by its section heading.
+    const section = screen.getByRole("heading", { name: "Default backend" }).closest("section")!;
+    const backendSelect = within(section).getByRole("combobox") as HTMLSelectElement;
+
+    expect(backendSelect.value).toBe("opencode");
+    expect([...backendSelect.options].map((o) => o.value)).toEqual(
+      expect.arrayContaining(["opencode", "codex", "claude"])
+    );
   });
 });

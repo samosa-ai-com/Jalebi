@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import type { EnvVar, Repo, SettingsMap } from "../types";
 
-const AGENT_CLIS = ["opencode"];
+const AGENT_CLIS = ["opencode", "codex", "claude"];
 
 function Toggle({
   checked,
@@ -219,6 +219,22 @@ export default function Settings() {
     busy: false,
     result: null,
   });
+  // Model options for the Default model dropdown — follow the Default backend.
+  const [defaultModels, setDefaultModels] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!settings?.default_backend) return;
+    let cancelled = false;
+    api
+      .getModels(settings.default_backend)
+      .then((m) => {
+        if (!cancelled) setDefaultModels(m.models ?? []);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [settings?.default_backend]);
 
   useEffect(() => {
     api
@@ -318,18 +334,39 @@ export default function Settings() {
       ),
     },
     {
-      key: "agent_cli",
-      label: "Agent backend",
-      desc: "Which coding-agent CLI drives tasks. Switching is one line.",
+      key: "default_backend",
+      label: "Default backend",
+      desc: "The agent backend used when an operation doesn't pick its own. Every task/follow-up/screen/agent form lets you override it per action.",
       control: (
         <select
-          value={settings.agent_cli}
-          onChange={(e) => save("agent_cli", e.target.value)}
+          value={settings.default_backend}
+          onChange={(e) => save("default_backend", e.target.value)}
           className="field w-44"
         >
           {AGENT_CLIS.map((c) => (
             <option key={c} value={c}>
               {c}
+            </option>
+          ))}
+        </select>
+      ),
+    },
+    {
+      key: "default_model",
+      label: "Default model",
+      desc: "The model used when an operation doesn't pick one (applied only on the default backend; other backends use their CLI's own default). Required.",
+      control: (
+        <select
+          value={settings.default_model}
+          onChange={(e) => save("default_model", e.target.value)}
+          className="field w-44"
+        >
+          <option value="" disabled>
+            select a model
+          </option>
+          {defaultModels.map((m) => (
+            <option key={m} value={m}>
+              {m}
             </option>
           ))}
         </select>

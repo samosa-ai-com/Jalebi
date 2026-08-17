@@ -109,7 +109,8 @@ def test_all_settings_survive_full_restart(session: OrmSession) -> None:
         assert get_setting(fresh, "retry_policy") == {"auto_retry": True}
         assert get_setting(fresh, "secret_patterns") == ["AKIA[0-9A-Z]{16}"]
         # Untouched defaults are still materialized rows.
-        assert get_setting(fresh, "agent_cli") == "opencode"
+        assert get_setting(fresh, "default_backend") == "opencode"
+        assert get_setting(fresh, "default_model") == ""
         assert get_setting(fresh, "notify_on_done") is True
     finally:
         fresh.close()

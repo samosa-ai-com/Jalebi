@@ -10,7 +10,7 @@ Jalebi is a **private, self-hosted, localhost-only web application** that behave
 
 Key architectural facts:
 
-- **Backend-agnostic agent adapters** — v1 ships the `opencode` CLI; Codex and Claude Code come later. Switching backend = one-line config (`agent.cli`).
+- **Backend-agnostic agent adapters** — opencode, Codex, and Claude Code. The backend + model are chosen **per action** (each task/follow-up/screen/agent form has its own selects); the Settings `default_backend`/`default_model` are only the fallbacks.
 - **GitHub PAT** (the owner's own token) drives all GitHub interaction via a thin httpx client. **The `gh` CLI is forbidden.**
 - Agents run as **local child processes** in per-task **git worktrees**.
 - Stack: Python 3.13 + Flask + SQLAlchemy 2 (SQLite) + Alembic + httpx + React + Vite + Tailwind. SSE for events. Git CLI (not libgit2).
@@ -113,6 +113,7 @@ This is critical and repeated: **all GitHub interaction in this project goes thr
 | `docs/17-phase1-validation.md` | Manual UI QA checklist for every Phase 1 feature. | Feature/UI behavior changes. |
 | `docs/18-cast-workflows-grid.md` | Design-only plan for per-thread cast, reusable workflows, the Inbox-as-helm dashboard, the 4×4 dynamic grid, and future multi-agent orchestration. **Not approved for implementation** — subject to change. | Design discussions only. |
 | `docs/19-phase2-validation.md` | Manual UI QA checklist for every Phase 2 feature (screening, commit statuses, diff/history). | Feature/UI behavior changes. |
+| `docs/20-phase3-validation.md` | Manual UI QA checklist for every Phase 3 feature (codex/claude backends, per-CLI guards, model dropdown). | Feature/UI behavior changes. |
 
 **If you add a doc file, add it to this table.**
 
@@ -152,7 +153,8 @@ Jalebi/
 │   ├── 16-triggers.md
 │   ├── 17-phase1-validation.md
 │   ├── 18-cast-workflows-grid.md   ← design-only, NOT approved for implementation
-│   └── 19-phase2-validation.md
+│   ├── 19-phase2-validation.md
+│   └── 20-phase3-validation.md
 ├── apps/
 │   ├── server/                    # Flask orchestrator (Python 3.13, uv)
 │   │   ├── pyproject.toml         # uv project; `jalebi` console script → jalebi.app:main
@@ -167,7 +169,7 @@ Jalebi/
 │   │   │   ├── git_workspace.py   # bare mirrors + worktrees + review worktrees + token-authenticated push
 │   │   │   ├── prompts.py         # per-task-type AGENTS.md + follow-up prompt builders
 │   │   │   ├── worktree_bootstrap.py  # per-worktree gh-guard (opencode.json) + git identity + AGENTS.md
-│   │   │   ├── adapters/          # types.py (AgentEvent/RunHandle) + opencode.py (codex/claude later)
+│   │   │   ├── adapters/          # types.py (AgentEvent/RunHandle) + opencode.py + codex.py + claude.py
 │   │   │   ├── events.py          # per-task SSE bus
 │   │   │   ├── masking.py         # PAT(s)/pattern redaction at ingest
 │   │   │   ├── queue.py           # TaskQueue: workers, run lifecycle, timeout/cancel, publish, review posting
@@ -207,7 +209,7 @@ Reference `docs/00-overview.md` and `HANDOFF.md` for current phase and status.
 - **Phase 0 — Foundation (v1, opencode only):** scaffolding, config, SQLite schema, PAT settings + validation, git workspace manager, `AgentAdapter` + opencode adapter, task queue (concurrency 4), run lifecycle (cancel/timeout/retry), publish (auto/manual, `Closes #N`), secret masking, artifacts, minimal Jules-like UI (queue + task detail + follow-up composer), follow-up via `opencode run --session`.
 - **Phase 1 — Catalog & reviewers + event-driven triggers:** catalog agents (personality → `AGENTS.md` injection + skills), reviewer workflow (per-reviewer worktrees + PR review comments), "address reviewers" follow-up, webhook listener + dedup + trigger rules + registration/polling fallback.
 - **Phase 2 — Screening + merge gating:** screening engine (cron, HEAD baseline dedup, findings, ntfy, "new task from finding"), commit statuses for branch protection. **complete.**
-- **Phase 3 — Backend parity:** Codex adapter, Claude Code adapter, per-task model dropdown from `listModels()`.
+- **Phase 3 — Backend parity:** Codex adapter, Claude Code adapter, per-task model dropdown from `listModels()`. **complete.** *(Claude Code unit-tested with captured fixtures; not live-auth'd on the dev machine.)*
 
 ---
 

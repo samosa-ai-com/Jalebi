@@ -1,7 +1,10 @@
+import json
+
 import pytest
 from flask.testing import FlaskClient
 
 from jalebi import repos, secrets
+from jalebi.db import Task
 
 
 @pytest.fixture
@@ -35,6 +38,23 @@ def test_create_task(client: FlaskClient, repo_id: int) -> None:
     assert body["prompt"] == "implement x"
     assert body["model"] == "m1"
     assert body["timeout_minutes"] == 60
+
+
+def test_create_task_cli_widened(client: FlaskClient, repo_id: int) -> None:
+    """The task cli field accepts every registered adapter and rejects unknowns."""
+    for cli in ("opencode", "codex", "claude"):
+        resp = client.post(
+            "/api/tasks",
+            json={"repo_id": repo_id, "type": "freeform", "prompt": "do it", "cli": cli},
+        )
+        assert resp.status_code == 201, f"{cli} should be accepted"
+        assert resp.get_json()["cli"] == cli
+    resp = client.post(
+        "/api/tasks",
+        json={"repo_id": repo_id, "type": "freeform", "prompt": "do it", "cli": "gemini"},
+    )
+    assert resp.status_code == 400
+    assert "unsupported agent cli" in resp.get_json()["error"]
 
 
 def test_create_task_requires_repo(client: FlaskClient) -> None:
@@ -172,6 +192,133 @@ def test_create_task_publish_mode_override(client: FlaskClient, repo_id: int) ->
     )
     assert resp.status_code == 201
     assert resp.get_json()["publish_mode"] == "auto"
+
+
+def test_create_freeform_with_linked_pr_fetches_pr_context(
+    app, client: FlaskClient, repo_id: int, session, monkeypatch
+) -> None:
+    """A freeform task that links a PR gets PR context + review comments fetched
+    and stored (masked), so build_agent_md can embed them.
+
+    Auth contract: the context fetch must run as the EXPLICITLY selected
+    account (``pat_name: "acct-a"`` → token ``ghp_a``), never the repo's bound
+    account (``test`` → ``ghp_test``) or any fallback.
+    """
+    secrets.add_github_token(app.config["JALEBI_CONFIG"], "acct-a", "ghp_a")
+
+    seen_tokens: list[str] = []
+
+    class FakeClient:
+        def __init__(self, token):
+            seen_tokens.append(token)
+
+        def get_pr(self, full_name, number):
+            return {
+                "number": number,
+                "title": "PR title",
+                "body": "PR body",
+                "html_url": "u",
+                "state": "open",
+                "base": "main",
+                "head": "feature",
+                "author": "bob",
+            }
+
+        def list_pr_reviews(self, full_name, number):
+            return [
+                {
+                    "id": 1,
+                    "body": "needs tests",
+                    "user": "carol",
+                    "state": "COMMENTED",
+                    "submitted_at": "x",
+                }
+            ]
+
+        def close(self): ...
+
+    monkeypatch.setattr("jalebi.routes.tasks.GitHubClient", FakeClient)
+    resp = client.post(
+        "/api/tasks",
+        json={
+            "repo_id": repo_id,
+            "type": "freeform",
+            "prompt": "fix the issues in this PR",
+            "pr_number": 7,
+            "pat_name": "acct-a",
+        },
+    )
+    assert resp.status_code == 201
+    body = resp.get_json()
+    assert body["prs"] == [7]
+    # The selected account's token drove the GitHub context fetch (the repo's
+    # bound account is "test"/ghp_test — it must NOT be the one used).
+    assert seen_tokens == ["ghp_a"]
+
+    row = session.get(Task, body["id"])
+    assert row is not None and row.context_json is not None
+    ctx = json.loads(row.context_json)
+    assert ctx["prs"][0]["number"] == 7
+    assert ctx["prs"][0]["body"] == "PR body"
+    assert ctx["prs"][0]["head"] == "feature"
+    assert ctx["prs"][0]["reviews"] == [{"author": "carol", "body": "needs tests"}]
+
+
+def test_create_freeform_linked_pr_truncates_oversized_reviews(
+    app, client: FlaskClient, repo_id: int, session, monkeypatch
+) -> None:
+    """An oversized review comment is truncated (per-comment and total caps) so
+    it can't balloon the worktree AGENTS.md / model context."""
+    from jalebi.routes.tasks import MAX_REVIEW_CHARS
+
+    secrets.add_github_token(app.config["JALEBI_CONFIG"], "acct-a", "ghp_a")
+
+    class FakeClient:
+        def __init__(self, token): ...
+
+        def get_pr(self, full_name, number):
+            return {
+                "number": number,
+                "title": "PR title",
+                "body": "PR body",
+                "html_url": "u",
+                "state": "open",
+                "base": "main",
+                "head": "feature",
+                "author": "bob",
+            }
+
+        def list_pr_reviews(self, full_name, number):
+            return [
+                {
+                    "id": 1,
+                    "body": "x" * 20_000,
+                    "user": "carol",
+                    "state": "COMMENTED",
+                    "submitted_at": "t",
+                }
+            ]
+
+        def close(self): ...
+
+    monkeypatch.setattr("jalebi.routes.tasks.GitHubClient", FakeClient)
+    resp = client.post(
+        "/api/tasks",
+        json={
+            "repo_id": repo_id,
+            "type": "freeform",
+            "prompt": "fix the issues",
+            "pr_number": 7,
+            "pat_name": "acct-a",
+        },
+    )
+    assert resp.status_code == 201
+    body = resp.get_json()
+    row = session.get(Task, body["id"])
+    ctx = json.loads(row.context_json)
+    embedded = ctx["prs"][0]["reviews"][0]["body"]
+    assert len(embedded) <= MAX_REVIEW_CHARS + 100
+    assert "review truncated" in embedded
 
 
 def test_create_task_with_env_vars(client: FlaskClient, repo_id: int) -> None:
@@ -376,7 +523,9 @@ def test_followup_uses_task_account_by_default(app, client, session, monkeypatch
     monkeypatch.setattr(
         q,
         "enqueue_followup",
-        lambda tid, body, pat_name=None, model=None: enqueued.append((tid, body, pat_name)),
+        lambda tid, body, pat_name=None, model=None, cli=None: enqueued.append(
+            (tid, body, pat_name)
+        ),
     )
     resp = client.post(
         f"/api/tasks/{task.id}/followup",

@@ -181,7 +181,7 @@ def test_followup_address_reviewers_uses_pr_number_column(
     captured: dict = {}
 
     class RecordingQueue:
-        def enqueue_followup(self, task_id, body, pat_name=None, model=None):
+        def enqueue_followup(self, task_id, body, pat_name=None, model=None, cli=None):
             captured["body"] = body
 
     monkeypatch.setattr("jalebi.routes.tasks._queue", lambda: RecordingQueue())
@@ -223,7 +223,7 @@ def test_followup_address_reviewers_embeds_reviews(client, repo, session, monkey
     captured: dict = {}
 
     class RecordingQueue:
-        def enqueue_followup(self, task_id, body, pat_name=None, model=None):
+        def enqueue_followup(self, task_id, body, pat_name=None, model=None, cli=None):
             captured["body"] = body
 
     monkeypatch.setattr("jalebi.routes.tasks._queue", lambda: RecordingQueue())

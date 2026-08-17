@@ -82,6 +82,143 @@ def test_run_screen_uses_screen_cli_and_model(session, repo_row, engine, monkeyp
     assert captured["model"] == "m-9"
 
 
+def test_unpinned_screen_uses_global_default_backend(session, repo_row, engine, monkeypatch):
+    """A screen with no backend pin resolves from the default_backend setting
+    (parity with the task queue) — the global default, not hardcoded opencode."""
+    from jalebi import settings
+
+    settings.set_setting(session, "default_backend", "codex")
+    # The codex sandbox gate would refuse a codex screening on a host without a
+    # usable bwrap workspace-write sandbox; mock the probe so the test exercises
+    # the resolution path independently of the host.
+    monkeypatch.setattr(screening, "_codex_sandbox_usable", lambda: True)
+    captured: list[tuple] = []
+    monkeypatch.setattr(
+        "jalebi.screening.worktree_bootstrap.write_guard",
+        lambda wt, cli: captured.append((wt, cli)),
+    )
+    adapter_seen: list[str] = []
+
+    class FakeAdapter:
+        def start(self, cwd, prompt, model=None, env=None):
+            return FakeHandle(_done_events("[]"))
+
+        def list_models(self):
+            return []
+
+    def fake_get_adapter(cli):
+        adapter_seen.append(cli)
+        return FakeAdapter()
+
+    monkeypatch.setattr("jalebi.screening.get_adapter", fake_get_adapter)
+    screen = screening.create_screen(
+        session,
+        repo_id=repo_row.id,
+        name="Unpinned",
+        system_prompt="P",
+        cadence_cron="0 6 * * 1",
+        cli=None,
+    )
+    engine.run_screen(session, screen, force=True)
+    assert adapter_seen == ["codex"]
+    assert captured and captured[-1][1] == "codex"
+    # A screen with its own pin still wins over the setting.
+    settings.set_setting(session, "default_backend", "claude")
+    pinned = screening.create_screen(
+        session,
+        repo_id=repo_row.id,
+        name="Pinned",
+        system_prompt="P",
+        cadence_cron="0 6 * * 2",
+        cli="opencode",
+    )
+    engine.run_screen(session, pinned, force=True)
+    assert adapter_seen[-1] == "opencode"
+    assert captured[-1][1] == "opencode"
+
+
+def test_run_screen_writes_per_cli_guard(session, repo_row, engine, monkeypatch):
+    """The audit worktree gets the guard matching the screen's backend."""
+    # Mock the codex sandbox probe so the test exercises the per-cli guard write
+    # independently of whether the host's bwrap is usable.
+    monkeypatch.setattr(screening, "_codex_sandbox_usable", lambda: True)
+    captured: list[tuple] = []
+    monkeypatch.setattr(
+        "jalebi.screening.worktree_bootstrap.write_guard",
+        lambda wt, cli: captured.append((wt, cli)),
+    )
+    _install_adapter(monkeypatch, FakeHandle(_done_events("[]")))
+
+    codex_screen = screening.create_screen(
+        session,
+        repo_id=repo_row.id,
+        name="Codex Audit",
+        system_prompt="P",
+        cadence_cron="0 6 * * 1",
+        cli="codex",
+    )
+    engine.run_screen(session, codex_screen, force=True)
+    assert captured and captured[-1][1] == "codex"
+
+    default_screen = screening.create_screen(
+        session,
+        repo_id=repo_row.id,
+        name="Default Audit",
+        system_prompt="P",
+        cadence_cron="0 6 * * 2",
+        cli=None,
+    )
+    engine.run_screen(session, default_screen, force=True)
+    assert captured and captured[-1][1] == "opencode"
+
+
+def test_codex_screening_refused_when_sandbox_unusable(
+    session, repo_row, engine, monkeypatch
+) -> None:
+    """Screening audits the most prompt-injection-exposed code in the system —
+    a codex screening is refused on a host without a usable workspace-write
+    sandbox (the only disk confinement codex has). opencode/claude keep their
+    pattern-gate floor even without an OS sandbox.
+    """
+    monkeypatch.setattr(screening, "_codex_sandbox_usable", lambda: False)
+    # No adapter call should ever happen — refuse before resolve.
+    called: list[str] = []
+    monkeypatch.setattr(
+        "jalebi.screening.get_adapter", lambda cli: called.append(cli) or None
+    )
+    screen = screening.create_screen(
+        session,
+        repo_id=repo_row.id,
+        name="Codex-no-sandbox",
+        system_prompt="P",
+        cadence_cron="0 6 * * 1",
+        cli="codex",
+    )
+    with pytest.raises(screening.ScreeningError, match="sandbox"):
+        engine.run_screen(session, screen, force=True)
+    assert called == []
+
+
+def test_codex_screening_runs_when_sandbox_usable(
+    session, repo_row, engine, monkeypatch
+) -> None:
+    """Sanity pair to the refusal test: a codex screening proceeds when the
+    sandbox probe reports usable (i.e. bwrap user namespaces work)."""
+    monkeypatch.setattr(screening, "_codex_sandbox_usable", lambda: True)
+    _install_adapter(monkeypatch, FakeHandle(_done_events("[]")))
+    screen = screening.create_screen(
+        session,
+        repo_id=repo_row.id,
+        name="Codex-sandbox-ok",
+        system_prompt="P",
+        cadence_cron="0 6 * * 2",
+        cli="codex",
+    )
+    run = engine.run_screen(session, screen, force=True)
+    assert run is not None
+    assert run.status == "done"
+
+
 class HangProc:
     """A fake proc that the watchdog's ``_kill_proc`` can actually kill."""
 

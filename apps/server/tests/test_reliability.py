@@ -389,7 +389,11 @@ def test_settings_reject_invalid_values(app) -> None:
         ("default_timeout_minutes", 0),
         ("secret_patterns", "not-a-list"),
         ("retry_policy", {"auto_retry": "yes"}),
-        ("agent_cli", "codex"),
+        ("default_backend", "gemini"),
+        ("default_model", ""),
+        ("adapter_model_lists", {"codex": 1}),
+        ("adapter_model_lists", {"gemini": []}),
+        ("adapter_model_lists", {"codex": [""]}),
     ]:
         resp = client.post("/api/settings", json={"key": key, "value": value})
         assert resp.status_code == 400, f"{key} should be rejected"

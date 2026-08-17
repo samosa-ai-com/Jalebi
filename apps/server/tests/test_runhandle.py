@@ -45,6 +45,21 @@ def test_error_on_nonzero_exit() -> None:
     assert "kaboom" in events[-1].text
 
 
+def test_error_message_uses_adapter_name() -> None:
+    handle = RunHandle(
+        proc=FakeProc(out="", err="boom\n", code=3), parse=_parse, name="codex"
+    )
+    events = list(handle.events())
+    text = events[-1].text
+    assert text is not None
+    assert text.startswith("codex exited with code 3")
+    # Default name keeps the historical opencode text.
+    default = RunHandle(proc=FakeProc(out="", err="", code=3), parse=_parse)
+    default_text = list(default.events())[-1].text
+    assert default_text is not None
+    assert default_text.startswith("opencode exited with code 3")
+
+
 def test_stderr_tail_bounded() -> None:
     proc = FakeProc(out="", err="\n".join(f"line{i}" for i in range(200)) + "\n", code=0)
     handle = RunHandle(proc=proc, parse=_parse)

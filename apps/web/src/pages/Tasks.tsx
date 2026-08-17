@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import { StatusBadge } from "../components/StatusBadge";
-import type { Account, CatalogAgent, GithubContext, Repo, Task } from "../types";
+import type { Account, CatalogAgent, GithubContext, Repo, SettingsMap, Task } from "../types";
 
 function repoName(repos: Repo[], id: number): string {
   return repos.find((r) => r.id === id)?.full_name ?? `repo#${id}`;
@@ -40,7 +40,6 @@ const TASK_TYPES = [
   { value: "freeform", label: "Freeform" },
   { value: "issue_fix", label: "Issue fix" },
   { value: "pr_review", label: "Review PR" },
-  { value: "screen_finding", label: "Screen finding" },
 ];
 
 function Select({
@@ -49,12 +48,14 @@ function Select({
   onChange,
   children,
   placeholder,
+  disabled,
 }: {
   label: string;
   value: string | number;
   onChange: (v: string) => void;
   children: React.ReactNode;
   placeholder?: string;
+  disabled?: boolean;
 }) {
   return (
     <label className="block">
@@ -62,7 +63,8 @@ function Select({
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="field"
+        className="field disabled:opacity-50"
+        disabled={disabled}
       >
         {placeholder !== undefined && <option value="">{placeholder}</option>}
         {children}
@@ -93,6 +95,8 @@ function CreateTask({
   const [publishMode, setPublishMode] = useState<"auto" | "manual" | "">("");
   const [context, setContext] = useState<GithubContext | null>(null);
   const [models, setModels] = useState<string[]>([]);
+  const [agentCli, setAgentCli] = useState<string | null>(null);
+  const [settings, setSettings] = useState<SettingsMap | null>(null);
   const [agents, setAgents] = useState<CatalogAgent[]>([]);
   const [reviewers, setReviewers] = useState<string[]>([]);
   const [envVars, setEnvVars] = useState<string[]>([]);
@@ -100,6 +104,7 @@ function CreateTask({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  const settingsLoading = agentCli === null;
   const effectiveRepoId = repoId || repos[0]?.id || 0;
   const repo = repoById(repos, effectiveRepoId);
 
@@ -116,15 +121,40 @@ function CreateTask({
   }
 
   useEffect(() => {
+    // The Backend select defaults to the global default_backend; the Model
+    // dropdown follows the backend selected in THIS form. When the selected
+    // backend is the default backend and a default model is configured, the
+    // Model selection defaults to it (unless the user already picked one).
     api
-      .getModels()
-      .then((m) => setModels(m.models ?? []))
+      .getSettings()
+      .then((s) => {
+        setSettings(s);
+        setAgentCli(s.default_backend || "opencode");
+      })
       .catch(() => {});
     api
       .getAgents(true)
       .then((a) => setAgents(a ?? []))
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (agentCli === null) return;
+    api
+      .getModels(agentCli || undefined)
+      .then((m) => {
+        if (cancelled) return;
+        setModels(m.models ?? []);
+        if (agentCli === settings?.default_backend && settings?.default_model) {
+          setModel((cur) => cur || settings.default_model);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [agentCli, settings?.default_backend, settings?.default_model]);
 
   useEffect(() => {
     if (!repo) return;
@@ -172,6 +202,7 @@ function CreateTask({
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!effectiveRepoId || !prompt.trim()) return;
+    if (agentCli === null) return; // settings still loading — refuse submit
     if (type === "issue_fix" && !issueNumber) {
       setError("Pick the issue to fix.");
       return;
@@ -190,6 +221,7 @@ function CreateTask({
         source_branch: sourceBranch || undefined,
         target_branch: targetBranch || undefined,
         agent_id: agentId || undefined,
+        cli: agentCli || undefined,
         model: model || undefined,
         pat_name: patName || undefined,
         issue_number: issueNumber ? Number(issueNumber) : undefined,
@@ -235,7 +267,9 @@ function CreateTask({
     >
       <div className="flex items-baseline justify-between">
         <h2 className="panel-title">New task</h2>
-        <span className="eyebrow">opencode · local worktree</span>
+        <span className="eyebrow">
+          {agentCli === null ? "Loading defaults…" : `${agentCli} · runs in a local worktree`}
+        </span>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
@@ -400,6 +434,13 @@ function CreateTask({
             </option>
           ))}
         </Select>
+        <Select label="Backend" value={agentCli ?? ""} onChange={setAgentCli} disabled={settingsLoading}>
+          {["opencode", "codex", "claude"].map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
+        </Select>
         <Select label="Model" value={model} onChange={setModel} placeholder="default model">
           {models.map((m) => (
             <option key={m} value={m}>
@@ -484,10 +525,10 @@ function CreateTask({
       <div className="flex justify-end">
         <button
           type="submit"
-          disabled={busy || !effectiveRepoId || !prompt.trim()}
+          disabled={busy || settingsLoading || !effectiveRepoId || !prompt.trim()}
           className="btn-primary"
         >
-          {busy ? "Creating…" : "Create"}
+          {busy ? "Creating…" : settingsLoading ? "Loading…" : "Create"}
         </button>
       </div>
     </form>

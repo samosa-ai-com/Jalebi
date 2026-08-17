@@ -12,7 +12,7 @@ from flask import Flask, Response, current_app, g, jsonify, request, send_from_d
 from flask.typing import ResponseReturnValue
 
 from jalebi import artifacts, clock, db, masking, notify, secrets, settings
-from jalebi.adapters import get_adapter
+from jalebi.adapters import available_adapters, get_adapter
 from jalebi.config import Config, load_config, repo_root
 from jalebi.queue import TaskQueue
 from jalebi.routes.catalog import bp as catalog_bp
@@ -29,7 +29,9 @@ logger = logging.getLogger(__name__)
 
 WEB_DIST = repo_root() / "apps" / "web" / "dist"
 
-ALLOWED_AGENT_CLIS = ("opencode",)
+# Derived from the adapter registry (single source of truth) so the setting
+# allow-list can never drift from the implemented adapters.
+ALLOWED_AGENT_CLIS = tuple(available_adapters())
 
 
 def _valid_secret_patterns(value: object) -> bool:
@@ -81,6 +83,22 @@ def _valid_timezone(v) -> bool:
         return False
 
 
+def _valid_adapter_model_lists(v) -> bool:
+    """adapter_model_lists: {cli: [model names]} overriding each adapter's curated list.
+
+    Keys must be known adapters; values must be non-empty-str lists.
+    """
+    if not isinstance(v, dict):
+        return False
+    return all(
+        isinstance(cli, str)
+        and cli in ALLOWED_AGENT_CLIS
+        and isinstance(models, list)
+        and all(isinstance(m, str) and m.strip() for m in models)
+        for cli, models in v.items()
+    )
+
+
 _SETTING_VALIDATORS = {
     "concurrency": lambda v: isinstance(v, int) and 0 <= v <= 64,
     "auto_publish": lambda v: isinstance(v, bool),
@@ -93,7 +111,9 @@ _SETTING_VALIDATORS = {
     "stall_timeout_seconds": lambda v: isinstance(v, int) and v >= 60,
     "secret_patterns": _valid_secret_patterns,
     "artifact_ttl_days": lambda v: isinstance(v, int) and v >= 1,
-    "agent_cli": lambda v: v in ALLOWED_AGENT_CLIS,
+    "default_backend": lambda v: v in ALLOWED_AGENT_CLIS,
+    "default_model": lambda v: isinstance(v, str) and bool(v.strip()),
+    "adapter_model_lists": _valid_adapter_model_lists,
     "notify_on_done": lambda v: isinstance(v, bool),
     "notify_on_failed": lambda v: isinstance(v, bool),
     "notify_on_progress": lambda v: isinstance(v, bool),
@@ -294,9 +314,25 @@ def create_app(config: Config | None = None) -> Flask:
 
     @app.get("/api/models")
     def list_models() -> ResponseReturnValue:
-        """Models available from the configured agent CLI (for the task form)."""
+        """Models available from an agent CLI (for the model dropdowns).
+
+        The backend defaults to the ``default_backend`` setting; a ``?cli=<backend>``
+        query param overrides it (used by the Settings default-model dropdown and
+        the Screenings/Agents/Tasks forms so the model list follows the backend
+        selected *in that form*). An ``adapter_model_lists`` setting entry for
+        the requested cli wins over the adapter's own ``list_models()``;
+        otherwise the adapter is asked (missing CLI / unknown backend → empty
+        list).
+        """
         session = db.get_session()
-        cli = str(settings.get_setting(session, "agent_cli") or "opencode")
+        requested = (request.args.get("cli") or "").strip()
+        cli = requested or str(settings.get_setting(session, "default_backend") or "opencode")
+        overrides = settings.get_setting(session, "adapter_model_lists") or {}
+        # ``.get`` returns None only when the key is absent, so an explicit empty
+        # list is authoritative (an owner can clear/disable the dropdown).
+        override_models = overrides.get(cli) if isinstance(overrides, dict) else None
+        if override_models is not None:
+            return jsonify({"cli": cli, "models": override_models})
         try:
             models = get_adapter(cli).list_models()
         except Exception:

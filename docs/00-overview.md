@@ -15,7 +15,7 @@ The authoritative behavioral spec is **`JALEBI_PRD.md`** at the repo root. This 
 ## 2. Core principles
 
 1. **Jules-like experience, self-hosted** — dedicated web UI with a task queue, per-task timeline, live logs, incremental diff, and follow-up panel. Owner-only.
-2. **Pluggable agent backends** — v1 ships `opencode`; Codex and Claude Code come later. Switching backend = one-line config (`agent.cli`).
+2. **Pluggable agent backends, chosen per action** — opencode, Codex, or Claude Code. Every task/follow-up/screen/agent form has its own Backend + Model selects; the Settings `default_backend`/`default_model` are the fallbacks.
 3. **Model freedom** — any model available to the selected CLI, per task and per agent.
 4. **Agent catalog** — named agents = personality (markdown → `AGENTS.md`) + skills + optional model + optional CLI.
 5. **Reviewer workflow** — catalog reviewers run in their own worktrees and post PR review comments.
@@ -84,6 +84,6 @@ The authoritative behavioral spec is **`JALEBI_PRD.md`** at the repo root. This 
 - **Phase 0 — Foundation (v1, opencode only):** scaffolding, config, SQLite schema, PAT settings + validation, git workspace manager, `AgentAdapter` + opencode adapter, task queue (concurrency 4), run lifecycle (cancel/timeout/retry), publish (auto/manual, `Closes #N`), secret masking, minimal Jules-like UI (queue + task detail + live console), follow-up via `opencode run --session`, artifacts (F18), restart recovery + live concurrency. **Status: complete (hardened).**
 - **Phase 1 — Catalog & reviewers + event-driven triggers:** catalog agents, reviewer workflow, "address reviewers" follow-up, webhook listener + dedup + trigger rules + registration. **Status: complete (polling fallback deferred/inert).**
 - **Phase 2 — Screening + merge gating:** screening engine, commit statuses for branch protection, diff-view polish + task history. **Status: complete.**
-- **Phase 3 — Backend parity:** Codex adapter, Claude Code adapter, per-task model dropdown from `listModels()`.
+- **Phase 3 — Backend parity:** Codex adapter, Claude Code adapter, per-task model dropdown from `listModels()`. **Status: complete.** *(Claude Code is unit-tested with captured fixtures; it is not live-auth'd on this dev machine.)*
 
 See `HANDOFF.md` for the current phase and live status.

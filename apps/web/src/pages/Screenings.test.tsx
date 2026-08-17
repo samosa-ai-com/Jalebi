@@ -81,7 +81,10 @@ function makeFetchMock() {
     if (u === "/api/repos/1/branches") {
       return { ok: true, json: async () => ({ full_name: "owner/repo", branches: ["main", "dev"] }) };
     }
-    if (u === "/api/models") {
+    if (u.startsWith("/api/models")) {
+      if (u.includes("cli=codex")) {
+        return { ok: true, json: async () => ({ cli: "codex", models: ["gpt-5.4-mini", "gpt-5.5"] }) };
+      }
       return { ok: true, json: async () => ({ cli: "opencode", models: ["opencode-go/deepseek-v4-flash"] }) };
     }
     if (u === "/api/screenings") {
@@ -230,5 +233,41 @@ describe("Screenings", () => {
     await userEvent.click(screen.getByRole("button", { name: "History" }));
     expect(await screen.findByText(/Running…/)).toBeInTheDocument();
     expect(screen.queryByText("No findings.")).not.toBeInTheDocument();
+  });
+
+  it("offers opencode/codex/claude in the Backend select", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Screenings />);
+    await screen.findByText("Security posture");
+    await userEvent.click(screen.getByRole("button", { name: "New screen" }));
+
+    const backend = screen.getByLabelText("Backend") as HTMLSelectElement;
+    expect(backend.value).toBe("");
+    expect([...backend.options].map((o) => o.value)).toEqual(
+      expect.arrayContaining(["", "opencode", "codex", "claude"])
+    );
+  });
+
+  it("refetches the Model dropdown when the Backend changes", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Screenings />);
+    await screen.findByText("Security posture");
+    await userEvent.click(screen.getByRole("button", { name: "New screen" }));
+
+    const model = screen.getByLabelText("Model") as HTMLSelectElement;
+    expect([...model.options].map((o) => o.value)).toEqual(
+      expect.arrayContaining(["opencode-go/deepseek-v4-flash"])
+    );
+
+    await userEvent.selectOptions(screen.getByLabelText("Backend"), "codex");
+    await waitFor(() => {
+      expect([...model.options].map((o) => o.value)).toEqual(
+        expect.arrayContaining(["gpt-5.4-mini", "gpt-5.5"])
+      );
+    });
+    // The model list followed the selected backend, not the global setting.
+    expect(fetchMock.mock.calls.some(([u]) => String(u).includes("cli=codex"))).toBe(true);
   });
 });

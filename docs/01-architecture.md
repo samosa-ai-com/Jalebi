@@ -7,14 +7,14 @@
 ## 1. High-level diagram (current implementation)
 
 ```
-┌────────────────────────── Your machine (127.0.0.1:3456) ──────────────────────────┐
+┌────────────────────────── Your machine (127.0.0.1:2052) ──────────────────────────┐
 │                    ▲ GitHub webhook events (via tunnel/proxy)                      │
 │                    │                                                               │
 │  ┌─────────────────┼──────┐  HTTP (REST + SSE)   ┌───────────────────────────────┐ │
 │  │  React + Vite UI │      │◀───────────────────▶│  Orchestrator (Flask)          │ │
 │  │  (built dist/,   │      │                     │  ┌──────────────────────────┐ │ │
 │  │  served by Flask │      │                     │  │ routes/ (blueprints)      │ │ │
-│  │  on 3456)        │      │                     │  │  tasks, repos, github,    │ │ │
+│  │  on 2052)        │      │                     │  │  tasks, repos, github,    │ │ │
 │  │  queue | task    │      │                     │  │  + SPA fallback           │ │ │
 │  │  | console       │      │                     │  └───────────┬──────────────┘ │ │
 │  └──────────────────┼──────┘                     │             │                  │ │
@@ -26,8 +26,8 @@
 │                     │                            │             │ events.py (SSE)  │ │
 │                     │                            │  ┌──────────▼──────────────┐   │ │
 │                     │                            │  │ Agent adapters           │   │ │
-│                     │                            │  │  opencode (v1)           │   │ │
-│                     │                            │  │  codex / claude (later)  │   │ │
+│                     │                            │  │  opencode                │   │ │
+│                     │                            │  │  codex / claude          │   │ │
 │                     │                            │  └──────────┬──────────────┘   │ │
 │                     │                            │             │ spawn (cwd=worktree)││
 │                     │                            │  ┌──────────▼──────────────┐   │ │
@@ -49,7 +49,7 @@
 
 | Component | Responsibility | Status |
 |-----------|----------------|--------|
-| **UI (React)** | Tasks queue + task detail (timeline, live console, Cancel/Re-run/Publish). Built to `apps/web/dist` and **served by Flask on the same origin (3456)**. Consumes REST; streams SSE via `EventSource`. | implemented |
+| **UI (React)** | Tasks queue + task detail (timeline, live console, Cancel/Re-run/Publish). Built to `apps/web/dist` and **served by Flask on the same origin (2052)**. Consumes REST; streams SSE via `EventSource`. | implemented |
 | **Orchestrator (Flask)** | `create_app` + blueprints (`routes/`): tasks, repos, github, settings, SPA fallback. Task queue + worker pool; run lifecycle; publish; timeout/cancel; masking at ingest; per-task SSE bus (`events.py`). | implemented |
 | **Adapters** | Translate a CLI into the `AgentAdapter` interface (`adapters/types.py`): start/resume/list_models/parse. Only component that knows the CLI binary. | opencode implemented |
 | **Git workspace mgr** | Bare mirrors (`--bare`, refs under `origin/*`), per-task worktrees (`jalebi/<taskId>`), token-authenticated push via `GIT_CONFIG_*` env. | implemented |
@@ -103,6 +103,6 @@ Python 3.13 + Flask + SQLAlchemy 2 (SQLite) + Alembic migrations + httpx (GitHub
 
 ## 6. Key design constraints
 
-- **Backend-agnostic:** the entire system depends on the `AgentAdapter` interface; only the adapter and the `agent_cli` setting know the CLI name (PRD §F4).
+- **Backend-agnostic:** the entire system depends on the `AgentAdapter` interface; only the adapters know the CLI name. The backend is chosen per action (task/follow-up/screen/agent form selects); the Settings `default_backend` is the fallback (PRD §F4).
 - **Simplicity (PRD Goal #10):** no event-bus frameworks, no complex state machines, no distributed abstractions. Borrow only small, specific snippets from reference projects and re-write them in Jalebi's own style.
-- **Localhost-only:** server binds to 127.0.0.1 (one port, 3456); optional UI password if exposed via tunnel (PRD §F13).
+- **Localhost-only:** server binds to 127.0.0.1 (one port, 2052); optional UI password if exposed via tunnel (PRD §F13).

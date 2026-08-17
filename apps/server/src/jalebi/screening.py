@@ -254,6 +254,25 @@ def _normalize_cli(cli: str | None) -> str | None:
     return cli
 
 
+def _codex_sandbox_usable() -> bool:
+    """True if a codex screening can run safely on this host.
+
+    Late-bound import: avoids a hard dependency from screening on the codex
+    adapter module (a host without codex installed still loads screening). The
+    underlying probe is cached per-process inside the adapter. A missing codex
+    binary counts as "unusable" so a codex screening is refused with the same
+    clear error regardless of the cause.
+    """
+    try:
+        from jalebi.adapters.codex import _sandbox_usable
+    except ImportError:
+        return False
+    try:
+        return bool(_sandbox_usable())
+    except RuntimeError:
+        return False
+
+
 def _normalize_model(model: str | None) -> str | None:
     """Normalize a screen's model pin: empty/None → None (adapter default)."""
     return (model or "").strip() or None
@@ -484,22 +503,59 @@ class ScreeningEngine:
         )
         masker = masking.build_masker(secrets.all_token_values(self.config), patterns)
 
+        # Backend resolution (parity with the task queue, queue.py `_run_task`):
+        # a screen's own cli pin wins; otherwise the global `default_backend`
+        # setting; otherwise the opencode fallback. Derived only for an actual
+        # run (below the baseline-dedup early return); screens have no run-to-run
+        # resume, so it is re-derived every run (no continuity to preserve).
+        effective_cli = str(
+            screen.cli
+            or settings.get_setting(session, "default_backend")
+            or "opencode"
+        )
+
+        # Screening audits *untrusted* repository code (the highest prompt-injection
+        # exposure in the system) — the agent gets no PAT. Codex is the only backend
+        # whose only disk confinement is the OS sandbox; when bwrap user namespaces
+        # are blocked on the host it falls back to ``danger-full-access`` and the
+        # codex guard denies only ``gh``, leaving the agent free to read
+        # ``~/.jalebi/secrets.json`` / ``~/.ssh`` / ``~/.aws``. Opencode and claude
+        # each have a pattern-gate floor (external_directory: deny / PreToolUse hook)
+        # that still confines a *benign-but-confused* agent to the worktree without
+        # an OS sandbox — codex does not. Refuse a codex screening here so the
+        # highest-risk path keeps at least the pattern-gate floor every other
+        # backend has. (`_sandbox_usable` is cached per process; cheap.)
+        if effective_cli == "codex" and not _codex_sandbox_usable():
+            raise ScreeningError(
+                "codex screening requires a working workspace-write sandbox "
+                "(bwrap with user namespaces); this host has it disabled. "
+                "Pick opencode or claude, or fix bwrap (see server log)."
+            )
+
         wt = None
         try:
             wt_path = GitWorkspace.screening_worktree_path(self.config.data_dir, run.id)
             wt = git.create_detached_worktree(
                 repo.full_name, branch, wt_path, token
             )
-            worktree_bootstrap.write_opencode_guard(wt)
+            worktree_bootstrap.write_guard(wt, effective_cli)
             prompt = build_screening_prompt(screen, repo, head_sha)
-            adapter = get_adapter(screen.cli or "opencode")
+            adapter = get_adapter(effective_cli)
             # Screening audits *untrusted* repository code — the highest
             # prompt-injection-exposure agent in the system. It gets NO PAT: the
             # mirror/worktree are prepared by Jalebi above, and a prompt-injected
             # audit agent must never hold a privileged GitHub token (curl against
             # the REST API with it would otherwise be possible).
+            effective_model = screen.model or None
+            if not effective_model:
+                default_backend = str(
+                    settings.get_setting(session, "default_backend") or "opencode"
+                )
+                if effective_cli == default_backend:
+                    default_model = settings.get_setting(session, "default_model")
+                    effective_model = str(default_model) if default_model else None
             handle = adapter.start(
-                str(wt), prompt, model=screen.model or None, env=_build_agent_env(None)
+                str(wt), prompt, model=effective_model, env=_build_agent_env(None)
             )
 
             # Watchdog: a hung agent must never block the single scheduler thread

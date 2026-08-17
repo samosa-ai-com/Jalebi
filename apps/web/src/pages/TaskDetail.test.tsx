@@ -81,13 +81,17 @@ describe("TaskDetail", () => {
     FakeEventSource.instances = [];
   });
 
-  function stubFetch(task: Record<string, unknown>) {
+  function stubFetch(task: Record<string, unknown>, settings: Record<string, unknown> | null = null) {
     const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
       if (url.endsWith("/runs")) {
         return { ok: true, json: async () => [task.run ?? RUN] };
       }
       if (url.includes("/api/tasks")) {
         return { ok: true, json: async () => task };
+      }
+      if (url.includes("/api/settings")) {
+        if (settings) return { ok: true, json: async () => settings };
+        return { ok: true, json: async () => ({ default_backend: "opencode", default_model: "m1" }) };
       }
       if (url.includes("/api/github/tokens")) {
         return { ok: true, json: async () => ({ accounts: [] }) };
@@ -165,6 +169,72 @@ describe("TaskDetail", () => {
       expect(postCall).toBeTruthy();
       expect(JSON.parse(postCall![1]!.body as string)).toEqual({ prompt: "do more" });
     });
+  });
+
+  it("follow-up Backend select overrides the backend and shows the fresh-session note", async () => {
+    const doneTask = {
+      ...TASK,
+      status: "done",
+      cli: "opencode",
+      run: { ...RUN, status: "done" },
+      followups: [],
+    };
+    const fetchMock = stubFetch(doneTask);
+
+    renderDetail();
+    await screen.findByText("Follow-up");
+
+    const backend = screen.getByLabelText("Backend") as HTMLSelectElement;
+    expect(backend.value).toBe("opencode");
+    // No note when the backend matches the task's own.
+    expect(screen.queryByText(/fresh session/)).not.toBeInTheDocument();
+
+    await userEvent.selectOptions(backend, "codex");
+    expect(screen.getByText(/fresh session/)).toBeInTheDocument();
+
+    await userEvent.type(
+      screen.getByPlaceholderText(/Address the reviewer comments/),
+      "switch backend"
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Send follow-up" }));
+
+    await waitFor(() => {
+      const postCall = fetchMock.mock.calls.find(
+        (call) => call[0] === "/api/tasks/7/followup" && call[1]?.method === "POST"
+      );
+      expect(postCall).toBeTruthy();
+      expect(JSON.parse(postCall![1]!.body as string)).toEqual({
+        prompt: "switch backend",
+        cli: "codex",
+      });
+    });
+  });
+
+  it("does NOT show the fresh-session note when picking 'Reuse task backend' on an unpinned task", async () => {
+    // A task without a pinned cli (cli: null) — the queue resolves to
+    // default_backend ("codex" below). The "Reuse task backend" option (cli="")
+    // therefore keeps the same backend; the warning must NOT appear.
+    const doneTask = {
+      ...TASK,
+      status: "done",
+      cli: null,
+      run: { ...RUN, status: "done" },
+      followups: [],
+    };
+    stubFetch(doneTask, { default_backend: "codex", default_model: "m1" });
+
+    renderDetail();
+    await screen.findByText("Follow-up");
+
+    // Default selection is the "Reuse task backend" option (value="").
+    const backend = screen.getByLabelText("Backend") as HTMLSelectElement;
+    expect(backend.value).toBe("");
+    // No note — the resolved backend is the same.
+    expect(screen.queryByText(/fresh session/)).not.toBeInTheDocument();
+
+    // Picker is "opencode" — different from the resolved "codex" → note shows.
+    await userEvent.selectOptions(backend, "opencode");
+    expect(screen.getByText(/fresh session/)).toBeInTheDocument();
   });
 
   it("shows captured artifacts with preview and download", async () => {

@@ -352,20 +352,55 @@ function FollowUpComposer({
   task,
   followups,
   accounts,
-  models,
   onSent,
 }: {
   task: Task;
   followups: Followup[];
   accounts: Account[];
-  models: string[];
   onSent: () => void;
 }) {
   const [text, setText] = useState("");
   const [patName, setPatName] = useState("");
   const [model, setModel] = useState("");
+  const [cli, setCli] = useState(task.cli ?? "");
+  const [models, setModels] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [defaultBackend, setDefaultBackend] = useState<string | null>(null);
+
+  // Fetch the global default backend so the "fresh session" warning exactly
+  // matches the queue's resolution (which uses ``cli || task.cli ||
+  // default_backend || "opencode"``). Without this, a task with no pinned
+  // backend + the user picking "Reuse task backend" would warn falsely.
+  useEffect(() => {
+    api
+      .getSettings()
+      .then((s) => setDefaultBackend(s.default_backend ?? null))
+      .catch(() => {});
+  }, []);
+
+  // The Model dropdown follows the Backend selected here (blank = the task's
+  // own backend).
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getModels(cli || undefined)
+      .then((m) => {
+        if (!cancelled) setModels(m.models ?? []);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [cli]);
+
+  // Compare against the value the queue will actually use, not against the
+  // task's pinned backend alone — a task with no pin resolves to
+  // ``default_backend``, so "Reuse task backend" (cli = "") is NOT a change.
+  const resolvedTaskCli = task.cli ?? defaultBackend ?? "opencode";
+  const resolvedCurrentCli = cli || (task.cli ?? defaultBackend ?? "opencode");
+  const backendChanged =
+    cli !== "" && resolvedCurrentCli !== resolvedTaskCli;
 
   const hasPr = (task.prs?.length ?? 0) > 0 || task.pr_number != null;
   // "Address reviewers" only makes sense on the fixer task: a pr_review task's
@@ -383,6 +418,7 @@ function FollowUpComposer({
       await api.postFollowup(task.id, text.trim(), {
         pat_name: patName || undefined,
         model: model || undefined,
+        cli: cli || undefined,
       });
       setText("");
       onSent();
@@ -404,6 +440,7 @@ function FollowUpComposer({
         include_reviews: true,
         pat_name: patName || undefined,
         model: model || undefined,
+        cli: cli || undefined,
       });
       setText("");
       onSent();
@@ -435,6 +472,17 @@ function FollowUpComposer({
             </select>
           </label>
           <label className="block">
+            <span className="mb-1.5 block text-xs font-medium text-ink-400">Backend</span>
+            <select value={cli} onChange={(e) => setCli(e.target.value)} className="field">
+              <option value="">Reuse task backend</option>
+              {["opencode", "codex", "claude"].map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
             <span className="mb-1.5 block text-xs font-medium text-ink-400">Model</span>
             <select value={model} onChange={(e) => setModel(e.target.value)} className="field">
               <option value="">Reuse task model</option>
@@ -446,6 +494,11 @@ function FollowUpComposer({
             </select>
           </label>
         </div>
+        {backendChanged && (
+          <p className="text-xs text-amber-300">
+            Changing the backend starts a fresh session with the previous conversation included.
+          </p>
+        )}
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
@@ -825,7 +878,6 @@ export default function TaskDetail() {
   const [runs, setRuns] = useState<Run[]>([]);
   const [repos, setRepos] = useState<Repo[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
-  const [models, setModels] = useState<string[]>([]);
   const [agents, setAgents] = useState<CatalogAgent[]>([]);
   const [assigning, setAssigning] = useState(false);
   const [assignError, setAssignError] = useState<string | null>(null);
@@ -896,7 +948,6 @@ export default function TaskDetail() {
       .catch(() => {});
     api.getRepos().then(setRepos).catch(() => {});
     api.getTokens().then((t) => setAccounts(t.accounts ?? [])).catch(() => {});
-    api.getModels().then((m) => setModels(m.models ?? [])).catch(() => {});
   }, [taskId]);
 
   useEffect(() => {
@@ -1192,7 +1243,6 @@ export default function TaskDetail() {
           task={task}
           followups={task.followups ?? []}
           accounts={accounts}
-          models={models}
           onSent={() => {
             load();
             setFollowUpPending(true);

@@ -72,7 +72,7 @@ class OpenCodeAdapter(AgentAdapter):
         if model:
             args += ["--model", model]
         args.append(prompt)
-        return RunHandle(proc=_spawn(args, cwd, env), parse=self.parse)
+        return RunHandle(proc=_spawn(args, cwd, env), parse=self.parse, name=self.name)
 
     def resume(
         self,
@@ -99,7 +99,7 @@ class OpenCodeAdapter(AgentAdapter):
         if model:
             args += ["--model", model]
         args.append(prompt)
-        return RunHandle(proc=_spawn(args, cwd, env), parse=self.parse)
+        return RunHandle(proc=_spawn(args, cwd, env), parse=self.parse, name=self.name)
 
     def parse(self, line: str) -> list[AgentEvent]:
         try:
