@@ -114,6 +114,7 @@ This is critical and repeated: **all GitHub interaction in this project goes thr
 | `docs/18-cast-workflows-grid.md` | Design-only plan for per-thread cast, reusable workflows, the Inbox-as-helm dashboard, the 4×4 dynamic grid, and future multi-agent orchestration. **Not approved for implementation** — subject to change. | Design discussions only. |
 | `docs/19-phase2-validation.md` | Manual UI QA checklist for every Phase 2 feature (screening, commit statuses, diff/history). | Feature/UI behavior changes. |
 | `docs/20-phase3-validation.md` | Manual UI QA checklist for every Phase 3 feature (codex/claude backends, per-CLI guards, model dropdown). | Feature/UI behavior changes. |
+| `docs/21-phase4-plan.md` | **Approved Phase 4 plan**: visualization/control (T0 agent-waiting UX, T1 hardening, T2 poller+attention, T3 frontend, T4 deps/nudge/durable-SSE/live view, T5 presentation, T6 IDE connector, T7 file browser). | Plan changes during Phase 4 implementation. |
 
 **If you add a doc file, add it to this table.**
 
