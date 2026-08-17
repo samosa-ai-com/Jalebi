@@ -160,3 +160,11 @@
 .jalebi-spin {
   animation: spin-slow 24s linear infinite;
 }
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-up,
+  .animate-pulse-dot,
+  .jalebi-spin {
+    animation: none;
+  }
+}

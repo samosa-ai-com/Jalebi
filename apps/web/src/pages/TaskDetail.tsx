@@ -47,6 +47,17 @@ const TEXT_EXTENSIONS = new Set([
 ]);
 const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "ico", "bmp"]);
 
+// Phase 4 T5.3 — step-type colors (background + text), aligned with the
+// StatusBadge dot pattern so the timeline visually pulls from the same palette.
+const STEP_STYLE: Record<string, string> = {
+  step: "bg-ink-700/30 text-ink-300",
+  message: "bg-sky-500/10 text-sky-300",
+  tool_call: "bg-chai-500/10 text-chai-300",
+  diff: "bg-green-500/10 text-green-300",
+  done: "bg-green-500/10 text-green-300",
+  error: "bg-red-500/10 text-red-300",
+};
+
 function Action({ onClick, children, disabled }: { onClick: () => void; children: string; disabled?: boolean }) {
   return (
     <button onClick={onClick} disabled={disabled} className="btn-ghost disabled:opacity-40">
@@ -289,7 +300,7 @@ function TimelineItem({ step, index }: { step: SseEvent; index: number }) {
   const dot = STEP_DOT[step.type] ?? "bg-ink-600";
   return (
     <li
-      className="relative flex gap-3 animate-fade-up"
+      className="relative flex gap-3 animate-fade-up before:absolute before:left-[3.5px] before:top-[9px] before:bottom-[-12px] before:w-px before:bg-ink-800/70 before:content-[''] last:before:hidden"
       style={{ animationDelay: `${Math.min(index * 0.02, 0.3)}s` }}
     >
       <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ring-2 ring-ink-950 ${dot}`} />
@@ -298,7 +309,11 @@ function TimelineItem({ step, index }: { step: SseEvent; index: number }) {
           <span className="font-mono text-[11px] text-ink-600">
             {step.ts?.slice(11, 19) ?? ""}
           </span>
-          <span className="font-mono text-[11px] uppercase tracking-wide text-ink-500">
+          <span
+            className={`rounded px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide ${
+              STEP_STYLE[step.type] ?? "bg-ink-700/30 text-ink-300"
+            }`}
+          >
             {step.type}
           </span>
           {step.phase && (
@@ -1109,8 +1124,8 @@ export default function TaskDetail() {
   const previewStepsLen = previewRun?.steps?.length ?? 0;
   const previewIsLatest = task !== null && (selectedRunId === null || selectedRunId === task.run?.id);
   const previewTimelineLen = previewIsLatest ? previewStepsLen + live.length : previewStepsLen;
-  const timelineRef = useAutoScroll<HTMLOListElement>(previewTimelineLen, followScroll);
-  const consoleRef = useAutoScroll<HTMLPreElement>(previewTimelineLen, followScroll);
+  const timelineRef = useAutoScroll<HTMLDivElement>(previewTimelineLen, followScroll);
+  const consoleRef = useAutoScroll<HTMLDivElement>(previewTimelineLen, followScroll);
   const [replyPrefill, setReplyPrefill] = useState<{ nonce: number; text: string } | null>(null);
   const replyNonce = useRef(0);
 
@@ -1358,54 +1373,65 @@ export default function TaskDetail() {
       )}
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <section className="surface flex min-h-[24rem] flex-col p-5">
-          <div className="mb-3 flex items-center justify-between gap-2">
-            <h2 className="panel-title">Timeline</h2>
-            <label className="flex shrink-0 items-center gap-1.5 text-[11px] text-ink-500">
-              <input
-                type="checkbox"
-                checked={followScroll}
-                onChange={(e) => setFollowScroll(e.target.checked)}
-                className="accent-syrup-500"
-              />
-              auto-scroll
-            </label>
+        <section className="surface flex h-[30rem] flex-col p-5">
+          <div ref={timelineRef} className="min-h-0 flex-1 overflow-y-auto pr-2">
+            <div className="sticky top-0 z-10 bg-ink-900/85 pb-3 backdrop-blur-sm">
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="panel-title">Timeline</h2>
+                <label className="flex shrink-0 items-center gap-1.5 text-[11px] text-ink-500">
+                  <input
+                    type="checkbox"
+                    checked={followScroll}
+                    onChange={(e) => setFollowScroll(e.target.checked)}
+                    className="accent-syrup-500"
+                  />
+                  auto-scroll
+                </label>
+              </div>
+            </div>
+            <ol className="space-y-3 text-sm">
+              {timeline.length === 0 && <li className="text-ink-600">No steps yet.</li>}
+              {timeline.map((step, i) => (
+                <TimelineItem
+                  key={step.seq ?? `${step.ts ?? "?"}-${step.type}`}
+                  step={step}
+                  index={i}
+                />
+              ))}
+            </ol>
           </div>
-          <ol ref={timelineRef} className="space-y-3 overflow-y-auto pr-2 text-sm">
-            {timeline.length === 0 && <li className="text-ink-600">No steps yet.</li>}
-            {timeline.map((step, i) => (
-              <TimelineItem
-                key={step.seq ?? `${step.ts ?? "?"}-${step.type}`}
-                step={step}
-                index={i}
-              />
-            ))}
-          </ol>
         </section>
-        <section className="surface flex min-h-[24rem] flex-col p-5">
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="panel-title">Console</h2>
-            <span className="font-mono text-[11px] text-ink-600">
-              {consoleLines.length} {consoleLines.length === 1 ? "line" : "lines"}
-            </span>
-          </div>
-          <pre ref={consoleRef} className="flex-1 overflow-y-auto whitespace-pre-wrap pr-2 font-mono text-xs leading-relaxed text-ink-300">
-            {consoleLines.length === 0 ? "No output yet." : ""}
-            {consoleLines.map((line) => (
-              <div key={line.seq ?? `${line.ts ?? "?"}-${line.type}`} className="flex gap-2">
-                <span
-                  className={`shrink-0 select-none ${
-                    line.type === "tool_call" ? "text-chai-500" : "text-ink-700"
-                  }`}
-                >
-                  {line.type === "tool_call" ? "⚙" : "›"}
-                </span>
-                <span className={line.type === "tool_call" ? "text-chai-300" : "text-ink-300"}>
-                  {line.text}
+        <section className="surface flex h-[30rem] flex-col p-5">
+          <div ref={consoleRef} className="min-h-0 flex-1 overflow-y-auto pr-2">
+            <div className="sticky top-0 z-10 bg-ink-900/85 pb-3 backdrop-blur-sm">
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="panel-title">Console</h2>
+                <span className="font-mono text-[11px] tabular-nums text-ink-500">
+                  {consoleLines.length} {consoleLines.length === 1 ? "line" : "lines"}
+                  {selectedRun?.started_at
+                    ? ` · ${runDuration(selectedRun.started_at, selectedRun.finished_at)}`
+                    : ""}
                 </span>
               </div>
-            ))}
-          </pre>
+            </div>
+            <pre className="whitespace-pre-wrap font-mono text-xs leading-relaxed text-ink-300">
+              {consoleLines.length === 0 ? "No output yet." : ""}
+              {consoleLines.map((line) => (
+                <div key={line.seq ?? `${line.ts ?? "?"}-${line.type}`} className="flex gap-2">
+                  <span
+                    className={`shrink-0 select-none ${
+                      line.type === "tool_call" ? "text-chai-500" : "text-ink-700"
+                    }`}
+                  >
+                    {line.type === "tool_call" ? "⚙" : "›"}
+                  </span>
+                  <span className={line.type === "tool_call" ? "text-chai-300" : "text-ink-300"}>
+                    {line.text}
+                  </span>
+                </div>
+              ))}
+            </pre>
+          </div>
         </section>
       </div>
 

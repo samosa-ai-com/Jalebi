@@ -246,54 +246,57 @@ export default function Github() {
               <p className="mb-2 text-xs text-ink-600">
                 Repositories ({reposByAccount.get(account.name)?.length ?? 0})
               </p>
-              {(reposByAccount.get(account.name) ?? []).length === 0 && (
+              {(reposByAccount.get(account.name) ?? []).length === 0 ? (
                 <p className="text-sm text-ink-600">No repositories listed for this account.</p>
-              )}
-              <ul className="divide-y divide-ink-800/70">
-                {(reposByAccount.get(account.name) ?? []).map((r) => {
-                  const [owner, repo] = r.full_name.split("/");
-                  const connectedRow = connected.find((c) => c.full_name === r.full_name);
-                  return (
-                    <li key={r.full_name} className="flex items-center gap-3 py-2.5">
-                      <span className="h-2 w-2 shrink-0 rounded-full bg-chai-500" />
-                      <span className="min-w-0 flex-1">
-                        <a
-                          href={r.html_url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="font-mono text-sm text-ink-200 transition-colors hover:text-syrup-300"
-                        >
-                          <span className="text-ink-500">{owner}/</span>
-                          {repo}
-                        </a>
-                        <span className="ml-2 font-mono text-[11px] text-ink-600">
-                          {r.private ? "private" : "public"} · {r.default_branch ?? "—"}
-                        </span>
-                      </span>
-                      {connectedRow ? (
-                        <div className="flex items-center gap-2">
-                          <span className="rounded-full bg-green-500/10 px-3 py-1 font-mono text-[11px] text-green-300">
-                            connected
+              ) : (
+                <div className="max-h-[26rem] overflow-y-auto rounded-md border border-ink-800/60">
+                  <ul className="divide-y divide-ink-800/70">
+                    {(reposByAccount.get(account.name) ?? []).map((r) => {
+                      const [owner, repo] = r.full_name.split("/");
+                      const connectedRow = connected.find((c) => c.full_name === r.full_name);
+                      return (
+                        <li key={r.full_name} className="flex items-center gap-3 py-2.5 px-3">
+                          <span className="h-2 w-2 shrink-0 rounded-full bg-chai-500" />
+                          <span className="min-w-0 flex-1">
+                            <a
+                              href={r.html_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="font-mono text-sm text-ink-200 transition-colors hover:text-syrup-300"
+                            >
+                              <span className="text-ink-500">{owner}/</span>
+                              {repo}
+                            </a>
+                            <span className="ml-2 font-mono text-[11px] text-ink-600">
+                              {r.private ? "private" : "public"} · {r.default_branch ?? "—"}
+                            </span>
                           </span>
-                          <button
-                            onClick={() => disconnect(connectedRow.id)}
-                            className="text-[11px] text-ink-500 transition-colors hover:text-red-300"
-                          >
-                            disconnect
-                          </button>
-                        </div>
-                      ) : (
-                        <button
-                          onClick={() => connect(account.name, r.full_name)}
-                          className="btn-ghost !px-3 !py-1 text-xs"
-                        >
-                          Connect
-                        </button>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
+                          {connectedRow ? (
+                            <div className="flex items-center gap-2">
+                              <span className="rounded-full bg-green-500/10 px-3 py-1 font-mono text-[11px] text-green-300">
+                                connected
+                              </span>
+                              <button
+                                onClick={() => disconnect(connectedRow.id)}
+                                className="text-[11px] text-ink-500 transition-colors hover:text-red-300"
+                              >
+                                disconnect
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => connect(account.name, r.full_name)}
+                              className="btn-ghost !px-3 !py-1 text-xs"
+                            >
+                              Connect
+                            </button>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              )}
             </div>
           </div>
         </section>

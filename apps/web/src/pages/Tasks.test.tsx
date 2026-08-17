@@ -377,3 +377,28 @@ describe("Tasks page (Phase 4 T3.1)", () => {
     expect(screen.getByText("done")).toBeInTheDocument();
   });
 });
+
+
+// ---- Phase 4 T5.3 — table sticky header + bounded scroll ---------------
+
+
+describe("Tasks page (Phase 4 T5.3)", () => {
+  it("wraps the table in a bounded scroll container with a sticky header", async () => {
+    const t1 = { ...TASKS[0] };
+    const t2 = { ...TASKS[0], id: 2, prompt: "another one" };
+    stubFetch({ "/api/tasks": [t1, t2] });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    await screen.findByText("do the thing");
+    const table = screen.getByRole("table");
+    const wrapper = table.parentElement as HTMLElement;
+    expect(wrapper.className).toContain("overflow-y-auto");
+    expect(wrapper.className).toContain("max-h-[60vh]");
+    const thead = table.querySelector("thead") as HTMLElement;
+    expect(thead.className).toContain("sticky");
+    expect(wrapper.contains(screen.getByText("do the thing"))).toBe(true);
+  });
+});

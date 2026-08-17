@@ -725,23 +725,24 @@ export default function Tasks() {
           />
         </div>
 
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-left text-xs uppercase tracking-wider text-ink-500">
-              <th className="cursor-pointer select-none px-4 pt-3 pb-2 font-medium hover:text-ink-300" onClick={() => toggleSort("id")}>
-                ID {sortKey === "id" ? (sortDesc ? "↓" : "↑") : ""}
-              </th>
-              <th className="cursor-pointer select-none px-4 pb-2 font-medium hover:text-ink-300" onClick={() => toggleSort("status")}>
-                Status {sortKey === "status" ? (sortDesc ? "↓" : "↑") : ""}
-              </th>
-              <th className="px-4 pb-2 font-medium">Repo</th>
-              <th className="px-4 pb-2 font-medium">Prompt</th>
-              <th className="px-4 pb-2 font-medium">PR / Issues</th>
-              <th className="cursor-pointer select-none px-4 pb-2 font-medium hover:text-ink-300" onClick={() => toggleSort("updated_at")}>
-                Updated {sortKey === "updated_at" ? (sortDesc ? "↓" : "↑") : ""}
-              </th>
-            </tr>
-          </thead>
+        <div className="max-h-[60vh] overflow-y-auto">
+          <table className="w-full text-sm">
+            <thead className="sticky top-0 z-10 bg-ink-900">
+              <tr className="text-left text-xs uppercase tracking-wider text-ink-500">
+                <th className="cursor-pointer select-none px-4 pt-3 pb-2 font-medium hover:text-ink-300" onClick={() => toggleSort("id")}>
+                  ID {sortKey === "id" ? (sortDesc ? "↓" : "↑") : ""}
+                </th>
+                <th className="cursor-pointer select-none px-4 pb-2 font-medium hover:text-ink-300" onClick={() => toggleSort("status")}>
+                  Status {sortKey === "status" ? (sortDesc ? "↓" : "↑") : ""}
+                </th>
+                <th className="px-4 pb-2 font-medium">Repo</th>
+                <th className="px-4 pb-2 font-medium">Prompt</th>
+                <th className="px-4 pb-2 font-medium">PR / Issues</th>
+                <th className="cursor-pointer select-none px-4 pb-2 font-medium hover:text-ink-300" onClick={() => toggleSort("updated_at")}>
+                  Updated {sortKey === "updated_at" ? (sortDesc ? "↓" : "↑") : ""}
+                </th>
+              </tr>
+            </thead>
           <tbody>
             {pageRows.length === 0 && (
               <tr>
@@ -790,7 +791,8 @@ export default function Tasks() {
               );
             })}
           </tbody>
-        </table>
+          </table>
+        </div>
 
         {pageCount > 1 && (
           <div className="flex items-center justify-end gap-2 border-t border-ink-800 px-4 py-3 text-xs text-ink-500">

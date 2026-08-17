@@ -79,3 +79,8 @@ After any code change, run the relevant tests and build before marking work done
     is jsdom-friendly but is verified by smoke test, not by an automated unit).
 - **Suite delta:** server 682 → 719 (T4 deltas); web 91 → 91 (T4.4 added a component
   covered by build only). All gates green.
+
+- **Phase 4 T5 deltas (web +2):**
+  - `Tasks.test.tsx` — wrapper has `max-h-[60vh]` + `overflow-y-auto`; thead has `sticky`.
+  - `Github.test.tsx` — per-account repo list wrapper has `max-h-[26rem]` + `overflow-y-auto`; count line stays outside.
+- **Suite delta:** web 91 → 93 (+2). All gates green (lint, typecheck, build).
