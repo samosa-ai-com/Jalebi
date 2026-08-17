@@ -15,6 +15,8 @@ from sqlalchemy.orm import Session
 from jalebi.db import Setting
 
 DEFAULTS: dict[str, object] = {
+    # Phase 4 T4.2 — auto-nudge when CI/review state changes (default OFF).
+    "auto_nudge": False,
     "concurrency": 4,
     "auto_publish": True,
     # Merged ntfy endpoint: a bare topic ("my-jalebi") or a full URL

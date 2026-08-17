@@ -8,7 +8,16 @@ from sqlalchemy.orm import Session
 
 from jalebi import attention, clock
 from jalebi.catalog import agent_by_slug
-from jalebi.db import TASK_TYPES, Artifact, Followup, Repo, ReviewAssignment, Run, Task
+from jalebi.db import (
+    TASK_TYPES,
+    Artifact,
+    Followup,
+    Repo,
+    ReviewAssignment,
+    Run,
+    Task,
+    TaskDependency,
+)
 
 MAX_PROMPT_CHARS = 32_000  # prompts travel via argv; bound them to stay clear of ARG_MAX
 
@@ -194,8 +203,15 @@ def task_to_dict(
     repo_full_name: str | None = None,
     reviewers: list[dict[str, object]] | None = None,
     pr_facts: attention.PRFacts | None = None,
+    deps: dict[str, object] | None = None,
 ) -> dict[str, object]:
     run_dict = run_to_dict(run, artifacts=artifacts) if run is not None else None
+    deps = deps or {
+        "depends_on": [],
+        "blocked_by": [],
+        "blocking": [],
+        "blocked": False,
+    }
     data: dict[str, object] = {
         "id": task.id,
         "type": task.type,
@@ -222,6 +238,10 @@ def task_to_dict(
         "created_at": clock.to_iso(task.created_at),
         "updated_at": clock.to_iso(task.updated_at),
         "run": run_dict,
+        "depends_on": deps.get("depends_on", []),
+        "blocked_by": deps.get("blocked_by", []),
+        "blocking": deps.get("blocking", []),
+        "blocked": deps.get("blocked", False),
         "followups": [
             {
                 "id": f.id,
@@ -242,22 +262,35 @@ def delete_tasks_cascade(session: Session, task_ids: list[int]) -> list[int]:
 
     Order is FK-dependency order — children before parents:
 
-    Followup → ReviewAssignment → Artifact → Run → Task
+    TaskDependency (Phase 4 T4.1) → Followup → ReviewAssignment →
+    Artifact → Run → Task
 
-    Followups are deleted first because they reference both ``tasks.id`` and
-    ``runs.id`` (nullable FK). Returns the ids of the deleted runs so callers
-    can reuse them for disk cleanup (artifact store + worktree paths).
+    TaskDependency edges are dropped first (FK ON DELETE CASCADE on both
+    sides will normally do this automatically; the explicit delete is
+    belt-and-suspenders for the partial-cascade path that may skip
+    cascading). Followups are deleted first because they reference both
+    ``tasks.id`` and ``runs.id`` (nullable FK). Returns the ids of the
+    deleted runs so callers can reuse them for disk cleanup (artifact
+    store + worktree paths).
 
     Does NOT commit: transaction control stays with the caller so it can
     wrap the cascade in its own transaction boundaries. ``_cleanup_partial``
     is the one caller that commits itself (to survive a rollbacked parent
     transaction on IntegrityError).
     """
+
     task_ids = list(task_ids)
     if not task_ids:
         return []
     run_ids = list(
         session.execute(select(Run.id).where(Run.task_id.in_(task_ids))).scalars()
+    )
+    # Phase 4 T4.1 — drop dep edges in both directions.
+    session.execute(
+        delete(TaskDependency).where(
+            TaskDependency.task_id.in_(task_ids)
+            | TaskDependency.depends_on_id.in_(task_ids)
+        )
     )
     session.execute(delete(Followup).where(Followup.task_id.in_(task_ids)))
     session.execute(delete(ReviewAssignment).where(ReviewAssignment.task_id.in_(task_ids)))
@@ -266,3 +299,127 @@ def delete_tasks_cascade(session: Session, task_ids: list[int]) -> list[int]:
         session.execute(delete(Run).where(Run.id.in_(run_ids)))
     session.execute(delete(Task).where(Task.id.in_(task_ids)))
     return run_ids
+
+
+# ---- Phase 4 T4.1 — task dependency helpers -----------------------------
+
+
+# A dependency is "satisfied" when its task is in a terminal deliverable
+# state. ``done`` and ``needs_approval`` mean "the work landed"; the other
+# terminal states (failed / timed_out / cancelled / interrupted) leave
+# dependents blocked (the work didn't actually land).
+DEP_SATISFIED_STATUSES = frozenset({"done", "needs_approval"})
+
+
+def dependencies_for(session: Session, task_id: int) -> list[int]:
+    """IDs the task depends on."""
+    return list(
+        session.execute(
+            select(TaskDependency.depends_on_id).where(TaskDependency.task_id == task_id)
+        )
+       .scalars()
+    )
+
+
+def dependents_for(session: Session, depends_on_id: int) -> list[int]:
+    """IDs that depend on the given task (reverse direction)."""
+    return list(
+        session.execute(
+            select(TaskDependency.task_id).where(TaskDependency.depends_on_id == depends_on_id)
+        )
+        .scalars()
+    )
+
+
+def has_unmet_deps(session: Session, task_id: int) -> bool:
+    """True if any of ``task_id``'s deps is not in a satisfied terminal state."""
+    dep_ids = dependencies_for(session, task_id)
+    if not dep_ids:
+        return False
+    unmet = list(
+        session.execute(
+            select(Task.id).where(
+                Task.id.in_(dep_ids),
+                Task.status.notin_(DEP_SATISFIED_STATUSES),
+            )
+        ).scalars()
+    )
+    return bool(unmet)
+
+
+def _dfs_creates_cycle(
+    session: Session, start: int, target: int, visited: set[int]
+) -> bool:
+    """True if walking ``target -> deps`` reaches ``start`` (a cycle through start)."""
+    if target in visited:
+        return False
+    visited.add(target)
+    for nxt in dependencies_for(session, target):
+        if nxt == start:
+            return True
+        if _dfs_creates_cycle(session, start, nxt, visited):
+            return True
+    return False
+
+
+def add_dependency(
+    session: Session, task_id: int, depends_on_id: int
+) -> None:
+    """Add an edge ``task_id -> depends_on_id``; raises ``ValueError`` on cycle/self-ref.
+
+    Caller commits.
+    """
+
+    if task_id == depends_on_id:
+        raise ValueError("a task cannot depend on itself")
+    # Ensure both rows exist.
+    if session.get(Task, task_id) is None:
+        raise LookupError(f"task {task_id} not found")
+    if session.get(Task, depends_on_id) is None:
+        raise LookupError(f"task {depends_on_id} not found")
+    if _dfs_creates_cycle(session, task_id, depends_on_id, set()):
+        raise ValueError(f"adding dep {depends_on_id} would create a cycle")
+    existing = session.get(
+        TaskDependency, (task_id, depends_on_id)
+    )
+    if existing is not None:
+        return  # idempotent
+    session.add(TaskDependency(task_id=task_id, depends_on_id=depends_on_id))
+
+
+def remove_dependency(
+    session: Session, task_id: int, depends_on_id: int
+) -> bool:
+    """Remove an edge. Returns True if the edge existed."""
+
+    edge = session.get(TaskDependency, (task_id, depends_on_id))
+    if edge is None:
+        return False
+    session.delete(edge)
+    return True
+
+
+def dep_dict(session: Session, task_id: int) -> dict[str, object]:
+    """The four task-dict dep fields for ``task_to_dict``.
+
+``."""
+    depends_on = dependencies_for(session, task_id)
+    blocked_by = [
+        d for d in depends_on
+        if _status_for(session, d) not in DEP_SATISFIED_STATUSES
+    ]
+    blocking = dependents_for(session, task_id)
+    blocked = task_id is not None and bool(blocked_by) and _status_for(
+        session, task_id
+    ) in {"queued", "running", "waiting_review"}
+    return {
+        "depends_on": depends_on,
+        "blocked_by": blocked_by,
+        "blocking": blocking,
+        "blocked": blocked,
+    }
+
+
+def _status_for(session: Session, task_id: int) -> str | None:
+    t = session.get(Task, task_id)
+    return t.status if t is not None else None

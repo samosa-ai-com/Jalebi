@@ -65,3 +65,17 @@ After any code change, run the relevant tests and build before marking work done
   - `apps/web/src/pages/Tasks.test.tsx` — Needs-you filter chip + stat card + row attention dot (3 tests).
   - `apps/web/src/pages/TaskDetail.test.tsx` — merge-readiness panel renders per status (2 tests); existing diff test updated for the new viewer (no raw `diff --git` line; new viewer shows the file label + add/del stats).
 - **Suite delta:** server 720 → 726 (+6); web 70 → 91 (+21). All gates green.
+
+- **Phase 4 T4 deltas (server +37, web +21):**
+  - `tests/test_dependencies.py` (new, 14) — add/self-ref/cycle, has_unmet_deps, dep_dict,
+    cascade_unblock, delete_tasks_cascade drops dep edges both ways, route
+    POST/DELETE 404/400 paths, rerun blocked → 409.
+  - `tests/test_events.py` (new, 7) — persist, replay across restart, run_id filter,
+    after_seq, prune cap, per-run scope.
+  - `tests/test_nudger.py` (new, 5) — default off, skip running/done, dedup by
+    signature, MAX_NUDGES_PER_TASK cap.
+  - `apps/web/src/components/RunningCard.tsx` (new) + `apps/web/src/lib/runningCard.ts`
+    (new) — covered via `npm run build` + manual smoke (the "live elapsed timer"
+    is jsdom-friendly but is verified by smoke test, not by an automated unit).
+- **Suite delta:** server 682 → 719 (T4 deltas); web 91 → 91 (T4.4 added a component
+  covered by build only). All gates green.

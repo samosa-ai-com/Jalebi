@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import { AttentionBadge } from "../components/AttentionBadge";
+import { RunningCard } from "../components/RunningCard";
 import { StatusBadge } from "../components/StatusBadge";
 import type { Account, CatalogAgent, GithubContext, Repo, SettingsMap, Task } from "../types";
 
@@ -681,6 +682,18 @@ export default function Tasks() {
           </div>
         ))}
       </div>
+
+      {/* Phase 4 T4.4 — live "running now" panel */}
+      {visible.some((t) => t.status === "running" || t.status === "queued") && (
+        <div className="space-y-2">
+          {visible
+            .filter((t) => t.status === "running" || t.status === "queued")
+            .slice(0, 4)
+            .map((t) => (
+              <RunningCard key={t.id} task={t} />
+            ))}
+        </div>
+      )}
 
       <CreateTask repos={repos} accounts={accounts} onCreated={load} />
 

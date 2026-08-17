@@ -54,6 +54,9 @@ def _task_dict(session, task: Task) -> dict[str, object]:
         if poller is not None
         else None
     )
+    # Phase 4 T4.1 — task dependency fields (depends_on / blocked_by /
+    # blocking / blocked).
+    deps = tasks.dep_dict(session, task.id)
     return tasks.task_to_dict(
         task,
         run=run,
@@ -62,6 +65,7 @@ def _task_dict(session, task: Task) -> dict[str, object]:
         repo_full_name=_repo_name(session, task.repo_id),
         reviewers=reviewers,
         pr_facts=pr_facts,
+        deps=deps,
     )
 
 
@@ -348,10 +352,85 @@ def rerun_task(task_id: int) -> ResponseReturnValue:
         return jsonify({"error": "task not found"}), 404
     if task.status in ("queued", "running"):
         return jsonify({"error": f"cannot rerun task in state {task.status}"}), 409
+    if tasks.has_unmet_deps(session, task.id):
+        return (
+            jsonify(
+                {
+                    "error": (
+                        "cannot rerun: task is blocked by unmet dependencies "
+                        "(resolve them first)"
+                    )
+                }
+            ),
+            409,
+        )
     task.status = "queued"
     task.updated_at = now()
     session.commit()
     _queue().enqueue(task.id)
+    return jsonify(_task_dict(session, task))
+
+
+# ---- Phase 4 T4.1 — task dependency endpoints ------------------------------
+
+
+@bp.post("/<int:task_id>/dependencies")
+def add_task_dependency(task_id: int) -> ResponseReturnValue:
+    """Add a dependency edge ``task_id -> depends_on_id`` (Phase 4 T4.1).
+
+    Body: ``{"depends_on_id": N}``. 400 on self-reference or cycle, 404 on
+    missing task; the task's status is recomputed to ``blocked`` if the new
+    edge leaves an unmet dep, else to ``queued`` if it satisfies a previous
+    block.
+    """
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        return jsonify({"error": "expected a JSON object"}), 400
+    raw_dep = payload.get("depends_on_id")
+    if raw_dep is None:
+        return jsonify({"error": "depends_on_id is required"}), 400
+    try:
+        depends_on_id = int(raw_dep)
+    except (TypeError, ValueError):
+        return jsonify({"error": "depends_on_id must be an integer"}), 400
+    session = db.get_session()
+    task = tasks.get_task(session, task_id)
+    if task is None:
+        return jsonify({"error": "task not found"}), 404
+    try:
+        tasks.add_dependency(session, task_id, depends_on_id)
+    except LookupError as exc:
+        return jsonify({"error": str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    # Recompute blocked status. A blocked task with newly-unmet deps stays
+    # blocked (the new dep blocks it from now on); a queued task whose
+    # newly-added dep is unfinished becomes blocked.
+    if tasks.has_unmet_deps(session, task_id):
+        if task.status not in {"done", "needs_approval"}:
+            task.status = "blocked"
+            task.updated_at = now()
+    elif task.status == "blocked":
+        task.status = "queued"
+        task.updated_at = now()
+    session.commit()
+    return jsonify(_task_dict(session, task)), 201
+
+
+@bp.delete("/<int:task_id>/dependencies/<int:dep_id>")
+def remove_task_dependency(task_id: int, dep_id: int) -> ResponseReturnValue:
+    """Remove a dependency edge (Phase 4 T4.1)."""
+    session = db.get_session()
+    task = tasks.get_task(session, task_id)
+    if task is None:
+        return jsonify({"error": "task not found"}), 404
+    if not tasks.remove_dependency(session, task_id, dep_id):
+        return jsonify({"error": "dependency not found"}), 404
+    # Recompute: a blocked task with no remaining unmet deps goes queued.
+    if task.status == "blocked" and not tasks.has_unmet_deps(session, task_id):
+        task.status = "queued"
+        task.updated_at = now()
+    session.commit()
     return jsonify(_task_dict(session, task))
 
 
@@ -889,7 +968,15 @@ def publish_check(task_id: int) -> ResponseReturnValue:
 
 @bp.get("/<int:task_id>/events")
 def task_events(task_id: int) -> ResponseReturnValue:
-    """SSE stream of live (masked) events for a task's current run."""
+    """SSE stream of live (masked) events for a task's current run.
+
+    Phase 4 T4.3 — when ``after_seq`` is given, the route backfills from the
+    durable ``task_events`` table first (replay across restarts), then the
+    in-memory bus takes over. Falls back to memory-only if persistence is not
+    wired (standalone ``TaskEvents()`` in tests).
+    """
+    from jalebi.events import replay_from_db
+
     session = db.get_session()
     task = tasks.get_task(session, task_id)
     if task is None:
@@ -899,11 +986,16 @@ def task_events(task_id: int) -> ResponseReturnValue:
     terminal = run is not None and run.status in TERMINAL_STATUSES
     events = _queue().events
     after_seq = request.args.get("after_seq", type=int)
-    q = events.subscribe(task_id, after_seq=after_seq)
+    run_id = run.id if run is not None else None
+    q = events.subscribe(task_id, after_seq=after_seq, run_id=run_id)
 
     def generate():
         try:
             yield f"data: {json.dumps({'type': 'connected'})}\n\n"
+            # Phase 4 T4.3 — durable backfill on reconnect.
+            if after_seq is not None:
+                for item in replay_from_db(session, task_id, run_id, after_seq):
+                    yield f"data: {json.dumps(item)}\n\n"
             if terminal:
                 yield f"data: {json.dumps({'type': 'stream_end'})}\n\n"
                 return

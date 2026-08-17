@@ -183,9 +183,15 @@ def _kill_pid(pid: int) -> None:
 
 
 class TaskQueue:
-    def __init__(self, config: Config):
+    def __init__(
+        self,
+        config: Config,
+        db_session_factory=None,
+    ):
         self.config = config
-        self.events = TaskEvents()
+        # Phase 4 T4.3 — wire TaskEvents with DB persistence when running
+        # under create_app. Standalone TaskQueue() (tests) stays memory-only.
+        self.events = TaskEvents(db_session_factory=db_session_factory)
         # Items: ("task", task_id) | ("followup", task_id, body) | None (stop).
         self._queue: queue.Queue[object] = queue.Queue()
         self._running: dict[int, _RunState] = {}
@@ -433,7 +439,9 @@ class TaskQueue:
         session.refresh(run)
         # Each run gets a fresh seq + replay buffer so a stale subscriber's seq
         # watermark can't discard the new run's events (SSE backfill, F4).
-        self.events.reset(task.id)
+        # Phase 4 T4.3 — per-run scoping so a stale tab can't silently drop a
+        # new run's low seqs against the prior run's high watermark.
+        self.events.reset(task.id, run_id=run.id)
         return run
 
     def _stream_and_finish(
@@ -463,7 +471,10 @@ class TaskQueue:
                 event = AgentEvent(type="message", text="Run cancelled by user.")
             if event.type in ("step", "message", "tool_call", "done", "error"):
                 entry = self._step_from_event(event, masker)
-                self.events.publish(task.id, entry)
+                # Phase 4 T4.3 — durable SSE timeline. ``session`` is the
+                # already-open ``_stream_and_finish`` session; events.publish
+                # inserts a task_events row in the same transaction.
+                self.events.publish(task.id, entry, run_id=run.id, session=session)
                 # Persist tool_call too so a reload doesn't lose console lines.
                 steps.append(entry)
                 if event.type in ("step", "message", "done", "error"):
@@ -765,6 +776,15 @@ class TaskQueue:
                 run = self._run_review(session, task, repo, cli, timeout, token, masker, state)
                 session.commit()
                 self._maybe_recover(session, task, run)
+                return
+
+            # Phase 4 T4.1 — a task with unmet deps is gated to `blocked`; a
+            # re-dispatch (e.g. a followup or web-rerun landing while still
+            # blocked) must not start spawn.
+            if tasks.has_unmet_deps(session, task.id):
+                task.status = "blocked"
+                task.updated_at = now()
+                session.commit()
                 return
 
             run = self._prepare_run(session, task, cli)
@@ -1607,6 +1627,33 @@ class TaskQueue:
             for s in steps
         )
 
+    def _cascade_unblock(self, session, task_id: int) -> None:
+        """Flip every dependent whose deps are now all satisfied from
+        ``blocked``→``queued`` and re-enqueue it (Phase 4 T4.1).
+
+        Called on every terminal completion path. Safe to call when no
+        dependents exist (no-op).
+        """
+        from jalebi.tasks import dependents_for, has_unmet_deps
+
+        deps_unblocked: list[Task] = []
+        for dep_id in dependents_for(session, task_id):
+            dep = session.get(Task, dep_id)
+            if dep is None:
+                continue
+            if dep.status != "blocked":
+                continue
+            if has_unmet_deps(session, dep.id):
+                continue
+            dep.status = "queued"
+            dep.updated_at = now()
+            deps_unblocked.append(dep)
+        if deps_unblocked:
+            session.commit()
+            # Re-enqueue in original order; existing queue dispatch picks them up.
+            for dep in deps_unblocked:
+                self.enqueue(dep.id)
+
     def _maybe_recover(self, session, task: Task, run: Run) -> None:
         """Auto-recover a failed/timed_out run that never delivered its output.
 
@@ -1624,6 +1671,10 @@ class TaskQueue:
         bounded by its own timeout, and terminal/progress notifications keep the
         owner informed. ``task.retry_count`` is bumped for observability only.
         """
+        # Phase 4 T4.1 — when a task transitions to a satisfied terminal
+        # state, unblock any dependents whose deps are now all met.
+        if task.status in {"done", "needs_approval"}:
+            self._cascade_unblock(session, task.id)
         if run.status not in ("failed", "timed_out"):
             return
         policy = settings.get_setting(session, "retry_policy") or {}

@@ -128,3 +128,25 @@ Queue items are tagged tuples: `("task", task_id)` or `("followup", task_id, bod
 ## 12. Reference
 
 - PRD §F3 (queue & concurrency), §F9 (publish), §F16 (timeouts & retries), §F17 (masking), §F18 (artifacts).
+
+## 4d. Dependencies + auto-nudge (Phase 4 T4)
+
+`TASK_STATUSES` now includes `"blocked"` (T4.1). A task with any unmet
+dependency is flipped to `blocked` on enqueue (and stays there on every
+re-dispatch until deps are met); `cascade_unblock` runs from `_maybe_recover`
+when a task reaches a satisfied terminal state and flips any dependent
+whose deps are now all met back to `queued` + re-enqueues.
+
+The queue gate is in `_run_task` (line ~782): `tasks.has_unmet_deps` →
+`task.status = "blocked"`. The route `POST /api/tasks/<id>/dependencies`
+adds an edge (DFS cycle-check + self-ref guard); `DELETE /api/tasks/<id>/dependencies/<dep_id>`
+removes it. `rerun` of a `blocked` task → 409.
+
+`nudger.py` (default OFF, `auto_nudge=False`) enqueues a `followup` when
+a tracked PR's CI or review state turns bad. Dedup is signature-keyed
+(`task_id:kind:ref`); the per-task cap is `MAX_NUDGES_PER_TASK = 3`.
+
+`events.py` publishes every event to the in-memory ring buffer **and**
+to the durable `task_events` table (via `replay_from_db` on the SSE route
+after a restart). `prune_task_events` runs at startup to cap rows at
+`PERSIST_CAP = 2000` per `(task_id, run_id)`.

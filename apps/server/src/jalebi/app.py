@@ -279,7 +279,9 @@ def create_app(config: Config | None = None) -> Flask:
         finally:
             session.close()
 
-    app.config["JALEBI_QUEUE"] = TaskQueue(config)
+    app.config["JALEBI_QUEUE"] = TaskQueue(
+        config, db_session_factory=db.get_session
+    )
     app.config["JALEBI_SCREENING"] = ScreeningScheduler(config)
     app.config["JALEBI_POLLER"] = Poller(config)  # Phase 4 T2.1 — default OFF
 
@@ -431,6 +433,12 @@ def main() -> None:
             pruned = artifacts.prune_artifacts(session, config.data_dir, ttl)
             if pruned:
                 logger.info("pruned %s expired artifact(s)", pruned)
+            # Phase 4 T4.3 — cap the durable task_events table (per-run).
+            from jalebi.events import prune_task_events
+
+            events_pruned = prune_task_events(session)
+            if events_pruned:
+                logger.info("pruned %s expired task_events row(s)", events_pruned)
         finally:
             session.close()
     recovered = queue.recover()

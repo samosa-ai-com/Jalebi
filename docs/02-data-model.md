@@ -307,3 +307,9 @@ None — all Phase-0/1/2 tables are materialized. (Phase 3 adds no new tables.)
 - Exposed via `tasks.run_to_dict(run)` keys `"git_sha_start"` and `"git_sha_end"` (`None` when unset).
 
 - **T2 adds no new tables.** The polling observer stores normalized `PRFacts` in an in-memory map (`(repo_id, pr_number) → PRFacts`) — ephemeral by design; the poller refetches every 30 s so a durable table would only avoid a bounded cold-start GitHub hammering (PRD Goal #10). The `event_deliveries` table is the durable analog. The pre-existing `repos.last_checked_at` column is updated after every successful tick; the pre-existing `repos.poll_fallback` column (Boolean, default false) is now also settable via `PATCH /api/repos/<id>`.
+
+- **T4 (`8a9b0c1d2e30`) added three new tables:**
+  - `task_dependencies(task_id FK→tasks, depends_on_id FK→tasks, created_at)` — composite PK `(task_id, depends_on_id)`, self-ref CHECK, two-side CASCADE. Dep edges are dropped from both directions inside `delete_tasks_cascade`.
+  - `task_events(id, task_id FK→tasks, run_id FK→runs, seq, payload_json, created_at)` — durable SSE timeline (Phase 4 T4.3). Per-(task, run) cap at 2000 (`prune_task_events` startup sweep).
+  - `nudges(id, task_id FK→tasks, signature, kind, created_at)` — auto-nudge dedup (Phase 4 T4.2). Unique pair `(task_id, signature)`.
+  - `tasks.status` widened to include `"blocked"` (T4.1). A blocked task sits with deps unmet; cleared by `cascade_unblock` when the last unsatisfied dep finishes.
