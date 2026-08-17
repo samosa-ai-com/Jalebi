@@ -980,3 +980,163 @@ def test_task_dict_attention_working_no_poller(app, repo_id) -> None:
     )
     body = resp.get_json()
     assert body["attention"] == "working"
+
+
+# ---- Phase 4 T3.2 — GET /api/tasks/<id>/publish-check -----------------------
+
+
+def _seed_pr_facts(app, repo_id, task_id, *, ci, review, mergeable):
+    """Inject PRFacts via the running poller (default-OFF tests skip the tick)."""
+    poller = app.config["JALEBI_POLLER"]
+    poller.record_facts(
+        repo_id,
+        task_id,
+        pr_number=99,
+        facts={
+            "ci_state": ci,
+            "review_decision": review,
+            "mergeable": mergeable,
+            "last_seen_at": "2026-08-17T00:00:00Z",
+        },
+    )
+
+
+def _setup_publish_check_task(app, client, session, tmp_path):
+    """Reusable fixture for publish-check tests: worktree + 1 commit ahead."""
+    import subprocess as _sp
+
+    from jalebi import tasks as tasks_svc
+    from jalebi.config import Config
+    from jalebi.git_workspace import GitWorkspace
+
+    remote = _seed_git_remote(tmp_path)
+    row, _ = repos.upsert_repo(
+        session,
+        full_name="owner/repo",
+        default_branch="main",
+        clone_url=remote,
+        pat_name="test",
+    )
+    task = tasks_svc.create_task(
+        session, type_="freeform", repo_id=row.id, prompt="x"
+    )
+    task.status = "done"
+    session.commit()
+    config: Config = app.config["JALEBI_CONFIG"]
+    ws = GitWorkspace(config)
+    ws.ensure_mirror("owner/repo", remote)
+    wt = ws.create_worktree(task.id, "owner/repo", "main")
+    # One commit ahead so the `commits` check passes.
+    _sp.run(["git", "-C", str(wt), "config", "user.email", "a@b.com"], check=True)
+    _sp.run(["git", "-C", str(wt), "config", "user.name", "A"], check=True)
+    (wt / "new.txt").write_text("agent\n")
+    _sp.run(["git", "-C", str(wt), "add", "new.txt"], check=True)
+    _sp.run(["git", "-C", str(wt), "commit", "-m", "agent"], check=True)
+    return task, ws, wt
+
+
+def test_publish_check_returns_ready(app, session, client, tmp_path) -> None:
+    task, _ws, _wt = _setup_publish_check_task(app, client, session, tmp_path)
+    _seed_pr_facts(
+        app,
+        task.repo_id,
+        task.id,
+        ci="success",
+        review="approved",
+        mergeable=True,
+    )
+    resp = client.get(f"/api/tasks/{task.id}/publish-check")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["status"] == "ready"
+    assert body["base_ref"] == "main"
+    by_name = {c["name"]: c for c in body["checks"]}
+    assert by_name["branch"]["ok"] is True
+    assert by_name["commits"]["ok"] is True
+    assert by_name["commits"]["ahead"] == 1
+    assert by_name["conflict"]["ok"] is True
+    assert by_name["ci"]["ok"] is True
+    assert by_name["review"]["ok"] is True
+    assert by_name["mergeable"]["ok"] is True
+
+
+def test_publish_check_blocks_on_branch_mismatch(
+    app, session, client, tmp_path
+) -> None:
+    import subprocess as _sp
+
+    task, _ws, wt = _setup_publish_check_task(app, client, session, tmp_path)
+    # Move HEAD off jalebi.
+    _sp.run(["git", "-C", str(wt), "checkout", "main"], check=True)
+    resp = client.get(f"/api/tasks/{task.id}/publish-check")
+    body = resp.get_json()
+    assert body["status"] == "blocked"
+    by_name = {c["name"]: c for c in body["checks"]}
+    assert by_name["branch"]["ok"] is False
+    assert "branch mismatch" in by_name["branch"]["message"]
+
+
+def test_publish_check_blocks_on_nothing_to_publish(
+    app, session, client, tmp_path
+) -> None:
+    """A task that was published / re-based ahead=0 → blocked (commits ahead = 0)."""
+    import subprocess as _sp
+
+    task, _ws, wt = _setup_publish_check_task(app, client, session, tmp_path)
+    # Reset the branch to origin/main so HEAD has no unique commits.
+    _sp.run(["git", "-C", str(wt), "reset", "--hard", "origin/main"], check=True)
+    resp = client.get(f"/api/tasks/{task.id}/publish-check")
+    body = resp.get_json()
+    assert body["status"] == "blocked"
+    by_name = {c["name"]: c for c in body["checks"]}
+    assert by_name["commits"]["ok"] is False
+    assert by_name["commits"]["ahead"] == 0
+
+
+def test_publish_check_blocks_on_predicted_conflict(
+    app, session, client, tmp_path
+) -> None:
+    import subprocess as _sp
+
+    task, _ws, _wt = _setup_publish_check_task(app, client, session, tmp_path)
+    # `_setup_publish_check_task` already seeded the bare remote + work clone.
+    # Use the same path it created to push a conflicting change to origin/main.
+    remote_url = str(tmp_path / "remote.git")
+    src2 = tmp_path / "src2_conflict"
+    _sp.run(["git", "clone", remote_url, str(src2)], check=True)
+    _sp.run(["git", "-C", str(src2), "config", "user.email", "a@b.com"], check=True)
+    _sp.run(["git", "-C", str(src2), "config", "user.name", "A"], check=True)
+    (src2 / "new.txt").write_text("remote side\n")
+    _sp.run(["git", "-C", str(src2), "add", "new.txt"], check=True)
+    _sp.run(["git", "-C", str(src2), "commit", "-m", "remote side"], check=True)
+    _sp.run(["git", "-C", str(src2), "push", "origin", "main"], check=True)
+    resp = client.get(f"/api/tasks/{task.id}/publish-check")
+    body = resp.get_json()
+    assert body["status"] == "blocked"
+    by_name = {c["name"]: c for c in body["checks"]}
+    assert by_name["conflict"]["ok"] is False
+
+
+def test_publish_check_attention_on_ci_failure(
+    app, session, client, tmp_path
+) -> None:
+    task, _ws, _wt = _setup_publish_check_task(app, client, session, tmp_path)
+    _seed_pr_facts(
+        app,
+        task.repo_id,
+        task.id,
+        ci="failure",
+        review="approved",
+        mergeable=True,
+    )
+    resp = client.get(f"/api/tasks/{task.id}/publish-check")
+    body = resp.get_json()
+    assert body["status"] == "attention"
+    by_name = {c["name"]: c for c in body["checks"]}
+    assert by_name["ci"]["ok"] is False
+    assert by_name["branch"]["ok"] is True  # branch is fine
+
+
+def test_publish_check_404_when_task_missing(client: FlaskClient) -> None:
+    resp = client.get("/api/tasks/99999/publish-check")
+    assert resp.status_code == 404

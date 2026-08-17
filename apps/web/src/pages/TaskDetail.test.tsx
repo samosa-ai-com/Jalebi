@@ -38,6 +38,7 @@ const TASK = {
   prs: [],
   created_at: "2026-08-06T10:00:00",
   updated_at: "2026-08-06T10:01:00",
+  attention: "working",
   run: RUN,
   followups: [],
   reviewers: [],
@@ -298,10 +299,11 @@ describe("TaskDetail", () => {
 
     renderDetail();
     expect(await screen.findByText("Diff")).toBeInTheDocument();
-    expect(await screen.findByText("diff --git a/f.txt b/f.txt")).toBeInTheDocument();
+    expect(await screen.findByText("f.txt")).toBeInTheDocument();
     expect(screen.getByText("+new")).toBeInTheDocument();
-    // The improved diff view shows a friendly file label + +/- stats.
-    expect(screen.getByText("f.txt")).toBeInTheDocument();
+    expect(screen.getByText("-old")).toBeInTheDocument();
+    // The improved diff view also surfaces a +/- tally (1 addition, 1 deletion).
+    expect(screen.getAllByText("+1").length + screen.getAllByText("−1").length).toBeGreaterThan(0);
     expect(screen.getAllByText("+1").length).toBeGreaterThan(0);
     expect(screen.getAllByText("−1").length).toBeGreaterThan(0);
   });
@@ -886,5 +888,114 @@ describe("TaskDetail", () => {
         expect(body.pr_number).toBe(9);
       });
     });
+  });
+});
+
+
+// ---- Phase 4 T3.2 — merge-readiness panel ------------------------------
+
+
+describe("TaskDetail (Phase 4 T3.2)", () => {
+  function stubFetchWithPublishCheck(
+    task: Record<string, unknown>,
+    settings: Record<string, unknown> | null,
+    publishCheck: Record<string, unknown> | null
+  ) {
+    const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
+      if (url.endsWith("/runs")) {
+        return { ok: true, json: async () => [task.run ?? RUN] };
+      }
+      if (url.includes("/publish-check")) {
+        if (publishCheck) return { ok: true, json: async () => publishCheck };
+        return { ok: true, json: async () => ({ status: "ready", base_ref: "main", checks: [] }) };
+      }
+      if (url.includes("/api/tasks")) {
+        return { ok: true, json: async () => task };
+      }
+      if (url.includes("/api/settings")) {
+        if (settings) return { ok: true, json: async () => settings };
+        return { ok: true, json: async () => ({ default_backend: "opencode", default_model: "m1" }) };
+      }
+      if (url.includes("/api/github/tokens")) {
+        return { ok: true, json: async () => ({ accounts: [] }) };
+      }
+      if (url.includes("/api/models")) {
+        return { ok: true, json: async () => ({ cli: "opencode", models: ["m1"] }) };
+      }
+      return { ok: true, json: async () => REPOS };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  function renderDetail() {
+    return render(
+      <MemoryRouter initialEntries={["/tasks/7"]}>
+        <Routes>
+          <Route path="/tasks/:id" element={<TaskDetail />} />
+        </Routes>
+      </MemoryRouter>
+    );
+  }
+
+  it("shows the merge-readiness panel for a publishable task (ready)", async () => {
+    const done = {
+      ...TASK,
+      status: "done",
+      run: { ...RUN, status: "done", has_diff: true },
+      attention: "ready_to_merge",
+    };
+    stubFetchWithPublishCheck(
+      done,
+      null,
+      {
+        status: "ready",
+        base_ref: "main",
+        checks: [
+          { name: "branch", ok: true, message: "on jalebi branch" },
+          { name: "commits", ok: true, ahead: 2, message: "2 commits ahead of origin/main" },
+          { name: "conflict", ok: true, conflicts: [], message: "no predicted conflicts" },
+          { name: "ci", ok: true, state: "success", message: "CI is green" },
+          { name: "review", ok: true, decision: "approved", message: "PR is approved" },
+          { name: "mergeable", ok: true, mergeable: true, message: "PR is mergeable" },
+        ],
+      }
+    );
+    renderDetail();
+    expect(await screen.findByText("Ready")).toBeInTheDocument();
+    expect(screen.getByText("CI is green")).toBeInTheDocument();
+    expect(screen.getByText("PR is approved")).toBeInTheDocument();
+  });
+
+  it("reflects a blocked state (branch mismatch)", async () => {
+    const done = {
+      ...TASK,
+      status: "done",
+      run: { ...RUN, status: "done", has_diff: true },
+      attention: "needs_you",
+    };
+    stubFetchWithPublishCheck(
+      done,
+      null,
+      {
+        status: "blocked",
+        base_ref: "main",
+        checks: [
+          {
+            name: "branch",
+            ok: false,
+            message: "branch mismatch; agent left HEAD on main, expected jalebi/7",
+          },
+          { name: "commits", ok: true, ahead: 1, message: "1 commit ahead of origin/main" },
+        ],
+      }
+    );
+    renderDetail();
+    expect(await screen.findByText("Blocked")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /branch mismatch; agent left HEAD on main, expected jalebi\/7/i
+      )
+    ).toBeInTheDocument();
   });
 });

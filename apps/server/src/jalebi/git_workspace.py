@@ -419,11 +419,28 @@ class GitWorkspace:
         )
 
     def commits_ahead(self, worktree: Path, base_branch: str) -> int:
-        """Number of commits on the worktree's HEAD beyond ``origin/<base_branch>``."""
-        out = _run_git(
-            ["-C", str(worktree), "rev-list", "--count", f"origin/{base_branch}..HEAD"]
-        )
-        return int(out or "0")
+        """Number of commits on the worktree's HEAD beyond ``origin/<base_branch>``.
+
+        Best-effort: returns 0 on any error (no upstream, missing worktree,
+        unborn HEAD, etc) so the caller can treat "nothing ahead" as a
+        soft signal instead of an exception.
+        """
+        try:
+            out = _run_git(
+                [
+                    "-C",
+                    str(worktree),
+                    "rev-list",
+                    "--count",
+                    f"origin/{base_branch}..HEAD",
+                ]
+            )
+        except GitWorkspaceError:
+            return 0
+        try:
+            return int(out)
+        except (TypeError, ValueError):
+            return 0
 
     def working_tree_status(self, worktree: Path) -> list[str]:
         """Porcelain status lines: dirty (modified/staged/untracked) paths.

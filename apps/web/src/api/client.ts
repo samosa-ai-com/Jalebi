@@ -6,6 +6,7 @@ import type {
   GithubContext,
   GithubRepo,
   Health,
+  PublishCheck,
   Repo,
   Run,
   Screen,
@@ -231,6 +232,12 @@ export const api = {
   getRuns: (id: number) => request<Run[]>(`/api/tasks/${id}/runs`),
   getRunDiff: (id: number, runId: number) =>
     request<{ diff: string }>(`/api/tasks/${id}/runs/${runId}/diff`),
+  getLiveDiff: (id: number) =>
+    request<{ diff: string; base: boolean; untracked: boolean }>(
+      `/api/tasks/${id}/diff?base=1&untracked=1`
+    ),
+  getPublishCheck: (id: number) =>
+    request<PublishCheck>(`/api/tasks/${id}/publish-check`),
   createTask: (input: CreateTaskInput) =>
     request<Task>("/api/tasks", { method: "POST", body: JSON.stringify(input) }),
   cancelTask: (id: number) =>

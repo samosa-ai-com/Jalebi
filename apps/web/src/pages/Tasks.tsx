@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
+import { AttentionBadge } from "../components/AttentionBadge";
 import { StatusBadge } from "../components/StatusBadge";
 import type { Account, CatalogAgent, GithubContext, Repo, SettingsMap, Task } from "../types";
 
@@ -536,11 +537,16 @@ function CreateTask({
 }
 
 const FILTERS = [
-  { id: "all", label: "All", test: () => true },
-  { id: "running", label: "Running", test: (s: string) => s === "queued" || s === "running" },
-  { id: "done", label: "Done", test: (s: string) => s === "done" },
-  { id: "failed", label: "Failed", test: (s: string) => s === "failed" || s === "timed_out" || s === "interrupted" },
-  { id: "review", label: "Review", test: (s: string) => s === "needs_approval" },
+  { id: "all", label: "All", test: (_t: Task) => true },
+  {
+    id: "needs_you",
+    label: "Needs you",
+    test: (t: Task) => t.attention === "needs_you",
+  },
+  { id: "running", label: "Running", test: (t: Task) => t.status === "queued" || t.status === "running" },
+  { id: "done", label: "Done", test: (t: Task) => t.status === "done" },
+  { id: "failed", label: "Failed", test: (t: Task) => t.status === "failed" || t.status === "timed_out" || t.status === "interrupted" },
+  { id: "review", label: "Review", test: (t: Task) => t.status === "needs_approval" },
 ] as const;
 
 type FilterId = (typeof FILTERS)[number]["id"];
@@ -605,14 +611,15 @@ export default function Tasks() {
     const running = tasks.filter((t) => t.status === "queued" || t.status === "running").length;
     const done = tasks.filter((t) => t.status === "done").length;
     const review = tasks.filter((t) => t.status === "needs_approval").length;
-    return { total: tasks.length, running, done, review };
+    const needsYou = tasks.filter((t) => t.attention === "needs_you").length;
+    return { total: tasks.length, running, done, review, needsYou };
   }, [tasks]);
 
   const visible = useMemo(() => {
     const test = FILTERS.find((f) => f.id === filter)!.test;
     const q = query.trim().toLowerCase();
     const list = tasks.filter((t) => {
-      if (!test(t.status)) return false;
+      if (!test(t)) return false;
       if (!q) return true;
       return (
         String(t.id).includes(q) ||
@@ -649,6 +656,7 @@ export default function Tasks() {
 
   const statCards = [
     { label: "Total", value: stats.total, accent: "text-ink-100" },
+    { label: "Needs you", value: stats.needsYou, accent: "text-syrup-300" },
     { label: "Running", value: stats.running, accent: "text-syrup-300" },
     { label: "Done", value: stats.done, accent: "text-green-300" },
     { label: "Needs review", value: stats.review, accent: "text-purple-300" },
@@ -663,7 +671,7 @@ export default function Tasks() {
         </p>
       </header>
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 animate-fade-up" style={{ animationDelay: "0.05s" }}>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-5 animate-fade-up" style={{ animationDelay: "0.05s" }}>
         {statCards.map((c) => (
           <div key={c.label} className="surface px-5 py-4">
             <p className="text-xs font-medium uppercase tracking-wider text-ink-500">{c.label}</p>
@@ -740,7 +748,10 @@ export default function Tasks() {
                     </Link>
                   </td>
                   <td className="px-4 py-3">
-                    <StatusBadge status={t.status} />
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <StatusBadge status={t.status} />
+                      <AttentionBadge attention={t.attention ?? "working"} />
+                    </div>
                   </td>
                   <td className="px-4 py-3">
                     <RepoChip name={rn} />

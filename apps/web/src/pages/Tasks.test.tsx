@@ -24,6 +24,7 @@ const TASKS = [
     prs: [],
     created_at: "2026-08-06T10:00:00",
     updated_at: "2026-08-06T10:05:00",
+    attention: "needs_you",
     run: null,
     followups: [],
   },
@@ -326,5 +327,53 @@ describe("Tasks", () => {
     const values = [...typeSelect.options].map((o) => o.value);
     expect(values).toContain("freeform");
     expect(values).not.toContain("screen_finding");
+  });
+});
+
+
+// ---- Phase 4 T3.1 — Needs-you filter + attention dot + stat card ----------
+
+
+describe("Tasks page (Phase 4 T3.1)", () => {
+  function renderTasks() {
+    return render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+  }
+
+  it("shows the 'Needs you' filter chip and isolates needs_you rows", async () => {
+    stubFetch({ "/api/tasks": TASKS });
+    renderTasks();
+    expect(await screen.findByRole("button", { name: "Needs you" })).toBeInTheDocument();
+    // The needs_you row is visible by default.
+    expect(screen.getByText("needs you")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Needs you" }));
+    // The filtered list still shows the needs_you row.
+    expect(screen.getByText("needs you")).toBeInTheDocument();
+  });
+
+  it("renders the 'Needs you' stat card with the correct count", async () => {
+    stubFetch({ "/api/tasks": TASKS });
+    renderTasks();
+    await waitFor(() =>
+      expect(screen.getAllByText("Needs you").length).toBeGreaterThanOrEqual(2)
+    );
+    // The card itself is the second surface containing "Needs you".
+    const needsYouCards = screen.getAllByText("Needs you");
+    const cardSurface = needsYouCards.find((el) =>
+      el.classList?.contains("uppercase")
+    );
+    expect(cardSurface).toBeTruthy();
+  });
+
+  it("renders the AttentionBadge next to the StatusBadge", async () => {
+    stubFetch({ "/api/tasks": TASKS });
+    renderTasks();
+    // The AttentionBadge label is `needs you` (underscores stripped).
+    expect(await screen.findByText("needs you")).toBeInTheDocument();
+    // The StatusBadge label is the raw status.
+    expect(screen.getByText("done")).toBeInTheDocument();
   });
 });

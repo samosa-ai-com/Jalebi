@@ -734,6 +734,159 @@ def merge_check(task_id: int) -> ResponseReturnValue:
     )
 
 
+# ---- Phase 4 T3.2 — merge-readiness panel -----------------------------------
+
+
+@bp.get("/<int:task_id>/publish-check")
+def publish_check(task_id: int) -> ResponseReturnValue:
+    """Advisory readiness check for the Publish button (Phase 4 T3.2).
+
+    Combines branch-guard + commits-ahead + conflict + PR/CI facts into
+    a single response the UI's ``MergeReadinessPanel`` consumes. Advisory
+    only — never raises 4xx for a failed check (the panel renders the
+    reason; the Publish button remains clickable when ``status`` is
+    ``ready`` or ``attention``).
+
+    ``status`` derivation:
+      - ``blocked`` — branch mismatch, nothing to publish, or predicted
+        conflict (cannot proceed).
+      - ``attention`` — everything else passable but CI pending/failed,
+        reviews requested, or GitHub not-mergeable (proceed with caution).
+      - ``ready`` — every check passes.
+    """
+    session = db.get_session()
+    task = tasks.get_task(session, task_id)
+    if task is None:
+        return jsonify({"error": "task not found"}), 404
+    repo = session.get(db.Repo, task.repo_id)
+    if repo is None:
+        return jsonify({"error": "repo not found"}), 404
+
+    config: Config = current_app.config["JALEBI_CONFIG"]
+    git = GitWorkspace(config)
+    worktree = git.worktree_path(config.data_dir, task.id)
+    base_ref = (
+        task.target_branch
+        if task.type == "issue_fix"
+        else (task.source_branch or "main")
+    )
+
+    checks: list[dict[str, object]] = []
+
+    # 1. branch — must be on jalebi/<id>.
+    try:
+        git.assert_publish_branch(task_id)
+        checks.append({"name": "branch", "ok": True, "message": "on jalebi branch"})
+    except GitWorkspaceError as exc:
+        checks.append({"name": "branch", "ok": False, "message": str(exc)})
+
+    # 2. commits — must be ahead of origin/<base_ref> to actually publish.
+    ahead = git.commits_ahead(worktree, base_ref)
+    checks.append(
+        {
+            "name": "commits",
+            "ok": ahead > 0,
+            "ahead": ahead,
+            "message": (
+                f"{ahead} commit{'s' if ahead != 1 else ''} ahead of origin/{base_ref}"
+                if ahead > 0
+                else "nothing to publish — HEAD matches origin"
+            ),
+        }
+    )
+
+    # 3. conflict — predict via merge-tree on the mirror.
+    token = secrets.resolve_token(config, task.pat_name)
+    try:
+        git.ensure_mirror(repo.full_name, repo.clone_url, token)
+        conflicts = git.predict_conflicts(repo.full_name, task_id, base_ref)
+        checks.append(
+            {
+                "name": "conflict",
+                "ok": not conflicts,
+                "conflicts": [{"kind": k, "path": p} for k, p in conflicts],
+                "message": (
+                    "no predicted conflicts"
+                    if not conflicts
+                    else f"{len(conflicts)} predicted conflict{'s' if len(conflicts) != 1 else ''}"
+                ),
+            }
+        )
+    except GitWorkspaceError as exc:
+        checks.append(
+            {
+                "name": "conflict",
+                "ok": True,  # can't predict; don't block
+                "message": f"conflict check unavailable: {exc}",
+            }
+        )
+
+    # 4–6. ci / review / mergeable — from the poller's PRFacts (T2).
+    poller = current_app.config.get("JALEBI_POLLER")
+    pr_facts = (
+        poller.pr_facts_for_task(task.repo_id, task.id)
+        if poller is not None
+        else None
+    )
+
+    if pr_facts is None:
+        for name in ("ci", "review", "mergeable"):
+            checks.append(
+                {
+                    "name": name,
+                    "ok": True,
+                    "message": "no PR yet — not applicable",
+                }
+            )
+    else:
+        ci_state = pr_facts.get("ci_state")
+        if ci_state == "success":
+            ci_msg, ci_ok = "CI is green", True
+        elif ci_state == "pending":
+            ci_msg, ci_ok = "CI is pending", False
+        elif ci_state == "failure":
+            ci_msg, ci_ok = "CI is failing", False
+        else:
+            ci_msg, ci_ok = "CI status unknown", True
+        checks.append({"name": "ci", "ok": ci_ok, "state": ci_state, "message": ci_msg})
+
+        rd = pr_facts.get("review_decision")
+        if rd == "approved":
+            rd_msg, rd_ok = "PR is approved", True
+        elif rd == "changes_requested":
+            rd_msg, rd_ok = "reviewers requested changes", False
+        elif rd == "review_required":
+            rd_msg, rd_ok = "PR still needs reviews", False
+        else:
+            rd_msg, rd_ok = "no reviews yet", True
+        checks.append(
+            {"name": "review", "ok": rd_ok, "decision": rd, "message": rd_msg}
+        )
+
+        mergeable = pr_facts.get("mergeable")
+        checks.append(
+            {
+                "name": "mergeable",
+                "ok": mergeable is True,
+                "mergeable": mergeable,
+                "message": (
+                    "PR is mergeable"
+                    if mergeable is True
+                    else "GitHub reports merge conflicts or required checks"
+                    if mergeable is False
+                    else "GitHub mergeable status unknown"
+                ),
+            }
+        )
+
+    blocked_names = {"branch", "commits", "conflict"}
+    blocked = any(not c["ok"] for c in checks if c.get("name") in blocked_names)
+    attention = (not blocked) and any(not c["ok"] for c in checks)
+    status = "blocked" if blocked else ("attention" if attention else "ready")
+
+    return jsonify({"status": status, "base_ref": base_ref, "checks": checks})
+
+
 @bp.get("/<int:task_id>/events")
 def task_events(task_id: int) -> ResponseReturnValue:
     """SSE stream of live (masked) events for a task's current run."""

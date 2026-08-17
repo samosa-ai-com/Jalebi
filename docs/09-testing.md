@@ -57,3 +57,11 @@ After any code change, run the relevant tests and build before marking work done
   - `tests/test_api_repos.py` — new `test_toggle_poll_fallback` (boolean validation, 404, empty payload).
   - `tests/test_github.py` — 5 new tests for `list_open_prs`, `list_check_runs_for_ref`, `list_reviews_for_pr` (with ETag + If-None-Match + 401 → `GitHubUnauthorized`).
 - **Suite delta:** 682 → 720 (+38). No existing tests broken.
+
+- **Phase 4 T3 deltas (server +6, web +25):**
+  - `tests/test_api_tasks.py` — +5 publish-check tests (`ready` / blocked branch / blocked nothing-to-publish / blocked conflict / attention CI failure) + 404 missing task.
+  - `apps/web/src/components/AttentionBadge.test.tsx` (new, 7) — one render per attention value + pulsing/muted dot checks.
+  - `apps/web/src/lib/unifiedDiff.test.ts` (new, 8) — added/removed/modified/renamed/binary/empty/malformed/backslash-no-newline cases.
+  - `apps/web/src/pages/Tasks.test.tsx` — Needs-you filter chip + stat card + row attention dot (3 tests).
+  - `apps/web/src/pages/TaskDetail.test.tsx` — merge-readiness panel renders per status (2 tests); existing diff test updated for the new viewer (no raw `diff --git` line; new viewer shows the file label + add/del stats).
+- **Suite delta:** server 720 → 726 (+6); web 70 → 91 (+21). All gates green.

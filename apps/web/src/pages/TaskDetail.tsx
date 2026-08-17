@@ -3,8 +3,11 @@ import { Link, useParams } from "react-router-dom";
 import { api, taskEvents } from "../api/client";
 import { StatusBadge } from "../components/StatusBadge";
 import Markdown from "../components/Markdown";
+import { MergeReadinessPanel } from "../components/MergeReadinessPanel";
 import WaitingCard from "../components/WaitingCard";
 import PublishDialog from "../components/PublishDialog";
+import { parseUnifiedDiff } from "../lib/unifiedDiff";
+import { useInView } from "../lib/useInView";
 import type { Account, Artifact, CatalogAgent, Followup, GithubPr, Repo, Run, SseEvent, Task } from "../types";
 
 const TERMINAL = new Set(["done", "failed", "timed_out", "cancelled", "needs_approval", "interrupted"]);
@@ -774,53 +777,94 @@ function diffLineClass(line: string): string {
   return "text-ink-300";
 }
 
-function fileLabel(header: string): string {
-  // "diff --git a/foo/bar.ts b/foo/bar.ts" -> "foo/bar.ts" (renames shown as a → b).
-  const m = header.match(/^diff --git a\/(.*?) b\/(.*)$/);
-  if (!m) return header;
-  const [a, b] = [m[1], m[2]];
-  if (a === "dev/null") return b;
-  if (b === "dev/null") return a;
-  return a === b ? a : `${a} → ${b}`;
+const STATUS_LETTER: Record<string, string> = {
+  added: "A",
+  removed: "D",
+  modified: "M",
+  renamed: "R",
+  binary: "B",
+};
+
+function pathLabel(file: { oldPath: string | null; newPath: string | null; status: string }): string {
+  const target = file.newPath ?? file.oldPath ?? "?";
+  if (file.status === "renamed" && file.oldPath && file.newPath) {
+    return `${file.oldPath} → ${file.newPath}`;
+  }
+  return target;
 }
 
-function fileStats(lines: string[]): { add: number; del: number } {
-  let add = 0;
-  let del = 0;
-  for (const line of lines) {
-    if (line.startsWith("+++ ") || line.startsWith("--- ")) continue;
-    if (line.startsWith("+")) add += 1;
-    else if (line.startsWith("-")) del += 1;
-  }
-  return { add, del };
+function DiffFileSection({
+  file,
+  defaultOpen,
+}: {
+  file: ReturnType<typeof parseUnifiedDiff>[number];
+  defaultOpen: boolean;
+}) {
+  const { ref, inView } = useInView<HTMLDivElement>();
+  const letter = STATUS_LETTER[file.status] ?? "M";
+  return (
+    <details open={defaultOpen}>
+      <summary className="cursor-pointer select-none font-mono text-xs text-ink-200 transition-colors hover:text-syrup-300">
+        <span
+          className={`mr-2 inline-block w-4 text-center font-bold ${
+            file.status === "added"
+              ? "text-green-400"
+              : file.status === "removed"
+                ? "text-red-400"
+                : file.status === "renamed"
+                  ? "text-chai-300"
+                  : file.status === "binary"
+                    ? "text-ink-500"
+                    : "text-syrup-300"
+          }`}
+        >
+          {letter}
+        </span>
+        <span className="text-ink-100">{pathLabel(file)}</span>
+        {file.additions > 0 && (
+          <span className="ml-2 text-green-400">+{file.additions}</span>
+        )}
+        {file.deletions > 0 && (
+          <span className="ml-2 text-red-400">−{file.deletions}</span>
+        )}
+      </summary>
+      <div ref={ref}>
+        {file.binary ? (
+          <p className="mt-1 rounded bg-ink-900/60 p-3 font-mono text-[11px] text-ink-400">
+            binary file — use Artifacts below to download.
+          </p>
+        ) : inView || typeof IntersectionObserver === "undefined" ? (
+          <pre className="mt-1 max-h-96 overflow-auto whitespace-pre rounded bg-ink-900/60 p-2 font-mono text-[11px] leading-relaxed">
+            {file.hunks.map((hunk, h) => (
+              <div key={h}>
+                {hunk.header && (
+                  <div className={diffLineClass(hunk.header)}>{hunk.header}</div>
+                )}
+                {hunk.lines.map((line, j) => (
+                  <div key={j} className={diffLineClass(line)}>
+                    {line}
+                  </div>
+                ))}
+              </div>
+            ))}
+          </pre>
+        ) : (
+          <p className="mt-1 rounded bg-ink-900/60 p-3 font-mono text-[11px] text-ink-500">
+            scroll to load…
+          </p>
+        )}
+      </div>
+    </details>
+  );
 }
 
 function DiffView({ diff }: { diff: string }) {
-  // Split the unified diff into per-file chunks on `diff --git` headers.
-  const files = useMemo(() => {
-    const chunks: { header: string; lines: string[] }[] = [];
-    let current: { header: string; lines: string[] } | null = null;
-    for (const line of diff.split("\n")) {
-      if (line.startsWith("diff --git ")) {
-        current = { header: line, lines: [] };
-        chunks.push(current);
-      } else if (current) {
-        current.lines.push(line);
-      } else if (line.trim()) {
-        chunks.push({ header: "(header)", lines: [line] });
-      }
-    }
-    return chunks;
-  }, [diff]);
-
+  const files = useMemo(() => parseUnifiedDiff(diff), [diff]);
   if (files.length === 0) {
     return <p className="text-sm text-ink-500">No diff.</p>;
   }
   const totals = files.reduce(
-    (acc, f) => {
-      const s = fileStats(f.lines);
-      return { add: acc.add + s.add, del: acc.del + s.del };
-    },
+    (acc, f) => ({ add: acc.add + f.additions, del: acc.del + f.deletions }),
     { add: 0, del: 0 }
   );
   return (
@@ -832,30 +876,9 @@ function DiffView({ diff }: { diff: string }) {
         <span className="text-green-400">+{totals.add}</span>
         <span className="text-red-400">−{totals.del}</span>
       </div>
-      {files.map((file, i) => {
-        const stats = fileStats(file.lines);
-        return (
-          <details key={`${file.header}-${i}`} open={files.length === 1}>
-            <summary className="cursor-pointer select-none font-mono text-xs text-ink-200 transition-colors hover:text-syrup-300">
-              <span className="text-ink-100">{fileLabel(file.header)}</span>
-              {stats.add > 0 && (
-                <span className="ml-2 text-green-400">+{stats.add}</span>
-              )}
-              {stats.del > 0 && (
-                <span className="ml-2 text-red-400">−{stats.del}</span>
-              )}
-            </summary>
-            <pre className="mt-1 max-h-96 overflow-auto whitespace-pre rounded bg-ink-900/60 p-2 font-mono text-[11px] leading-relaxed">
-              <div className={diffLineClass(file.header)}>{file.header}</div>
-              {file.lines.map((line, j) => (
-                <div key={j} className={diffLineClass(line)}>
-                  {line}
-                </div>
-              ))}
-            </pre>
-          </details>
-        );
-      })}
+      {files.map((file, i) => (
+        <DiffFileSection key={`${file.newPath ?? file.oldPath ?? i}`} file={file} defaultOpen={files.length === 1} />
+      ))}
     </div>
   );
 }
@@ -874,13 +897,13 @@ function DiffSection({
     if (!run.has_diff) return;
     let cancelled = false;
     api
-      .getRunDiff(taskId, run.id)
+      .getLiveDiff(taskId)
       .then((r) => !cancelled && setDiff(r.diff))
       .catch((e) => !cancelled && setError(e instanceof Error ? e.message : "failed to load diff"));
     return () => {
       cancelled = true;
     };
-  }, [taskId, run.id, run.has_diff]);
+  }, [taskId, run.has_diff, run.id]);
 
   if (!run.has_diff) return null;
   return (
@@ -1229,6 +1252,12 @@ export default function TaskDetail() {
           </div>
         </dl>
       </section>
+
+      <div className="flex flex-wrap gap-2">
+        {(task.status === "needs_approval" || canManualPublish(task)) && (
+          <MergeReadinessPanel taskId={task.id} refreshKey={task.updated_at} />
+        )}
+      </div>
 
       <div className="flex flex-wrap gap-2">
         {(task.status === "running" || task.status === "queued") && (

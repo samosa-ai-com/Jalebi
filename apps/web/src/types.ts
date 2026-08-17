@@ -74,8 +74,35 @@ export interface Task {
   updated_at: string;
   run: Run | null;
   waiting_input?: boolean;
+  attention: AttentionValue;
   followups?: Followup[];
   reviewers?: ReviewAssignment[];
+}
+
+export type AttentionValue =
+  | "working"
+  | "needs_you"
+  | "in_review"
+  | "ready_to_merge"
+  | "done";
+
+export type PublishCheckStatus = "ready" | "attention" | "blocked";
+
+export interface PublishCheckItem {
+  name: "branch" | "commits" | "conflict" | "ci" | "review" | "mergeable";
+  ok: boolean;
+  message: string;
+  ahead?: number;
+  conflicts?: { kind: string; path: string }[];
+  state?: string | null;
+  decision?: string | null;
+  mergeable?: boolean | null;
+}
+
+export interface PublishCheck {
+  status: PublishCheckStatus;
+  base_ref: string;
+  checks: PublishCheckItem[];
 }
 
 export interface Repo {
