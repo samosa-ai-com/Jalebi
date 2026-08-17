@@ -611,6 +611,101 @@ def test_run_diff_endpoint(client: FlaskClient, session) -> None:
     detail = client.get(f"/api/tasks/{task.id}").get_json()
     assert detail["run"]["has_diff"] is True
     assert "diff_text" not in detail["run"]
+    # waiting_input is always present (derived, read-time) on run + task dicts
+    assert "waiting_input" in detail
+    assert "waiting_input" in detail["run"]
+    assert detail["waiting_input"] is False  # no steps → no waiting signal
+
+
+def test_task_detail_exposes_waiting_input_true(client: FlaskClient, session) -> None:
+    from jalebi import clock
+    from jalebi import tasks as tasks_svc
+    from jalebi.db import Run, now
+
+    row, _ = repos.upsert_repo(
+        session,
+        full_name="owner/waiting",
+        default_branch="main",
+        clone_url="https://github.com/owner/waiting.git",
+        pat_name="test",
+    )
+    task = tasks_svc.create_task(session, type_="freeform", repo_id=row.id, prompt="x")
+    task.status = "done"
+    run = Run(
+        task_id=task.id,
+        seq=1,
+        status="done",
+        started_at=now(),
+        finished_at=now(),
+        steps_json=json.dumps(
+            [
+                {
+                    "type": "message",
+                    "text": "I have a plan; **waiting for explicit approval** before proceeding.",
+                    "ts": clock.to_iso(now()),
+                }
+            ]
+        ),
+    )
+    session.add(run)
+    session.commit()
+
+    detail = client.get(f"/api/tasks/{task.id}").get_json()
+    assert detail["waiting_input"] is True
+    assert detail["run"]["waiting_input"] is True
+
+
+def test_task_detail_waiting_input_false_for_normal_done_run(
+    client: FlaskClient, session
+) -> None:
+    from jalebi import clock
+    from jalebi import tasks as tasks_svc
+    from jalebi.db import Run, now
+
+    row, _ = repos.upsert_repo(
+        session,
+        full_name="owner/normal",
+        default_branch="main",
+        clone_url="https://github.com/owner/normal.git",
+        pat_name="test",
+    )
+    task = tasks_svc.create_task(session, type_="freeform", repo_id=row.id, prompt="x")
+    task.status = "done"
+    run = Run(
+        task_id=task.id,
+        seq=1,
+        status="done",
+        started_at=now(),
+        finished_at=now(),
+        steps_json=json.dumps(
+            [{"type": "message", "text": "All done.", "ts": clock.to_iso(now())}]
+        ),
+    )
+    session.add(run)
+    session.commit()
+
+    detail = client.get(f"/api/tasks/{task.id}").get_json()
+    assert detail["waiting_input"] is False
+    assert detail["run"]["waiting_input"] is False
+
+
+def test_task_detail_waiting_input_false_when_no_run(
+    client: FlaskClient, session
+) -> None:
+    from jalebi import tasks as tasks_svc
+
+    row, _ = repos.upsert_repo(
+        session,
+        full_name="owner/norun",
+        default_branch="main",
+        clone_url="https://github.com/owner/norun.git",
+        pat_name="test",
+    )
+    task = tasks_svc.create_task(session, type_="freeform", repo_id=row.id, prompt="x")
+
+    detail = client.get(f"/api/tasks/{task.id}").get_json()
+    assert detail["run"] is None
+    assert detail["waiting_input"] is False
 
 
 def test_rerun_interrupted(client: FlaskClient, session, repo_id: int) -> None:

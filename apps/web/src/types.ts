@@ -24,6 +24,7 @@ export interface Run {
   started_at: string | null;
   finished_at: string | null;
   has_diff: boolean;
+  waiting_input?: boolean;
   steps: Step[];
   artifacts?: Artifact[];
 }
@@ -72,6 +73,7 @@ export interface Task {
   created_at: string;
   updated_at: string;
   run: Run | null;
+  waiting_input?: boolean;
   followups?: Followup[];
   reviewers?: ReviewAssignment[];
 }

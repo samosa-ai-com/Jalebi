@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, taskEvents } from "../api/client";
 import { StatusBadge } from "../components/StatusBadge";
+import Markdown from "../components/Markdown";
+import WaitingCard from "../components/WaitingCard";
 import PublishDialog from "../components/PublishDialog";
 import type { Account, Artifact, CatalogAgent, Followup, GithubPr, Repo, Run, SseEvent, Task } from "../types";
 
@@ -310,6 +312,8 @@ function TimelineItem({ step, index }: { step: SseEvent; index: number }) {
           <div className="mt-0.5">
             <ToolCallEntry step={step} />
           </div>
+        ) : step.type === "message" && step.text ? (
+          <Markdown className="mt-0.5">{step.text}</Markdown>
         ) : (
           step.text && <p className="mt-0.5 text-sm leading-snug text-ink-300">{step.text}</p>
         )}
@@ -353,13 +357,16 @@ function FollowUpComposer({
   followups,
   accounts,
   onSent,
+  prefill,
 }: {
   task: Task;
   followups: Followup[];
   accounts: Account[];
   onSent: () => void;
+  prefill?: { nonce: number; text: string } | null;
 }) {
   const [text, setText] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [patName, setPatName] = useState("");
   const [model, setModel] = useState("");
   const [cli, setCli] = useState(task.cli ?? "");
@@ -393,6 +400,23 @@ function FollowUpComposer({
       cancelled = true;
     };
   }, [cli]);
+
+  // A fresh nonce per click (even for the same text) re-triggers this effect,
+  // pre-filling the composer with the quoted final message and focusing it.
+  // setState-in-effect is intentional: we need to mirror a parent-driven input
+  // (the WaitingCard reply button) into the composer's local state, plus
+  // imperatively focus + scroll the textarea. React's lint rule is overly
+  // strict for this "prop-driven state reset" case.
+  useEffect(() => {
+    if (!prefill) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setText(prefill.text);
+    const el = textareaRef.current;
+    if (el) {
+      el.focus();
+      el.scrollIntoView?.({ block: "center" });
+    }
+  }, [prefill]);
 
   // Compare against the value the queue will actually use, not against the
   // task's pinned backend alone — a task with no pin resolves to
@@ -500,6 +524,7 @@ function FollowUpComposer({
           </p>
         )}
         <textarea
+          ref={textareaRef}
           value={text}
           onChange={(e) => setText(e.target.value)}
           rows={3}
@@ -1063,6 +1088,8 @@ export default function TaskDetail() {
   const previewTimelineLen = previewIsLatest ? previewStepsLen + live.length : previewStepsLen;
   const timelineRef = useAutoScroll<HTMLOListElement>(previewTimelineLen, followScroll);
   const consoleRef = useAutoScroll<HTMLPreElement>(previewTimelineLen, followScroll);
+  const [replyPrefill, setReplyPrefill] = useState<{ nonce: number; text: string } | null>(null);
+  const replyNonce = useRef(0);
 
   if (error) return <p className="text-red-400">{error}</p>;
   if (!task) return <p className="text-ink-500">Loading…</p>;
@@ -1071,6 +1098,15 @@ export default function TaskDetail() {
   const selectedRun =
     runs.find((r) => r.id === selectedRunId) ?? task.run ?? runs[runs.length - 1] ?? null;
   const steps = selectedRun?.steps ?? [];
+  const finalMessage = (() => {
+    if (!selectedRun?.waiting_input) return null;
+    for (let i = steps.length - 1; i >= 0; i--) {
+      const s = steps[i];
+      if (s.type === "message" && s.text) return s.text;
+    }
+    return null;
+  })();
+  const canReply = runs.some((r) => r.session_id) && TERMINAL.has(task.status);
   const timeline = isLatest ? [...steps, ...live] : steps;
   const consoleLines = timeline.filter((s) => s.type === "message" || s.type === "tool_call");
 
@@ -1098,6 +1134,19 @@ export default function TaskDetail() {
           )}
         </span>
       </div>
+
+      {finalMessage && selectedRun && (
+        <WaitingCard
+          run={selectedRun}
+          message={finalMessage}
+          canReply={canReply}
+          onReply={() => {
+            const quoted = finalMessage.split("\n").map((l) => `> ${l}`).join("\n");
+            replyNonce.current += 1;
+            setReplyPrefill({ nonce: replyNonce.current, text: `${quoted}\n\n` });
+          }}
+        />
+      )}
 
       <section className="surface p-6">
         <div className="flex items-center justify-between gap-4">
@@ -1247,6 +1296,7 @@ export default function TaskDetail() {
             load();
             setFollowUpPending(true);
           }}
+          prefill={replyPrefill}
         />
       )}
 

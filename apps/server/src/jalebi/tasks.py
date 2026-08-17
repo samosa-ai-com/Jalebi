@@ -6,7 +6,7 @@ from collections.abc import Callable
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from jalebi import clock
+from jalebi import attention, clock
 from jalebi.catalog import agent_by_slug
 from jalebi.db import TASK_TYPES, Artifact, Followup, Repo, ReviewAssignment, Run, Task
 
@@ -154,6 +154,11 @@ def list_artifacts(session: Session, run_id: int) -> list[Artifact]:
 
 
 def run_to_dict(run: Run, artifacts: list[Artifact] | None = None) -> dict[str, object]:
+    steps = json.loads(run.steps_json) if run.steps_json else []
+    waiting_input = (
+        run.status in attention.WAITING_INPUT_STATUSES
+        and attention.is_waiting_message(attention.last_message_text(steps))
+    )
     return {
         "id": run.id,
         "seq": run.seq,
@@ -165,7 +170,8 @@ def run_to_dict(run: Run, artifacts: list[Artifact] | None = None) -> dict[str, 
         "started_at": clock.to_iso(run.started_at) if run.started_at else None,
         "finished_at": clock.to_iso(run.finished_at) if run.finished_at else None,
         "has_diff": bool(run.diff_text),
-        "steps": json.loads(run.steps_json) if run.steps_json else [],
+        "waiting_input": waiting_input,
+        "steps": steps,
         "artifacts": [
             {
                 "id": a.id,
@@ -186,6 +192,7 @@ def task_to_dict(
     repo_full_name: str | None = None,
     reviewers: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
+    run_dict = run_to_dict(run, artifacts=artifacts) if run is not None else None
     data: dict[str, object] = {
         "id": task.id,
         "type": task.type,
@@ -199,6 +206,7 @@ def task_to_dict(
         "pat_name": task.pat_name,
         "prompt": task.prompt,
         "status": task.status,
+        "waiting_input": bool(run_dict and run_dict["waiting_input"]),
         "timeout_minutes": task.timeout_minutes,
         "retry_count": task.retry_count,
         "pr_number": task.pr_number,
@@ -209,7 +217,7 @@ def task_to_dict(
         "env_vars": json.loads(task.env_vars_json) if task.env_vars_json else [],
         "created_at": clock.to_iso(task.created_at),
         "updated_at": clock.to_iso(task.updated_at),
-        "run": run_to_dict(run, artifacts=artifacts) if run is not None else None,
+        "run": run_dict,
         "followups": [
             {
                 "id": f.id,

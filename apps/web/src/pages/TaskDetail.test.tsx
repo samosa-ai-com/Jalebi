@@ -562,6 +562,83 @@ describe("TaskDetail", () => {
     ).toBeInTheDocument();
   });
 
+  it("shows the waiting card for a waiting_input run", async () => {
+    const waitingTask = {
+      ...TASK,
+      status: "done",
+      run: {
+        ...RUN,
+        status: "done",
+        waiting_input: true,
+        finished_at: "2026-08-06T10:02:00",
+        steps: [
+          {
+            type: "message",
+            text: "# H\n\nPlan. **waiting for explicit approval**.",
+            ts: "2026-08-06T10:01:05",
+          },
+        ],
+      },
+    };
+    stubFetch(waitingTask);
+    vi.stubGlobal("EventSource", FakeEventSource);
+
+    renderDetail();
+    expect(await screen.findByText("Agent is waiting for your input")).toBeInTheDocument();
+    // The message is rendered as markdown in the card AND the timeline.
+    expect(screen.getAllByText(/Plan/).length).toBeGreaterThan(0);
+  });
+
+  it("does not show the waiting card when waiting_input is false", async () => {
+    const normalTask = {
+      ...TASK,
+      status: "done",
+      run: {
+        ...RUN,
+        status: "done",
+        waiting_input: false,
+        steps: [{ type: "message", text: "All done.", ts: "2026-08-06T10:01:05" }],
+      },
+    };
+    stubFetch(normalTask);
+    vi.stubGlobal("EventSource", FakeEventSource);
+
+    renderDetail();
+    await screen.findByText("Follow-up");
+    expect(screen.queryByText("Agent is waiting for your input")).toBeNull();
+  });
+
+  it("Reply in follow-up prefills the composer with quoted context", async () => {
+    const waitingTask = {
+      ...TASK,
+      status: "done",
+      run: {
+        ...RUN,
+        status: "done",
+        waiting_input: true,
+        finished_at: "2026-08-06T10:02:00",
+        steps: [
+          {
+            type: "message",
+            text: "# H\n\nPlan. **waiting for explicit approval**.",
+            ts: "2026-08-06T10:01:05",
+          },
+        ],
+      },
+    };
+    stubFetch(waitingTask);
+    vi.stubGlobal("EventSource", FakeEventSource);
+
+    renderDetail();
+    await screen.findByText("Agent is waiting for your input");
+    await userEvent.click(screen.getByRole("button", { name: "Reply in follow-up" }));
+
+    const textarea = screen.getByPlaceholderText(
+      /Address the reviewer comments/
+    ) as HTMLTextAreaElement;
+    expect(textarea.value.startsWith("> ")).toBe(true);
+  });
+
   describe("publish modes", () => {
     function doneTask(overrides: Record<string, unknown> = {}) {
       return {
