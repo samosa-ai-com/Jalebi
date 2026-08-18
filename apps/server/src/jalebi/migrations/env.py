@@ -1,7 +1,7 @@
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import engine_from_config, event, pool
 
 from jalebi.config import load_config
 from jalebi.db import Base
@@ -47,6 +47,19 @@ def run_migrations_online() -> None:
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
+
+    # Jalebi's global SQLAlchemy "connect" listener (db.py) forces
+    # PRAGMA foreign_keys=ON on every SQLite engine. Alembic's batch
+    # mode must drop/recreate `tasks` when widening ck_tasks_status, which
+    # SQLite forbids while foreign keys are enforced. Register an
+    # engine-instance listener that turns foreign keys OFF *after* the
+    # global one runs, so alembic's batch DDL works. This is the standard
+    # alembic-on-SQLite pattern and only affects the migration connection.
+    @event.listens_for(connectable, "connect")
+    def _disable_fk_for_migrations(dbapi_connection, _connection_record):  # noqa: ARG001
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=OFF")
+        cursor.close()
 
     with connectable.connect() as connection:
         context.configure(
