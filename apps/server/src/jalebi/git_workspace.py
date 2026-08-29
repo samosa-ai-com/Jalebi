@@ -882,12 +882,12 @@ class GitWorkspace:
         mirror = self.mirror_path(self.config.data_dir, full_name)
         auth = _auth_env(token)
         with self._lock_for(full_name):
-            base_env = os.environ.copy()
+            env = _clean_git_env(os.environ.copy())
             if auth:
-                base_env.update(auth)
+                env.update(auth)
             proc = subprocess.run(
                 ["git", "-C", str(mirror), "push", "--force-with-lease", "origin", branch],
-                env=_clean_git_env(base_env),
+                env=env,
                 capture_output=True,
                 text=True,
                 timeout=GIT_TIMEOUT_SECONDS,
