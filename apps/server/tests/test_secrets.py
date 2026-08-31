@@ -97,3 +97,27 @@ def test_named_token_metadata(cfg: Config) -> None:
 def test_add_github_token_rejects_empty_name(cfg: Config) -> None:
     with pytest.raises(ValueError, match="empty"):
         secrets.add_github_token(cfg, " ", "ghp_x")
+
+
+def test_update_github_token_replaces_token_and_meta(cfg: Config) -> None:
+    secrets.add_github_token(cfg, "work", "ghp_old", meta={"login": "old-user"})
+    secrets.add_github_token(cfg, "personal", "ghp_personal")
+    secrets.update_github_token(
+        cfg, "work", "ghp_new", meta={"login": "new-user", "token_type": "fine-grained"}
+    )
+    assert set(secrets.token_names(cfg)) == {"work", "personal"}
+    assert secrets.get_named_token(cfg, "work") == "ghp_new"
+    # Unrelated accounts are untouched.
+    assert secrets.get_named_token(cfg, "personal") == "ghp_personal"
+    meta = secrets.token_meta(cfg, "work")
+    assert meta is not None
+    assert meta["login"] == "new-user"
+    assert meta["token_type"] == "fine-grained"
+
+
+def test_update_github_token_unknown_name_raises(cfg: Config) -> None:
+    secrets.add_github_token(cfg, "work", "ghp_work")
+    with pytest.raises(KeyError, match="no such"):
+        secrets.update_github_token(cfg, "missing", "ghp_x")
+    # The existing account is untouched by the failed update.
+    assert secrets.get_named_token(cfg, "work") == "ghp_work"

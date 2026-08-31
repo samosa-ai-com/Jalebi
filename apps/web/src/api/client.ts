@@ -223,6 +223,15 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ name, token }),
     }),
+  updateToken: (name: string, token: string) =>
+    request<{
+      updated: string;
+      previous_login?: string | null;
+      login?: string | null;
+    }>(`/api/github/tokens/${encodeURIComponent(name)}`, {
+      method: "PUT",
+      body: JSON.stringify({ token }),
+    }),
   deleteToken: (name: string) =>
     request<{ removed: string; repos_affected: string[]; tasks_affected: number }>(
       `/api/github/tokens/${encodeURIComponent(name)}`,

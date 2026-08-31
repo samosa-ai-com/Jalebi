@@ -38,8 +38,16 @@ Blueprint `jalebi/routes/github.py` (`/api/github`):
 | Endpoint | Behavior |
 |---|---|
 | `GET /api/github/status` | Validates the configured token; 409 if none configured; returns `TokenInfo`. |
-| `PUT /api/github/token` | Validates a submitted PAT; if valid, stores it in `secrets.json` (0600); never echoes it. 400 on invalid. |
 | `GET /api/github/repos` | Lists the authenticated user's repos. 409 if no token. |
+
+Account vault (`jalebi/routes/github.py`, `/api/github/tokens` — see §9 for details):
+
+| Endpoint | Behavior |
+|---|---|
+| `GET /api/github/tokens` | Lists every named account with live status; never returns token values (only masked previews). |
+| `POST /api/github/tokens` | Adds a new named account (validated first). **409 if the name already exists** — an existing account's credential is changed via `PUT`, never silently overwritten. |
+| `PUT /api/github/tokens/<name>` | Replaces an existing account's PAT. Validates first (400 invalid / 502 unreachable / 404 unknown name); updates the token **and refreshes its metadata** without deleting any bound data — `repos.pat_name`/`tasks.pat_name` are name-keyed, so connected repos, tasks, and history survive. Returns `{updated, previous_login, login}` so the UI can flag an accidental identity change. |
+| `DELETE /api/github/tokens/<name>` | Removes the account AND everything tied to it (repos, tasks, runs, worktrees, mirrors); queued/running tasks cancelled first. See §11. |
 
 Connected-repo registry (`jalebi/routes/repos.py`, `/api/repos`):
 
@@ -109,7 +117,7 @@ Implemented via the same client (Phase 0): issue/PR context fetch, publish (crea
 ## 9. Named PAT vault (multi-token)
 
 - Jalebi stores **named PATs** in the `0600` secrets file (`secrets.json` → `github_tokens: [{name, token}]`). Every PAT is an equal account — there is no primary/default and no fallback.
-- `GET/POST/DELETE /api/github/tokens` manage the vault; add validates first (`validate_token`), the UI sees only **masked** previews (never values).
+- `GET/POST/PUT/DELETE /api/github/tokens` manage the vault. **Add** (`POST`) validates first (`validate_token`) and refuses an existing name (409); **update** (`PUT /api/github/tokens/<name>`) validates, then swaps the token and refreshes its metadata via `secrets.update_github_token` — name-keyed bindings (`repos.pat_name`, `tasks.pat_name`) are untouched, so replacing a credential **never deletes repos, tasks, or history**. The UI sees only **masked** previews (never values); the update response's `previous_login`/`login` let the UI warn when the new token authenticates as a different GitHub user.
 - Tasks and follow-ups carry a `pat_name`; the queue resolves the token via `secrets.resolve_token(config, name)` (strict: named only, else `None` → an explicit error) and uses it for GitHub calls, the agent `JALEBI_GITHUB_TOKEN`, and masking. The agent env carries the selected PAT for GitHub **API** use but **no git push credentials** — Jalebi is the only pusher. **All** known PATs are masked at ingest.
 - New client methods (httpx): `list_issues`, `get_issue`, `comment_on_issue`, `list_prs`, `get_pr`, `post_pr_review` (event `COMMENT`), `list_branches`, `find_pr_by_head` (same-repo dedup).
 - `GET /api/github/context?repo=&account=` returns open issues + open PRs + branches for the task-form pickers.

@@ -96,12 +96,67 @@ function AddAccountForm({ onAdded }: { onAdded: () => void }) {
   );
 }
 
+function UpdateTokenForm({ account, onUpdated }: { account: Account; onUpdated: () => void }) {
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!value.trim()) return;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await api.updateToken(account.name, value.trim());
+      setValue("");
+      if (res.previous_login && res.login && res.previous_login !== res.login) {
+        setNotice(
+          `Token updated. This account now authenticates as ${res.login} (was ${res.previous_login}).`
+        );
+      }
+      onUpdated();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "failed to update token");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form onSubmit={submit} className="mt-3 rounded-md border border-ink-800 bg-ink-900/40 p-3">
+      <p className="text-xs text-ink-500">
+        Replacing this token only swaps the credential — connected repos, tasks and history for{" "}
+        <span className="font-mono text-ink-300">{account.name}</span> are kept intact.
+      </p>
+      <div className="mt-2 grid gap-2 sm:grid-cols-[1fr_auto] sm:items-center">
+        <input
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          type="password"
+          placeholder="new ghp_…"
+          className="field font-mono"
+          autoComplete="off"
+          spellCheck={false}
+        />
+        <button type="submit" disabled={busy || !value.trim()} className="btn-primary !px-3 !py-1 text-xs">
+          {busy ? "Updating…" : "Update token"}
+        </button>
+      </div>
+      {error && <p className="mt-2 text-xs text-red-400">{error}</p>}
+      {notice && <p className="mt-2 text-xs text-ink-400">{notice}</p>}
+    </form>
+  );
+}
+
 export default function Github() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [repos, setRepos] = useState<GithubRepo[]>([]);
   const [connected, setConnected] = useState<Repo[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [updating, setUpdating] = useState<string | null>(null);
 
   const load = useCallback(() => {
     api
@@ -205,14 +260,25 @@ export default function Github() {
             <h2 className="panel-title">
               {account.login ?? account.name}
             </h2>
-            <button
-              onClick={() => removeAccount(account.name)}
-              className="ml-auto text-[11px] text-ink-500 transition-colors hover:text-red-300"
-            >
-              remove
-            </button>
+            <div className="ml-auto flex items-center gap-3">
+              <button
+                onClick={() => setUpdating(updating === account.name ? null : account.name)}
+                className="text-[11px] text-ink-500 transition-colors hover:text-syrup-300"
+              >
+                {updating === account.name ? "cancel" : "update token"}
+              </button>
+              <button
+                onClick={() => removeAccount(account.name)}
+                className="text-[11px] text-ink-500 transition-colors hover:text-red-300"
+              >
+                remove
+              </button>
+            </div>
           </div>
           <div className="space-y-4 px-6 py-5">
+            {updating === account.name && (
+              <UpdateTokenForm account={account} onUpdated={load} />
+            )}
             <AccountStatus account={account} />
 
             <div>
