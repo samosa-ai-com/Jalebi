@@ -707,6 +707,16 @@ export default function Tasks() {
     setPage(0);
   }
 
+  function handleDismissAttention(taskId: number) {
+    setTasks((prev) =>
+      prev.map((t) => (t.id === taskId ? { ...t, attention: "done" } : t))
+    );
+    api.dismissAttention(taskId).catch((e) => {
+      setError(e.message);
+      load();
+    });
+  }
+
   const statCards = [
     { label: "Total", value: stats.total, accent: "text-ink-100" },
     { label: "Needs you", value: stats.needsYou, accent: "text-syrup-300" },
@@ -817,6 +827,20 @@ export default function Tasks() {
                     <div className="flex flex-wrap items-center gap-1.5">
                       <StatusBadge status={t.status} />
                       <AttentionBadge attention={t.attention ?? "working"} />
+                      {t.attention === "needs_you" && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            handleDismissAttention(t.id);
+                          }}
+                          className="rounded px-1.5 py-0.5 text-[10px] font-medium text-ink-400 ring-1 ring-ink-700/60 hover:bg-ink-800 hover:text-ink-200 transition-colors"
+                          title="Dismiss attention for this task"
+                        >
+                          Dismiss
+                        </button>
+                      )}
                     </div>
                   </td>
                   <td className="px-4 py-3">

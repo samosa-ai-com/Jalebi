@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, taskEvents } from "../api/client";
 import { StatusBadge } from "../components/StatusBadge";
+import { AttentionBadge } from "../components/AttentionBadge";
 import FileBrowser from "../components/FileBrowser";
 import Markdown from "../components/Markdown";
 import { MergeReadinessPanel } from "../components/MergeReadinessPanel";
@@ -1177,6 +1178,14 @@ export default function TaskDetail() {
   const lastPhase = timeline.reduce<string | null>((acc, s) => s.phase ?? acc, null);
   const phaseIndex = lastPhase ? PHASE_ORDER.indexOf(lastPhase) : -1;
 
+  function handleDismissAttention() {
+    if (!task) return;
+    api
+      .dismissAttention(task.id)
+      .then((updated) => setTask(updated))
+      .catch((e) => setError(e.message));
+  }
+
   return (
     <div className="space-y-6 animate-fade-up">
       <div className="flex flex-wrap items-center gap-3">
@@ -1185,6 +1194,21 @@ export default function TaskDetail() {
         </Link>
         <h1 className="text-2xl font-bold tracking-tight text-ink-100">Task #{task.id}</h1>
         <StatusBadge status={task.status} />
+        {task.attention && task.attention !== "working" && (
+          <div className="flex items-center gap-1.5">
+            <AttentionBadge attention={task.attention} />
+            {task.attention === "needs_you" && (
+              <button
+                type="button"
+                onClick={handleDismissAttention}
+                className="rounded px-1.5 py-0.5 text-[10px] font-medium text-ink-400 ring-1 ring-ink-700/60 hover:bg-ink-800 hover:text-ink-200 transition-colors"
+                title="Dismiss attention for this task"
+              >
+                Dismiss
+              </button>
+            )}
+          </div>
+        )}
         <span className="mx-1 hidden h-4 w-px bg-ink-800 sm:block" />
         <span className="font-mono text-xs text-ink-500">
           {repoName}
@@ -1212,6 +1236,11 @@ export default function TaskDetail() {
             }}
             ideConfigured={ideConfigured}
             onOpenWorktree={openInIde}
+            onReject={() => {
+              if (window.confirm("Reject this proposal and dismiss attention?")) {
+                handleDismissAttention();
+              }
+            }}
           />
           {ideError && <p className="text-xs text-red-400">{ideError}</p>}
         </>

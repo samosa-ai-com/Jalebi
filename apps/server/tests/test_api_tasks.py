@@ -3,7 +3,7 @@ import json
 import pytest
 from flask.testing import FlaskClient
 
-from jalebi import repos, secrets
+from jalebi import repos, secrets, tasks
 from jalebi.db import Task
 
 
@@ -1233,3 +1233,47 @@ def test_create_pr_head_source_rejected_for_issue_fix(
     )
     assert resp.status_code == 400
     assert "freeform" in resp.get_json()["error"]
+
+
+def test_cancel_task_allows_needs_approval(
+    client: FlaskClient, repo_id: int, session
+) -> None:
+    task = tasks.create_task(
+        session, type_="freeform", repo_id=repo_id, prompt="test cancel"
+    )
+    task.status = "needs_approval"
+    session.commit()
+
+    resp = client.post(f"/api/tasks/{task.id}/cancel")
+    assert resp.status_code == 200
+    assert resp.get_json()["status"] == "cancelled"
+
+    task_resp = client.get(f"/api/tasks/{task.id}")
+    assert task_resp.status_code == 200
+    assert task_resp.get_json()["status"] == "cancelled"
+    assert task_resp.get_json()["attention"] == "done"
+
+
+def test_dismiss_attention_endpoint(
+    client: FlaskClient, repo_id: int, session
+) -> None:
+    task = tasks.create_task(
+        session, type_="freeform", repo_id=repo_id, prompt="test dismiss"
+    )
+    task.status = "failed"
+    session.commit()
+
+    # Before dismissing, failed terminal without PR facts evaluates to needs_you
+    task_resp = client.get(f"/api/tasks/{task.id}")
+    assert task_resp.get_json()["attention"] == "needs_you"
+
+    # Dismiss attention
+    resp = client.post(f"/api/tasks/{task.id}/dismiss-attention")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["attention"] == "done"
+
+    # Confirm subsequent GET also returns done
+    task_resp2 = client.get(f"/api/tasks/{task.id}")
+    assert task_resp2.get_json()["attention"] == "done"
+

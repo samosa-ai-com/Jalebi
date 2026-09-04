@@ -435,6 +435,21 @@ describe("Tasks page (Phase 4 T3.1)", () => {
     // The StatusBadge label is the raw status.
     expect(screen.getByText("done")).toBeInTheDocument();
   });
+
+  it("renders the Dismiss button on needs_you rows and allows dismissing attention", async () => {
+    stubFetch({
+      "/api/tasks/1/dismiss-attention": { ...TASKS[0], attention: "done" },
+      "/api/tasks": TASKS,
+    });
+    renderTasks();
+    const dismissBtn = await screen.findByRole("button", { name: "Dismiss" });
+    expect(dismissBtn).toBeInTheDocument();
+    await userEvent.click(dismissBtn);
+    // After dismiss, the task's attention becomes "done" and the dismiss button is removed
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument();
+    });
+  });
 });
 
 

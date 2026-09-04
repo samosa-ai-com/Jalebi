@@ -4,7 +4,7 @@ import json
 from typing import TYPE_CHECKING, TypedDict
 
 WAITING_INPUT_STATUSES = frozenset(
-    {"done", "failed", "timed_out", "cancelled", "needs_approval"}
+    {"done", "failed", "timed_out", "needs_approval"}
 )
 
 # Non-terminal task statuses (everything except the terminal set + the rare
@@ -40,10 +40,23 @@ def _steps_json(run) -> list:
         return []
 
 
+def _is_attention_dismissed(task: "Task") -> bool:
+    ctx = getattr(task, "context_json", None)
+    if not ctx:
+        return False
+    try:
+        data = json.loads(ctx)
+        return bool(isinstance(data, dict) and data.get("attention_dismissed"))
+    except (TypeError, ValueError):
+        return False
+
+
 def attention_for(task: "Task", run: "Run | None", pr_facts: "PRFacts | None") -> str:
     """One-word attention status consumed by the UI (T3) + route serializers.
 
     Decision tree (order matters):
+    0. Cancelled or explicitly dismissed tasks → ``"done"`` (the owner
+       cancelled or acknowledged it; never demands attention).
     1. T0 waiting-for-input (terminal run whose last message asks for the
        user) → ``"needs_you"`` — beats every other branch.
     2. Non-terminal (queued / running / waiting_review) → ``"working"``,
@@ -55,6 +68,10 @@ def attention_for(task: "Task", run: "Run | None", pr_facts: "PRFacts | None") -
        → ``"needs_you"``; mergeable=True → ``"ready_to_merge"``; else
        ``"in_review"``.
     """
+    # 0. Cancelled or dismissed attention.
+    if task.status == "cancelled" or _is_attention_dismissed(task):
+        return "done"
+
     # 1. T0 waiting-for-input always wins (cosmetic but high-signal).
     if run is not None and run.status in WAITING_INPUT_STATUSES:
         steps = _steps_json(run)

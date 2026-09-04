@@ -10,6 +10,7 @@ export default function WaitingCard({
   onReply,
   ideConfigured,
   onOpenWorktree,
+  onReject,
 }: {
   run: Run;
   message: string;
@@ -17,6 +18,7 @@ export default function WaitingCard({
   onReply: () => void;
   ideConfigured: boolean;
   onOpenWorktree: () => void;
+  onReject?: () => void;
 }) {
   const finished = run.finished_at ? new Date(run.finished_at).toLocaleString() : "—";
   return (
@@ -47,6 +49,16 @@ export default function WaitingCard({
         >
           Open worktree
         </button>
+        {onReject && (
+          <button
+            type="button"
+            onClick={onReject}
+            className="btn-ghost text-red-400 hover:text-red-300 hover:border-red-500/40"
+            title="Reject this proposal and dismiss attention"
+          >
+            Reject proposal
+          </button>
+        )}
         {!ideConfigured && (
           <Link
             to="/settings"

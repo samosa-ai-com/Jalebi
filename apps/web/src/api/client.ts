@@ -270,6 +270,8 @@ export const api = {
     request<Task>("/api/tasks", { method: "POST", body: JSON.stringify(input) }),
   cancelTask: (id: number) =>
     request<{ status: string }>(`/api/tasks/${id}/cancel`, { method: "POST" }),
+  dismissAttention: (id: number) =>
+    request<Task>(`/api/tasks/${id}/dismiss-attention`, { method: "POST" }),
   rerunTask: (id: number) => request<Task>(`/api/tasks/${id}/rerun`, { method: "POST" }),
   deleteTask: (id: number) =>
     request<{ deleted: number }>(`/api/tasks/${id}`, { method: "DELETE" }),

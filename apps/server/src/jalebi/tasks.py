@@ -18,6 +18,7 @@ from jalebi.db import (
     Run,
     Task,
     TaskDependency,
+    now,
 )
 
 MAX_PROMPT_CHARS = 32_000  # prompts travel via argv; bound them to stay clear of ARG_MAX
@@ -461,3 +462,27 @@ def dep_dict(session: Session, task_id: int) -> dict[str, object]:
 def _status_for(session: Session, task_id: int) -> str | None:
     t = session.get(Task, task_id)
     return t.status if t is not None else None
+
+
+def dismiss_task_attention(session: Session, task_id: int) -> Task | None:
+    """Mark a task's attention as dismissed so it leaves the "Needs you" state."""
+    from jalebi import clock
+
+    task = session.get(Task, task_id)
+    if task is None:
+        return None
+    ctx: dict = {}
+    if task.context_json:
+        try:
+            parsed = json.loads(task.context_json)
+            if isinstance(parsed, dict):
+                ctx = parsed
+        except (TypeError, ValueError):
+            ctx = {}
+    ctx["attention_dismissed"] = True
+    ctx["attention_dismissed_at"] = clock.to_iso(now())
+    task.context_json = json.dumps(ctx)
+    task.updated_at = now()
+    session.commit()
+    return task
+

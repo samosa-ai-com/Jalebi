@@ -361,7 +361,8 @@ def cancel_task(task_id: int) -> ResponseReturnValue:
     task = tasks.get_task(session, task_id)
     if task is None:
         return jsonify({"error": "task not found"}), 404
-    if task.status == "queued":
+    if task.status in ("queued", "needs_approval"):
+        was_queued = task.status == "queued"
         task.status = "cancelled"
         task.updated_at = now()
         session.commit()
@@ -369,12 +370,22 @@ def cancel_task(task_id: int) -> ResponseReturnValue:
         # this task's _RunState (but not yet committed "running"), queue.cancel
         # sets state.reason so the worker kills the process instead of running
         # a task the user saw as cancelled.
-        _queue().cancel(task_id)
+        if was_queued:
+            _queue().cancel(task_id)
         return jsonify({"status": "cancelled"})
     if task.status == "running":
         killed = _queue().cancel(task_id)
         return jsonify({"status": "cancelling", "killed": killed})
     return jsonify({"error": f"cannot cancel task in state {task.status}"}), 409
+
+
+@bp.post("/<int:task_id>/dismiss-attention")
+def dismiss_attention(task_id: int) -> ResponseReturnValue:
+    session = db.get_session()
+    task = tasks.dismiss_task_attention(session, task_id)
+    if task is None:
+        return jsonify({"error": "task not found"}), 404
+    return jsonify(_task_dict(session, task))
 
 
 @bp.post("/<int:task_id>/rerun")

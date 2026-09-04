@@ -319,3 +319,28 @@ def test_attention_for_interrupted_terminal_no_facts_needs_you() -> None:
 
     task = _task_with_status("interrupted")
     assert _attn.attention_for(cast(Task, task), None, None) == "needs_you"
+
+
+def test_attention_for_cancelled_task_returns_done() -> None:
+    from typing import cast
+
+    from jalebi import attention as _attn
+    from jalebi.db import Run, Task
+
+    task = _task_with_status("cancelled")
+    run = _run_with_status(status="cancelled")
+    assert _attn.attention_for(cast(Task, task), cast(Run, run), None) == "done"
+
+
+def test_attention_for_dismissed_attention_returns_done() -> None:
+    import json
+    from typing import cast
+
+    from jalebi import attention as _attn
+    from jalebi.db import Run, Task
+
+    task = _task_with_status("failed")
+    task.context_json = json.dumps({"attention_dismissed": True})
+    run = _run_with_status(status="failed")
+    assert _attn.attention_for(cast(Task, task), cast(Run, run), None) == "done"
+
