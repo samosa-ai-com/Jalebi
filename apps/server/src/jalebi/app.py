@@ -412,12 +412,14 @@ def create_app(config: Config | None = None) -> Flask:
 
     @app.get("/api/ide/detect")
     def ide_detect() -> ResponseReturnValue:
-        """Probe the short whitelist for an IDE on PATH."""
-        detected = ide.detect_ide()
-        if detected is None:
-            return jsonify({"command": "", "name": ""})
-        command, name = detected
-        return jsonify({"command": command, "name": name})
+        """Probe the whitelist for installed IDEs on PATH."""
+        all_detected = ide.detect_all_ides()
+        first = all_detected[0] if all_detected else None
+        return jsonify({
+            "detected": all_detected,
+            "command": first["command"] if first else "",
+            "name": first["name"] if first else "",
+        })
 
     @app.post("/api/ide/test")
     def ide_test() -> ResponseReturnValue:

@@ -1,19 +1,19 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
-import type { EnvVar, Repo, SettingsMap } from "../types";
+import type { DetectedIde, EnvVar, Repo, SettingsMap } from "../types";
 
-// Phase 4 T6 — IDE connector settings. Self-contained component so the
-// "Detect" button can programmatically fill a controlled command input
-// (the parent's uncontrolled save-on-blur pattern can't be re-filled).
+// Phase 4 T6 — IDE connector settings.
 function IDESettings() {
   const [command, setCommand] = useState("");
   const [name, setName] = useState("");
   const [found, setFound] = useState(false);
+  const [detected, setDetected] = useState<DetectedIde[]>([]);
+  const [isCustom, setIsCustom] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [testMsg, setTestMsg] = useState<string | null>(null);
   const [testErr, setTestErr] = useState<string | null>(null);
 
-  useEffect(() => {
+  const loadStatus = () => {
     api
       .getIdeStatus()
       .then((s) => {
@@ -22,36 +22,67 @@ function IDESettings() {
         setFound(s.found);
       })
       .catch(() => {});
+  };
+
+  const loadDetected = () => {
+    api
+      .detectIde()
+      .then((d) => {
+        const list = d.detected ?? (d.command ? [{ command: d.command, name: d.name }] : []);
+        setDetected(list);
+      })
+      .catch(() => {});
+  };
+
+  useEffect(() => {
+    loadStatus();
+    loadDetected();
   }, []);
+
+  const selectIde = (ide: DetectedIde) => {
+    setCommand(ide.command);
+    setName(ide.name);
+    setFound(true);
+    setIsCustom(false);
+    setTestMsg(null);
+    setTestErr(null);
+    Promise.all([
+      api.updateSetting("ide_command", ide.command),
+      api.updateSetting("ide_name", ide.name),
+    ])
+      .then(() => setStatus(`saved (${ide.name})`))
+      .catch((e) => setStatus(e instanceof Error ? e.message : "save failed"));
+  };
 
   const saveCommand = (v: string) => {
     setCommand(v);
     api
       .updateSetting("ide_command", v)
-      .then(() => setStatus("saved"))
+      .then(() => {
+        setStatus("saved");
+        api
+          .getIdeStatus()
+          .then((s) => setFound(s.found))
+          .catch(() => {});
+      })
       .catch((e) => setStatus(e instanceof Error ? e.message : "save failed"));
   };
+
   const saveName = (v: string) => {
     setName(v);
     api.updateSetting("ide_name", v).catch(() => {});
   };
 
-  const detect = () => {
-    api
-      .detectIde()
-      .then((d) => {
-        if (d.command) {
-          setCommand(d.command);
-          setName(d.name);
-          setFound(true);
-          api.updateSetting("ide_command", d.command).catch(() => {});
-          api.updateSetting("ide_name", d.name).catch(() => {});
-          setStatus("detected");
-        } else {
-          setStatus("no IDE found on PATH");
-        }
-      })
-      .catch(() => setStatus("detect failed"));
+  const clearIde = () => {
+    setCommand("");
+    setName("");
+    setFound(false);
+    setIsCustom(false);
+    setTestMsg(null);
+    setTestErr(null);
+    Promise.all([api.updateSetting("ide_command", ""), api.updateSetting("ide_name", "")])
+      .then(() => setStatus("IDE disabled"))
+      .catch((e) => setStatus(e instanceof Error ? e.message : "failed to clear"));
   };
 
   const test = () => {
@@ -63,49 +94,151 @@ function IDESettings() {
       .catch((e) => setTestErr(e instanceof Error ? e.message : "test failed"));
   };
 
+  const matchedDetected = detected.find((d) => d.command === command);
+  const showCustomInputs = isCustom || (Boolean(command) && !matchedDetected);
+
   return (
     <section className="surface p-5 animate-fade-up" style={{ animationDelay: "0.035s" }}>
-      <h2 className="panel-title mb-1">IDE</h2>
-      <p className="mb-4 text-xs leading-relaxed text-ink-500">
-        Configure an IDE binary so you can open a task&apos;s worktree directly
-        from the task detail page. Leave blank to disable.
-      </p>
-      <div className="grid gap-4 md:grid-cols-2">
-        <label className="block">
-          <span className="mb-1.5 block text-xs font-medium text-ink-400">
-            IDE command
-            {command && (
-              <span className={`ml-2 ${found ? "text-green-300" : "text-red-300"}`}>
-                {found ? "found ✓" : "not found ✕"}
-              </span>
-            )}
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+        <h2 className="panel-title">IDE</h2>
+        {command && (
+          <span
+            className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-medium ${
+              found
+                ? "bg-green-500/10 text-green-300 ring-1 ring-green-500/30"
+                : "bg-red-500/10 text-red-300 ring-1 ring-red-500/30"
+            }`}
+          >
+            <span className={`h-1.5 w-1.5 rounded-full ${found ? "bg-green-400" : "bg-red-400"}`} />
+            {name || command} {found ? "ready" : "not found on PATH"}
           </span>
-          <input
-            value={command}
-            onChange={(e) => saveCommand(e.target.value)}
-            onBlur={(e) => saveCommand(e.target.value.trim())}
-            placeholder="e.g. code, cursor, nvim"
-            className="field max-w-xs font-mono"
-          />
-        </label>
-        <div>
-          <span className="mb-1.5 block text-xs font-medium text-ink-400">Display name</span>
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            onBlur={(e) => saveName(e.target.value.trim())}
-            placeholder="e.g. VS Code"
-            className="field max-w-xs"
-          />
-        </div>
+        )}
       </div>
+      <p className="mb-4 text-xs leading-relaxed text-ink-500">
+        Configure an IDE binary so you can open a task&apos;s worktree directly from the task detail
+        page and file browser.
+      </p>
+
+      {/* Detected IDEs */}
+      <div className="mb-4 space-y-2">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-medium text-ink-400">Detected IDEs on your system</span>
+          <button
+            type="button"
+            onClick={loadDetected}
+            className="text-[11px] text-ink-500 hover:text-ink-300 underline-offset-2 hover:underline"
+          >
+            Scan again
+          </button>
+        </div>
+
+        {detected.length > 0 ? (
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 md:grid-cols-3">
+            {detected.map((d) => {
+              const active = command === d.command;
+              return (
+                <button
+                  key={d.command}
+                  type="button"
+                  onClick={() => selectIde(d)}
+                  className={`flex flex-col items-start rounded-lg border p-3 text-left transition-all ${
+                    active
+                      ? "border-syrup-500 bg-syrup-500/10 ring-1 ring-syrup-500"
+                      : "border-ink-800 bg-ink-900/40 hover:border-ink-700 hover:bg-ink-850"
+                  }`}
+                >
+                  <div className="flex w-full items-center justify-between">
+                    <span className="text-sm font-semibold text-ink-100">{d.name}</span>
+                    {active && <span className="text-xs text-syrup-400 font-mono">✓ active</span>}
+                  </div>
+                  <span
+                    className="mt-0.5 font-mono text-[11px] text-ink-500 truncate w-full"
+                    title={d.path ?? d.command}
+                  >
+                    {d.command} {d.path ? `· ${d.path}` : ""}
+                  </span>
+                </button>
+              );
+            })}
+            <button
+              type="button"
+              onClick={() => {
+                setIsCustom(true);
+              }}
+              className={`flex flex-col items-start rounded-lg border p-3 text-left transition-all ${
+                showCustomInputs
+                  ? "border-syrup-500 bg-syrup-500/10 ring-1 ring-syrup-500"
+                  : "border-dashed border-ink-800 bg-ink-900/20 hover:border-ink-700 hover:bg-ink-850"
+              }`}
+            >
+              <span className="text-sm font-semibold text-ink-300">Custom command…</span>
+              <span className="mt-0.5 text-[11px] text-ink-600">
+                Enter custom CLI binary or path
+              </span>
+            </button>
+          </div>
+        ) : (
+          <p className="text-xs text-ink-500">No common IDEs automatically found on PATH.</p>
+        )}
+      </div>
+
+      {/* Custom command input fields */}
+      {showCustomInputs && (
+        <div className="mb-4 rounded-lg border border-ink-800 bg-ink-900/50 p-4">
+          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-ink-400">
+            Custom IDE Command
+          </h3>
+          <div className="grid gap-4 md:grid-cols-2">
+            <label className="block">
+              <span className="mb-1.5 block text-xs font-medium text-ink-400">
+                CLI Command / Executable Path
+                {command && (
+                  <span className={`ml-2 ${found ? "text-green-300" : "text-red-300"}`}>
+                    {found ? "found ✓" : "not found ✕"}
+                  </span>
+                )}
+              </span>
+              <input
+                value={command}
+                onChange={(e) => saveCommand(e.target.value)}
+                onBlur={(e) => saveCommand(e.target.value.trim())}
+                placeholder="e.g. cursor, code, nvim, /usr/bin/zed"
+                className="field w-full font-mono text-xs"
+              />
+            </label>
+            <div>
+              <span className="mb-1.5 block text-xs font-medium text-ink-400">Display Name</span>
+              <input
+                value={name}
+                onChange={(e) => saveName(e.target.value)}
+                onBlur={(e) => saveName(e.target.value.trim())}
+                placeholder="e.g. My Editor"
+                className="field w-full text-xs"
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Actions and Status */}
       <div className="mt-4 flex flex-wrap items-center gap-2">
-        <button type="button" onClick={detect} className="btn-ghost text-xs">
-          Detect
-        </button>
-        <button type="button" onClick={test} className="btn-ghost text-xs">
+        <button
+          type="button"
+          onClick={test}
+          disabled={!command}
+          className="btn-ghost text-xs disabled:opacity-40"
+        >
           Test open
         </button>
+        {command && (
+          <button
+            type="button"
+            onClick={clearIde}
+            className="btn-ghost text-xs text-ink-500 hover:text-red-400"
+          >
+            Disable IDE
+          </button>
+        )}
         {status && <span className="text-xs text-ink-500">{status}</span>}
         {testMsg && <span className="text-xs text-green-300">{testMsg}</span>}
         {testErr && <span className="text-xs text-red-400">{testErr}</span>}
@@ -193,10 +326,7 @@ function EnvVarsSection({ repos }: { repos: Repo[] }) {
     setBusy(true);
     setMsg(null);
     try {
-      const res = await api.importEnvVars(
-        importText,
-        importScope ? Number(importScope) : null
-      );
+      const res = await api.importEnvVars(importText, importScope ? Number(importScope) : null);
       setImportText("");
       setMsg({ kind: "ok", text: `imported ${res.imported} variable(s)` });
       setVars(res.env_vars);
@@ -220,9 +350,9 @@ function EnvVarsSection({ repos }: { repos: Repo[] }) {
     <section className="surface p-5 animate-fade-up" style={{ animationDelay: "0.04s" }}>
       <h2 className="panel-title mb-1">Environment variables</h2>
       <p className="mb-4 text-xs leading-relaxed text-ink-500">
-        Variables injected into task agents&apos; environments (build/test env, keys).
-        Values are stored as secrets — never shown in full, and redacted if an agent
-        echoes them. Pick which ones a task gets on the task form.
+        Variables injected into task agents&apos; environments (build/test env, keys). Values are
+        stored as secrets — never shown in full, and redacted if an agent echoes them. Pick which
+        ones a task gets on the task form.
       </p>
 
       <form onSubmit={addVar} className="mb-4 grid gap-3 sm:grid-cols-4">
@@ -305,9 +435,7 @@ function EnvVarsSection({ repos }: { repos: Repo[] }) {
               <span className="rounded bg-ink-800 px-1.5 py-0.5 font-mono text-[10px] text-ink-500">
                 {repoLabel(v.repo_id)}
               </span>
-              <span className="flex-1 truncate font-mono text-[11px] text-ink-600">
-                {v.masked}
-              </span>
+              <span className="flex-1 truncate font-mono text-[11px] text-ink-600">{v.masked}</span>
               <button
                 onClick={() => removeVar(v.id)}
                 className="text-[11px] text-ink-500 transition-colors hover:text-red-400"
@@ -605,7 +733,10 @@ export default function Settings() {
           onBlur={(e) =>
             save(
               "secret_patterns",
-              e.target.value.split("\n").map((s) => s.trim()).filter(Boolean)
+              e.target.value
+                .split("\n")
+                .map((s) => s.trim())
+                .filter(Boolean)
             )
           }
           placeholder={"AKIA[0-9A-Z]{16}\nsk-[A-Za-z0-9]{20,}"}
@@ -620,8 +751,8 @@ export default function Settings() {
       <header className="animate-fade-up">
         <h1 className="text-3xl font-bold tracking-tight text-ink-100">Settings</h1>
         <p className="mt-1 text-sm text-ink-500">
-          Runtime behaviour of the queue and the agent. Most changes apply immediately;
-          artifact retention applies on the next start.
+          Runtime behaviour of the queue and the agent. Most changes apply immediately; artifact
+          retention applies on the next start.
         </p>
       </header>
 
@@ -630,10 +761,9 @@ export default function Settings() {
       <section className="surface p-5 animate-fade-up" style={{ animationDelay: "0.02s" }}>
         <h2 className="panel-title mb-1">Webhooks</h2>
         <p className="mb-4 text-xs leading-relaxed text-ink-500">
-          Event-driven triggers are delivered by GitHub to the local listener. For a
-          localhost install, expose Jalebi via a tunnel (cloudflared/ngrok) and set the
-          public URL here; the optional secret signs deliveries
-          (<span className="font-mono">X-Hub-Signature-256</span>).
+          Event-driven triggers are delivered by GitHub to the local listener. For a localhost
+          install, expose Jalebi via a tunnel (cloudflared/ngrok) and set the public URL here; the
+          optional secret signs deliveries (<span className="font-mono">X-Hub-Signature-256</span>).
         </p>
         <div className="grid gap-4 md:grid-cols-2">
           <label className="block">
@@ -647,7 +777,12 @@ export default function Settings() {
               className="field font-mono"
             />
             <span className="mt-1 block text-[11px] text-ink-500">
-              GitHub posts to <span className="font-mono">{settings.webhook_url ? `${settings.webhook_url.replace(/\/$/, "")}/webhook` : "<url>/webhook"}</span>
+              GitHub posts to{" "}
+              <span className="font-mono">
+                {settings.webhook_url
+                  ? `${settings.webhook_url.replace(/\/$/, "")}/webhook`
+                  : "<url>/webhook"}
+              </span>
             </span>
           </label>
           <label className="block">
@@ -671,16 +806,14 @@ export default function Settings() {
       <section className="surface p-5 animate-fade-up" style={{ animationDelay: "0.03s" }}>
         <h2 className="panel-title mb-1">Notifications</h2>
         <p className="mb-4 text-xs leading-relaxed text-ink-500">
-          Push task lifecycle updates to an ntfy server. The endpoint is either a bare
-          topic name (sent to <span className="font-mono">ntfy.sh</span>) or a full URL
-          to a self-hosted server.
+          Push task lifecycle updates to an ntfy server. The endpoint is either a bare topic name
+          (sent to <span className="font-mono">ntfy.sh</span>) or a full URL to a self-hosted
+          server.
         </p>
         <div className="grid gap-4 md:grid-cols-2">
           <div className="space-y-4">
             <label className="block">
-              <span className="mb-1.5 block text-xs font-medium text-ink-400">
-                ntfy endpoint
-              </span>
+              <span className="mb-1.5 block text-xs font-medium text-ink-400">ntfy endpoint</span>
               <input
                 defaultValue={settings.ntfy_topic}
                 onBlur={(e) => save("ntfy_topic", e.target.value.trim())}
@@ -696,9 +829,7 @@ export default function Settings() {
                 type="number"
                 min={1}
                 defaultValue={settings.notify_progress_interval_minutes}
-                onBlur={(e) =>
-                  save("notify_progress_interval_minutes", Number(e.target.value))
-                }
+                onBlur={(e) => save("notify_progress_interval_minutes", Number(e.target.value))}
                 className="field w-28 font-mono"
               />
             </label>
@@ -710,9 +841,7 @@ export default function Settings() {
               >
                 {notifyTest.busy ? "Sending…" : "Send test notification"}
               </button>
-              {notifyTest.result === "sent" && (
-                <span className="text-xs text-green-300">sent</span>
-              )}
+              {notifyTest.result === "sent" && <span className="text-xs text-green-300">sent</span>}
               {notifyTest.result && notifyTest.result !== "sent" && (
                 <span className="text-xs text-red-400">{notifyTest.result}</span>
               )}
@@ -759,7 +888,10 @@ export default function Settings() {
 
       <EnvVarsSection repos={repos} />
 
-      <div className="grid gap-4 md:grid-cols-2 animate-fade-up" style={{ animationDelay: "0.05s" }}>
+      <div
+        className="grid gap-4 md:grid-cols-2 animate-fade-up"
+        style={{ animationDelay: "0.05s" }}
+      >
         {rows.map((row) => (
           <section key={row.label} className="surface flex flex-col justify-between gap-4 p-5">
             <div>

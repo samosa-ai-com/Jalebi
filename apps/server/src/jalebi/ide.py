@@ -25,35 +25,68 @@ from pathlib import Path
 
 from jalebi import settings
 
-# Whitelist of binaries the Settings UI's "Detect" button probes (in order).
-# Short list — no PATH scanning, just one shutil.which per entry.
+# Whitelist of binaries probed for installed IDEs (in preferred order).
 IDE_CANDIDATES = [
-    "code",
+    "antigravity",
     "cursor",
+    "windsurf",
+    "code",
+    "code-insiders",
+    "zed",
     "codium",
-    "nvim",
-    "vim",
+    "fleet",
+    "positron",
     "subl",
     "idea",
     "webstorm",
     "pycharm",
     "phpstorm",
     "goland",
+    "clion",
+    "rustrover",
+    "rider",
+    "rubymine",
+    "datagrip",
+    "android-studio",
+    "nvim",
+    "vim",
+    "hx",
+    "helix",
+    "emacs",
+    "kate",
+    "geany",
 ]
 
 # Display name for each known binary.
 IDE_DISPLAY_NAMES = {
-    "code": "VS Code",
+    "antigravity": "Antigravity",
     "cursor": "Cursor",
+    "windsurf": "Windsurf",
+    "code": "VS Code",
+    "code-insiders": "VS Code Insiders",
+    "zed": "Zed",
     "codium": "VSCodium",
-    "nvim": "Neovim",
-    "vim": "Vim",
+    "fleet": "Fleet",
+    "positron": "Positron",
     "subl": "Sublime Text",
     "idea": "IntelliJ IDEA",
     "webstorm": "WebStorm",
     "pycharm": "PyCharm",
     "phpstorm": "PhpStorm",
     "goland": "GoLand",
+    "clion": "CLion",
+    "rustrover": "RustRover",
+    "rider": "Rider",
+    "rubymine": "RubyMine",
+    "datagrip": "DataGrip",
+    "android-studio": "Android Studio",
+    "nvim": "Neovim",
+    "vim": "Vim",
+    "hx": "Helix",
+    "helix": "Helix",
+    "emacs": "Emacs",
+    "kate": "Kate",
+    "geany": "Geany",
 }
 
 # Security: only this character class is allowed in a stored command. No
@@ -98,6 +131,26 @@ def detect_ide() -> tuple[str, str] | None:
         if shutil.which(name):
             return name, IDE_DISPLAY_NAMES.get(name, name)
     return None
+
+
+def detect_all_ides() -> list[dict[str, str]]:
+    """Scan PATH for all known IDE candidates.
+
+    Returns a list of dicts:
+    [{"command": "antigravity", "name": "Antigravity", "path": "/usr/local/bin/antigravity"}, ...]
+    """
+    found: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for name in IDE_CANDIDATES:
+        path = shutil.which(name)
+        if path and name not in seen:
+            seen.add(name)
+            found.append({
+                "command": name,
+                "name": IDE_DISPLAY_NAMES.get(name, name),
+                "path": path,
+            })
+    return found
 
 
 def ide_status(session) -> dict:

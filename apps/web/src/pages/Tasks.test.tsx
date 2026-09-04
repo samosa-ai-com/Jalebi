@@ -59,9 +59,18 @@ const DEFAULT_HANDLERS = {
   "/api/models": { cli: "opencode", models: ["opencode-go/deepseek-v4-flash"] },
   "/api/settings": { default_backend: "opencode", default_model: "opencode-go/deepseek-v4-flash" },
   "/api/github/tokens": {
-
     accounts: [
-      { name: "work", login: "acct2", masked: "ghp_****", token_type: "classic", granted_scopes: ["repo"], missing_scopes: [], note: null, valid: true, error: null },
+      {
+        name: "work",
+        login: "acct2",
+        masked: "ghp_****",
+        token_type: "classic",
+        granted_scopes: ["repo"],
+        missing_scopes: [],
+        note: null,
+        valid: true,
+        error: null,
+      },
     ],
   },
   "/api/github/context": { issues: [], prs: [], branches: ["main", "dev"] },
@@ -175,7 +184,9 @@ describe("Tasks", () => {
     await userEvent.selectOptions(screen.getByLabelText("Task type"), "pr_review");
     expect(screen.queryByLabelText("Source branch")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Target branch (PR base)")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Target branch (worktree base / PR base)")).not.toBeInTheDocument();
+    expect(
+      screen.queryByLabelText("Target branch (worktree base / PR base)")
+    ).not.toBeInTheDocument();
   });
 
   it("freeform keeps both branch pickers", async () => {
@@ -197,7 +208,15 @@ describe("Tasks", () => {
       "/api/github/context": {
         issues: [],
         prs: [
-          { number: 1, title: "Phase 1", html_url: "u", state: "open", base: "main", head: "phase-1", author: "me" },
+          {
+            number: 1,
+            title: "Phase 1",
+            html_url: "u",
+            state: "open",
+            base: "main",
+            head: "phase-1",
+            author: "me",
+          },
         ],
         branches: ["main", "dev"],
       },
@@ -254,9 +273,7 @@ describe("Tasks", () => {
 
     const source = screen.getByLabelText("Source branch") as HTMLSelectElement;
     expect(source.value).toBe("pr/7/head");
-    expect(
-      screen.getByRole("option", { name: /PR #7 head/ })
-    ).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /PR #7 head/ })).toBeInTheDocument();
 
     await userEvent.type(screen.getByPlaceholderText("Instructions…"), "address reviews");
     await userEvent.click(screen.getByRole("button", { name: "Create" }));
@@ -279,8 +296,22 @@ describe("Tasks", () => {
     const fetchMock = stubFetch({
       ...DEFAULT_HANDLERS,
       "/api/envvars": [
-        { id: 1, name: "DATABASE_URL", masked: "post***", repo_id: null, repo_full_name: null, created_at: "2026-08-08T00:00:00" },
-        { id: 2, name: "API_KEY", masked: "sk-***", repo_id: 1, repo_full_name: "owner/repo", created_at: "2026-08-08T00:00:00" },
+        {
+          id: 1,
+          name: "DATABASE_URL",
+          masked: "post***",
+          repo_id: null,
+          repo_full_name: null,
+          created_at: "2026-08-08T00:00:00",
+        },
+        {
+          id: 2,
+          name: "API_KEY",
+          masked: "sk-***",
+          repo_id: 1,
+          repo_full_name: "owner/repo",
+          created_at: "2026-08-08T00:00:00",
+        },
       ],
     });
 
@@ -340,7 +371,10 @@ describe("Tasks", () => {
     const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
       if (url.includes("/api/settings")) {
         await settingsPromise;
-        return { ok: true, json: async () => ({ default_backend: "opencode", default_model: "x" }) };
+        return {
+          ok: true,
+          json: async () => ({ default_backend: "opencode", default_model: "x" }),
+        };
       }
       if (url.includes("/api/models")) {
         return { ok: true, json: async () => ({ cli: "opencode", models: ["x"] }) };
@@ -389,9 +423,7 @@ describe("Tasks", () => {
   });
 });
 
-
 // ---- Phase 4 T3.1 — Needs-you filter + attention dot + stat card ----------
-
 
 describe("Tasks page (Phase 4 T3.1)", () => {
   function renderTasks() {
@@ -416,14 +448,10 @@ describe("Tasks page (Phase 4 T3.1)", () => {
   it("renders the 'Needs you' stat card with the correct count", async () => {
     stubFetch({ "/api/tasks": TASKS });
     renderTasks();
-    await waitFor(() =>
-      expect(screen.getAllByText("Needs you").length).toBeGreaterThanOrEqual(2)
-    );
+    await waitFor(() => expect(screen.getAllByText("Needs you").length).toBeGreaterThanOrEqual(2));
     // The card itself is the second surface containing "Needs you".
     const needsYouCards = screen.getAllByText("Needs you");
-    const cardSurface = needsYouCards.find((el) =>
-      el.classList?.contains("uppercase")
-    );
+    const cardSurface = needsYouCards.find((el) => el.classList?.contains("uppercase"));
     expect(cardSurface).toBeTruthy();
   });
 
@@ -452,9 +480,7 @@ describe("Tasks page (Phase 4 T3.1)", () => {
   });
 });
 
-
 // ---- Phase 4 T5.3 — table sticky header + bounded scroll ---------------
-
 
 describe("Tasks page (Phase 4 T5.3)", () => {
   it("wraps the table in a bounded scroll container with a sticky header", async () => {

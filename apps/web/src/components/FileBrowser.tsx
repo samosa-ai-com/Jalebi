@@ -25,9 +25,13 @@ const MD_EXTS = new Set(["md", "markdown"]);
 function FileBrowser({
   taskId,
   refreshSignal,
+  onOpenInIde,
+  ideName,
 }: {
   taskId: number;
   refreshSignal?: number;
+  onOpenInIde?: () => void;
+  ideName?: string | null;
 }) {
   const [path, setPath] = useState("");
   const [entries, setEntries] = useState<FileEntry[] | null>(null);
@@ -47,9 +51,7 @@ function FileBrowser({
       api
         .getTaskFiles(taskId, p)
         .then((r) => setEntries(Array.isArray(r.entries) ? r.entries : []))
-        .catch((e) =>
-          setError(e instanceof Error ? e.message : "failed to list files")
-        )
+        .catch((e) => setError(e instanceof Error ? e.message : "failed to list files"))
         .finally(() => setLoading(false));
     },
     [taskId]
@@ -74,7 +76,9 @@ function FileBrowser({
   const open = (entry: FileEntry) => {
     api
       .getTaskFileContent(taskId, entry.path)
-      .then((r) => setOpenFile({ path: entry.path, name: entry.name, content: r.content, binary: r.binary }))
+      .then((r) =>
+        setOpenFile({ path: entry.path, name: entry.name, content: r.content, binary: r.binary })
+      )
       .catch((e) => setError(e instanceof Error ? e.message : "failed to read file"));
   };
 
@@ -90,12 +94,28 @@ function FileBrowser({
   return (
     <section className="surface p-5 animate-fade-up">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h2 className="panel-title">Files</h2>
-        {entries !== null && (
-          <span className="text-xs text-ink-500">
-            {entries.filter((e) => !e.is_dir).length} file
-            {entries.filter((e) => !e.is_dir).length === 1 ? "" : "s"}
-          </span>
+        <div className="flex items-center gap-2.5">
+          <h2 className="panel-title">Files</h2>
+          {entries !== null && (
+            <span className="text-xs text-ink-500">
+              {entries.filter((e) => !e.is_dir).length} file
+              {entries.filter((e) => !e.is_dir).length === 1 ? "" : "s"}
+            </span>
+          )}
+        </div>
+        {onOpenInIde && (
+          <button
+            type="button"
+            onClick={onOpenInIde}
+            className="inline-flex items-center gap-1.5 rounded-md border border-ink-700/60 bg-ink-900/60 px-2 py-1 text-xs text-ink-300 transition-colors hover:border-syrup-500/50 hover:bg-ink-800 hover:text-syrup-300"
+            title={`Open worktree in ${ideName || "configured IDE"}`}
+          >
+            <svg className="h-3 w-3 text-syrup-400" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M2 3.75C2 2.784 2.784 2 3.75 2h8.5c.966 0 1.75.784 1.75 1.75v8.5A1.75 1.75 0 0 1 12.25 14h-8.5A1.75 1.75 0 0 1 2 12.25Zm1.75-.25a.25.25 0 0 0-.25.25v8.5c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25v-8.5a.25.25 0 0 0-.25-.25Z" />
+              <path d="M5.78 5.47a.75.75 0 0 1 0 1.06L4.81 7.5l.97.97a.75.75 0 1 1-1.06 1.06l-1.5-1.5a.75.75 0 0 1 0-1.06l1.5-1.5a.75.75 0 0 1 1.06 0Zm4.44 0a.75.75 0 0 1 1.06 0l1.5 1.5a.75.75 0 0 1 0 1.06l-1.5 1.5a.75.75 0 0 1-1.06-1.06l.97-.97-.97-.97a.75.75 0 0 1 0-1.06Z" />
+            </svg>
+            <span>Open in {ideName || "IDE"}</span>
+          </button>
         )}
       </div>
 
@@ -160,14 +180,10 @@ function FileBrowser({
                   onClick={() => (entry.is_dir ? setPath(entry.path) : open(entry))}
                   className="flex w-full items-center gap-3 px-2 py-2 text-left transition-colors hover:bg-ink-850/40"
                 >
-                  <span
-                    className={`font-mono ${entry.is_dir ? "text-syrup-300" : "text-ink-400"}`}
-                  >
+                  <span className={`font-mono ${entry.is_dir ? "text-syrup-300" : "text-ink-400"}`}>
                     {entry.is_dir ? "📁" : "📄"}
                   </span>
-                  <span className="min-w-0 flex-1 truncate text-sm text-ink-200">
-                    {entry.name}
-                  </span>
+                  <span className="min-w-0 flex-1 truncate text-sm text-ink-200">{entry.name}</span>
                   {!entry.is_dir && (
                     <>
                       <span className="shrink-0 font-mono text-[11px] text-ink-500">

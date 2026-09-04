@@ -217,6 +217,24 @@ def test_ide_status_includes_command_and_found_flag(
     assert body["found"] is True
 
 
+def test_detect_all_ides(monkeypatch) -> None:
+    def fake_which(n):
+        if n == "antigravity":
+            return "/usr/local/bin/antigravity"
+        if n == "cursor":
+            return "/usr/bin/cursor"
+        return None
+
+    monkeypatch.setattr(ide.shutil, "which", fake_which)
+    found = ide.detect_all_ides()
+    cmds = [item["command"] for item in found]
+    assert "antigravity" in cmds
+    assert "cursor" in cmds
+    names = [item["name"] for item in found]
+    assert "Antigravity" in names
+    assert "Cursor" in names
+
+
 def test_ide_detect_endpoint_returns_first_match(
     client: FlaskClient, monkeypatch
 ) -> None:
@@ -226,7 +244,10 @@ def test_ide_detect_endpoint_returns_first_match(
     resp = client.get("/api/ide/detect")
     assert resp.status_code == 200
     body = resp.get_json()
-    assert body == {"command": "cursor", "name": "Cursor"}
+    assert body["command"] == "cursor"
+    assert body["name"] == "Cursor"
+    assert len(body["detected"]) == 1
+    assert body["detected"][0]["command"] == "cursor"
 
 
 def test_ide_detect_endpoint_returns_empty_when_nothing_on_path(
@@ -235,7 +256,10 @@ def test_ide_detect_endpoint_returns_empty_when_nothing_on_path(
     monkeypatch.setattr(ide.shutil, "which", lambda n: None)
     resp = client.get("/api/ide/detect")
     assert resp.status_code == 200
-    assert resp.get_json() == {"command": "", "name": ""}
+    body = resp.get_json()
+    assert body["command"] == ""
+    assert body["name"] == ""
+    assert body["detected"] == []
 
 
 def test_ide_test_endpoint_returns_400_when_unconfigured(client: FlaskClient) -> None:

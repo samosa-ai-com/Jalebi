@@ -9,6 +9,7 @@ export default function WaitingCard({
   canReply,
   onReply,
   ideConfigured,
+  ideName,
   onOpenWorktree,
   onReject,
 }: {
@@ -17,6 +18,7 @@ export default function WaitingCard({
   canReply: boolean;
   onReply: () => void;
   ideConfigured: boolean;
+  ideName?: string | null;
   onOpenWorktree: () => void;
   onReject?: () => void;
 }) {
@@ -43,11 +45,11 @@ export default function WaitingCard({
           className="btn-ghost disabled:opacity-40"
           title={
             ideConfigured
-              ? "Open this task's worktree in your configured IDE"
+              ? `Open this task's worktree in ${ideName || "your configured IDE"}`
               : "IDE not configured"
           }
         >
-          Open worktree
+          {ideName ? `Open worktree in ${ideName}` : "Open worktree"}
         </button>
         {onReject && (
           <button

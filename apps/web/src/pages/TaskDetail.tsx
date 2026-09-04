@@ -10,20 +10,30 @@ import WaitingCard from "../components/WaitingCard";
 import PublishDialog from "../components/PublishDialog";
 import { parseUnifiedDiff } from "../lib/unifiedDiff";
 import { useInView } from "../lib/useInView";
-import type { Account, Artifact, CatalogAgent, Followup, GithubPr, Repo, Run, SseEvent, Task } from "../types";
+import type {
+  Account,
+  Artifact,
+  CatalogAgent,
+  Followup,
+  GithubPr,
+  Repo,
+  Run,
+  SseEvent,
+  Task,
+} from "../types";
 
-const TERMINAL = new Set(["done", "failed", "timed_out", "cancelled", "needs_approval", "interrupted"]);
+const TERMINAL = new Set([
+  "done",
+  "failed",
+  "timed_out",
+  "cancelled",
+  "needs_approval",
+  "interrupted",
+]);
 
 const MAX_LIVE = 500; // live timeline buffer cap (backend persists last 500 steps)
 
-const PHASE_ORDER = [
-  "scanning",
-  "planning",
-  "implementing",
-  "testing",
-  "reviewing",
-  "creating_pr",
-];
+const PHASE_ORDER = ["scanning", "planning", "implementing", "testing", "reviewing", "creating_pr"];
 
 const PHASE_STYLE: Record<string, string> = {
   scanning: "bg-ink-700/40 text-ink-300",
@@ -44,8 +54,29 @@ const STEP_DOT: Record<string, string> = {
 };
 
 const TEXT_EXTENSIONS = new Set([
-  "txt", "md", "json", "log", "py", "js", "ts", "tsx", "jsx", "sh", "yaml", "yml",
-  "toml", "csv", "html", "css", "go", "rs", "java", "c", "h", "cpp", "hpp",
+  "txt",
+  "md",
+  "json",
+  "log",
+  "py",
+  "js",
+  "ts",
+  "tsx",
+  "jsx",
+  "sh",
+  "yaml",
+  "yml",
+  "toml",
+  "csv",
+  "html",
+  "css",
+  "go",
+  "rs",
+  "java",
+  "c",
+  "h",
+  "cpp",
+  "hpp",
 ]);
 const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "ico", "bmp"]);
 
@@ -60,7 +91,15 @@ const STEP_STYLE: Record<string, string> = {
   error: "bg-red-500/10 text-red-300",
 };
 
-function Action({ onClick, children, disabled }: { onClick: () => void; children: string; disabled?: boolean }) {
+function Action({
+  onClick,
+  children,
+  disabled,
+}: {
+  onClick: () => void;
+  children: string;
+  disabled?: boolean;
+}) {
   return (
     <button onClick={onClick} disabled={disabled} className="btn-ghost disabled:opacity-40">
       {children}
@@ -86,13 +125,19 @@ function PublishButton({
 }: {
   task: Task;
   disabled: boolean;
-  onPick: (opts: { mode: "new_pr" | "update_pr" | "push_branch"; branch?: string; pr_number?: number }) => void;
+  onPick: (opts: {
+    mode: "new_pr" | "update_pr" | "push_branch";
+    branch?: string;
+    pr_number?: number;
+  }) => void;
 }) {
   const hasLinkedPr = task.prs && task.prs.length > 0;
   const defaultPr = hasLinkedPr ? task.prs[0] : undefined;
   const [showAdvanced, setShowAdvanced] = useState(false);
   // Explicit mode choice in the Advanced panel (null = not chosen → smart default).
-  const [advancedModeChoice, setAdvancedModeChoice] = useState<"new_pr" | "update_pr" | "push_branch" | null>(null);
+  const [advancedModeChoice, setAdvancedModeChoice] = useState<
+    "new_pr" | "update_pr" | "push_branch" | null
+  >(null);
   // Explicit pick in the update_pr dropdown ("" = not picked → smart default).
   const [pickedPr, setPickedPr] = useState<number | "">("");
   const [branchInput, setBranchInput] = useState<string>("");
@@ -138,14 +183,16 @@ function PublishButton({
     (p) => p.head === task.source_branch && !linkedNumbers.has(p.number)
   );
   const effectiveDefaultPr = defaultPr ?? matchingOpenPr?.number;
-  const defaultMode: "new_pr" | "update_pr" = effectiveDefaultPr !== undefined ? "update_pr" : "new_pr";
+  const defaultMode: "new_pr" | "update_pr" =
+    effectiveDefaultPr !== undefined ? "update_pr" : "new_pr";
   const advancedMode: "new_pr" | "update_pr" | "push_branch" =
     advancedModeChoice ?? (defaultMode === "update_pr" ? "update_pr" : "new_pr");
   const advancedPr: number | undefined = pickedPr === "" ? effectiveDefaultPr : pickedPr;
 
-  const primaryLabel = defaultMode === "update_pr" && effectiveDefaultPr !== undefined
-    ? `Push to PR #${effectiveDefaultPr}`
-    : "Publish";
+  const primaryLabel =
+    defaultMode === "update_pr" && effectiveDefaultPr !== undefined
+      ? `Push to PR #${effectiveDefaultPr}`
+      : "Publish";
 
   // Selectable PRs: linked PRs first (labeled by number), then the repo's open
   // PRs with title + head→base so the owner can pick any PR to update.
@@ -153,7 +200,10 @@ function PublishButton({
   for (const n of task.prs ?? []) prOptions.push({ number: n, label: `PR #${n}` });
   for (const p of openPrs ?? []) {
     if (linkedNumbers.has(p.number)) continue;
-    prOptions.push({ number: p.number, label: `#${p.number} — ${p.title} (${p.head} → ${p.base})` });
+    prOptions.push({
+      number: p.number,
+      label: `#${p.number} — ${p.title} (${p.head} → ${p.base})`,
+    });
   }
 
   return (
@@ -190,7 +240,9 @@ function PublishButton({
                 checked={advancedMode === "new_pr"}
                 onChange={() => setAdvancedModeChoice("new_pr")}
               />
-              <span>Open a new PR (push <span className="font-mono">jalebi/{task.id}</span> → target)</span>
+              <span>
+                Open a new PR (push <span className="font-mono">jalebi/{task.id}</span> → target)
+              </span>
             </label>
             <label className="flex items-center gap-2">
               <input
@@ -215,13 +267,19 @@ function PublishButton({
                   </option>
                 ))}
                 {openPrs === null && prOptions.length === 0 && (
-                  <option value="" disabled>loading PRs…</option>
+                  <option value="" disabled>
+                    loading PRs…
+                  </option>
                 )}
                 {prsLoadFailed && (
-                  <option value="" disabled>couldn't load PRs</option>
+                  <option value="" disabled>
+                    couldn't load PRs
+                  </option>
                 )}
                 {openPrs !== null && !prsLoadFailed && prOptions.length === 0 && (
-                  <option value="" disabled>no open PRs in this repo</option>
+                  <option value="" disabled>
+                    no open PRs in this repo
+                  </option>
                 )}
               </select>
             )}
@@ -276,7 +334,7 @@ function ToolCallEntry({ step }: { step: SseEvent }) {
   try {
     const data = JSON.parse(step.text ?? "{}");
     const tool = data.tool ?? "";
-    title = data.title ? `${tool} — ${data.title}` : (tool || (step.text ?? ""));
+    title = data.title ? `${tool} — ${data.title}` : tool || (step.text ?? "");
     details = JSON.stringify(
       { tool: data.tool, input: data.input, output: data.output, status: data.status },
       null,
@@ -308,9 +366,7 @@ function TimelineItem({ step, index }: { step: SseEvent; index: number }) {
       <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ring-2 ring-ink-950 ${dot}`} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <span className="font-mono text-[11px] text-ink-600">
-            {step.ts?.slice(11, 19) ?? ""}
-          </span>
+          <span className="font-mono text-[11px] text-ink-600">{step.ts?.slice(11, 19) ?? ""}</span>
           <span
             className={`rounded px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide ${
               STEP_STYLE[step.type] ?? "bg-ink-700/30 text-ink-300"
@@ -443,8 +499,7 @@ function FollowUpComposer({
   // ``default_backend``, so "Reuse task backend" (cli = "") is NOT a change.
   const resolvedTaskCli = task.cli ?? defaultBackend ?? "opencode";
   const resolvedCurrentCli = cli || (task.cli ?? defaultBackend ?? "opencode");
-  const backendChanged =
-    cli !== "" && resolvedCurrentCli !== resolvedTaskCli;
+  const backendChanged = cli !== "" && resolvedCurrentCli !== resolvedTaskCli;
 
   const hasPr = (task.prs?.length ?? 0) > 0 || task.pr_number != null;
   // "Address reviewers" only makes sense on the fixer task: a pr_review task's
@@ -499,8 +554,8 @@ function FollowUpComposer({
     <section className="surface p-5 animate-fade-up">
       <h2 className="panel-title mb-3">Follow-up</h2>
       <p className="mb-3 text-xs leading-relaxed text-ink-500">
-        Send a follow-up to resume this task&apos;s session in the same worktree and branch —
-        the agent picks up where it left off.
+        Send a follow-up to resume this task&apos;s session in the same worktree and branch — the
+        agent picks up where it left off.
       </p>
       <form onSubmit={submit} className="space-y-3">
         <div className="grid gap-3 sm:grid-cols-2">
@@ -552,8 +607,8 @@ function FollowUpComposer({
           className="field resize-y"
         />
         <p className="text-[11px] leading-relaxed text-ink-600">
-          Resume refreshes remote refs first, then continues your worktree&apos;s local
-          commits; review worktrees move to the current PR head.
+          Resume refreshes remote refs first, then continues your worktree&apos;s local commits;
+          review worktrees move to the current PR head.
         </p>
         {error && <p className="text-xs text-red-400">{error}</p>}
         <div className="flex justify-end gap-2">
@@ -655,7 +710,9 @@ function ReviewersCard({
         </ul>
       ) : (
         <p className="mb-3 text-xs text-ink-500">
-          No reviewers assigned yet. Assign catalog reviewers (kind <code className="font-mono">reviewer</code>) to review this PR — each runs its own review task and posts its comments.
+          No reviewers assigned yet. Assign catalog reviewers (kind{" "}
+          <code className="font-mono">reviewer</code>) to review this PR — each runs its own review
+          task and posts its comments.
         </p>
       )}
 
@@ -740,11 +797,10 @@ function ArtifactPreview({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-3 border-b border-ink-800 px-5 py-3">
-          <h3 className="min-w-0 flex-1 truncate font-mono text-sm text-ink-100">{artifact.path}</h3>
-          <a
-            href={api.artifactUrl(taskId, artifact.id)}
-            className="btn-ghost !px-3 !py-1 text-xs"
-          >
+          <h3 className="min-w-0 flex-1 truncate font-mono text-sm text-ink-100">
+            {artifact.path}
+          </h3>
+          <a href={api.artifactUrl(taskId, artifact.id)} className="btn-ghost !px-3 !py-1 text-xs">
             Download
           </a>
           <button onClick={onClose} className="btn-ghost !px-2 !py-1 text-xs">
@@ -802,7 +858,11 @@ const STATUS_LETTER: Record<string, string> = {
   binary: "B",
 };
 
-function pathLabel(file: { oldPath: string | null; newPath: string | null; status: string }): string {
+function pathLabel(file: {
+  oldPath: string | null;
+  newPath: string | null;
+  status: string;
+}): string {
   const target = file.newPath ?? file.oldPath ?? "?";
   if (file.status === "renamed" && file.oldPath && file.newPath) {
     return `${file.oldPath} → ${file.newPath}`;
@@ -838,12 +898,8 @@ function DiffFileSection({
           {letter}
         </span>
         <span className="text-ink-100">{pathLabel(file)}</span>
-        {file.additions > 0 && (
-          <span className="ml-2 text-green-400">+{file.additions}</span>
-        )}
-        {file.deletions > 0 && (
-          <span className="ml-2 text-red-400">−{file.deletions}</span>
-        )}
+        {file.additions > 0 && <span className="ml-2 text-green-400">+{file.additions}</span>}
+        {file.deletions > 0 && <span className="ml-2 text-red-400">−{file.deletions}</span>}
       </summary>
       <div ref={ref}>
         {file.binary ? (
@@ -854,9 +910,7 @@ function DiffFileSection({
           <pre className="mt-1 max-h-96 overflow-auto whitespace-pre rounded bg-ink-900/60 p-2 font-mono text-[11px] leading-relaxed">
             {file.hunks.map((hunk, h) => (
               <div key={h}>
-                {hunk.header && (
-                  <div className={diffLineClass(hunk.header)}>{hunk.header}</div>
-                )}
+                {hunk.header && <div className={diffLineClass(hunk.header)}>{hunk.header}</div>}
                 {hunk.lines.map((line, j) => (
                   <div key={j} className={diffLineClass(line)}>
                     {line}
@@ -894,19 +948,17 @@ function DiffView({ diff }: { diff: string }) {
         <span className="text-red-400">−{totals.del}</span>
       </div>
       {files.map((file, i) => (
-        <DiffFileSection key={`${file.newPath ?? file.oldPath ?? i}`} file={file} defaultOpen={files.length === 1} />
+        <DiffFileSection
+          key={`${file.newPath ?? file.oldPath ?? i}`}
+          file={file}
+          defaultOpen={files.length === 1}
+        />
       ))}
     </div>
   );
 }
 
-function DiffSection({
-  taskId,
-  run,
-}: {
-  taskId: number;
-  run: Run;
-}) {
+function DiffSection({ taskId, run }: { taskId: number; run: Run }) {
   const [diff, setDiff] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -927,11 +979,7 @@ function DiffSection({
     <section className="surface p-5 animate-fade-up">
       <h2 className="panel-title mb-3">Diff</h2>
       {error && <p className="text-xs text-red-400">{error}</p>}
-      {diff === null ? (
-        <p className="text-sm text-ink-500">Loading…</p>
-      ) : (
-        <DiffView diff={diff} />
-      )}
+      {diff === null ? <p className="text-sm text-ink-500">Loading…</p> : <DiffView diff={diff} />}
     </section>
   );
 }
@@ -1011,8 +1059,14 @@ export default function TaskDetail() {
       .getAgents(true)
       .then((a) => setAgents(a.filter((x) => x.kind === "reviewer")))
       .catch(() => {});
-    api.getRepos().then(setRepos).catch(() => {});
-    api.getTokens().then((t) => setAccounts(t.accounts ?? [])).catch(() => {});
+    api
+      .getRepos()
+      .then(setRepos)
+      .catch(() => {});
+    api
+      .getTokens()
+      .then((t) => setAccounts(t.accounts ?? []))
+      .catch(() => {});
   }, [taskId]);
 
   useEffect(() => {
@@ -1022,15 +1076,14 @@ export default function TaskDetail() {
   // Cancel / Re-run / Publish: serialized, with errors surfaced inline instead of
   // silently swallowed (D-4). The ref check is synchronous so two clicks in the
   // same tick (before React re-renders) cannot double-fire.
-  function runAction(fn: () => Promise<unknown>) {    if (actionInFlightRef.current) return;
+  function runAction(fn: () => Promise<unknown>) {
+    if (actionInFlightRef.current) return;
     actionInFlightRef.current = true;
     setActionBusy(true);
     setActionError(null);
     fn()
       .then(load)
-      .catch((e) =>
-        setActionError(e instanceof Error ? e.message : "action failed")
-      )
+      .catch((e) => setActionError(e instanceof Error ? e.message : "action failed"))
       .finally(() => {
         actionInFlightRef.current = false;
         setActionBusy(false);
@@ -1124,7 +1177,8 @@ export default function TaskDetail() {
     ? (runs.find((r) => r.id === selectedRunId) ?? task.run ?? runs[runs.length - 1] ?? null)
     : null;
   const previewStepsLen = previewRun?.steps?.length ?? 0;
-  const previewIsLatest = task !== null && (selectedRunId === null || selectedRunId === task.run?.id);
+  const previewIsLatest =
+    task !== null && (selectedRunId === null || selectedRunId === task.run?.id);
   const previewTimelineLen = previewIsLatest ? previewStepsLen + live.length : previewStepsLen;
   const timelineRef = useAutoScroll<HTMLDivElement>(previewTimelineLen, followScroll);
   const consoleRef = useAutoScroll<HTMLDivElement>(previewTimelineLen, followScroll);
@@ -1132,14 +1186,26 @@ export default function TaskDetail() {
   const replyNonce = useRef(0);
   // Phase 4 T6 — whether an IDE command is configured (for Open worktree).
   const [ideConfigured, setIdeConfigured] = useState(false);
+  const [ideName, setIdeName] = useState<string | null>(null);
   const [ideError, setIdeError] = useState<string | null>(null);
   const [ideBusy, setIdeBusy] = useState(false);
+  const [ideOpened, setIdeOpened] = useState(false);
+  const ideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Fetch ide_command once to decide whether "Open worktree" is available.
+  useEffect(() => {
+    return () => {
+      if (ideTimerRef.current) clearTimeout(ideTimerRef.current);
+    };
+  }, []);
+
+  // Fetch ide settings once to decide whether "Open worktree" is available.
   useEffect(() => {
     api
       .getSettings()
-      .then((s) => setIdeConfigured(Boolean(s.ide_command)))
+      .then((s) => {
+        setIdeConfigured(Boolean(s.ide_command));
+        setIdeName(s.ide_name || null);
+      })
       .catch(() => {});
   }, []);
 
@@ -1147,19 +1213,25 @@ export default function TaskDetail() {
     if (ideBusy || !task) return;
     setIdeBusy(true);
     setIdeError(null);
+    setIdeOpened(false);
+    if (ideTimerRef.current) clearTimeout(ideTimerRef.current);
     api
       .openInIde(task.id)
-      .then(() => {})
-      .catch((e) =>
-        setIdeError(e instanceof Error ? e.message : "failed to open in IDE")
-      )
+      .then(() => {
+        setIdeOpened(true);
+        ideTimerRef.current = setTimeout(() => setIdeOpened(false), 3000);
+      })
+      .catch((e) => setIdeError(e instanceof Error ? e.message : "failed to open in IDE"))
       .finally(() => setIdeBusy(false));
   };
 
   if (error) return <p className="text-red-400">{error}</p>;
   if (!task) return <p className="text-ink-500">Loading…</p>;
 
-  const repoName = task.repo_full_name ?? repos.find((r) => r.id === task.repo_id)?.full_name ?? `repo#${task.repo_id}`;
+  const repoName =
+    task.repo_full_name ??
+    repos.find((r) => r.id === task.repo_id)?.full_name ??
+    `repo#${task.repo_id}`;
   const selectedRun =
     runs.find((r) => r.id === selectedRunId) ?? task.run ?? runs[runs.length - 1] ?? null;
   const steps = selectedRun?.steps ?? [];
@@ -1186,42 +1258,90 @@ export default function TaskDetail() {
       .catch((e) => setError(e.message));
   }
 
+  let ideButtonLabel = `Open in ${ideName || "IDE"}`;
+  if (ideOpened) {
+    ideButtonLabel = `Opened in ${ideName || "IDE"} ✓`;
+  } else if (ideBusy) {
+    ideButtonLabel = "Opening…";
+  }
+
   return (
     <div className="space-y-6 animate-fade-up">
-      <div className="flex flex-wrap items-center gap-3">
-        <Link to="/" className="text-sm text-ink-500 transition-colors hover:text-syrup-300">
-          ← Tasks
-        </Link>
-        <h1 className="text-2xl font-bold tracking-tight text-ink-100">Task #{task.id}</h1>
-        <StatusBadge status={task.status} />
-        {task.attention && task.attention !== "working" && (
-          <div className="flex items-center gap-1.5">
-            <AttentionBadge attention={task.attention} />
-            {task.attention === "needs_you" && (
-              <button
-                type="button"
-                onClick={handleDismissAttention}
-                className="rounded px-1.5 py-0.5 text-[10px] font-medium text-ink-400 ring-1 ring-ink-700/60 hover:bg-ink-800 hover:text-ink-200 transition-colors"
-                title="Dismiss attention for this task"
-              >
-                Dismiss
-              </button>
-            )}
-          </div>
-        )}
-        <span className="mx-1 hidden h-4 w-px bg-ink-800 sm:block" />
-        <span className="font-mono text-xs text-ink-500">
-          {repoName}
-          <span className="mx-1.5 text-ink-700">·</span>
-          {task.model ?? "default model"}
-          {task.pat_name && (
-            <>
-              <span className="mx-1.5 text-ink-700">·</span>
-              {accounts.find((a) => a.name === task.pat_name)?.login ?? task.pat_name}
-            </>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <Link to="/" className="text-sm text-ink-500 transition-colors hover:text-syrup-300">
+            ← Tasks
+          </Link>
+          <h1 className="text-2xl font-bold tracking-tight text-ink-100">Task #{task.id}</h1>
+          <StatusBadge status={task.status} />
+          {task.attention && task.attention !== "working" && (
+            <div className="flex items-center gap-1.5">
+              <AttentionBadge attention={task.attention} />
+              {task.attention === "needs_you" && (
+                <button
+                  type="button"
+                  onClick={handleDismissAttention}
+                  className="rounded px-1.5 py-0.5 text-[10px] font-medium text-ink-400 ring-1 ring-ink-700/60 hover:bg-ink-800 hover:text-ink-200 transition-colors"
+                  title="Dismiss attention for this task"
+                >
+                  Dismiss
+                </button>
+              )}
+            </div>
           )}
-        </span>
+          <span className="mx-1 hidden h-4 w-px bg-ink-800 sm:block" />
+          <span className="font-mono text-xs text-ink-500">
+            {repoName}
+            <span className="mx-1.5 text-ink-700">·</span>
+            {task.model ?? "default model"}
+            {task.pat_name && (
+              <>
+                <span className="mx-1.5 text-ink-700">·</span>
+                {accounts.find((a) => a.name === task.pat_name)?.login ?? task.pat_name}
+              </>
+            )}
+          </span>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {ideConfigured ? (
+            <button
+              type="button"
+              onClick={openInIde}
+              disabled={ideBusy}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-ink-700/60 bg-ink-900/60 px-3 py-1.5 text-xs font-medium text-ink-200 transition-colors hover:border-syrup-500/50 hover:bg-ink-800 hover:text-syrup-200 disabled:opacity-50"
+              title={`Open worktree in ${ideName || "configured IDE"}`}
+            >
+              <svg className="h-3.5 w-3.5 text-syrup-400" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M2 3.75C2 2.784 2.784 2 3.75 2h8.5c.966 0 1.75.784 1.75 1.75v8.5A1.75 1.75 0 0 1 12.25 14h-8.5A1.75 1.75 0 0 1 2 12.25Zm1.75-.25a.25.25 0 0 0-.25.25v8.5c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25v-8.5a.25.25 0 0 0-.25-.25Z" />
+                <path d="M5.78 5.47a.75.75 0 0 1 0 1.06L4.81 7.5l.97.97a.75.75 0 1 1-1.06 1.06l-1.5-1.5a.75.75 0 0 1 0-1.06l1.5-1.5a.75.75 0 0 1 1.06 0Zm4.44 0a.75.75 0 0 1 1.06 0l1.5 1.5a.75.75 0 0 1 0 1.06l-1.5 1.5a.75.75 0 0 1-1.06-1.06l.97-.97-.97-.97a.75.75 0 0 1 0-1.06Z" />
+              </svg>
+              <span>{ideButtonLabel}</span>
+            </button>
+          ) : (
+            <Link
+              to="/settings"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-dashed border-ink-800 px-3 py-1.5 text-xs text-ink-500 transition-colors hover:border-ink-700 hover:text-ink-400"
+              title="Configure IDE in Settings to open worktrees directly"
+            >
+              <span>Configure IDE…</span>
+            </Link>
+          )}
+        </div>
       </div>
+
+      {ideError && (
+        <div className="flex items-center justify-between rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-400">
+          <span>Failed to open in IDE: {ideError}</span>
+          <button
+            type="button"
+            onClick={() => setIdeError(null)}
+            className="ml-2 font-bold text-red-300 hover:text-white"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {finalMessage && selectedRun && (
         <>
@@ -1230,11 +1350,15 @@ export default function TaskDetail() {
             message={finalMessage}
             canReply={canReply}
             onReply={() => {
-              const quoted = finalMessage.split("\n").map((l) => `> ${l}`).join("\n");
+              const quoted = finalMessage
+                .split("\n")
+                .map((l) => `> ${l}`)
+                .join("\n");
               replyNonce.current += 1;
               setReplyPrefill({ nonce: replyNonce.current, text: `${quoted}\n\n` });
             }}
             ideConfigured={ideConfigured}
+            ideName={ideName}
             onOpenWorktree={openInIde}
             onReject={() => {
               if (window.confirm("Reject this proposal and dismiss attention?")) {
@@ -1242,7 +1366,6 @@ export default function TaskDetail() {
               }
             }}
           />
-          {ideError && <p className="text-xs text-red-400">{ideError}</p>}
         </>
       )}
 
@@ -1286,7 +1409,9 @@ export default function TaskDetail() {
             <a
               className="btn-ghost !px-3 !py-1 text-xs text-syrup-300"
               href={`https://github.com/${repoName}/${
-                task.pr_number ? `pull/${task.pr_number}` : `commits/${task.source_branch || task.target_branch || "main"}`
+                task.pr_number
+                  ? `pull/${task.pr_number}`
+                  : `commits/${task.source_branch || task.target_branch || "main"}`
               }`}
               target="_blank"
               rel="noreferrer"
@@ -1336,18 +1461,12 @@ export default function TaskDetail() {
 
       <div className="flex flex-wrap gap-2">
         {(task.status === "running" || task.status === "queued") && (
-          <Action
-            onClick={() => runAction(() => api.cancelTask(task.id))}
-            disabled={actionBusy}
-          >
+          <Action onClick={() => runAction(() => api.cancelTask(task.id))} disabled={actionBusy}>
             Cancel
           </Action>
         )}
         {TERMINAL.has(task.status) && task.status !== "needs_approval" && (
-          <Action
-            onClick={() => runAction(() => api.rerunTask(task.id))}
-            disabled={actionBusy}
-          >
+          <Action onClick={() => runAction(() => api.rerunTask(task.id))} disabled={actionBusy}>
             Re-run
           </Action>
         )}
@@ -1372,10 +1491,7 @@ export default function TaskDetail() {
             }}
           />
         )}
-        <Action
-          onClick={deleteTask}
-          disabled={actionBusy}
-        >
+        <Action onClick={deleteTask} disabled={actionBusy}>
           Delete
         </Action>
         {actionError && <p className="text-xs text-red-400">{actionError}</p>}
@@ -1495,16 +1611,15 @@ export default function TaskDetail() {
         </section>
       </div>
 
-      {selectedRun && (
-        <DiffSection key={selectedRun.id} taskId={task.id} run={selectedRun} />
-      )}
+      {selectedRun && <DiffSection key={selectedRun.id} taskId={task.id} run={selectedRun} />}
 
       {runs.length > 1 && (
         <section className="surface p-5 animate-fade-up">
           <div className="mb-3 flex items-center justify-between gap-2">
             <h2 className="panel-title">Run history</h2>
             <p className="text-xs text-ink-500">
-              The live stream follows the latest run. Click a run to view its logs, diff, and artifacts.
+              The live stream follows the latest run. Click a run to view its logs, diff, and
+              artifacts.
             </p>
           </div>
           <ol className="divide-y divide-ink-800/70">
@@ -1516,7 +1631,9 @@ export default function TaskDetail() {
                     type="button"
                     onClick={() => setSelectedRunId(r.id)}
                     className={`flex w-full items-center gap-3 px-2 py-2.5 text-left transition-colors ${
-                      active ? "rounded-lg bg-ink-850/80 ring-1 ring-inset ring-syrup-500/40" : "hover:bg-ink-850/40"
+                      active
+                        ? "rounded-lg bg-ink-850/80 ring-1 ring-inset ring-syrup-500/40"
+                        : "hover:bg-ink-850/40"
                     }`}
                   >
                     <span className="font-mono text-sm text-ink-200">#{r.seq}</span>
@@ -1550,16 +1667,15 @@ export default function TaskDetail() {
       )}
 
       {selectedRun && (
-        <FileBrowser taskId={task.id} refreshSignal={live.length} />
-      )}
-
-      {preview && (
-        <ArtifactPreview
+        <FileBrowser
           taskId={task.id}
-          artifact={preview}
-          onClose={closePreview}
+          refreshSignal={live.length}
+          onOpenInIde={ideConfigured ? openInIde : undefined}
+          ideName={ideName}
         />
       )}
+
+      {preview && <ArtifactPreview taskId={task.id} artifact={preview} onClose={closePreview} />}
 
       {publishDialogOpen && publishOptions && (
         <PublishDialog

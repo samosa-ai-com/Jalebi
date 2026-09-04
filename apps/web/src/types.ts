@@ -87,12 +87,7 @@ export interface Task {
   reviewers?: ReviewAssignment[];
 }
 
-export type AttentionValue =
-  | "working"
-  | "needs_you"
-  | "in_review"
-  | "ready_to_merge"
-  | "done";
+export type AttentionValue = "working" | "needs_you" | "in_review" | "ready_to_merge" | "done";
 
 export type PublishCheckStatus = "ready" | "attention" | "blocked";
 
@@ -228,6 +223,18 @@ export interface SettingsMap {
   ide_name: string;
 }
 
+export interface DetectedIde {
+  command: string;
+  name: string;
+  path?: string;
+}
+
+export interface IdeDetectResponse {
+  command: string;
+  name: string;
+  detected?: DetectedIde[];
+}
+
 export interface EnvVar {
   id: number;
   name: string;
@@ -286,7 +293,8 @@ export interface WebhookStatus {
   secret_set: boolean;
   reachable: boolean;
   repos: {
-    id: number;    full_name: string;
+    id: number;
+    full_name: string;
     webhook_registered: boolean;
     poll_fallback: boolean;
   }[];
