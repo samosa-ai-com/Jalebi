@@ -1,6 +1,7 @@
 """Task service: create/list/detail over the `tasks` and `runs` tables."""
 
 import json
+import re
 from collections.abc import Callable
 
 from sqlalchemy import delete, select
@@ -20,6 +21,43 @@ from jalebi.db import (
 )
 
 MAX_PROMPT_CHARS = 32_000  # prompts travel via argv; bound them to stay clear of ARG_MAX
+
+# A freeform task can be based on a PR head (same-repo or fork) instead of an
+# origin branch: ``source_branch == "pr/<N>/head"`` means "start the worktree at
+# the current head of PR #N". The branch never exists on ``origin`` for fork
+# PRs, so the queue fetches ``refs/pull/<N>/head`` instead (see git_workspace).
+PR_HEAD_SOURCE_RE = re.compile(r"^pr/(\d+)/head$")
+
+
+def pr_head_source_number(source_branch: str | None) -> int | None:
+    """PR number when ``source_branch`` is a ``pr/<N>/head`` sentinel, else None."""
+    if not source_branch:
+        return None
+    m = PR_HEAD_SOURCE_RE.match(source_branch.strip())
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except (TypeError, ValueError):
+        return None
+
+
+def is_pr_head_source(source_branch: str | None) -> bool:
+    """True when the task's worktree base is a PR head, not an origin branch."""
+    return pr_head_source_number(source_branch) is not None
+
+
+def effective_diff_base(task) -> str:
+    """Branch for diff/conflict checks (``origin/<base>`` must exist).
+
+    PR-head tasks are based on a PR head commit, but every read-only check runs
+    against ``origin/<target>`` (the PR base) so fork sentinels never reach git.
+    """
+    if is_pr_head_source(task.source_branch):
+        return task.target_branch or "main"
+    if task.type == "issue_fix":
+        return task.target_branch or task.source_branch or "main"
+    return task.source_branch or "main"
 
 
 def create_task(

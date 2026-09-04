@@ -170,6 +170,9 @@ export interface GithubPr {
   state: string;
   base: string | null;
   head: string | null;
+  head_repo: string | null;
+  head_sha?: string | null;
+  is_fork?: boolean;
   author: string | null;
 }
 

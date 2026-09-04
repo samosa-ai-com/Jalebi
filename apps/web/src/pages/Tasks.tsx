@@ -110,6 +110,26 @@ function CreateTask({
   const effectiveRepoId = repoId || repos[0]?.id || 0;
   const repo = repoById(repos, effectiveRepoId);
 
+  // Fork-aware fix flow: a freeform task linked to a fork PR can be based on
+  // the PR head commit (which never exists on origin) instead of an origin
+  // branch. The sentinel `pr/<N>/head` tells the backend to fetch
+  // `refs/pull/<N>/head` for the worktree and to push back to the fork.
+  const selectedPr = context?.prs.find((p) => p.number === Number(prNumber)) ?? null;
+  const prHeadValue = selectedPr ? `pr/${selectedPr.number}/head` : "";
+  const prHeadMissingOnOrigin =
+    !!selectedPr?.head && !(context?.branches.includes(selectedPr.head) ?? true);
+  const showPrHeadOption =
+    type === "freeform" &&
+    !!selectedPr &&
+    (!!selectedPr.is_fork || prHeadMissingOnOrigin || !!selectedPr.head_repo);
+  const isPrHeadSelected = !!prHeadValue && sourceBranch === prHeadValue;
+
+  function usePrHeadBase() {
+    if (!selectedPr) return;
+    setSourceBranch(`pr/${selectedPr.number}/head`);
+    if (selectedPr.base) setTargetBranch(selectedPr.base);
+  }
+
   function accountLabel(name: string | null | undefined): string {
     if (!name) return "Unknown account";
     return accounts.find((a) => a.name === name)?.login ?? name;
@@ -355,31 +375,63 @@ function CreateTask({
           </Select>
         </div>
       ) : type === "pr_review" ? null : (
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Select
-            label="Source branch"
-            value={sourceBranch}
-            onChange={setSourceBranch}
-            placeholder={context ? (context.branches.length ? "default" : "no branches") : "loading…"}
-          >
-            {(context?.branches ?? []).map((b) => (
-              <option key={b} value={b}>
-                {b}
-              </option>
-            ))}
-          </Select>
-          <Select
-            label="Target branch (PR base)"
-            value={targetBranch}
-            onChange={setTargetBranch}
-            placeholder={context ? (context.branches.length ? "default" : "no branches") : "loading…"}
-          >
-            {(context?.branches ?? []).map((b) => (
-              <option key={b} value={b}>
-                {b}
-              </option>
-            ))}
-          </Select>
+        <div className="space-y-3">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Select
+              label="Source branch"
+              value={sourceBranch}
+              onChange={setSourceBranch}
+              placeholder={context ? (context.branches.length ? "default" : "no branches") : "loading…"}
+            >
+              {(context?.branches ?? []).map((b) => (
+                <option key={b} value={b}>
+                  {b}
+                </option>
+              ))}
+              {(showPrHeadOption || isPrHeadSelected) && selectedPr && (
+                <option value={prHeadValue}>
+                  PR #{selectedPr.number} head
+                  {selectedPr.head_repo ? ` (${selectedPr.head_repo}:${selectedPr.head})` : ` (${selectedPr.head})`}
+                </option>
+              )}
+            </Select>
+            <Select
+              label="Target branch (PR base)"
+              value={targetBranch}
+              onChange={setTargetBranch}
+              placeholder={context ? (context.branches.length ? "default" : "no branches") : "loading…"}
+            >
+              {(context?.branches ?? []).map((b) => (
+                <option key={b} value={b}>
+                  {b}
+                </option>
+              ))}
+            </Select>
+          </div>
+          {showPrHeadOption && selectedPr && !isPrHeadSelected && (
+            <p className="text-[11px] leading-relaxed text-ink-500">
+              This PR&apos;s head branch{" "}
+              <span className="font-mono">
+                {selectedPr.head_repo ? `${selectedPr.head_repo}:${selectedPr.head}` : selectedPr.head}
+              </span>{" "}
+              is not on origin (fork).{" "}
+              <button
+                type="button"
+                onClick={usePrHeadBase}
+                className="underline-offset-2 hover:text-ink-300 hover:underline"
+              >
+                Base the worktree on PR #{selectedPr.number} head
+              </button>{" "}
+              to address its reviews — publish will push back to that PR, or open a new PR if the fork disallows edits.
+            </p>
+          )}
+          {isPrHeadSelected && selectedPr && (
+            <p className="text-[11px] leading-relaxed text-syrup-300">
+              Worktree starts at PR #{selectedPr.number} head; target is its base (
+              <span className="font-mono">{selectedPr.base ?? targetBranch}</span>). Publish defaults to
+              Push to PR #{selectedPr.number}.
+            </p>
+          )}
         </div>
       )}
 

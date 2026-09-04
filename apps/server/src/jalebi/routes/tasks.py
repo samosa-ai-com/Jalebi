@@ -262,12 +262,34 @@ def create_task() -> ResponseReturnValue:
     if not _valid_pat(config, effective_pat):
         return jsonify({"error": f"unknown PAT: {effective_pat}"}), 400
 
+    # PR-head worktree base (fork-aware fix flow, freeform only): the worktree
+    # starts at the current head of the linked PR instead of an origin branch,
+    # so a fork branch that never exists on origin can still be addressed.
+    pr_head_num = tasks.pr_head_source_number(str(source_branch))
+    if pr_head_num is not None:
+        if type_ != "freeform":
+            return jsonify({"error": "pr-head source is only valid for freeform tasks"}), 400
+        if pr_number is None or int(pr_number) != pr_head_num:
+            return jsonify({"error": "pr-head source must match the linked pr_number"}), 400
+
     try:
         context = _fetch_context(
             session, repo_id, issue_number, pr_number, pat_name=effective_pat
         )
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
+
+    if pr_head_num is not None:
+        # The merge target is the PR's base (authoritative from the fetched
+        # context) so the new_pr fallback opens against the right branch even
+        # when the form left target at its default.
+        try:
+            prs_ctx = (context.get("prs") or []) if isinstance(context, dict) else []
+            base = prs_ctx[0].get("base") if prs_ctx else None
+            if isinstance(base, str) and base:
+                target_branch = base
+        except (IndexError, AttributeError, TypeError):
+            pass
 
     # Reviewer workflow (PRD F7): a pr_review task may select reviewers from the
     # catalog (kind reviewer). Each reviewer runs as its OWN pr_review task;
@@ -762,9 +784,7 @@ def live_diff(task_id: int) -> ResponseReturnValue:
     worktree = GitWorkspace.worktree_path(config.data_dir, task.id)
     if not (worktree / ".git").is_file():
         return jsonify({"error": "task has no worktree yet"}), 409
-    base_ref = task.target_branch if task.type == "issue_fix" else (
-        task.source_branch or "main"
-    )
+    base_ref = tasks.effective_diff_base(task)
     use_base = request.args.get("base") == "1"
     use_untracked = request.args.get("untracked") == "1"
     git = GitWorkspace(config)
@@ -810,9 +830,7 @@ def merge_check(task_id: int) -> ResponseReturnValue:
     token = secrets.resolve_token(config, task.pat_name)
     try:
         git.ensure_mirror(repo.full_name, repo.clone_url, token)  # idempotent fetch
-        base_ref = task.target_branch if task.type == "issue_fix" else (
-            task.source_branch or "main"
-        )
+        base_ref = tasks.effective_diff_base(task)
         conflicts = git.predict_conflicts(repo.full_name, task_id, base_ref)
     except GitWorkspaceError as exc:
         return jsonify({"error": str(exc)}), 409
@@ -908,11 +926,7 @@ def publish_check(task_id: int) -> ResponseReturnValue:
     config: Config = current_app.config["JALEBI_CONFIG"]
     git = GitWorkspace(config)
     worktree = git.worktree_path(config.data_dir, task.id)
-    base_ref = (
-        task.target_branch
-        if task.type == "issue_fix"
-        else (task.source_branch or "main")
-    )
+    base_ref = tasks.effective_diff_base(task)
 
     checks: list[dict[str, object]] = []
 

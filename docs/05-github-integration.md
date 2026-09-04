@@ -121,6 +121,7 @@ Implemented via the same client (Phase 0): issue/PR context fetch, publish (crea
 - Tasks and follow-ups carry a `pat_name`; the queue resolves the token via `secrets.resolve_token(config, name)` (strict: named only, else `None` → an explicit error) and uses it for GitHub calls, the agent `JALEBI_GITHUB_TOKEN`, and masking. The agent env carries the selected PAT for GitHub **API** use but **no git push credentials** — Jalebi is the only pusher. **All** known PATs are masked at ingest.
 - New client methods (httpx): `list_issues`, `get_issue`, `comment_on_issue`, `list_prs`, `get_pr`, `post_pr_review` (event `COMMENT`), `list_branches`, `find_pr_by_head` (same-repo dedup).
 - `GET /api/github/context?repo=&account=` returns open issues + open PRs + branches for the task-form pickers.
+- Fork metadata: `list_prs` returns `head_repo` / `head_sha` / `is_fork` per PR; `get_pr` additionally returns `head_clone_url` and `maintainer_can_modify` (whether the fork allows maintainer pushes — drives the fork `update_pr` vs `new_pr`-fallback decision). `is_fork` is true when the head repo differs from the base repo (or GitHub marks it a fork); a missing head repo (deleted fork) is treated as same-repo so callers fall back to the origin path with a clear error.
 
 ## 10. Publish dedup & PR accuracy
 

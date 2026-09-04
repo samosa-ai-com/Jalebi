@@ -370,6 +370,56 @@ def test_review_worktree_detached_at_pr_head(ws: GitWorkspace, remote: str, tmp_
     assert proc.stdout.strip() == ""
 
 
+def test_create_worktree_from_pr_head_based_on_pr_commit(
+    ws: GitWorkspace, remote: str, tmp_path
+) -> None:
+    """A PR-head worktree starts at the PR head commit on a writable branch."""
+    src = tmp_path / "clone"
+    _git(["clone", remote, str(src)])
+    _git(["-C", str(src), "config", "user.email", "t@example.com"])
+    _git(["-C", str(src), "config", "user.name", "Test"])
+    (src / "prfile.txt").write_text("pr change\n")
+    _git(["-C", str(src), "add", "prfile.txt"])
+    _git(["-C", str(src), "commit", "-m", "pr change"])
+    pr_commit = _git(["-C", str(src), "rev-parse", "HEAD"])
+    _git(["-C", str(src), "push", remote, f"{pr_commit}:refs/heads/pr-branch"])
+    _git(["-C", remote, "update-ref", "refs/pull/1/head", pr_commit])
+
+    ws.ensure_mirror(FULL_NAME, remote)
+    wt = ws.create_worktree_from_pr_head(11, FULL_NAME, 1)
+    assert _git(["-C", str(wt), "rev-parse", "HEAD"]) == pr_commit
+    assert (wt / "prfile.txt").exists()
+    assert _git(["-C", str(wt), "symbolic-ref", "--short", "HEAD"]) == "jalebi/11"
+    # Resume reuses the existing worktree/branch.
+    assert ws.create_worktree_from_pr_head(11, FULL_NAME, 1) == wt
+
+
+def test_merge_task_into_fork_head_merges_cleanly(
+    ws: GitWorkspace, remote: str, tmp_path
+) -> None:
+    """merge_task_into_fork_head lands the task branch on fork-pr-<N>."""
+    src = tmp_path / "clone"
+    _git(["clone", remote, str(src)])
+    _git(["-C", str(src), "config", "user.email", "t@example.com"])
+    _git(["-C", str(src), "config", "user.name", "Test"])
+    (src / "prfile.txt").write_text("pr change\n")
+    _git(["-C", str(src), "add", "prfile.txt"])
+    _git(["-C", str(src), "commit", "-m", "pr change"])
+    pr_commit = _git(["-C", str(src), "rev-parse", "HEAD"])
+    _git(["-C", str(src), "push", remote, f"{pr_commit}:refs/heads/pr-branch"])
+    _git(["-C", remote, "update-ref", "refs/pull/2/head", pr_commit])
+
+    ws.ensure_mirror(FULL_NAME, remote)
+    wt = ws.create_worktree_from_pr_head(12, FULL_NAME, 2)
+    _add_commit(wt, "fix from jalebi")
+    conflicts = ws.merge_task_into_fork_head(12, FULL_NAME, 2)
+    assert conflicts == []
+    mirror = ws.mirror_path(ws.config.data_dir, FULL_NAME)
+    fork_log = _git(["-C", str(mirror), "log", "fork-pr-2", "--format=%s"])
+    assert "fix from jalebi" in fork_log
+    assert "pr change" in fork_log
+
+
 # ---- Phase 4 T1.2 — diff_against_base --------------------------------------
 
 

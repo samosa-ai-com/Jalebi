@@ -216,6 +216,65 @@ describe("Tasks", () => {
     expect(picker).toHaveValue("1");
   });
 
+  it("fork PR offers a PR-head worktree base and sends the sentinel on create", async () => {
+    const fetchMock = stubFetch({
+      ...DEFAULT_HANDLERS,
+      "/api/github/context": {
+        issues: [],
+        prs: [
+          {
+            number: 7,
+            title: "Zen fix",
+            html_url: "u",
+            state: "open",
+            base: "main",
+            head: "feat/zen",
+            head_repo: "ramon/repo",
+            is_fork: true,
+            author: "ramon",
+          },
+        ],
+        branches: ["main", "dev"],
+      },
+    });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+
+    await screen.findByText("New task");
+    const picker = await screen.findByLabelText("Link PR (optional)");
+    await userEvent.selectOptions(picker, "7");
+
+    const useHead = await screen.findByRole("button", {
+      name: /Base the worktree on PR #7 head/,
+    });
+    await userEvent.click(useHead);
+
+    const source = screen.getByLabelText("Source branch") as HTMLSelectElement;
+    expect(source.value).toBe("pr/7/head");
+    expect(
+      screen.getByRole("option", { name: /PR #7 head/ })
+    ).toBeInTheDocument();
+
+    await userEvent.type(screen.getByPlaceholderText("Instructions…"), "address reviews");
+    await userEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      const postCall = fetchMock.mock.calls.find(
+        (call) => call[0] === "/api/tasks" && call[1]?.method === "POST"
+      );
+      expect(postCall).toBeTruthy();
+      const body = JSON.parse(postCall![1]!.body as string) as Record<string, unknown>;
+      expect(body).toMatchObject({
+        pr_number: 7,
+        source_branch: "pr/7/head",
+        target_branch: "main",
+      });
+    });
+  });
+
   it("shows env-var chips and sends selected env_vars on create", async () => {
     const fetchMock = stubFetch({
       ...DEFAULT_HANDLERS,

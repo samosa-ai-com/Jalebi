@@ -9,10 +9,13 @@ stored prompt clean while the agent gets the full brief.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from jalebi import catalog
 from jalebi.db import CatalogAgent, Repo, Task
+
+_PR_HEAD_RE = re.compile(r"^pr/(\d+)/head$")
 
 BEST_PRACTICES = """\
 ## Working conventions
@@ -112,8 +115,16 @@ def build_agent_md(
             f"- Target branch (worktree base / PR base): `{task.target_branch or 'default'}`"
         )
     else:
-        parts.append(f"- Source branch (worktree base): `{task.source_branch or 'default'}`")
+        src = task.source_branch or "default"
+        parts.append(f"- Source branch (worktree base): `{src}`")
         parts.append(f"- Target branch (PR base): `{task.target_branch or 'default'}`")
+        m = _PR_HEAD_RE.match(src.strip()) if isinstance(src, str) else None
+        if m:
+            parts.append(
+                f"- Worktree is based on the current head of PR #{m.group(1)} "
+                "(same-repo or fork) — address its review comments and commit; "
+                "Jalebi pushes back to that PR."
+            )
     if task.pat_name and task.pat_name != "default":
         parts.append(f"- Using GitHub token: `{task.pat_name}`")
     parts += ["", HARD_RULES, "", BEST_PRACTICES]

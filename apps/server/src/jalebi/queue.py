@@ -356,6 +356,40 @@ class TaskQueue:
         return task.source_branch or "main"
 
     @staticmethod
+    def _pr_head_number(task: Task) -> int | None:
+        """PR number when the task is based on a PR head sentinel, else None."""
+        return tasks.pr_head_source_number(task.source_branch)
+
+    def _ensure_task_worktree(
+        self, git: GitWorkspace, task: Task, repo: Repo, token: str | None
+    ):
+        """Create (or reuse) the task's writable worktree, PR-head aware.
+
+        Freeform-family tasks with ``source_branch == "pr/<N>/head"`` are based
+        on the current PR head commit (same-repo or fork) so review feedback on
+        a fork PR can be addressed even though the fork branch never exists on
+        ``origin``. All other tasks use :meth:`_worktree_base`.
+        """
+        pr_number = self._pr_head_number(task)
+        if pr_number is not None:
+            if task.type in ("issue_fix", "pr_review"):
+                raise RuntimeError(
+                    f"task {task.id}: pr-head source is only valid for freeform tasks"
+                )
+            return git.create_worktree_from_pr_head(task.id, repo.full_name, pr_number, token)
+        return git.create_worktree(task.id, repo.full_name, self._worktree_base(task), token)
+
+    def _reset_task_branch(
+        self, git: GitWorkspace, task: Task, repo: Repo, token: str | None
+    ) -> None:
+        """First-run reset to the current base (PR-head aware)."""
+        pr_number = self._pr_head_number(task)
+        if pr_number is not None:
+            git.reset_branch_to_pr_head(task.id, repo.full_name, pr_number, token)
+        else:
+            git.reset_branch_to_base(task.id, repo.full_name, self._worktree_base(task))
+
+    @staticmethod
     def _agent_token_for(task: Task, token: str | None) -> str | None:
         """The token to expose to the agent subprocess.
 
@@ -801,13 +835,9 @@ class TaskQueue:
             stale_branch = git.branch_exists(task.id, repo.full_name)
             wt_path = GitWorkspace.worktree_path(self.config.data_dir, task.id)
             worktree_existed = (wt_path / ".git").is_file()
-            wt = git.create_worktree(
-                task.id, repo.full_name, self._worktree_base(task), token
-            )
+            wt = self._ensure_task_worktree(git, task, repo, token)
             if run.seq == 1 and stale_branch and not worktree_existed:
-                git.reset_branch_to_base(
-                    task.id, repo.full_name, self._worktree_base(task)
-                )
+                self._reset_task_branch(git, task, repo, token)
             worktree_bootstrap.bootstrap_worktree(
                 wt,
                 prompts.build_agent_md(task, repo, agent=agent, cli=cli),
@@ -1343,9 +1373,7 @@ class TaskQueue:
                     raise RuntimeError(f"pr_review task {task.id} has no PR number to resume")
                 wt = git.create_review_worktree(task.id, repo.full_name, pr_number, token)
             else:
-                wt = git.create_worktree(
-                    task.id, repo.full_name, self._worktree_base(task), token
-                )
+                wt = self._ensure_task_worktree(git, task, repo, token)
             worktree_bootstrap.bootstrap_worktree(
                 wt,
                 prompts.build_agent_md(task, repo, agent=agent, cli=cli),
@@ -2017,8 +2045,9 @@ class TaskQueue:
         masker=None,
     ) -> int:
         # Ensure the worktree exists (it may have been cleaned for old tasks);
-        # create_worktree reuses the existing jalebi/<taskId> branch if present.
-        git.create_worktree(task.id, repo.full_name, task.target_branch, token)
+        # _ensure_task_worktree reuses the existing jalebi/<taskId> branch if
+        # present, and re-bases PR-head tasks on the current PR head.
+        self._ensure_task_worktree(git, task, repo, token)
         # Sync the task branch with the PR base BEFORE pushing so the PR is up to
         # date with target's progress made during the run and merges cleanly. A
         # conflict aborts the merge and surfaces the files instead of pushing a
@@ -2111,6 +2140,13 @@ class TaskQueue:
             raise PublishError(
                 f"PR #{pr_number} has no resolvable head branch"
             )
+        head_repo = pr.get("head_repo") or repo.full_name
+        is_fork = bool(pr.get("is_fork")) or (head_repo != repo.full_name)
+        if is_fork:
+            return self._publish_update_fork_pr(
+                task, repo, token, git, pr_number=pr_number, pr=pr,
+                head_branch=str(head_branch), fork_repo=str(head_repo),
+            )
         # The worktree is already ensured by ``publish_task`` (commits_ahead
         # gate ran on it), so ``jalebi/<id>`` is on disk — no second
         # create_worktree call needed.
@@ -2140,6 +2176,67 @@ class TaskQueue:
             pr_number,
             head_branch,
             (old_sha or "?")[:10],
+            (new_sha or "?")[:10],
+        )
+        return pr_number
+
+    def _publish_update_fork_pr(
+        self,
+        task: Task,
+        repo: Repo,
+        token: str,
+        git: GitWorkspace,
+        *,
+        pr_number: int,
+        pr: dict,
+        head_branch: str,
+        fork_repo: str,
+    ) -> int:
+        """Push ``jalebi/<id>`` onto a fork PR's head branch (Option 1).
+
+        The merge runs on the mirror's local ``fork-pr-<N>`` branch (based on
+        the current ``refs/pull/<N>/head``); the push goes directly to the fork
+        URL with ``--force-with-lease`` against the PR's recorded head SHA, so
+        a concurrently-moved fork branch is refused (412) instead of clobbered.
+        The agent never touches the fork — all of this runs in the queue
+        process. When the fork disallows maintainer edits, raises PublishError
+        guiding the owner to ``new_pr`` (Option 2 fallback).
+        """
+        if pr.get("maintainer_can_modify") is False:
+            raise PublishError(
+                f"PR #{pr_number} is from fork {fork_repo} which does not allow "
+                "maintainer edits — push to the fork is not permitted. Publish "
+                "with `new_pr` instead to open a separate PR on "
+                f"{repo.full_name}."
+            )
+        old_sha = pr.get("head_sha")
+        if not isinstance(old_sha, str) or not old_sha:
+            # No recorded head SHA (e.g. mocked PR payload) — push with a plain
+            # lease instead of refusing the publish.
+            old_sha = None
+        conflicts = git.merge_task_into_fork_head(task.id, repo.full_name, pr_number, token)
+        if conflicts:
+            raise PublishConflict(
+                f"pushing to PR #{pr_number} (fork {fork_repo}:{head_branch}) would conflict: "
+                + ", ".join(conflicts)
+                + " — the merge was aborted. Send a follow-up asking the agent to "
+                "resolve, then publish again."
+            )
+        try:
+            git.push_fork_head(
+                repo.full_name, pr_number, head_branch, fork_repo,
+                str(old_sha) if old_sha else None, token,
+            )
+        except PushLeaseFailed:
+            raise
+        new_sha = git.local_ref_sha(repo.full_name, GitWorkspace.fork_branch(pr_number))
+        logger.info(
+            "task %s updated fork PR #%s (%s:%s): %s -> %s",
+            task.id,
+            pr_number,
+            fork_repo,
+            head_branch,
+            (str(old_sha) if old_sha else "?")[:10],
             (new_sha or "?")[:10],
         )
         return pr_number

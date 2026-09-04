@@ -358,6 +358,228 @@ class GitWorkspace:
                 )
         return None
 
+    @staticmethod
+    def pr_head_ref(pr_number: int) -> str:
+        """Mirror-local ref tracking a PR head (``refs/remotes/origin/pr-<N>``)."""
+        return f"refs/remotes/origin/pr-{pr_number}"
+
+    @staticmethod
+    def fork_branch(pr_number: int) -> str:
+        """Mirror-local branch holding the merged fork-PR head (``fork-pr-<N>``)."""
+        return f"fork-pr-{pr_number}"
+
+    def fetch_pr_head(
+        self, full_name: str, pr_number: int, token: str | None = None
+    ) -> str:
+        """Fetch ``refs/pull/<N>/head`` into the mirror; return the local ref.
+
+        Works for same-repo and fork PRs without touching the fork repo.
+        """
+        mirror = self.mirror_path(self.config.data_dir, full_name)
+        auth = _auth_env(token)
+        ref = self.pr_head_ref(pr_number)
+        with self._lock_for(full_name):
+            if not mirror.exists():
+                raise GitWorkspaceError(f"mirror missing for {full_name}; call ensure_mirror first")
+            _run_git(
+                ["-C", str(mirror), "fetch", "origin", f"refs/pull/{pr_number}/head:{ref}"],
+                auth_env=auth,
+            )
+        return ref
+
+    def create_worktree_from_pr_head(
+        self, task_id: int, full_name: str, pr_number: int, token: str | None = None
+    ) -> Path:
+        """Create a writable ``jalebi/<taskId>`` worktree based on a PR head.
+
+        The base is the current ``refs/pull/<N>/head`` commit (same-repo or
+        fork) — not ``origin/<branch>`` — so a fix task can address review
+        comments on a fork PR whose branch never exists on ``origin``.
+        Reuses an existing worktree/branch for resumes (same as
+        :meth:`create_worktree`).
+        """
+        mirror = self.mirror_path(self.config.data_dir, full_name)
+        ws = self.worktree_path(self.config.data_dir, task_id)
+        branch = self.task_branch(task_id)
+        auth = _auth_env(token)
+        ref = self.pr_head_ref(pr_number)
+
+        if (ws / ".git").is_file():
+            return ws
+
+        with self._lock_for(full_name):
+            if not mirror.exists():
+                raise GitWorkspaceError(f"mirror missing for {full_name}; call ensure_mirror first")
+            _run_git(["-C", str(mirror), "fetch", "origin", "--prune"], auth_env=auth)
+            _run_git(
+                ["-C", str(mirror), "fetch", "origin", f"refs/pull/{pr_number}/head:{ref}"],
+                auth_env=auth,
+            )
+            _run_git(["-C", str(mirror), "worktree", "prune"], auth_env=auth)
+            branches = self._list_local_heads(mirror)
+            if branch in branches:
+                _run_git(["-C", str(mirror), "worktree", "add", str(ws), branch])
+            else:
+                _run_git(
+                    ["-C", str(mirror), "worktree", "add", "-b", branch, str(ws), ref]
+                )
+        return ws
+
+    def reset_branch_to_pr_head(
+        self, task_id: int, full_name: str, pr_number: int, token: str | None = None
+    ) -> None:
+        """Reset ``jalebi/<taskId>`` to the *current* PR head (first-run only).
+
+        Mirrors :meth:`reset_branch_to_base` for PR-head tasks so a stale
+        branch can never contaminate a fresh run.
+        """
+        mirror = self.mirror_path(self.config.data_dir, full_name)
+        ws = self.worktree_path(self.config.data_dir, task_id)
+        branch = self.task_branch(task_id)
+        ref = self.pr_head_ref(pr_number)
+        auth = _auth_env(token)
+        with self._lock_for(full_name):
+            if not mirror.exists() or not (ws / ".git").is_file():
+                return
+            _run_git(
+                ["-C", str(mirror), "fetch", "origin", f"refs/pull/{pr_number}/head:{ref}"],
+                auth_env=auth,
+            )
+            _run_git(["-C", str(ws), "checkout", "-B", branch, ref])
+            _run_git(["-C", str(ws), "clean", "-fd"])
+
+    def merge_task_into_fork_head(
+        self, task_id: int, full_name: str, pr_number: int, token: str | None = None
+    ) -> list[str]:
+        """Merge ``jalebi/<taskId>`` into the local ``fork-pr-<N>`` branch.
+
+        The local fork branch is (re)created at the current PR head first, so
+        the merge always targets what GitHub shows. Returns conflicting paths
+        (empty = clean); on conflict the merge is aborted and the mirror is
+        left clean. Caller pushes ``fork-pr-<N>`` to the fork afterwards.
+        """
+        mirror = self.mirror_path(self.config.data_dir, full_name)
+        auth = _auth_env(token)
+        task_branch = self.task_branch(task_id)
+        fork_local = self.fork_branch(pr_number)
+        ref = self.pr_head_ref(pr_number)
+
+        with self._lock_for(full_name):
+            if not mirror.exists():
+                raise GitWorkspaceError(
+                    f"mirror missing for {full_name}; call ensure_mirror first"
+                )
+            _run_git(
+                ["-C", str(mirror), "fetch", "origin", f"refs/pull/{pr_number}/head:{ref}"],
+                auth_env=auth,
+            )
+            try:
+                task_sha = _run_git(
+                    ["-C", str(mirror), "rev-parse", f"refs/heads/{task_branch}"]
+                )
+            except GitWorkspaceError as exc:
+                raise GitWorkspaceError(
+                    f"cannot resolve branches for fork update: {exc}"
+                ) from None
+            # (Re)create the local fork branch exactly at the current PR head.
+            _run_git(["-C", str(mirror), "branch", "-f", fork_local, ref], auth_env=auth)
+            try:
+                fork_sha = _run_git(
+                    ["-C", str(mirror), "rev-parse", f"refs/heads/{fork_local}"]
+                )
+            except GitWorkspaceError as exc:
+                raise GitWorkspaceError(
+                    f"cannot resolve branches for fork update: {exc}"
+                ) from None
+            if task_sha == fork_sha:
+                return []  # nothing to do
+
+            temp_ws = self.worktree_path(self.config.data_dir, task_id) / "publish-fork-tmp"
+            if temp_ws.exists():
+                _run_git(["-C", str(mirror), "worktree", "remove", "--force", str(temp_ws)])
+            _run_git(
+                ["-C", str(mirror), "worktree", "add", "-B", fork_local, str(temp_ws), fork_local],
+                auth_env=auth,
+            )
+            try:
+                env = _clean_git_env(os.environ.copy())
+                if auth:
+                    env.update(auth)
+                proc = subprocess.run(
+                    ["git", "-C", str(temp_ws), "merge", task_branch],
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=GIT_TIMEOUT_SECONDS,
+                )
+                if proc.returncode == 0:
+                    return []
+                try:
+                    _run_git(
+                        ["-C", str(temp_ws), "rev-parse", "--verify", "-q", "MERGE_HEAD"]
+                    )
+                except GitWorkspaceError:
+                    raise GitWorkspaceError(
+                        f"git merge failed: {(proc.stderr or '').strip()}"
+                    ) from None
+                try:
+                    conflicts = _run_git(
+                        ["-C", str(temp_ws), "diff", "--name-only", "--diff-filter=U"]
+                    ).splitlines()
+                except GitWorkspaceError:
+                    conflicts = []
+                _run_git(["-C", str(temp_ws), "merge", "--abort"])
+                return conflicts
+            finally:
+                _run_git(["-C", str(mirror), "worktree", "remove", "--force", str(temp_ws)])
+
+    def push_fork_head(
+        self,
+        full_name: str,
+        pr_number: int,
+        head_branch: str,
+        fork_repo: str,
+        expected_old_sha: str | None,
+        token: str | None = None,
+    ) -> None:
+        """Push local ``fork-pr-<N>`` to ``<head_branch>`` on the fork repo.
+
+        Pushes to ``https://github.com/<fork_repo>.git`` (never adds a remote —
+        the queue owns fork writes; agents are still forbidden from adding
+        remotes). Uses ``--force-with-lease`` so a concurrently-moved fork
+        branch is refused as :class:`PushLeaseFailed` instead of clobbered.
+        """
+        mirror = self.mirror_path(self.config.data_dir, full_name)
+        auth = _auth_env(token)
+        fork_local = self.fork_branch(pr_number)
+        fork_url = f"https://github.com/{fork_repo}.git"
+        with self._lock_for(full_name):
+            env = _clean_git_env(os.environ.copy())
+            if auth:
+                env.update(auth)
+            if expected_old_sha:
+                lease = f"--force-with-lease={head_branch}:{expected_old_sha}"
+            else:
+                lease = "--force-with-lease"
+            proc = subprocess.run(
+                ["git", "-C", str(mirror), "push", lease, fork_url, f"{fork_local}:{head_branch}"],
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=GIT_TIMEOUT_SECONDS,
+            )
+            if proc.returncode == 0:
+                return
+            stderr = (proc.stderr or "").strip() or (proc.stdout or "").strip()
+            if "(stale info)" in stderr:
+                raise PushLeaseFailed(
+                    f"remote fork branch {head_branch} moved since last fetch — "
+                    "re-fetch and retry to confirm the new state"
+                ) from None
+            raise GitWorkspaceError(
+                f"git push {lease} to fork {fork_repo} failed: {stderr}"
+            )
+
     def create_detached_worktree(
         self,
         full_name: str,

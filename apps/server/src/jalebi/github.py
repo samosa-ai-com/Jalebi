@@ -33,6 +33,26 @@ class GitHubUnauthorized(GitHubError):
     """Raised when GitHub returns HTTP 401 — token revoked/rotated (T2.1)."""
 
 
+def _is_fork_pr(pr_body: dict, base_full_name: str) -> bool:
+    """True when the PR head lives on a different repo (fork) than the base.
+
+    Defensive: the issues/PR list shapes vary, and ``head.repo`` may be absent
+    (deleted fork). A missing head repo is treated as same-repo (not a fork)
+    so callers fall back to the existing origin push path with a clear error
+    instead of guessing a fork URL.
+    """
+    if not isinstance(pr_body, dict):
+        return False
+    head = pr_body.get("head") or {}
+    head_repo = (head.get("repo") or {}) if isinstance(head, dict) else {}
+    if head_repo.get("fork") is True:
+        return True
+    head_full = head_repo.get("full_name")
+    if isinstance(head_full, str) and head_full and head_full != base_full_name:
+        return True
+    return False
+
+
 # Polling-observer (T2.1) URL templates. Path strings are also the ETag cache
 # keys; every poller URL begins with ``/repos/{full_name}/``, so the
 # repo-scoped prune (``_prune_repo``) can match by prefix.
@@ -245,6 +265,9 @@ class GitHubClient:
                 "state": pr.get("state"),
                 "base": (pr.get("base") or {}).get("ref"),
                 "head": (pr.get("head") or {}).get("ref"),
+                "head_sha": (pr.get("head") or {}).get("sha"),
+                "head_repo": ((pr.get("head") or {}).get("repo") or {}).get("full_name"),
+                "is_fork": _is_fork_pr(pr, full_name),
                 "author": (pr.get("user") or {}).get("login"),
             }
             for pr in body
@@ -256,6 +279,8 @@ class GitHubClient:
             raise GitHubNotFound(f"{full_name}#{number}")
         if status != 200 or not isinstance(body, dict):
             raise GitHubError(f"failed to fetch PR: HTTP {status}")
+        head_obj = body.get("head") if isinstance(body.get("head"), dict) else {}
+        head_repo_obj = (head_obj.get("repo") or {}) if isinstance(head_obj, dict) else {}
         return {
             "number": body.get("number"),
             "title": body.get("title"),
@@ -265,6 +290,10 @@ class GitHubClient:
             "base": (body.get("base") or {}).get("ref"),
             "head": (body.get("head") or {}).get("ref"),
             "head_sha": (body.get("head") or {}).get("sha"),
+            "head_repo": head_repo_obj.get("full_name"),
+            "head_clone_url": head_repo_obj.get("clone_url"),
+            "is_fork": _is_fork_pr(body, full_name),
+            "maintainer_can_modify": body.get("maintainer_can_modify"),
             "author": (body.get("user") or {}).get("login"),
         }
 

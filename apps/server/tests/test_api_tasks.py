@@ -1140,3 +1140,96 @@ def test_publish_check_attention_on_ci_failure(
 def test_publish_check_404_when_task_missing(client: FlaskClient) -> None:
     resp = client.get("/api/tasks/99999/publish-check")
     assert resp.status_code == 404
+
+
+def test_pr_head_source_helpers() -> None:
+    from jalebi import tasks as task_svc
+
+    assert task_svc.pr_head_source_number("pr/7/head") == 7
+    assert task_svc.pr_head_source_number("main") is None
+    assert task_svc.is_pr_head_source("pr/7/head") is True
+    assert task_svc.is_pr_head_source("main") is False
+
+
+def _fake_pr_client(monkeypatch, *, base="main"):
+    class FakeClient:
+        def __init__(self, token): ...
+
+        def get_pr(self, full_name, number):
+            return {
+                "number": number,
+                "title": "PR title",
+                "body": "PR body",
+                "html_url": "u",
+                "state": "open",
+                "base": base,
+                "head": "feat/x",
+                "head_repo": "fork/repo",
+                "is_fork": True,
+                "author": "bob",
+            }
+
+        def list_pr_reviews(self, full_name, number):
+            return []
+
+        def close(self): ...
+
+    monkeypatch.setattr("jalebi.routes.tasks.GitHubClient", FakeClient)
+
+
+def test_create_freeform_pr_head_source_sets_target_to_pr_base(
+    client: FlaskClient, repo_id: int, session, monkeypatch
+) -> None:
+    _fake_pr_client(monkeypatch, base="develop")
+    resp = client.post(
+        "/api/tasks",
+        json={
+            "repo_id": repo_id,
+            "type": "freeform",
+            "prompt": "address reviews",
+            "pr_number": 7,
+            "source_branch": "pr/7/head",
+        },
+    )
+    assert resp.status_code == 201
+    body = resp.get_json()
+    assert body["source_branch"] == "pr/7/head"
+    assert body["target_branch"] == "develop"
+    assert body["prs"] == [7]
+
+
+def test_create_pr_head_source_must_match_pr_number(
+    client: FlaskClient, repo_id: int, session, monkeypatch
+) -> None:
+    _fake_pr_client(monkeypatch)
+    resp = client.post(
+        "/api/tasks",
+        json={
+            "repo_id": repo_id,
+            "type": "freeform",
+            "prompt": "address reviews",
+            "pr_number": 8,
+            "source_branch": "pr/7/head",
+        },
+    )
+    assert resp.status_code == 400
+    assert "must match" in resp.get_json()["error"]
+
+
+def test_create_pr_head_source_rejected_for_issue_fix(
+    client: FlaskClient, repo_id: int, session, monkeypatch
+) -> None:
+    _fake_pr_client(monkeypatch)
+    resp = client.post(
+        "/api/tasks",
+        json={
+            "repo_id": repo_id,
+            "type": "issue_fix",
+            "prompt": "fix it",
+            "issue_number": 3,
+            "pr_number": 7,
+            "source_branch": "pr/7/head",
+        },
+    )
+    assert resp.status_code == 400
+    assert "freeform" in resp.get_json()["error"]

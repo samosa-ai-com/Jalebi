@@ -54,6 +54,7 @@ Jalebi uses the **git CLI** (not libgit2) for all repo operations. Each task/age
 - **`issue_fix` (single-target model):** a single **target branch** picker (the PR base). The worktree is based on that same branch, so the PR diff is exactly the agent's fix and merges cleanly by construction. This supersedes PRD §F8's two-selector design ("source `main`, target `development`"): diverged source/target produced PRs that smuggled source-only commits into the target or silently conflicted.
 - **Other task types (freeform):** a **source branch** (the worktree base) and a **target branch** (the PR base) remain available.
 - **`pr_review`:** branch pickers are hidden — the review worktree checks out the PR head, so branches are irrelevant.
+- **Fork-PR fix flow (freeform only):** when a freeform task links a fork PR, the source may be the sentinel **`pr/<N>/head`** instead of an origin branch. `create_worktree_from_pr_head()` bases writable `jalebi/<id>` on the current `refs/pull/<N>/head` commit (fetched like review worktrees — no fork remote is ever added), so a fork branch that never exists on `origin` can still be addressed. `reset_branch_to_pr_head()` is the first-run reset equivalent. Diff/conflict checks for these tasks run against `origin/<target_branch>` (the PR base) via `tasks.effective_diff_base()` — the sentinel never reaches git.
 
 ## 8. Publish (PRD §F9)
 
@@ -65,11 +66,13 @@ Jalebi uses the **git CLI** (not libgit2) for all repo operations. Each task/age
 - **Issue comments on new PR only:** the "Jalebi opened a pull request for this issue" comment is posted **only when a PR is newly created**, never when re-publishing to an existing open PR (follow-up pushes stay silent).
 - **Three publish modes** (manual publish via the UI; auto-publish always uses `new_pr`):
 
-  | Mode | What it does | When to use |
-  |---|---|---|
-  | `new_pr` *(default, current behaviour)* | Push `jalebi/<id>` → target, open a new PR (or reuse an existing open PR with that head). | The agent's work is a standalone change. |
-  | `update_pr` | Fast-forward (or merge) `jalebi/<id>` into an existing PR's head branch, force-push with `--force-with-lease`. | The agent's commits should land on top of an existing PR (e.g. addressing review feedback or adding to a branch the user already opened). |
-  | `push_branch` | Fast-forward (or merge) `jalebi/<id>` into a named branch, force-push with `--force-with-lease`. No PR interaction. | The agent's work goes onto a feature branch with no PR. |
+   | Mode | What it does | When to use |
+   |---|---|---|
+   | `new_pr` *(default, current behaviour)* | Push `jalebi/<id>` → target, open a new PR (or reuse an existing open PR with that head). | The agent's work is a standalone change. |
+   | `update_pr` | Fast-forward (or merge) `jalebi/<id>` into an existing PR's head branch, force-push with `--force-with-lease`. | The agent's commits should land on top of an existing PR (e.g. addressing review feedback or adding to a branch the user already opened). |
+   | `push_branch` | Fast-forward (or merge) `jalebi/<id>` into a named branch, force-push with `--force-with-lease`. No PR interaction. | The agent's work goes onto a feature branch with no PR. |
+
+   **Fork-PR `update_pr` (Option 1 with `new_pr` fallback):** when the target PR's head lives on a fork (`head_repo != base repo`), the queue merges `jalebi/<id>` into the mirror-local `fork-pr-<N>` branch (recreated at the current PR head each time) and pushes `fork-pr-<N>:<head_branch>` directly to `https://github.com/<fork>.git` with `--force-with-lease=<branch>:<head_sha>` — no remote is added (agents remain forbidden from adding remotes; the queue owns fork writes). A concurrently-moved fork branch is refused as `PushLeaseFailed` (412). When the fork disallows maintainer edits (`maintainer_can_modify == false`), publish is refused with a `PublishError` guiding the owner to `new_pr` instead (a separate origin PR, leaving the fork untouched).
 
   All three run in Jalebi's queue/server process — never in the agent subprocess. `auth_env` (git push credentials) is never applied to the agent env, so the agent still cannot push directly (see `docs/10-security.md`).
 

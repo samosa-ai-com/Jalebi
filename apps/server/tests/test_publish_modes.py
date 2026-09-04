@@ -278,6 +278,132 @@ def test_publish_update_pr_happy_path(q, session, repo_row, monkeypatch) -> None
     assert "Pushed to PR #9" in run.steps_json
 
 
+def _fork_pr(number: int, *, can_modify=True) -> dict:
+    return {
+        "number": number,
+        "state": "open",
+        "head": "feat/fork-x",
+        "head_repo": "fork/repo",
+        "head_sha": "abc123",
+        "is_fork": True,
+        "maintainer_can_modify": can_modify,
+    }
+
+
+def test_publish_update_pr_fork_pushes_to_fork(q, session, repo_row, monkeypatch) -> None:
+    """Fork PRs merge into the local fork branch and push to the fork URL."""
+    settings.set_setting(session, "auto_publish", False)
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
+    _seed_commit(q, task.id, repo_row)
+    _seed_run(session, task.id)
+
+    seen: dict[str, object] = {}
+
+    class OpenClient:
+        def __init__(self, token: str):
+            pass
+
+        def get_pr(self, full_name, number):
+            return _fork_pr(number)
+
+        def close(self):
+            pass
+
+    class CapturingGit(GitWorkspace):
+        def __init__(self, config):
+            self.config = config
+
+        def create_worktree(self, *a, **k):
+            return Path("/dev/null")
+
+        def fast_forward_into(self, *a, **k):
+            raise AssertionError("same-repo path must not run for fork PRs")
+
+        def push_existing_branch(self, *a, **k):
+            raise AssertionError("origin push must not run for fork PRs")
+
+        def merge_task_into_fork_head(self, task_id, full_name, pr_number, token):
+            seen["merged"] = (task_id, full_name, pr_number)
+            return []
+
+        def push_fork_head(
+            self, full_name, pr_number, head_branch, fork_repo, expected_old_sha, token
+        ):
+            seen["pushed"] = (full_name, pr_number, head_branch, fork_repo, expected_old_sha)
+
+        def local_ref_sha(self, full_name, branch):
+            return "def456"
+
+        def assert_publish_branch(self, task_id):
+            return None
+
+    monkeypatch.setattr("jalebi.queue.GitHubClient", OpenClient)
+    monkeypatch.setattr("jalebi.queue.GitWorkspace", CapturingGit)
+    pr = q.publish_task(task.id, mode="update_pr", pr_number=7)
+    assert pr == 7
+    assert seen["merged"] == (task.id, FULL_NAME, 7)
+    assert seen["pushed"] == (FULL_NAME, 7, "feat/fork-x", "fork/repo", "abc123")
+
+
+def test_publish_update_pr_fork_refused_without_maintainer_edits(
+    q, session, repo_row, monkeypatch
+) -> None:
+    """A fork PR with maintainer edits off guides the owner to new_pr."""
+    settings.set_setting(session, "auto_publish", False)
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
+    _seed_commit(q, task.id, repo_row)
+
+    class ClosedForkClient:
+        def __init__(self, token: str):
+            pass
+
+        def get_pr(self, full_name, number):
+            return _fork_pr(number, can_modify=False)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("jalebi.queue.GitHubClient", ClosedForkClient)
+    with pytest.raises(PublishError, match="maintainer edits"):
+        q.publish_task(task.id, mode="update_pr", pr_number=7)
+
+
+def test_publish_update_pr_fork_conflict_propagates(
+    q, session, repo_row, monkeypatch
+) -> None:
+    settings.set_setting(session, "auto_publish", False)
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
+    _seed_commit(q, task.id, repo_row)
+
+    class OpenClient:
+        def __init__(self, token: str):
+            pass
+
+        def get_pr(self, full_name, number):
+            return _fork_pr(number)
+
+        def close(self):
+            pass
+
+    class ConflictGit(GitWorkspace):
+        def __init__(self, config):
+            self.config = config
+
+        def create_worktree(self, *a, **k):
+            return Path("/dev/null")
+
+        def merge_task_into_fork_head(self, *a, **k):
+            return ["a.txt"]
+
+        def assert_publish_branch(self, task_id):
+            return None
+
+    monkeypatch.setattr("jalebi.queue.GitHubClient", OpenClient)
+    monkeypatch.setattr("jalebi.queue.GitWorkspace", ConflictGit)
+    with pytest.raises(PublishConflict, match="fork"):
+        q.publish_task(task.id, mode="update_pr", pr_number=7)
+
+
 def test_publish_push_branch_happy_path(q, session, repo_row, monkeypatch) -> None:
     settings.set_setting(session, "auto_publish", False)
     task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")

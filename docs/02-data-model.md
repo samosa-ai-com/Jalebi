@@ -41,7 +41,7 @@
 | `id` | int PK | |
 | `type` | text CHECK | `issue_fix` \| `pr_review` \| `freeform` \| `screen_finding` \| `triggered` |
 | `repo_id` | int FK → repos | |
-| `source_branch` | text, default `'main'` | worktree base for freeform (and other non-issue_fix types); **unused for `issue_fix`** (single-target model) |
+| `source_branch` | text, default `'main'` | worktree base for freeform (and other non-issue_fix types); **unused for `issue_fix`** (single-target model). May be the sentinel **`pr/<N>/head`** (freeform only, must match the linked `pr_number`) meaning "base the worktree on the current head of PR #N" — used for fork PRs whose branch never exists on origin; diff/conflict checks for these tasks run against `target_branch` via `tasks.effective_diff_base()` |
 | `target_branch` | text, default `'main'` | PR base; also the worktree base for `issue_fix` |
 | `agent_id` | text null | catalog agent slug — **no FK yet**; FK added in Phase 1 |
 | `model` | text null | |
@@ -49,7 +49,7 @@
 | `pat_name` | text null | the **account** that runs this task (required at creation; no default) |
 | `issues_json` | text null | JSON list of linked issue numbers |
 | `prs_json` | text null | JSON list of linked PR numbers (any type that links a PR, e.g. `pr_review` and freeform "fix the issues in this PR") |
-| `context_json` | text null | masked issue/PR context embedded into the agent brief; fetched at creation for **any** linked issue/PR (not just `issue_fix`/`pr_review`). PR context includes `reviews` — the PR's current review comments (masked), so a freeform task linked to a PR can address them directly. Review text is truncated (per-comment and total) with a marker so large reviews can't bloat the agent brief |
+| `context_json` | text null | masked issue/PR context embedded into the agent brief; fetched at creation for **any** linked issue/PR (not just `issue_fix`/`pr_review`). PR context includes `reviews` — the PR's current review comments (masked), so a freeform task linked to a PR can address them directly. Review text is truncated (per-comment and total) with a marker so large reviews can't bloat the agent brief. PR entries also carry fork metadata (`head_repo`, `head_sha`, `is_fork`, `maintainer_can_modify`) backing the fork-PR fix flow |
 | `env_vars_json` | text null | JSON list of env-var **names** injected into the agent subprocess env |
 | `prompt` | text | instructions |
 | `status` | text CHECK, default `'queued'` | `queued` \| `running` \| `waiting_review` \| `needs_approval` \| `done` \| `failed` \| `timed_out` \| `interrupted` \| `cancelled` |

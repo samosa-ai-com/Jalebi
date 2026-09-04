@@ -259,6 +259,78 @@ def test_list_prs(monkeypatch) -> None:
     assert prs[0]["head"] == "jalebi/7"
 
 
+def test_list_prs_marks_fork_heads(monkeypatch) -> None:
+    client = make_client()
+    body = [
+        {
+            "number": 7,
+            "title": "fork PR",
+            "html_url": "u",
+            "state": "open",
+            "base": {"ref": "main", "repo": {"full_name": "owner/repo"}},
+            "head": {
+                "ref": "feat/x",
+                "sha": "abc",
+                "repo": {"full_name": "fork/repo", "fork": True},
+            },
+            "user": {"login": "contrib"},
+        },
+        {
+            "number": 8,
+            "title": "same-repo PR",
+            "html_url": "u",
+            "state": "open",
+            "base": {"ref": "main", "repo": {"full_name": "owner/repo"}},
+            "head": {
+                "ref": "feat/y",
+                "sha": "def",
+                "repo": {"full_name": "owner/repo", "fork": False},
+            },
+            "user": {"login": "owner"},
+        },
+    ]
+    monkeypatch.setattr(client, "_request", lambda method, path, **kw: (200, body, {}))
+    prs = client.list_prs("owner/repo")
+    assert prs[0]["is_fork"] is True
+    assert prs[0]["head_repo"] == "fork/repo"
+    assert prs[0]["head_sha"] == "abc"
+    assert prs[1]["is_fork"] is False
+    assert prs[1]["head_repo"] == "owner/repo"
+
+
+def test_get_pr_returns_fork_metadata(monkeypatch) -> None:
+    client = make_client()
+    payload = {
+        "number": 7,
+        "title": "t",
+        "body": "b",
+        "html_url": "u",
+        "state": "open",
+        "base": {"ref": "main", "repo": {"full_name": "owner/repo"}},
+        "head": {
+            "ref": "feat/x",
+            "sha": "abc123",
+            "repo": {
+                "full_name": "fork/repo",
+                "fork": True,
+                "clone_url": "https://github.com/fork/repo.git",
+            },
+        },
+        "maintainer_can_modify": True,
+        "user": {"login": "contrib"},
+    }
+    monkeypatch.setattr(
+        client, "_request", lambda method, path, **kw: (200, payload, {})
+    )
+    pr = client.get_pr("owner/repo", 7)
+    assert pr["head"] == "feat/x"
+    assert pr["head_repo"] == "fork/repo"
+    assert pr["head_clone_url"] == "https://github.com/fork/repo.git"
+    assert pr["is_fork"] is True
+    assert pr["maintainer_can_modify"] is True
+    assert pr["head_sha"] == "abc123"
+
+
 def test_post_pr_review(monkeypatch) -> None:
     """GitHub returns 200 OK on a successful review POST, not 201."""
     client = make_client()
