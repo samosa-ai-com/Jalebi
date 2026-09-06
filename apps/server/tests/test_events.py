@@ -196,3 +196,42 @@ def test_reset_scopes_seq_per_run(session) -> None:
     assert (7, 1) not in bus._seq
     bus.publish(7, {"type": "message", "text": "second-run"}, run_id=2)
     assert bus._seq[(7, 2)] == 1
+
+
+def test_throttled_prune_sweeps_table(session, config, monkeypatch) -> None:
+    """F6: the queue's prune callback sweeps the table every N persists."""
+    import jalebi.events as events_mod
+    from jalebi import db as db_mod
+    from jalebi import repos
+    from jalebi.db import Run, Task
+    from jalebi.queue import TaskQueue
+
+    repos.upsert_repo(
+        session,
+        full_name="owner/r6",
+        default_branch="main",
+        clone_url="https://x/r6.git",
+        pat_name="test",
+    )
+    task = Task(type="freeform", repo_id=1, prompt="x")
+    session.add(task)
+    session.commit()
+    run = Run(task_id=task.id, seq=1, status="running")
+    session.add(run)
+    session.commit()
+    for i in range(5):
+        session.add(
+            TaskEvent(
+                task_id=task.id, run_id=run.id, seq=i + 1, payload_json="{}"
+            )
+        )
+    session.commit()
+
+    monkeypatch.setattr(events_mod, "PERSIST_CAP", 3)
+    monkeypatch.setattr("jalebi.queue._PRUNE_EVERY_N_PUBLISHES", 2)
+    q = TaskQueue(config, db_session_factory=db_mod.get_session)
+    q._prune_task_events_throttled(run.id)  # 1st call → below cadence
+    assert session.query(TaskEvent).filter_by(task_id=task.id).count() == 5
+    q._prune_task_events_throttled(run.id)  # 2nd call → sweep to cap 3
+    session.expire_all()
+    assert session.query(TaskEvent).filter_by(task_id=task.id).count() == 3

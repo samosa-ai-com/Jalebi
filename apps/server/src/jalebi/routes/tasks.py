@@ -1115,15 +1115,27 @@ def task_events(task_id: int) -> ResponseReturnValue:
     events = _queue().events
     after_seq = request.args.get("after_seq", type=int)
     run_id = run.id if run is not None else None
-    q = events.subscribe(task_id, after_seq=after_seq, run_id=run_id)
+    # Phase 4 T4.3 — durable backfill on reconnect, WITHOUT duplicating
+    # what the memory bus will also replay (F6): read the DB first, then
+    # subscribe the memory bus from the DB high-water mark. Anything
+    # published between the DB read and the subscribe is still in the
+    # memory buffer (publish writes memory before the DB row), so raising
+    # the watermark loses nothing and replays nothing twice.
+    db_items: list = []
+    resume_from = after_seq
+    if after_seq is not None:
+        db_items = replay_from_db(session, task_id, run_id, after_seq)
+        for _item in db_items:
+            _seq = _item.get("seq") if isinstance(_item, dict) else None
+            if isinstance(_seq, int) and (resume_from is None or _seq > resume_from):
+                resume_from = _seq
+    q = events.subscribe(task_id, after_seq=resume_from, run_id=run_id)
 
     def generate():
         try:
             yield f"data: {json.dumps({'type': 'connected'})}\n\n"
-            # Phase 4 T4.3 — durable backfill on reconnect.
-            if after_seq is not None:
-                for item in replay_from_db(session, task_id, run_id, after_seq):
-                    yield f"data: {json.dumps(item)}\n\n"
+            for item in db_items:
+                yield f"data: {json.dumps(item)}\n\n"
             if terminal:
                 yield f"data: {json.dumps({'type': 'stream_end'})}\n\n"
                 return

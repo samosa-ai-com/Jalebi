@@ -41,8 +41,8 @@ class TaskEvents:
         self._seq: dict[tuple[int, int | None], int] = {}
         self._lock = threading.Lock()
         self._db_session_factory = db_session_factory
-        # prune_callback(task_id) is invoked after every persist; the app
-        # wires it to cap rows at PERSIST_CAP (in-memory, no extra round-trip).
+        # prune_callback(run_id) is invoked after every persisted publish;
+        # the queue wires it to a throttled PERSIST_CAP sweep (F6).
         self._prune_callback = prune_callback
 
     def subscribe(

@@ -156,5 +156,9 @@ objects). All hooks are best-effort and never fail the caller.
 
 `events.py` publishes every event to the in-memory ring buffer **and**
 to the durable `task_events` table (via `replay_from_db` on the SSE route
-after a restart). `prune_task_events` runs at startup to cap rows at
-`PERSIST_CAP = 2000` per `(task_id, run_id)`.
+after a restart). `prune_task_events` runs at startup **and** on a
+throttled publish-path sweep (every 250 persisted publishes, fresh
+session, in `TaskQueue._prune_task_events_throttled`) to cap rows at
+`PERSIST_CAP = 2000` per `(task_id, run_id)` even during long runs. The
+SSE route reads the DB replay first and subscribes the memory bus from
+the DB high-water mark, so reconnects never receive an event twice.

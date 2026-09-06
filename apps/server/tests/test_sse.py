@@ -305,3 +305,65 @@ def test_sse_after_seq_backfills_events_published_before_subscribe(
 def test_sse_not_found(app) -> None:
     client = app.test_client()
     assert client.get("/api/tasks/999/events").status_code == 404
+
+
+def test_sse_live_no_duplicate_memory_and_db_replay(
+    q: TaskQueue, app, session
+) -> None:
+    """F6: a live reconnect with after_seq gets each event exactly once —
+    the memory-bus backfill must not repeat the durable DB replay."""
+    from jalebi.db import Run
+
+    settings.set_setting(session, "auto_publish", False)
+    row, _ = repos.upsert_repo(
+        session,
+        full_name=FULL_NAME,
+        default_branch="main",
+        clone_url="https://example.invalid/owner/repo.git",
+        pat_name="test",
+    )
+    task = tasks.create_task(session, type_="freeform", repo_id=row.id, prompt="do it")
+    run = Run(task_id=task.id, seq=1, status="running", session_id="ses_live")
+    session.add(run)
+    session.commit()
+    task_id = task.id
+
+    for text in ("a", "b"):
+        q.events.publish(
+            task_id, {"type": "message", "text": text}, run_id=run.id, session=session
+        )
+    session.commit()
+
+    client = app.test_client()
+    stream_resp = client.get(f"/api/tasks/{task_id}/events?after_seq=0", buffered=False)
+    lines: list[str] = []
+
+    def read_stream():
+        for chunk in stream_resp.response:
+            lines.append(chunk.decode())
+
+    reader = threading.Thread(target=read_stream)
+    reader.start()
+
+    # Wait until both events arrive, then end the stream from the test.
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        seqs = [
+            json.loads(line[6:]).get("seq")
+            for line in "".join(lines).splitlines()
+            if line.startswith("data: ")
+        ]
+        if sum(1 for s in seqs if s in (1, 2)) >= 2:
+            break
+        time.sleep(0.01)
+    q.events.close(task_id)
+    reader.join(timeout=10)
+    assert not reader.is_alive()
+
+    seqs = [
+        json.loads(line[6:]).get("seq")
+        for line in "".join(lines).splitlines()
+        if line.startswith("data: ")
+    ]
+    seqs = [s for s in seqs if isinstance(s, int)]
+    assert seqs == [1, 2]
