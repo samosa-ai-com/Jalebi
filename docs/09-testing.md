@@ -104,3 +104,35 @@ After any code change, run the relevant tests and build before marking work done
   - `apps/web/src/pages/TaskDetail.test.tsx` +2 — FileBrowser mounts with
     a run; hidden without.
 - **Suite delta:** server 775 → 786 (+11); web 98 → 105 (+7). All gates green.
+
+- **Post-plan additions + pre-PR audit fixes (server +42 collected, web +14):**
+  - Token rotation: `test_secrets.py` + `test_api_github.py` (update replaces
+    token + meta, unknown name → 404/KeyError, invalid keeps old token, POST
+    409 guard, login-change notice); `Github.test.tsx` (PUT submit, notices).
+  - Fork-PR flow: `test_github` fork metadata, `test_api_tasks` sentinel
+    validation + `_parse_number` 400s (garbage `pr_number`/`issue_number`),
+    `test_publish_modes` fork push/refusal/conflict, `test_git_workspace`
+    PR-head worktree + fork merge, `test_prompts` sentinel rendering,
+    `Tasks.test.tsx` fork flow.
+  - Attention: `test_attention.py` (cancelled → done, dismissed → done),
+    `test_api_tasks.py` (cancel allows `needs_approval`, dismiss endpoint,
+    `clear_attention_dismissal` helper, `_prepare_run` re-arm).
+  - IDE expansion: `test_ide.py` (`detect_all_ides`, new detect payload);
+    `Settings.test.tsx` (quick-pick cards, one-click save, test open);
+    `TaskDetail.test.tsx` (header Open-in-IDE button).
+  - Audit fixes: `test_workspace_files.py` (+3: intermediate symlink,
+    escape-via-symlink-dir, `.Git`/`.GIT` variants); `test_nudger.py` (+3:
+    object/string branch shapes, success ignored) + `test_poller.py` (+3:
+    CI-failure and changes-requested transition wiring, queueless no-op) +
+    `test_api_webhooks.py` (route-level status → nudge without rules);
+    `Tasks.test.tsx` (+2 dep badges, +2 RunningCard contract incl. PR
+    links); `TaskDetail.test.tsx` (+1 dep badges, +1 Files-above-Diff);
+    `FileBrowser.test.tsx` (completion refresh on signal → 0);
+    `test_events.py` (throttled prune sweep); `test_sse.py` (live
+    no-duplicate replay, incl. fail-without-fix proof).
+  - `test_check_runs.py::test_exception_path_closes_out_pending_status` is a
+    known race-sensitive flake (passes isolated; fails ~rarely under full
+    load) — see F10. Never `gh`-based; all git tests use local throwaway
+    bare remotes, GitHub via mocks.
+- **Suite totals at PR:** server **828 collected**, web **119 passed**.
+  Full gates green (server suite modulo the known flake).

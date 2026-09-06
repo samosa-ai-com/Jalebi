@@ -64,6 +64,7 @@ Implemented via the same client (Phase 0): issue/PR context fetch, publish (crea
 - For a localhost-only install, GitHub cannot reach the machine — the listener must be exposed via a **tunnel (e.g. `cloudflared`/`ngrok`)**; the owner sets the public base URL in Settings (webhook_url). The app detects an unreachable webhook (`GET /api/webhook/status`) and warns in the Triggers page UI.
 - **Idempotency:** deliveries are deduped on `X-GitHub-Delivery`, so re-deliveries never double-run a task.
 - **Replay:** the Triggers page offers "replay" for any logged delivery.
+- **Auto-nudge (Phase 4 T4.2, default OFF):** every live delivery for a connected repo also passes through `nudger.on_webhook` — independent of trigger rules, so a failing `status` event on a `jalebi/<id>` branch enqueues a fix follow-up even with zero rules. Manual replays intentionally skip the nudge. Accepts both branch shapes (`"jalebi/12"` strings and real-GitHub `{"name": …}` objects).
 - **Full flow, rule matching, and dispatch:** see `docs/16-triggers.md`.
 
 ### Webhook listener flow
@@ -159,6 +160,7 @@ When a connected repo has `poll_fallback=True`, a daemon thread (`jalebi.poller.
 - **Stale-PR prune** — at the end of each successful tick, facts whose PR is no longer in the open-PR list (merged / closed) are dropped.
 - **Per-repo prune** — at the end of every tick, repos that were NOT polled this time (disconnected, or `poll_fallback` flipped off) have their facts + etags cleared. Closes the "stale facts after OFF" risk.
 - **Read API** — `routes/tasks._task_dict` calls `poller.pr_facts_for_task(task.repo_id, task.id)` and passes the result to `tasks.task_to_dict` which derives the `attention` field via `jalebi.attention.attention_for(task, run, pr_facts)`.
+- **Auto-nudge (Phase 4 T4.2, default OFF)** — the poller is constructed with the task queue and calls `nudger.on_poller_fact_change` only on transitions *into* `failure` / `changes_requested` (first sighting counts; signature dedup backstops). Best-effort; never fails the tick.
 
 ### 12.1 `attention` (Phase 4 T2.2)
 
@@ -170,6 +172,6 @@ One-word status consumed by the UI (T3) and `tasks.task_to_dict`:
 | `working` | Queued / running / waiting_review (and no running-PR CI failure). |
 | `in_review` | Terminal with facts and no mergeable conflict. |
 | `ready_to_merge` | Terminal with facts and `mergeable == True`. |
-| `done` | Terminal `done` task with no PR facts (poller off, or not published yet). |
+| `done` | Terminal `done` task with no PR facts (poller off, or not published yet). `cancelled` tasks and dismissed attention also evaluate to `done` — a user-cancelled/acknowledged task never demands attention (deliberate §16.3 deviation from the original plan). |
 
 T0's `waiting_input` flag takes precedence over everything. The derivation is pure (no network call) and runs at read time; in-memory state survives only as long as the process.
