@@ -1235,6 +1235,55 @@ def test_create_pr_head_source_rejected_for_issue_fix(
     assert "freeform" in resp.get_json()["error"]
 
 
+def test_create_task_rejects_garbage_pr_number(
+    client: FlaskClient, repo_id: int, session, monkeypatch
+) -> None:
+    """F8: a non-numeric pr_number is a 400, never an unhandled 500."""
+    _fake_pr_client(monkeypatch)
+    for bad in ("abc", "7.5", 3.5, True):
+        resp = client.post(
+            "/api/tasks",
+            json={
+                "repo_id": repo_id,
+                "type": "freeform",
+                "prompt": "x",
+                "pr_number": bad,
+                "source_branch": "pr/7/head",
+            },
+        )
+        assert resp.status_code == 400, bad
+        assert "integer" in resp.get_json()["error"]
+    # Sanity: numeric strings still accepted.
+    resp = client.post(
+        "/api/tasks",
+        json={
+            "repo_id": repo_id,
+            "type": "freeform",
+            "prompt": "x",
+            "pr_number": "7",
+            "source_branch": "pr/7/head",
+        },
+    )
+    assert resp.status_code == 201
+
+
+def test_create_task_rejects_garbage_issue_number(
+    client: FlaskClient, repo_id: int, session
+) -> None:
+    """F8: a non-numeric issue_number is a 400, never an unhandled 500."""
+    resp = client.post(
+        "/api/tasks",
+        json={
+            "repo_id": repo_id,
+            "type": "issue_fix",
+            "prompt": "x",
+            "issue_number": "abc",
+        },
+    )
+    assert resp.status_code == 400
+    assert "integer" in resp.get_json()["error"]
+
+
 def test_cancel_task_allows_needs_approval(
     client: FlaskClient, repo_id: int, session
 ) -> None:

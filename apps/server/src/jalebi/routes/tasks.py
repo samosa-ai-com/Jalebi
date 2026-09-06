@@ -85,6 +85,24 @@ def _valid_pat(config, name: str | None) -> bool:
     return name in secrets.token_names(config)
 
 
+def _parse_number(value, name: str) -> tuple[int | None, str | None]:
+    """Parse an optional JSON number field (F8).
+
+    Accepts ints and digit strings; anything else (floats, garbage
+    strings, bools) is a 400, never an unhandled ValueError → 500.
+    Returns ``(int-or-None, error-or-None)``.
+    """
+    if value is None:
+        return None, None
+    if isinstance(value, bool):
+        return None, f"{name} must be an integer"
+    if isinstance(value, int):
+        return value, None
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip()), None
+    return None, f"{name} must be an integer"
+
+
 def _masker(session) -> Callable[[str], str]:
     config: Config = current_app.config["JALEBI_CONFIG"]
     patterns = settings.get_setting(session, "secret_patterns") or []
@@ -223,6 +241,14 @@ def create_task() -> ResponseReturnValue:
     prompt = payload.get("prompt", "")
     issue_number = payload.get("issue_number")
     pr_number = payload.get("pr_number")
+    # F8 — validate number fields up front: bare int() conversions below
+    # used to raise unhandled ValueError → HTTP 500 on garbage input.
+    pr_number_int, _err = _parse_number(pr_number, "pr_number")
+    if _err is not None:
+        return jsonify({"error": _err}), 400
+    issue_number_int, _err = _parse_number(issue_number, "issue_number")
+    if _err is not None:
+        return jsonify({"error": _err}), 400
     if type_ == "issue_fix" and issue_number is None:
         return jsonify({"error": "issue_number is required for issue_fix tasks"}), 400
     if type_ == "pr_review" and pr_number is None:
@@ -269,7 +295,7 @@ def create_task() -> ResponseReturnValue:
     if pr_head_num is not None:
         if type_ != "freeform":
             return jsonify({"error": "pr-head source is only valid for freeform tasks"}), 400
-        if pr_number is None or int(pr_number) != pr_head_num:
+        if pr_number_int is None or pr_number_int != pr_head_num:
             return jsonify({"error": "pr-head source must match the linked pr_number"}), 400
 
     try:
@@ -302,11 +328,12 @@ def create_task() -> ResponseReturnValue:
             return jsonify({"error": "reviewers are only valid for pr_review tasks"}), 400
         if pr_number is None:
             return jsonify({"error": "pr_number is required for pr_review tasks"}), 400
+        assert pr_number_int is not None  # validated above; None returns 400 here
         if repo is None:
             return jsonify({"error": "repo not found"}), 400
         try:
             created = reviews.assign_reviewers(
-                session, repo, int(pr_number), [str(r) for r in reviewers],
+                session, repo, pr_number_int, [str(r) for r in reviewers],
                 queue=_queue(), masker=masker,
             )
         except reviews.ReviewError as exc:
@@ -325,8 +352,8 @@ def create_task() -> ResponseReturnValue:
             model=model,
             cli=cli,
             pat_name=effective_pat,
-            issues=[int(issue_number)] if issue_number is not None else None,
-            prs=[int(pr_number)] if pr_number is not None else None,
+            issues=[issue_number_int] if issue_number_int is not None else None,
+            prs=[pr_number_int] if pr_number_int is not None else None,
             context=context,
             env_vars=env_vars,
             timeout_minutes=timeout_minutes,
