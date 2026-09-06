@@ -145,6 +145,14 @@ removes it. `rerun` of a `blocked` task → 409.
 `nudger.py` (default OFF, `auto_nudge=False`) enqueues a `followup` when
 a tracked PR's CI or review state turns bad. Dedup is signature-keyed
 (`task_id:kind:ref`); the per-task cap is `MAX_NUDGES_PER_TASK = 3`.
+Wiring (previously handlers-only): `routes/webhooks.py` calls
+`nudger.on_webhook` on every live delivery for a connected repo
+(independent of trigger rules; manual replays skip it); `Poller` (wired
+with the queue in `create_app`) calls `nudger.on_poller_fact_change` via
+`_maybe_nudge` only on transitions *into* `failure`/`changes_requested`
+(first sighting counts; signature dedup backstops). The webhook accepts
+both branch shapes (`"jalebi/12"` strings and real-GitHub `{"name": ...}`
+objects). All hooks are best-effort and never fail the caller.
 
 `events.py` publishes every event to the in-memory ring buffer **and**
 to the durable `task_events` table (via `replay_from_db` on the SSE route

@@ -129,3 +129,93 @@ def test_nudge_caps_at_max(session, app) -> None:
     finally:
         q.enqueue_followup = orig  # type: ignore[assignment]
     assert call_count["n"] == 3
+
+
+def _stubbed_queue_calls(q):
+    """Replace enqueue_followup with a recorder; return (calls, restore)."""
+    calls: list = []
+    orig = q.enqueue_followup
+
+    def recording(*a, **k):
+        calls.append((a, k))
+
+    q.enqueue_followup = recording  # type: ignore[assignment]
+    return calls, orig
+
+
+def test_on_webhook_failure_with_object_branches(session, app) -> None:
+    """Real GitHub status payloads carry branches as [{"name": ...}] objects."""
+    from jalebi.db import Run
+
+    task = _make_task(session, app, status="failed")
+    session.add(Run(task_id=task.id, seq=1, status="failed", session_id="ses_1"))
+    session.commit()
+    settings.set_setting(session, "auto_nudge", True)
+
+    q = app.config["JALEBI_QUEUE"]
+    calls, orig = _stubbed_queue_calls(q)
+    try:
+        nudger.on_webhook(
+            session,
+            q,
+            "status",
+            {
+                "sha": "abc123",
+                "state": "failure",
+                "branches": [{"name": f"jalebi/{task.id}"}],
+            },
+        )
+    finally:
+        q.enqueue_followup = orig  # type: ignore[assignment]
+    assert len(calls) == 1
+    assert nudger._already_nudged(session, task.id, f"{task.id}:ci_failure:abc123:failure")
+
+
+def test_on_webhook_failure_with_string_branches(session, app) -> None:
+    """Bare-string branches are also accepted."""
+    from jalebi.db import Run
+
+    task = _make_task(session, app, status="failed")
+    session.add(Run(task_id=task.id, seq=1, status="failed", session_id="ses_1"))
+    session.commit()
+    settings.set_setting(session, "auto_nudge", True)
+
+    q = app.config["JALEBI_QUEUE"]
+    calls, orig = _stubbed_queue_calls(q)
+    try:
+        nudger.on_webhook(
+            session,
+            q,
+            "status",
+            {"sha": "abc123", "state": "error", "branches": [f"jalebi/{task.id}"]},
+        )
+    finally:
+        q.enqueue_followup = orig  # type: ignore[assignment]
+    assert len(calls) == 1
+
+
+def test_on_webhook_ignores_success_state(session, app) -> None:
+    """A green status event never nudges."""
+    from jalebi.db import Run
+
+    task = _make_task(session, app, status="failed")
+    session.add(Run(task_id=task.id, seq=1, status="failed", session_id="ses_1"))
+    session.commit()
+    settings.set_setting(session, "auto_nudge", True)
+
+    q = app.config["JALEBI_QUEUE"]
+    calls, orig = _stubbed_queue_calls(q)
+    try:
+        nudger.on_webhook(
+            session,
+            q,
+            "status",
+            {
+                "sha": "abc123",
+                "state": "success",
+                "branches": [{"name": f"jalebi/{task.id}"}],
+            },
+        )
+    finally:
+        q.enqueue_followup = orig  # type: ignore[assignment]
+    assert calls == []

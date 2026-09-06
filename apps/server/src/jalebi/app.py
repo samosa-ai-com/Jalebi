@@ -286,7 +286,9 @@ def create_app(config: Config | None = None) -> Flask:
         config, db_session_factory=db.get_session
     )
     app.config["JALEBI_SCREENING"] = ScreeningScheduler(config)
-    app.config["JALEBI_POLLER"] = Poller(config)  # Phase 4 T2.1 — default OFF
+    app.config["JALEBI_POLLER"] = Poller(
+        config, queue=app.config["JALEBI_QUEUE"]
+    )  # Phase 4 T2.1 — default OFF; queue wired for the T4.2 auto-nudge
 
     app.register_blueprint(github_bp)
     app.register_blueprint(repos_bp)

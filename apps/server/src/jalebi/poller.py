@@ -23,7 +23,7 @@ from typing import cast
 import httpx
 from sqlalchemy.orm import Session
 
-from jalebi import clock, db, repos, secrets
+from jalebi import clock, db, nudger, repos, secrets
 from jalebi.attention import PRFacts
 from jalebi.config import Config
 from jalebi.db import Repo
@@ -90,8 +90,12 @@ class Poller:
     so they can call ``tick()`` synchronously.
     """
 
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, queue=None):
         self.config = config
+        # Phase 4 T4.2 — the queue the auto-nudger enqueues follow-ups on.
+        # Optional so unit tests can run the poller without a queue (no
+        # nudging then); create_app always wires the real TaskQueue.
+        self._queue = queue
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._lock = threading.Lock()
@@ -256,6 +260,7 @@ class Poller:
                         number,
                         head_sha,
                         mergeable,
+                        session,
                     )
 
                 # Prune facts for PRs that are no longer open (only when we
@@ -299,6 +304,7 @@ class Poller:
         pr_number: int,
         head_sha: str | None,
         mergeable: bool | None,
+        session: Session,
     ) -> None:
         """Fetch + persist facts for a single PR (T2.1 step 6).
 
@@ -355,6 +361,61 @@ class Poller:
             "last_seen_at": clock.to_iso(datetime.now()),
         }
         self.record_facts(repo_id, task_id, pr_number, facts)
+        # Phase 4 T4.2 — fire the auto-nudge on bad-state transitions.
+        # ``reviews`` is [] on a 304 (see github.list_reviews_for_pr), which
+        # is safe: on a 304 the decision equals prev's, so no transition.
+        self._maybe_nudge(
+            session, task_id, pr_number, prev, facts, head_sha, reviews
+        )
+
+    def _maybe_nudge(
+        self,
+        session: Session,
+        task_id: int,
+        pr_number: int,
+        prev: PRFacts | None,
+        facts: PRFacts,
+        head_sha: str | None,
+        reviews: list[dict],
+    ) -> None:
+        """Best-effort T4.2 auto-nudge on CI/review transitions.
+
+        Nudges only on a *transition* into a bad state (first sighting of a
+        bad state counts as a transition); the nudger's signature dedup is
+        the backstop against repeats. No-op when no queue is wired (unit
+        tests) or when ``auto_nudge`` is OFF (checked inside the nudger).
+        Never raises — the nudger swallows its own errors.
+        """
+        queue = self._queue
+        if queue is None:
+            return
+        if facts.get("ci_state") == "failure" and (
+            prev is None or prev.get("ci_state") != "failure"
+        ):
+            nudger.on_poller_fact_change(
+                session,
+                queue,
+                task_id,
+                pr_number,
+                kind="ci_failure",
+                ref=head_sha or f"pr-{pr_number}",
+            )
+        if facts.get("review_decision") == "changes_requested" and (
+            prev is None or prev.get("review_decision") != "changes_requested"
+        ):
+            n_cr = sum(
+                1
+                for r in reviews or []
+                if isinstance(r, dict) and r.get("state") == _CHANGES_REQUESTED
+            )
+            nudger.on_poller_fact_change(
+                session,
+                queue,
+                task_id,
+                pr_number,
+                kind="review_changes",
+                ref=f"{pr_number}:{n_cr}",
+            )
 
     def _pr_facts_snapshot(self, repo_id: int, pr_number: int) -> PRFacts | None:
         with self._lock:

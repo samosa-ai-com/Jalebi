@@ -125,6 +125,10 @@ def on_webhook(
         if not branches:
             return
         for branch in branches:
+            # Real GitHub status payloads carry branches as objects
+            # ({"name": "jalebi/12", ...}); accept bare strings too.
+            if isinstance(branch, dict):
+                branch = branch.get("name")
             if not isinstance(branch, str) or not branch.startswith("jalebi/"):
                 continue
             try:

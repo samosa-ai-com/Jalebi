@@ -7,15 +7,18 @@ its auth — see ``app._basic_auth_gate``).
 """
 
 import json
+import logging
 
 from flask import Blueprint, current_app, jsonify, request
 from flask.typing import ResponseReturnValue
 from sqlalchemy import select
 
-from jalebi import db, masking, secrets, settings, webhooks
+from jalebi import db, masking, nudger, secrets, settings, webhooks
 from jalebi.config import Config
 from jalebi.db import Repo
 from jalebi.queue import TaskQueue
+
+logger = logging.getLogger(__name__)
 
 bp = Blueprint("webhooks", __name__)
 
@@ -91,6 +94,18 @@ def webhook() -> ResponseReturnValue:
             result={"reason": "repo not connected"},
         )
         return jsonify({"ok": True, "matched": False})
+
+    # Phase 4 T4.2 — best-effort auto-nudge on CI/review signals. This is
+    # independent of trigger rules (it keys off the task branch in the
+    # payload), so it runs whether or not any rule matches. Never affects
+    # the webhook response. Manual replays (replay()) intentionally skip
+    # this — replay re-runs rules, not live signals.
+    try:
+        nudger.on_webhook(
+            session, _queue(), event, payload if isinstance(payload, dict) else {}
+        )
+    except Exception:  # noqa: BLE001 - webhook must always answer 200
+        logger.exception("auto-nudge hook failed for delivery %s", delivery_id)
 
     event_key = f"{event}.{action}" if action else event
     context = webhooks.event_context(payload)

@@ -646,3 +646,45 @@ def test_completed_delivery_with_multiple_rules_stores_all_in_result(
     assert len(tasks_service.list_tasks(session)) == 2
     # matched_rule_id column no longer exists on the model.
     assert not hasattr(delivery, "matched_rule_id")
+
+
+def test_status_delivery_nudges_task_without_rules(client, session, repo) -> None:
+    """Phase 4 T4.2 wiring: a failing `status` event on a task branch
+    enqueues a nudge follow-up even when NO trigger rule matches (the
+    nudger is independent of rules). Uses the real GitHub payload shape
+    (branches as objects)."""
+    from jalebi import nudger
+    from jalebi import tasks as tasks_service
+    from jalebi.db import Run
+
+    settings.set_setting(session, "auto_nudge", True)
+    task = tasks_service.create_task(
+        session, type_="freeform", repo_id=repo, prompt="x"
+    )
+    task.status = "failed"
+    session.add(Run(task_id=task.id, seq=1, status="failed", session_id="ses_1"))
+    session.commit()
+
+    q = client.application.config["JALEBI_QUEUE"]
+    calls: list = []
+    orig = q.enqueue_followup
+    q.enqueue_followup = lambda *a, **k: calls.append((a, k))  # type: ignore[assignment]
+    try:
+        res = client.post(
+            "/webhook",
+            headers={"X-GitHub-Delivery": "d-nudge-1", "X-GitHub-Event": "status"},
+            json={
+                "sha": "deadbeef",
+                "state": "failure",
+                "branches": [{"name": f"jalebi/{task.id}"}],
+                "repository": {"full_name": "owner/repo"},
+            },
+        )
+    finally:
+        q.enqueue_followup = orig  # type: ignore[assignment]
+    assert res.status_code == 200
+    assert res.get_json()["matched"] is False  # no rules — nudge still fired
+    assert len(calls) == 1
+    assert nudger._already_nudged(
+        session, task.id, f"{task.id}:ci_failure:deadbeef:failure"
+    )

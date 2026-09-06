@@ -367,3 +367,123 @@ def test_poller_double_start_is_safe(config: Config) -> None:
     assert poller._thread is first
     poller.stop()
     poller.join(timeout=2)
+
+
+# ---- T4.2 auto-nudge wiring ---------------------------------------------------
+
+
+class _StubQueue:
+    """Minimal queue double — records enqueue_followup calls."""
+
+    def __init__(self):
+        self.calls: list = []
+
+    def enqueue_followup(self, *a, **k):
+        self.calls.append((a, k))
+
+
+def _make_nudgeable_task(session, repo_id: int, status: str = "failed"):
+    from jalebi import tasks as tasks_svc
+    from jalebi.db import Run
+
+    task = tasks_svc.create_task(
+        session, type_="freeform", repo_id=repo_id, prompt="x"
+    )
+    task.status = status
+    session.add(Run(task_id=task.id, seq=1, status=status, session_id="ses_1"))
+    session.commit()
+    return task
+
+
+def test_tick_nudges_on_ci_failure_then_stays_quiet(
+    config: Config, session, fake_repo, monkeypatch
+) -> None:
+    """Phase 4 T4.2 wiring: a tick that observes a CI failure transition
+    enqueues one nudge; the next (304) tick enqueues nothing more."""
+    from jalebi import nudger, settings
+
+    settings.set_setting(session, "auto_nudge", True)
+    task = _make_nudgeable_task(session, fake_repo.id)
+    fake = _RecordingGitHubClient(
+        open_prs=[
+            {
+                "number": 9,
+                "head": f"jalebi/{task.id}",
+                "head_sha": "sha-fail",
+                "mergeable": True,
+            }
+        ],
+        statuses={
+            "sha-fail": {"state": "failure", "total_count": 2, "statuses": []}
+        },
+        reviews={9: []},
+    )
+    _install_fake_client(monkeypatch, fake)
+    stub = _StubQueue()
+    poller = Poller(config, queue=stub)
+    assert poller.tick() == 1
+    assert len(stub.calls) == 1
+    assert nudger._already_nudged(session, task.id, f"{task.id}:ci_failure:sha-fail")
+    # Second tick is all-304 → no _update_pr → no further nudge.
+    poller.tick()
+    assert len(stub.calls) == 1
+
+
+def test_tick_nudges_on_changes_requested(
+    config: Config, session, fake_repo, monkeypatch
+) -> None:
+    from jalebi import nudger, settings
+
+    settings.set_setting(session, "auto_nudge", True)
+    task = _make_nudgeable_task(session, fake_repo.id)
+    fake = _RecordingGitHubClient(
+        open_prs=[
+            {
+                "number": 9,
+                "head": f"jalebi/{task.id}",
+                "head_sha": "sha-ok",
+                "mergeable": True,
+            }
+        ],
+        statuses={
+            "sha-ok": {"state": "success", "total_count": 1, "statuses": []}
+        },
+        reviews={9: [{"state": "CHANGES_REQUESTED"}]},
+    )
+    _install_fake_client(monkeypatch, fake)
+    stub = _StubQueue()
+    poller = Poller(config, queue=stub)
+    assert poller.tick() == 1
+    assert len(stub.calls) == 1
+    assert nudger._already_nudged(session, task.id, f"{task.id}:review_changes:9:1")
+
+
+def test_tick_without_queue_never_nudges(
+    config: Config, session, fake_repo, monkeypatch
+) -> None:
+    """A queueless poller (unit-test shape) polls facts but nudges nothing."""
+    from jalebi import nudger, settings
+
+    settings.set_setting(session, "auto_nudge", True)
+    task = _make_nudgeable_task(session, fake_repo.id)
+    fake = _RecordingGitHubClient(
+        open_prs=[
+            {
+                "number": 9,
+                "head": f"jalebi/{task.id}",
+                "head_sha": "sha-fail",
+                "mergeable": True,
+            }
+        ],
+        statuses={
+            "sha-fail": {"state": "failure", "total_count": 2, "statuses": []}
+        },
+    )
+    _install_fake_client(monkeypatch, fake)
+    poller = Poller(config)  # no queue
+    assert poller.tick() == 1
+    assert poller.pr_facts_for_task(fake_repo.id, task.id) is not None
+    assert (
+        nudger._already_nudged(session, task.id, f"{task.id}:ci_failure:sha-fail")
+        is False
+    )
