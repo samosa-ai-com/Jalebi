@@ -1618,6 +1618,15 @@ export default function TaskDetail() {
         </section>
       </div>
 
+      {selectedRun && (
+        <FileBrowser
+          taskId={task.id}
+          refreshSignal={live.length}
+          onOpenInIde={ideConfigured ? openInIde : undefined}
+          ideName={ideName}
+        />
+      )}
+
       {selectedRun && <DiffSection key={selectedRun.id} taskId={task.id} run={selectedRun} />}
 
       {runs.length > 1 && (
@@ -1671,15 +1680,6 @@ export default function TaskDetail() {
           </ol>
           {runsError && <p className="mt-2 text-xs text-red-400">{runsError}</p>}
         </section>
-      )}
-
-      {selectedRun && (
-        <FileBrowser
-          taskId={task.id}
-          refreshSignal={live.length}
-          onOpenInIde={ideConfigured ? openInIde : undefined}
-          ideName={ideName}
-        />
       )}
 
       {preview && <ArtifactPreview taskId={task.id} artifact={preview} onClose={closePreview} />}

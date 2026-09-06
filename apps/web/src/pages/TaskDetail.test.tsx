@@ -1058,6 +1058,19 @@ describe("TaskDetail (Phase 4 T3.2)", () => {
     expect(await screen.findByText("⛔ blocked")).toBeInTheDocument();
     expect(screen.getByText("depends on #3")).toBeInTheDocument();
   });
+
+  it("places the Files panel above the Diff panel", async () => {
+    const withDiff = {
+      ...TASK,
+      status: "done",
+      run: { ...RUN, status: "done", has_diff: true },
+    };
+    stubFetchWithPublishCheck(withDiff, null, null);
+    renderDetail();
+    const filesH = await screen.findByText("Files");
+    const diffH = await screen.findByText("Diff");
+    expect(filesH.compareDocumentPosition(diffH) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
 });
 
 // ---- Phase 4 T6 — Open worktree ---------------------------------------

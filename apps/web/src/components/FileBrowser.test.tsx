@@ -1,6 +1,6 @@
 /** Phase 4 T7 — in-worktree file browser/viewer. */
 
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import FileBrowser from "./FileBrowser";
@@ -97,5 +97,25 @@ describe("FileBrowser", () => {
     expect(
       await screen.findByText(/binary file — use Artifacts below to download/i)
     ).toBeInTheDocument();
+  });
+
+  it("reloads when the refresh signal drops back to zero (run completion)", async () => {
+    const fetchMock = stubFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const { rerender } = render(<FileBrowser taskId={7} refreshSignal={0} />);
+    await screen.findByText("hello.txt");
+    const initial = fetchMock.mock.calls.length;
+    rerender(<FileBrowser taskId={7} refreshSignal={3} />);
+    await waitFor(
+      () => expect(fetchMock.mock.calls.length).toBeGreaterThan(initial),
+      { timeout: 3000 }
+    );
+    const afterEvent = fetchMock.mock.calls.length;
+    // Completion clears the live buffer → signal 0 → must still reload.
+    rerender(<FileBrowser taskId={7} refreshSignal={0} />);
+    await waitFor(
+      () => expect(fetchMock.mock.calls.length).toBeGreaterThan(afterEvent),
+      { timeout: 3000 }
+    );
   });
 });

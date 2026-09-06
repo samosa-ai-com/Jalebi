@@ -7,7 +7,7 @@
  * enforced server-side (`workspace_files`); this component never
  * constructs absolute paths.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api } from "../api/client";
 import Markdown from "./Markdown";
@@ -63,9 +63,17 @@ function FileBrowser({
     load(path);
   }, [load, path]);
 
-  // Live refresh on SSE (debounced) so new files appear as the agent works.
+  // Live refresh on SSE (debounced) so new files appear as the agent works,
+  // including the final state when the run completes (refreshSignal drops
+  // back to 0 when the live buffer clears — a change like any other, not
+  // a reason to skip). The mount-time signal is ignored (initial load
+  // above already fetched).
+  const signalSeenRef = useRef(false);
   useEffect(() => {
-    if (!refreshSignal) return;
+    if (!signalSeenRef.current) {
+      signalSeenRef.current = true;
+      return;
+    }
     const t = setTimeout(() => {
       if (!openFile) load(path);
     }, 800);
