@@ -102,7 +102,8 @@ def webhook() -> ResponseReturnValue:
     # this — replay re-runs rules, not live signals.
     try:
         nudger.on_webhook(
-            session, _queue(), event, payload if isinstance(payload, dict) else {}
+            session, _queue(), event, payload if isinstance(payload, dict) else {},
+            repo_id=repo.id,
         )
     except Exception:  # noqa: BLE001 - webhook must always answer 200
         logger.exception("auto-nudge hook failed for delivery %s", delivery_id)

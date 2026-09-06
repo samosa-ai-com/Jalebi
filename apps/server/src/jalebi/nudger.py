@@ -109,11 +109,13 @@ def on_webhook(
     queue: "TaskQueue",
     event: str,
     payload: dict,
+    *,
+    repo_id: int,
 ) -> None:
     """Hook called from the webhook route after delivery completion.
 
     Best-effort: only nudges when the setting is on and a matching tracked
-    task/PR is found.
+    task/PR is found in the connected repository resolved by the route.
     """
     try:
         if not bool(settings.get_setting(session, "auto_nudge") or False):
@@ -136,7 +138,7 @@ def on_webhook(
             except ValueError:
                 continue
             task = session.get(Task, task_id)
-            if task is None:
+            if task is None or task.repo_id != repo_id:
                 continue
             run = (
                 session.query(Run)

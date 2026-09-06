@@ -38,6 +38,8 @@
 - [ ] `GET /api/tasks/<id>/merge-check` on a conflicting branch lists
       conflict paths.
 - [ ] Run history shows per-run git SHAs (`-dirty` suffix when dirty).
+- [ ] The untracked diff omits symlinks to files inside/outside the worktree,
+      directory symlinks, and `.git` contents; ordinary new text files remain visible.
 
 ## 3. T2/T3 — attention + merge-readiness + diff
 
@@ -49,18 +51,25 @@
       branch/commits/conflict/CI/review state above the Publish button.
 - [ ] Diff viewer shows per-file A/D/R/M/B chips + add/del stats; binary
       files show the artifact hint; long diffs lazy-load per file.
+- [ ] Select an older run after a follow-up changes the worktree: Diff shows
+      that run's saved snapshot. Return to the latest run to see the current diff.
 
 ## 4. T4 — deps, nudge, durable SSE, running-now
 
 - [ ] Create task B `depends_on` A (via API): B's row shows
-      `depends on #A`; while A is unfinished and B is queued/running, B
+      `depends on #A`; while A is unfinished and B is `blocked`, B
       shows the orange **⛔ blocked** pill + `blocked` StatusBadge; when A
       completes, B flips to `queued` and runs.
+- [ ] Fail A's auto-publish: A becomes `needs_approval`, B stays blocked with
+      its dependency pill. Failed manual publish keeps B blocked; successful
+      manual publish releases B (new PR, update PR, and push branch modes).
 - [ ] Rerun of a `blocked` task → 409.
 - [ ] Auto-nudge (OFF by default): enable `auto_nudge`, let a tracked PR's
       CI fail (or deliver a failing `status` webhook) → exactly one
       follow-up enqueued on the idle task; no second nudge for the same
       SHA; cap of 3 per task.
+- [ ] Deliver a failing status for `jalebi/<task_id>` in another connected
+      repository: no follow-up or nudge quota consumed for the original task.
 - [ ] Restart the server mid-run, reload the tab with `?after_seq=N` →
       timeline backfills from the DB with **no duplicated events**.
 - [ ] With 5+ queued/running tasks, the Running-now panel shows **one card

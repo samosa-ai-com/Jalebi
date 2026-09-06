@@ -1082,6 +1082,45 @@ def test_publish_failure_sets_needs_approval(q, session, repo_row, monkeypatch) 
     assert _latest_run(session, task.id).status == "done"
 
 
+@pytest.mark.parametrize("mode", ["new_pr", "update_pr", "push_branch"])
+def test_failed_publish_blocks_dependents_until_manual_publish_succeeds(
+    q, session, repo_row, monkeypatch, mode
+) -> None:
+    settings.set_setting(session, "auto_publish", True)
+    parent = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="parent")
+    child = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="child")
+    child.status = "blocked"
+    tasks.add_dependency(session, child.id, parent.id)
+    session.commit()
+    _seed_commit(q, parent.id, repo_row)
+    _install_adapter(monkeypatch, FakeHandle([AgentEvent(type="done")]))
+    monkeypatch.setattr("jalebi.queue.GitHubClient", FailingGitHubClient)
+    enqueued = []
+    monkeypatch.setattr(q, "enqueue", enqueued.append)
+
+    q._run_task(parent.id)
+
+    assert _fresh_task(session, parent.id).status == "needs_approval"
+    assert _fresh_task(session, child.id).status == "blocked"
+    assert tasks.has_unmet_deps(session, child.id)
+    assert enqueued == []
+
+    # Retrying the publish must keep dependents blocked if it fails again.
+    with pytest.raises(RuntimeError, match="PR create failed"):
+        q.publish_task(parent.id)
+    assert _fresh_task(session, child.id).status == "blocked"
+    assert enqueued == []
+
+    # Exercise the shared completion path for all three manual publish modes.
+    result = 0 if mode == "push_branch" else 42
+    monkeypatch.setattr(q, "_publish", lambda *a, **kw: result)
+    assert q.publish_task(parent.id, mode=mode, target_branch="main", pr_number=42) == result
+    assert _fresh_task(session, parent.id).status == "done"
+    assert _fresh_task(session, child.id).status == "queued"
+    assert not tasks.has_unmet_deps(session, child.id)
+    assert enqueued == [child.id]
+
+
 def test_publish_conflict_sets_needs_approval_and_skips_pr(
     q, session, repo_row, monkeypatch
 ) -> None:

@@ -133,9 +133,12 @@ Queue items are tagged tuples: `("task", task_id)` or `("followup", task_id, bod
 
 `TASK_STATUSES` now includes `"blocked"` (T4.1). A task with any unmet
 dependency is flipped to `blocked` on enqueue (and stays there on every
-re-dispatch until deps are met); `cascade_unblock` runs from `_maybe_recover`
-when a task reaches a satisfied terminal state and flips any dependent
-whose deps are now all met back to `queued` + re-enqueues.
+re-dispatch until deps are met). Only task status `done` satisfies a dependency;
+`needs_approval` leaves dependents blocked, including when auto-publishing fails
+after a successful agent run. `cascade_unblock` runs from `_maybe_recover`
+on successful completion and after a successful manual publish (all three
+publish modes), flipping dependents whose deps are all met back to `queued`
+and re-enqueuing them. A failed manual publish does not release dependents.
 
 The queue gate is in `_run_task` (line ~782): `tasks.has_unmet_deps` →
 `task.status = "blocked"`. The route `POST /api/tasks/<id>/dependencies`
@@ -152,7 +155,11 @@ with the queue in `create_app`) calls `nudger.on_poller_fact_change` via
 `_maybe_nudge` only on transitions *into* `failure`/`changes_requested`
 (first sighting counts; signature dedup backstops). The webhook accepts
 both branch shapes (`"jalebi/12"` strings and real-GitHub `{"name": ...}`
-objects). All hooks are best-effort and never fail the caller.
+objects). The webhook route passes its resolved connected `repo.id` to the
+nudger; a branch's task ID is eligible only when `task.repo_id` matches that
+repository. Identical branch names in other repositories cannot enqueue a
+follow-up or consume the task's nudge quota. All hooks are best-effort and
+never fail the caller.
 
 `events.py` publishes every event to the in-memory ring buffer **and**
 to the durable `task_events` table (via `replay_from_db` on the SSE route

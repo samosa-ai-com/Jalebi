@@ -164,6 +164,7 @@ def test_on_webhook_failure_with_object_branches(session, app) -> None:
                 "state": "failure",
                 "branches": [{"name": f"jalebi/{task.id}"}],
             },
+            repo_id=task.repo_id,
         )
     finally:
         q.enqueue_followup = orig  # type: ignore[assignment]
@@ -188,6 +189,7 @@ def test_on_webhook_failure_with_string_branches(session, app) -> None:
             q,
             "status",
             {"sha": "abc123", "state": "error", "branches": [f"jalebi/{task.id}"]},
+            repo_id=task.repo_id,
         )
     finally:
         q.enqueue_followup = orig  # type: ignore[assignment]
@@ -215,7 +217,33 @@ def test_on_webhook_ignores_success_state(session, app) -> None:
                 "state": "success",
                 "branches": [{"name": f"jalebi/{task.id}"}],
             },
+            repo_id=task.repo_id,
         )
     finally:
         q.enqueue_followup = orig  # type: ignore[assignment]
     assert calls == []
+
+
+def test_on_webhook_rejects_other_repository(session, app, monkeypatch) -> None:
+    from jalebi.db import Nudge, Run
+
+    task = _make_task(session, app, status="failed")
+    other, _ = repos.upsert_repo(
+        session, full_name="owner/other", default_branch="main",
+        clone_url="https://x/other.git", pat_name="test",
+    )
+    session.add(Run(task_id=task.id, seq=1, status="failed", session_id="ses_1"))
+    session.commit()
+    settings.set_setting(session, "auto_nudge", True)
+    q = app.config["JALEBI_QUEUE"]
+    calls = []
+    monkeypatch.setattr(q, "enqueue_followup", lambda *a, **k: calls.append(a))
+
+    nudger.on_webhook(
+        session, q, "status",
+        {"sha": "abc123", "state": "failure", "branches": [f"jalebi/{task.id}"]},
+        repo_id=other.id,
+    )
+
+    assert calls == []
+    assert session.query(Nudge).count() == 0

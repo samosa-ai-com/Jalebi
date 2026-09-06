@@ -1,3 +1,4 @@
+import os
 import subprocess
 from pathlib import Path
 
@@ -537,6 +538,63 @@ def test_diff_with_untracked_appends_pseudo_hunks(ws: GitWorkspace, remote: str)
     # .gitignore-matched file is skipped (the +++ b/ignored.txt hunk never
     # appears — only the untracked .gitignore file itself does).
     assert "+++ b/ignored.txt" not in combined
+
+
+@pytest.mark.parametrize("target_kind", ["outside", "inside", "missing", "git"])
+def test_untracked_diff_skips_symlinks(ws, remote, tmp_path, target_kind) -> None:
+    ws.ensure_mirror(FULL_NAME, remote)
+    wt = ws.create_worktree(1, FULL_NAME, "main")
+    outside = tmp_path / "private.txt"
+    outside.write_text("private sentinel\n")
+    targets = {
+        "outside": outside,
+        "inside": wt / "file.txt",
+        "missing": tmp_path / "missing.txt",
+        "git": wt / ".git",
+    }
+    (wt / "leak.txt").symlink_to(targets[target_kind])
+    (wt / "safe.txt").write_text("safe text\n")
+
+    diff = ws.diff_with_untracked(wt, "tracked sentinel")
+    assert "tracked sentinel" in diff
+    assert "+++ b/safe.txt" in diff
+    assert "leak.txt" not in diff
+    assert "private sentinel" not in diff
+
+
+@pytest.mark.parametrize("unsafe_path", ["alias/private.txt", "../private.txt", ".Git/config"])
+def test_untracked_diff_rejects_unsafe_paths(ws, tmp_path, monkeypatch, unsafe_path) -> None:
+    wt = tmp_path / "worktree"
+    wt.mkdir()
+    (tmp_path / "private.txt").write_text("private sentinel")
+    (wt / "alias").symlink_to(tmp_path, target_is_directory=True)
+    (wt / ".Git").mkdir()
+    (wt / ".Git" / "config").write_text("private sentinel")
+    monkeypatch.setattr("jalebi.git_workspace._run_git", lambda *a: unsafe_path)
+
+    assert ws.diff_with_untracked(wt, "tracked") == "tracked"
+
+
+@pytest.mark.parametrize("component", ["nested", "new.txt"])
+def test_untracked_diff_rejects_symlink_swap(ws, tmp_path, monkeypatch, component) -> None:
+    wt = tmp_path / "worktree"
+    (wt / "nested").mkdir(parents=True)
+    (wt / "nested" / "new.txt").write_text("safe text")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "new.txt").write_text("private sentinel")
+    monkeypatch.setattr("jalebi.git_workspace._run_git", lambda *a: "nested/new.txt")
+    real_open = os.open
+
+    def swap_before_open(path, flags, *, dir_fd=None):
+        if path == component and dir_fd is not None:
+            target = wt / "nested" if component == "nested" else wt / "nested" / "new.txt"
+            target.rename(target.with_name("saved"))
+            target.symlink_to(outside if component == "nested" else outside / "new.txt")
+        return real_open(path, flags, dir_fd=dir_fd)
+
+    monkeypatch.setattr("jalebi.git_workspace.os.open", swap_before_open)
+    assert ws.diff_with_untracked(wt, "tracked") == "tracked"
 
 
 # ---- Phase 4 T1.4 — predict_conflicts ---------------------------------------

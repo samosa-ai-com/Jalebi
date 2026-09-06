@@ -366,6 +366,44 @@ describe("TaskDetail", () => {
     expect(screen.getByText("1 artifact")).toBeInTheDocument();
   });
 
+  it("loads the selected historical snapshot and returns to the live diff", async () => {
+    const run1 = { ...RUN, id: 1, seq: 1, status: "done", has_diff: true };
+    const run2 = { ...run1, id: 2, seq: 2 };
+    const task = { ...TASK, status: "done", run: run2 };
+    const fetchMock = stubFetch(task);
+    const fallback = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/runs")) return { ok: true, json: async () => [run1, run2] };
+      if (url.includes("/diff")) {
+        const content = url.endsWith("/runs/1/diff") ? "historical content" : "current content";
+        return {
+          ok: true,
+          json: async () => ({
+            diff: `diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -0,0 +1 @@\n+${content}\n`,
+          }),
+        };
+      }
+      return fallback(url, init);
+    });
+    const user = userEvent.setup();
+    renderDetail();
+
+    expect(await screen.findByText("+current content")).toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.some(([url]) => url === "/api/tasks/7/diff?base=1&untracked=1")
+    ).toBe(true);
+    fetchMock.mockClear();
+    await user.click(screen.getByRole("button", { name: /^#1/ }));
+    expect(await screen.findByText("+historical content")).toBeInTheDocument();
+    expect(screen.queryByText("+current content")).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url]) => url === "/api/tasks/7/runs/1/diff")).toBe(true);
+    expect(fetchMock.mock.calls.some(([url]) => url.includes("/diff?"))).toBe(false);
+
+    await user.click(screen.getByRole("button", { name: /^#2/ }));
+    expect(await screen.findByText("+current content")).toBeInTheDocument();
+    expect(screen.queryByText("+historical content")).not.toBeInTheDocument();
+  });
+
   it("shows Cancel for a queued task", async () => {
     const queuedTask = { ...TASK, status: "queued" };
     stubFetch(queuedTask);

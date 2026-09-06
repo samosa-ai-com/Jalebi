@@ -343,11 +343,9 @@ def delete_tasks_cascade(session: Session, task_ids: list[int]) -> list[int]:
 # ---- Phase 4 T4.1 — task dependency helpers -----------------------------
 
 
-# A dependency is "satisfied" when its task is in a terminal deliverable
-# state. ``done`` and ``needs_approval`` mean "the work landed"; the other
-# terminal states (failed / timed_out / cancelled / interrupted) leave
-# dependents blocked (the work didn't actually land).
-DEP_SATISFIED_STATUSES = frozenset({"done", "needs_approval"})
+# Only successful completion satisfies a dependency. ``needs_approval``
+# includes failed publishing (even when the agent's run itself is done).
+DEP_SATISFIED_STATUSES = frozenset({"done"})
 
 
 def dependencies_for(session: Session, task_id: int) -> list[int]:
@@ -450,7 +448,7 @@ def dep_dict(session: Session, task_id: int) -> dict[str, object]:
     blocking = dependents_for(session, task_id)
     blocked = task_id is not None and bool(blocked_by) and _status_for(
         session, task_id
-    ) in {"queued", "running", "waiting_review"}
+    ) in {"blocked", "queued", "running", "waiting_review"}
     return {
         "depends_on": depends_on,
         "blocked_by": blocked_by,

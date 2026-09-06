@@ -1628,6 +1628,7 @@ class TaskQueue:
                 )
                 run.steps_json = json.dumps(steps[-MAX_STEPS:])
             session.commit()
+            self._cascade_unblock(session, task.id)
             return pr_number
         finally:
             session.close()
@@ -1742,7 +1743,7 @@ class TaskQueue:
         """
         # Phase 4 T4.1 — when a task transitions to a satisfied terminal
         # state, unblock any dependents whose deps are now all met.
-        if task.status in {"done", "needs_approval"}:
+        if task.status in tasks.DEP_SATISFIED_STATUSES:
             self._cascade_unblock(session, task.id)
         if run.status not in ("failed", "timed_out"):
             return

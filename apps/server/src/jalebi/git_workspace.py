@@ -8,8 +8,10 @@ argv, URLs, or logs.
 import base64
 import os
 import re
+import stat
 import subprocess
 import threading
+from contextlib import ExitStack
 from pathlib import Path
 
 from jalebi.config import Config
@@ -748,27 +750,47 @@ class GitWorkspace:
         ``--- /dev/null`` / ``+++ b/<rel>`` hunk so T3's unified-diff parser
         (which splits on ``diff --git``) renders them in place. Binary files
         (NUL byte in the first 8 KB) and files over
-        ``_UNTRACKED_DIFF_SIZE_CAP`` are omitted. Pure read of the working tree.
+        ``_UNTRACKED_DIFF_SIZE_CAP`` are omitted, as are symlinks anywhere in
+        a path. Pure read of the working tree.
         """
         lines = _run_git(
             ["-C", str(worktree), "ls-files", "--others", "--exclude-standard"]
         )
         extra: list[str] = []
+        root = worktree.resolve()
         for rel in (ln.strip() for ln in lines.splitlines() if ln.strip()):
-            if ".git" in Path(rel).parts:
-                continue
-            path = worktree / rel
-            if not path.is_file():
-                continue
-            try:
-                size = path.stat().st_size
-            except OSError:
-                continue
-            if size > self._UNTRACKED_DIFF_SIZE_CAP:
+            relative = Path(rel)
+            if relative.is_absolute() or any(
+                part == ".." or part.lower() == ".git" for part in relative.parts
+            ):
                 continue
             try:
-                content = path.read_bytes()
-            except OSError:
+                if not (root / relative).resolve().is_relative_to(root):
+                    continue
+                # Open each component relative to its verified parent, refusing
+                # symlinks at open time so a concurrent swap cannot bypass the
+                # containment check. Nonblocking open also avoids hanging on FIFOs.
+                with ExitStack() as opened:
+                    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+                    parent_fd = os.open(root, flags)
+                    opened.callback(os.close, parent_fd)
+                    for part in relative.parts[:-1]:
+                        parent_fd = os.open(part, flags, dir_fd=parent_fd)
+                        opened.callback(os.close, parent_fd)
+                    fd = os.open(
+                        relative.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                        dir_fd=parent_fd,
+                    )
+                    with os.fdopen(fd, "rb") as source:
+                        info = os.fstat(source.fileno())
+                        if not stat.S_ISREG(info.st_mode):
+                            continue
+                        if info.st_size > self._UNTRACKED_DIFF_SIZE_CAP:
+                            continue
+                        content = source.read(self._UNTRACKED_DIFF_SIZE_CAP + 1)
+                if len(content) > self._UNTRACKED_DIFF_SIZE_CAP:
+                    continue
+            except (OSError, RuntimeError, ValueError):
                 continue
             if b"\x00" in content[:8192]:
                 continue  # binary

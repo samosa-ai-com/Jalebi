@@ -959,21 +959,21 @@ function DiffView({ diff }: { diff: string }) {
   );
 }
 
-function DiffSection({ taskId, run }: { taskId: number; run: Run }) {
+function DiffSection({ taskId, run, isLatest }: { taskId: number; run: Run; isLatest: boolean }) {
   const [diff, setDiff] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!run.has_diff) return;
     let cancelled = false;
-    api
-      .getLiveDiff(taskId)
+    const request = isLatest ? api.getLiveDiff(taskId) : api.getRunDiff(taskId, run.id);
+    request
       .then((r) => !cancelled && setDiff(r.diff))
       .catch((e) => !cancelled && setError(e instanceof Error ? e.message : "failed to load diff"));
     return () => {
       cancelled = true;
     };
-  }, [taskId, run.has_diff, run.id]);
+  }, [taskId, run.has_diff, run.id, isLatest]);
 
   if (!run.has_diff) return null;
   return (
@@ -1627,7 +1627,14 @@ export default function TaskDetail() {
         />
       )}
 
-      {selectedRun && <DiffSection key={selectedRun.id} taskId={task.id} run={selectedRun} />}
+      {selectedRun && (
+        <DiffSection
+          key={`${selectedRun.id}:${isLatest}`}
+          taskId={task.id}
+          run={selectedRun}
+          isLatest={isLatest}
+        />
+      )}
 
       {runs.length > 1 && (
         <section className="surface p-5 animate-fade-up">

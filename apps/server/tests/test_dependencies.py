@@ -82,6 +82,27 @@ def test_has_unmet_deps_true_when_unfinished(session, app) -> None:
     assert tasks_svc.has_unmet_deps(session, a.id) is True
 
 
+def test_publish_failure_keeps_dependency_and_badge_blocked(client, session, app) -> None:
+    parent = _make_task(session, app, status="needs_approval")
+    child = _make_task(session, app, status="blocked")
+    tasks_svc.add_dependency(session, child.id, parent.id)
+    session.commit()
+
+    assert tasks_svc.has_unmet_deps(session, child.id) is True
+    response = client.get(f"/api/tasks/{child.id}")
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["status"] == "blocked"
+    assert body["blocked"] is True
+    assert body["blocked_by"] == [parent.id]
+
+    parent.status = "done"
+    session.commit()
+    body = client.get(f"/api/tasks/{child.id}").get_json()
+    assert body["blocked"] is False
+    assert body["blocked_by"] == []
+
+
 def test_dependencies_and_dependents_for(session, app) -> None:
     a = _make_task(session, app)
     b = _make_task(session, app)
