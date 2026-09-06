@@ -115,6 +115,7 @@ This is critical and repeated: **all GitHub interaction in this project goes thr
 | `docs/19-phase2-validation.md` | Manual UI QA checklist for every Phase 2 feature (screening, commit statuses, diff/history). | Feature/UI behavior changes. |
 | `docs/20-phase3-validation.md` | Manual UI QA checklist for every Phase 3 feature (codex/claude backends, per-CLI guards, model dropdown). | Feature/UI behavior changes. |
 | `docs/21-phase4-plan.md` | **Approved Phase 4 plan**: visualization/control (T0 agent-waiting UX, T1 hardening, T2 poller+attention, T3 frontend, T4 deps/nudge/durable-SSE/live view, T5 presentation, T6 IDE connector, T7 file browser). | Plan changes during Phase 4 implementation. |
+| `docs/22-phase4-validation.md` | Manual UI QA checklist for every Phase 4 feature (T0–T7 + post-plan additions + audit fixes). | Feature/UI behavior changes. |
 
 **If you add a doc file, add it to this table.**
 
@@ -156,6 +157,8 @@ Jalebi/
 │   ├── 18-cast-workflows-grid.md   ← design-only, NOT approved for implementation
 │   ├── 19-phase2-validation.md
 │   └── 20-phase3-validation.md
+│   ├── 21-phase4-plan.md            ← approved Phase 4 roadmap (+ §16 post-plan additions)
+│   └── 22-phase4-validation.md      ← manual QA checklist for Phase 4
 ├── apps/
 │   ├── server/                    # Flask orchestrator (Python 3.13, uv)
 │   │   ├── pyproject.toml         # uv project; `jalebi` console script → jalebi.app:main
@@ -211,7 +214,7 @@ Reference `docs/00-overview.md` and `HANDOFF.md` for current phase and status.
 - **Phase 1 — Catalog & reviewers + event-driven triggers:** catalog agents (personality → `AGENTS.md` injection + skills), reviewer workflow (per-reviewer worktrees + PR review comments), "address reviewers" follow-up, webhook listener + dedup + trigger rules + registration/polling fallback.
 - **Phase 2 — Screening + merge gating:** screening engine (cron, HEAD baseline dedup, findings, ntfy, "new task from finding"), commit statuses for branch protection. **complete.**
 - **Phase 3 — Backend parity:** Codex adapter, Claude Code adapter, per-task model dropdown from `listModels()`. **complete.** *(Claude Code unit-tested with captured fixtures; not live-auth'd on the dev machine.)*
-- **Phase 4 — Visualization & control:** see **`docs/21-phase4-plan.md`** (approved). Agent-"waiting for input" UX + markdown rendering (T0), backend hardening (T1), GitHub polling observer + derived attention (T2), frontend features (T3), deps/nudge/durable-SSE/live running view (T4), presentation fixes (T5), IDE connector (T6), in-task file browser (T7). **Status: plan approved; not yet started.**
+- **Phase 4 — Visualization & control:** see **`docs/21-phase4-plan.md`** (+ **`docs/22-phase4-validation.md`** checklist). Agent-"waiting for input" UX + markdown rendering (T0), backend hardening (T1), GitHub polling observer + derived attention (T2), frontend features (T3), deps/nudge/durable-SSE/live running view (T4), presentation fixes (T5), IDE connector (T6), in-task file browser (T7), plus owner-approved extras (§16: PAT rotation, fork-PR flow, attention dismissal, IDE expansion) and pre-PR audit fixes. **Status: 25 commits on `phase-4` ahead of `main` (8 tier commits + post-plan features + 10 audit-fix/docs commits, unpushed); PR pending full gate + `docs/22` manual QA.**
 
 ---
 

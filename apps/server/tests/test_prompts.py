@@ -272,3 +272,20 @@ def test_agent_md_never_instructs_working_tree_restore(session) -> None:
     assert "git restore AGENTS.md" not in md  # full (working-tree) restore forbidden
     assert "git checkout" in md
     assert "reset --hard" in md
+
+
+def test_agent_md_pr_head_source_notes_pr_head_worktree(session) -> None:
+    """A freeform task based on a PR head names the PR as the worktree base."""
+    repo = Repo(
+        full_name="owner/repo",
+        default_branch="main",
+        clone_url="https://github.com/owner/repo.git",
+        pat_name="test",
+    )
+    session.add(repo)
+    session.commit()
+    task = _task(session, repo, type_="freeform", prs=[7])
+    task.source_branch = "pr/7/head"
+    md = prompts.build_agent_md(task, repo)
+    assert "pr/7/head" in md
+    assert "PR #7" in md

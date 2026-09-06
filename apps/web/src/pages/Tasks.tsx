@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
+import { AttentionBadge } from "../components/AttentionBadge";
+import { DepBadges } from "../components/DepBadges";
+import { RunningCard } from "../components/RunningCard";
 import { StatusBadge } from "../components/StatusBadge";
 import type { Account, CatalogAgent, GithubContext, Repo, SettingsMap, Task } from "../types";
 
@@ -108,6 +111,26 @@ function CreateTask({
   const effectiveRepoId = repoId || repos[0]?.id || 0;
   const repo = repoById(repos, effectiveRepoId);
 
+  // Fork-aware fix flow: a freeform task linked to a fork PR can be based on
+  // the PR head commit (which never exists on origin) instead of an origin
+  // branch. The sentinel `pr/<N>/head` tells the backend to fetch
+  // `refs/pull/<N>/head` for the worktree and to push back to the fork.
+  const selectedPr = context?.prs.find((p) => p.number === Number(prNumber)) ?? null;
+  const prHeadValue = selectedPr ? `pr/${selectedPr.number}/head` : "";
+  const prHeadMissingOnOrigin =
+    !!selectedPr?.head && !(context?.branches.includes(selectedPr.head) ?? true);
+  const showPrHeadOption =
+    type === "freeform" &&
+    !!selectedPr &&
+    (!!selectedPr.is_fork || prHeadMissingOnOrigin || !!selectedPr.head_repo);
+  const isPrHeadSelected = !!prHeadValue && sourceBranch === prHeadValue;
+
+  function usePrHeadBase() {
+    if (!selectedPr) return;
+    setSourceBranch(`pr/${selectedPr.number}/head`);
+    if (selectedPr.base) setTargetBranch(selectedPr.base);
+  }
+
   function accountLabel(name: string | null | undefined): string {
     if (!name) return "Unknown account";
     return accounts.find((a) => a.name === name)?.login ?? name;
@@ -185,9 +208,10 @@ function CreateTask({
         if (cancelled) return;
         setContext(c);
         if (c.branches.length > 0) {
-          const def = repo.default_branch && c.branches.includes(repo.default_branch)
-            ? repo.default_branch
-            : c.branches[0];
+          const def =
+            repo.default_branch && c.branches.includes(repo.default_branch)
+              ? repo.default_branch
+              : c.branches[0];
           setSourceBranch(def);
           setTargetBranch(def);
         }
@@ -275,7 +299,11 @@ function CreateTask({
       <div className="grid gap-4 sm:grid-cols-2">
         <label className="block">
           <span className="mb-1.5 block text-xs font-medium text-ink-400">Repository</span>
-          <select value={effectiveRepoId} onChange={(e) => selectRepo(Number(e.target.value))} className="field">
+          <select
+            value={effectiveRepoId}
+            onChange={(e) => selectRepo(Number(e.target.value))}
+            className="field"
+          >
             {(() => {
               const groups = new Map<string, Repo[]>();
               for (const r of repos) {
@@ -343,7 +371,9 @@ function CreateTask({
             label="Target branch (worktree base / PR base)"
             value={targetBranch}
             onChange={setTargetBranch}
-            placeholder={context ? (context.branches.length ? "default" : "no branches") : "loading…"}
+            placeholder={
+              context ? (context.branches.length ? "default" : "no branches") : "loading…"
+            }
           >
             {(context?.branches ?? []).map((b) => (
               <option key={b} value={b}>
@@ -353,31 +383,72 @@ function CreateTask({
           </Select>
         </div>
       ) : type === "pr_review" ? null : (
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Select
-            label="Source branch"
-            value={sourceBranch}
-            onChange={setSourceBranch}
-            placeholder={context ? (context.branches.length ? "default" : "no branches") : "loading…"}
-          >
-            {(context?.branches ?? []).map((b) => (
-              <option key={b} value={b}>
-                {b}
-              </option>
-            ))}
-          </Select>
-          <Select
-            label="Target branch (PR base)"
-            value={targetBranch}
-            onChange={setTargetBranch}
-            placeholder={context ? (context.branches.length ? "default" : "no branches") : "loading…"}
-          >
-            {(context?.branches ?? []).map((b) => (
-              <option key={b} value={b}>
-                {b}
-              </option>
-            ))}
-          </Select>
+        <div className="space-y-3">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Select
+              label="Source branch"
+              value={sourceBranch}
+              onChange={setSourceBranch}
+              placeholder={
+                context ? (context.branches.length ? "default" : "no branches") : "loading…"
+              }
+            >
+              {(context?.branches ?? []).map((b) => (
+                <option key={b} value={b}>
+                  {b}
+                </option>
+              ))}
+              {(showPrHeadOption || isPrHeadSelected) && selectedPr && (
+                <option value={prHeadValue}>
+                  PR #{selectedPr.number} head
+                  {selectedPr.head_repo
+                    ? ` (${selectedPr.head_repo}:${selectedPr.head})`
+                    : ` (${selectedPr.head})`}
+                </option>
+              )}
+            </Select>
+            <Select
+              label="Target branch (PR base)"
+              value={targetBranch}
+              onChange={setTargetBranch}
+              placeholder={
+                context ? (context.branches.length ? "default" : "no branches") : "loading…"
+              }
+            >
+              {(context?.branches ?? []).map((b) => (
+                <option key={b} value={b}>
+                  {b}
+                </option>
+              ))}
+            </Select>
+          </div>
+          {showPrHeadOption && selectedPr && !isPrHeadSelected && (
+            <p className="text-[11px] leading-relaxed text-ink-500">
+              This PR&apos;s head branch{" "}
+              <span className="font-mono">
+                {selectedPr.head_repo
+                  ? `${selectedPr.head_repo}:${selectedPr.head}`
+                  : selectedPr.head}
+              </span>{" "}
+              is not on origin (fork).{" "}
+              <button
+                type="button"
+                onClick={usePrHeadBase}
+                className="underline-offset-2 hover:text-ink-300 hover:underline"
+              >
+                Base the worktree on PR #{selectedPr.number} head
+              </button>{" "}
+              to address its reviews — publish will push back to that PR, or open a new PR if the
+              fork disallows edits.
+            </p>
+          )}
+          {isPrHeadSelected && selectedPr && (
+            <p className="text-[11px] leading-relaxed text-syrup-300">
+              Worktree starts at PR #{selectedPr.number} head; target is its base (
+              <span className="font-mono">{selectedPr.base ?? targetBranch}</span>). Publish
+              defaults to Push to PR #{selectedPr.number}.
+            </p>
+          )}
         </div>
       )}
 
@@ -434,7 +505,12 @@ function CreateTask({
             </option>
           ))}
         </Select>
-        <Select label="Backend" value={agentCli ?? ""} onChange={setAgentCli} disabled={settingsLoading}>
+        <Select
+          label="Backend"
+          value={agentCli ?? ""}
+          onChange={setAgentCli}
+          disabled={settingsLoading}
+        >
           {["opencode", "codex", "claude"].map((c) => (
             <option key={c} value={c}>
               {c}
@@ -536,11 +612,25 @@ function CreateTask({
 }
 
 const FILTERS = [
-  { id: "all", label: "All", test: () => true },
-  { id: "running", label: "Running", test: (s: string) => s === "queued" || s === "running" },
-  { id: "done", label: "Done", test: (s: string) => s === "done" },
-  { id: "failed", label: "Failed", test: (s: string) => s === "failed" || s === "timed_out" || s === "interrupted" },
-  { id: "review", label: "Review", test: (s: string) => s === "needs_approval" },
+  { id: "all", label: "All", test: (_t: Task) => true },
+  {
+    id: "needs_you",
+    label: "Needs you",
+    test: (t: Task) => t.attention === "needs_you",
+  },
+  {
+    id: "running",
+    label: "Running",
+    test: (t: Task) => t.status === "queued" || t.status === "running",
+  },
+  { id: "done", label: "Done", test: (t: Task) => t.status === "done" },
+  {
+    id: "failed",
+    label: "Failed",
+    test: (t: Task) =>
+      t.status === "failed" || t.status === "timed_out" || t.status === "interrupted",
+  },
+  { id: "review", label: "Review", test: (t: Task) => t.status === "needs_approval" },
 ] as const;
 
 type FilterId = (typeof FILTERS)[number]["id"];
@@ -548,15 +638,8 @@ type FilterId = (typeof FILTERS)[number]["id"];
 type SortKey = "id" | "updated_at" | "status";
 const PAGE_SIZE = 10;
 
-function GhLink({
-  repo,
-  kind,
-  number,
-}: {
-  repo: string;
-  kind: "pull" | "issues";
-  number: number;
-}) {
+function GhLink({ repo, kind, number }: { repo: string; kind: "pull" | "issues"; number: number }) {
+  const label = kind === "pull" ? `#${number}` : `issue #${number}`;
   return (
     <a
       className="font-mono text-xs text-syrup-400 hover:text-syrup-300"
@@ -564,7 +647,7 @@ function GhLink({
       target="_blank"
       rel="noreferrer"
     >
-      {kind === "pull" ? "#" : "issue "}#{number}
+      {label}
     </a>
   );
 }
@@ -605,14 +688,15 @@ export default function Tasks() {
     const running = tasks.filter((t) => t.status === "queued" || t.status === "running").length;
     const done = tasks.filter((t) => t.status === "done").length;
     const review = tasks.filter((t) => t.status === "needs_approval").length;
-    return { total: tasks.length, running, done, review };
+    const needsYou = tasks.filter((t) => t.attention === "needs_you").length;
+    return { total: tasks.length, running, done, review, needsYou };
   }, [tasks]);
 
   const visible = useMemo(() => {
     const test = FILTERS.find((f) => f.id === filter)!.test;
     const q = query.trim().toLowerCase();
     const list = tasks.filter((t) => {
-      if (!test(t.status)) return false;
+      if (!test(t)) return false;
       if (!q) return true;
       return (
         String(t.id).includes(q) ||
@@ -623,7 +707,10 @@ export default function Tasks() {
     list.sort((a, b) => {
       const av = sortKey === "status" ? a.status : sortKey === "id" ? a.id : a.updated_at;
       const bv = sortKey === "status" ? b.status : sortKey === "id" ? b.id : b.updated_at;
-      const cmp = typeof av === "number" && typeof bv === "number" ? av - bv : String(av).localeCompare(String(bv));
+      const cmp =
+        typeof av === "number" && typeof bv === "number"
+          ? av - bv
+          : String(av).localeCompare(String(bv));
       return sortDesc ? -cmp : cmp;
     });
     return list;
@@ -647,8 +734,17 @@ export default function Tasks() {
     setPage(0);
   }
 
+  function handleDismissAttention(taskId: number) {
+    setTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, attention: "done" } : t)));
+    api.dismissAttention(taskId).catch((e) => {
+      setError(e.message);
+      load();
+    });
+  }
+
   const statCards = [
     { label: "Total", value: stats.total, accent: "text-ink-100" },
+    { label: "Needs you", value: stats.needsYou, accent: "text-syrup-300" },
     { label: "Running", value: stats.running, accent: "text-syrup-300" },
     { label: "Done", value: stats.done, accent: "text-green-300" },
     { label: "Needs review", value: stats.review, accent: "text-purple-300" },
@@ -663,7 +759,10 @@ export default function Tasks() {
         </p>
       </header>
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 animate-fade-up" style={{ animationDelay: "0.05s" }}>
+      <div
+        className="grid grid-cols-2 gap-3 sm:grid-cols-5 animate-fade-up"
+        style={{ animationDelay: "0.05s" }}
+      >
         {statCards.map((c) => (
           <div key={c.label} className="surface px-5 py-4">
             <p className="text-xs font-medium uppercase tracking-wider text-ink-500">{c.label}</p>
@@ -673,6 +772,22 @@ export default function Tasks() {
           </div>
         ))}
       </div>
+
+      {/* Phase 4 T4.4 — live "running now" panel: one card per
+          queued/running task, scroll-bounded for long queues. */}
+      {visible.some((t) => t.status === "running" || t.status === "queued") && (
+        <div className="max-h-[24rem] space-y-2 overflow-y-auto">
+          {visible
+            .filter((t) => t.status === "running" || t.status === "queued")
+            .map((t) => (
+              <RunningCard
+                key={t.id}
+                task={t}
+                repoName={t.repo_full_name ?? repoName(repos, t.repo_id)}
+              />
+            ))}
+        </div>
+      )}
 
       <CreateTask repos={repos} accounts={accounts} onCreated={load} />
 
@@ -704,69 +819,109 @@ export default function Tasks() {
           />
         </div>
 
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-left text-xs uppercase tracking-wider text-ink-500">
-              <th className="cursor-pointer select-none px-4 pt-3 pb-2 font-medium hover:text-ink-300" onClick={() => toggleSort("id")}>
-                ID {sortKey === "id" ? (sortDesc ? "↓" : "↑") : ""}
-              </th>
-              <th className="cursor-pointer select-none px-4 pb-2 font-medium hover:text-ink-300" onClick={() => toggleSort("status")}>
-                Status {sortKey === "status" ? (sortDesc ? "↓" : "↑") : ""}
-              </th>
-              <th className="px-4 pb-2 font-medium">Repo</th>
-              <th className="px-4 pb-2 font-medium">Prompt</th>
-              <th className="px-4 pb-2 font-medium">PR / Issues</th>
-              <th className="cursor-pointer select-none px-4 pb-2 font-medium hover:text-ink-300" onClick={() => toggleSort("updated_at")}>
-                Updated {sortKey === "updated_at" ? (sortDesc ? "↓" : "↑") : ""}
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {pageRows.length === 0 && (
-              <tr>
-                <td colSpan={6} className="px-4 py-8 text-center text-ink-600">
-                  No tasks{filter !== "all" ? ` in “${filter}”` : ""}
-                  {query ? " matching your search" : ""} yet.
-                </td>
+        <div className="max-h-[60vh] overflow-y-auto">
+          <table className="w-full text-sm">
+            <thead className="sticky top-0 z-10 bg-ink-900">
+              <tr className="text-left text-xs uppercase tracking-wider text-ink-500">
+                <th
+                  className="cursor-pointer select-none px-4 pt-3 pb-2 font-medium hover:text-ink-300"
+                  onClick={() => toggleSort("id")}
+                >
+                  ID {sortKey === "id" ? (sortDesc ? "↓" : "↑") : ""}
+                </th>
+                <th
+                  className="cursor-pointer select-none px-4 pb-2 font-medium hover:text-ink-300"
+                  onClick={() => toggleSort("status")}
+                >
+                  Status {sortKey === "status" ? (sortDesc ? "↓" : "↑") : ""}
+                </th>
+                <th className="px-4 pb-2 font-medium">Repo</th>
+                <th className="px-4 pb-2 font-medium">Prompt</th>
+                <th className="px-4 pb-2 font-medium">PR / Issues</th>
+                <th
+                  className="cursor-pointer select-none px-4 pb-2 font-medium hover:text-ink-300"
+                  onClick={() => toggleSort("updated_at")}
+                >
+                  Updated {sortKey === "updated_at" ? (sortDesc ? "↓" : "↑") : ""}
+                </th>
               </tr>
-            )}
-            {pageRows.map((t) => {
-              const rn = t.repo_full_name ?? repoName(repos, t.repo_id);
-              return (
-                <tr key={t.id} className="border-t border-ink-800/70 transition-colors hover:bg-ink-875/50">
-                  <td className="px-4 py-3">
-                    <Link to={`/tasks/${t.id}`} className="font-mono text-syrup-400 hover:text-syrup-300">
-                      #{t.id}
-                    </Link>
-                  </td>
-                  <td className="px-4 py-3">
-                    <StatusBadge status={t.status} />
-                  </td>
-                  <td className="px-4 py-3">
-                    <RepoChip name={rn} />
-                  </td>
-                  <td className="max-w-xs truncate px-4 py-3 text-ink-300">{t.prompt}</td>
-                  <td className="px-4 py-3">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      {(t.prs?.length ? t.prs : t.pr_number ? [t.pr_number] : []).map((n) => (
-                        <GhLink key={`p${n}`} repo={rn} kind="pull" number={n} />
-                      ))}
-                      {(t.issues ?? []).map((n) => (
-                        <GhLink key={`i${n}`} repo={rn} kind="issues" number={n} />
-                      ))}
-                      {!t.prs?.length && !t.issues?.length && (
-                        <span className="text-ink-600">–</span>
-                      )}
-                    </div>
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-ink-500">
-                    {timeAgo(t.updated_at)}
+            </thead>
+            <tbody>
+              {pageRows.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="px-4 py-8 text-center text-ink-600">
+                    No tasks{filter !== "all" ? ` in “${filter}”` : ""}
+                    {query ? " matching your search" : ""} yet.
                   </td>
                 </tr>
-              );
-            })}
-          </tbody>
-        </table>
+              )}
+              {pageRows.map((t) => {
+                const rn = t.repo_full_name ?? repoName(repos, t.repo_id);
+                return (
+                  <tr
+                    key={t.id}
+                    className="border-t border-ink-800/70 transition-colors hover:bg-ink-875/50"
+                  >
+                    <td className="px-4 py-3">
+                      <Link
+                        to={`/tasks/${t.id}`}
+                        className="font-mono text-syrup-400 hover:text-syrup-300"
+                      >
+                        #{t.id}
+                      </Link>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <StatusBadge status={t.status} />
+                        <AttentionBadge attention={t.attention ?? "working"} />
+                        <DepBadges
+                          dependsOn={t.depends_on}
+                          blockedBy={t.blocked_by}
+                          blocking={t.blocking}
+                          blocked={t.blocked}
+                        />
+                        {t.attention === "needs_you" && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              handleDismissAttention(t.id);
+                            }}
+                            className="rounded px-1.5 py-0.5 text-[10px] font-medium text-ink-400 ring-1 ring-ink-700/60 hover:bg-ink-800 hover:text-ink-200 transition-colors"
+                            title="Dismiss attention for this task"
+                          >
+                            Dismiss
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <RepoChip name={rn} />
+                    </td>
+                    <td className="max-w-xs truncate px-4 py-3 text-ink-300">{t.prompt}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {(t.prs?.length ? t.prs : t.pr_number ? [t.pr_number] : []).map((n) => (
+                          <GhLink key={`p${n}`} repo={rn} kind="pull" number={n} />
+                        ))}
+                        {(t.issues ?? []).map((n) => (
+                          <GhLink key={`i${n}`} repo={rn} kind="issues" number={n} />
+                        ))}
+                        {!t.prs?.length && !t.issues?.length && (
+                          <span className="text-ink-600">–</span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-ink-500">
+                      {timeAgo(t.updated_at)}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
 
         {pageCount > 1 && (
           <div className="flex items-center justify-end gap-2 border-t border-ink-800 px-4 py-3 text-xs text-ink-500">

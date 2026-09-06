@@ -93,6 +93,21 @@ def add_github_token(
     _store(config, data)
 
 
+def update_github_token(
+    config: Config, name: str, token: str, meta: dict | None = None
+) -> None:
+    """Replace the credential (and refresh meta) of an existing named account.
+
+    Update is name-keyed only: every binding — ``repos.pat_name``,
+    ``tasks.pat_name``, trigger/screening ownership — references the account
+    *name*, so swapping the token preserves all associated data. Raises
+    ``KeyError`` when no account with that name exists (update is not create).
+    """
+    if name not in token_names(config):
+        raise KeyError(f"no such GitHub account: {name}")
+    add_github_token(config, name, token, meta=meta)
+
+
 def remove_github_token(config: Config, name: str) -> None:
     data = _load(config)
     tokens = data.get(GITHUB_TOKENS_KEY) or []

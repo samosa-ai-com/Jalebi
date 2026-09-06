@@ -3,9 +3,12 @@ import type {
   CatalogSkill,
   EnvVar,
   EventDelivery,
+  FileEntry,
   GithubContext,
   GithubRepo,
   Health,
+  IdeDetectResponse,
+  PublishCheck,
   Repo,
   Run,
   Screen,
@@ -74,8 +77,7 @@ export const api = {
     skills?: CatalogSkill[];
     custom_instructions?: string;
     enabled?: boolean;
-  }) =>
-    request<CatalogAgent>("/api/agents", { method: "POST", body: JSON.stringify(input) }),
+  }) => request<CatalogAgent>("/api/agents", { method: "POST", body: JSON.stringify(input) }),
   updateAgent: (
     slug: string,
     input: {
@@ -99,9 +101,7 @@ export const api = {
     }),
   getWebhookStatus: () => request<WebhookStatus>("/api/webhook/status"),
   getTriggerRules: (repoId?: number) =>
-    request<TriggerRule[]>(
-      `/api/triggers${repoId ? `?repo_id=${repoId}` : ""}`
-    ),
+    request<TriggerRule[]>(`/api/triggers${repoId ? `?repo_id=${repoId}` : ""}`),
   createTriggerRule: (input: {
     repo_id: number;
     event: string;
@@ -138,10 +138,9 @@ export const api = {
     request<{ deleted: number }>(`/api/triggers/${id}`, { method: "DELETE" }),
   getDeliveries: () => request<EventDelivery[]>("/api/webhooks/deliveries"),
   replayDelivery: (id: number) =>
-    request<{ matched: number; results: unknown[] }>(
-      `/api/webhooks/deliveries/${id}/replay`,
-      { method: "POST" }
-    ),
+    request<{ matched: number; results: unknown[] }>(`/api/webhooks/deliveries/${id}/replay`, {
+      method: "POST",
+    }),
   getScreenTemplates: () => request<ScreenTemplate[]>("/api/screenings/templates"),
   getScreens: () => request<Screen[]>("/api/screenings"),
   createScreen: (input: {
@@ -168,7 +167,8 @@ export const api = {
       notify_ntfy: boolean;
     }>
   ) => request<Screen>(`/api/screenings/${id}`, { method: "PUT", body: JSON.stringify(input) }),
-  deleteScreen: (id: number) => request<{ ok: boolean }>(`/api/screenings/${id}`, { method: "DELETE" }),
+  deleteScreen: (id: number) =>
+    request<{ ok: boolean }>(`/api/screenings/${id}`, { method: "DELETE" }),
   runScreen: (id: number) =>
     request<{ ok: boolean; screening_id: number }>(`/api/screenings/${id}/run`, {
       method: "POST",
@@ -188,12 +188,10 @@ export const api = {
     ),
   updateSetting: (key: string, value: unknown) =>
     request<SettingsMap>(`/api/settings`, { method: "POST", body: JSON.stringify({ key, value }) }),
-  testNotification: () =>
-    request<{ ok: boolean }>(`/api/notify/test`, { method: "POST" }),
+  testNotification: () => request<{ ok: boolean }>(`/api/notify/test`, { method: "POST" }),
   getEnvVars: (repoId?: number) =>
-    request<EnvVar[]>(
-      `/api/envvars${repoId ? `?repo_id=${repoId}` : ""}`
-    ),  upsertEnvVar: (name: string, value: string, repoId?: number | null) =>
+    request<EnvVar[]>(`/api/envvars${repoId ? `?repo_id=${repoId}` : ""}`),
+  upsertEnvVar: (name: string, value: string, repoId?: number | null) =>
     request<EnvVar>(`/api/envvars`, {
       method: "POST",
       body: JSON.stringify({ name, value, repo_id: repoId ?? null }),
@@ -221,6 +219,15 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ name, token }),
     }),
+  updateToken: (name: string, token: string) =>
+    request<{
+      updated: string;
+      previous_login?: string | null;
+      login?: string | null;
+    }>(`/api/github/tokens/${encodeURIComponent(name)}`, {
+      method: "PUT",
+      body: JSON.stringify({ token }),
+    }),
   deleteToken: (name: string) =>
     request<{ removed: string; repos_affected: string[]; tasks_affected: number }>(
       `/api/github/tokens/${encodeURIComponent(name)}`,
@@ -231,10 +238,32 @@ export const api = {
   getRuns: (id: number) => request<Run[]>(`/api/tasks/${id}/runs`),
   getRunDiff: (id: number, runId: number) =>
     request<{ diff: string }>(`/api/tasks/${id}/runs/${runId}/diff`),
+  getLiveDiff: (id: number) =>
+    request<{ diff: string; base: boolean; untracked: boolean }>(
+      `/api/tasks/${id}/diff?base=1&untracked=1`
+    ),
+  getPublishCheck: (id: number) => request<PublishCheck>(`/api/tasks/${id}/publish-check`),
+  getIdeStatus: () => request<{ command: string; name: string; found: boolean }>("/api/ide/status"),
+  detectIde: () => request<IdeDetectResponse>("/api/ide/detect"),
+  testIde: () => request<{ ok: boolean; error?: string }>("/api/ide/test", { method: "POST" }),
+  openInIde: (id: number) =>
+    request<{ ok: boolean; path: string }>(`/api/tasks/${id}/open-in-ide`, {
+      method: "POST",
+    }),
+  getTaskFiles: (id: number, path = "") =>
+    request<{ path: string; entries: FileEntry[] }>(
+      `/api/tasks/${id}/files${path ? `?path=${encodeURIComponent(path)}` : ""}`
+    ),
+  getTaskFileContent: (id: number, path: string) =>
+    request<{ path: string; content: string; binary: boolean }>(
+      `/api/tasks/${id}/files/content?path=${encodeURIComponent(path)}`
+    ),
   createTask: (input: CreateTaskInput) =>
     request<Task>("/api/tasks", { method: "POST", body: JSON.stringify(input) }),
   cancelTask: (id: number) =>
     request<{ status: string }>(`/api/tasks/${id}/cancel`, { method: "POST" }),
+  dismissAttention: (id: number) =>
+    request<Task>(`/api/tasks/${id}/dismiss-attention`, { method: "POST" }),
   rerunTask: (id: number) => request<Task>(`/api/tasks/${id}/rerun`, { method: "POST" }),
   deleteTask: (id: number) =>
     request<{ deleted: number }>(`/api/tasks/${id}`, { method: "DELETE" }),
@@ -244,7 +273,7 @@ export const api = {
       mode?: "new_pr" | "update_pr" | "push_branch";
       branch?: string;
       pr_number?: number;
-    } = {},
+    } = {}
   ) => {
     const body: Record<string, unknown> = {};
     if (opts.mode) body.mode = opts.mode;
@@ -255,10 +284,14 @@ export const api = {
       {
         method: "POST",
         body: Object.keys(body).length ? JSON.stringify(body) : undefined,
-      },
+      }
     );
   },
-  postFollowup: (id: number, prompt: string, opts?: { pat_name?: string; model?: string; cli?: string; include_reviews?: boolean }) =>
+  postFollowup: (
+    id: number,
+    prompt: string,
+    opts?: { pat_name?: string; model?: string; cli?: string; include_reviews?: boolean }
+  ) =>
     request<Task>(`/api/tasks/${id}/followup`, {
       method: "POST",
       body: JSON.stringify({ prompt, ...opts }),
@@ -278,8 +311,7 @@ export const api = {
     request<{ disconnected: string }>(`/api/repos/${id}`, { method: "DELETE" }),
   updateRepo: (id: number, input: { check_runs_enabled?: boolean }) =>
     request<Repo>(`/api/repos/${id}`, { method: "PATCH", body: JSON.stringify(input) }),
-  pruneRepos: () =>
-    request<{ removed: string[] }>("/api/repos/prune", { method: "POST" }),
+  pruneRepos: () => request<{ removed: string[] }>("/api/repos/prune", { method: "POST" }),
   artifactUrl: (taskId: number, artifactId: number) =>
     `/api/tasks/${taskId}/artifacts/${artifactId}/download`,
   artifactContentUrl: (taskId: number, artifactId: number) =>

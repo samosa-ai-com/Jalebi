@@ -646,3 +646,87 @@ def test_completed_delivery_with_multiple_rules_stores_all_in_result(
     assert len(tasks_service.list_tasks(session)) == 2
     # matched_rule_id column no longer exists on the model.
     assert not hasattr(delivery, "matched_rule_id")
+
+
+def test_status_delivery_nudges_task_without_rules(client, session, repo) -> None:
+    """Phase 4 T4.2 wiring: a failing `status` event on a task branch
+    enqueues a nudge follow-up even when NO trigger rule matches (the
+    nudger is independent of rules). Uses the real GitHub payload shape
+    (branches as objects)."""
+    from jalebi import nudger
+    from jalebi import tasks as tasks_service
+    from jalebi.db import Run
+
+    settings.set_setting(session, "auto_nudge", True)
+    task = tasks_service.create_task(
+        session, type_="freeform", repo_id=repo, prompt="x"
+    )
+    task.status = "failed"
+    session.add(Run(task_id=task.id, seq=1, status="failed", session_id="ses_1"))
+    session.commit()
+
+    q = client.application.config["JALEBI_QUEUE"]
+    calls: list = []
+    orig = q.enqueue_followup
+    q.enqueue_followup = lambda *a, **k: calls.append((a, k))  # type: ignore[assignment]
+    try:
+        res = client.post(
+            "/webhook",
+            headers={"X-GitHub-Delivery": "d-nudge-1", "X-GitHub-Event": "status"},
+            json={
+                "sha": "deadbeef",
+                "state": "failure",
+                "branches": [{"name": f"jalebi/{task.id}"}],
+                "repository": {"full_name": "owner/repo"},
+            },
+        )
+    finally:
+        q.enqueue_followup = orig  # type: ignore[assignment]
+    assert res.status_code == 200
+    assert res.get_json()["matched"] is False  # no rules — nudge still fired
+    assert len(calls) == 1
+    assert nudger._already_nudged(
+        session, task.id, f"{task.id}:ci_failure:deadbeef:failure"
+    )
+
+
+def test_status_delivery_cannot_nudge_another_repos_task(client, session, repo, monkeypatch):
+    from jalebi import tasks as tasks_service
+    from jalebi.db import Nudge, Run
+
+    settings.set_setting(session, "auto_nudge", True)
+    repos.upsert_repo(
+        session, full_name="owner/other", default_branch="main",
+        clone_url="https://github.com/owner/other.git", pat_name="test",
+    )
+    task = tasks_service.create_task(session, type_="freeform", repo_id=repo, prompt="x")
+    task.status = "failed"
+    session.add(Run(task_id=task.id, seq=1, status="failed", session_id="ses_1"))
+    session.commit()
+    calls = []
+    q = client.application.config["JALEBI_QUEUE"]
+    monkeypatch.setattr(q, "enqueue_followup", lambda *a, **k: calls.append(a))
+
+    payload = {
+        "sha": "deadbeef", "state": "failure",
+        "branches": [{"name": f"jalebi/{task.id}"}],
+        "repository": {"full_name": "owner/other"},
+    }
+    response = client.post(
+        "/webhook", json=payload,
+        headers={"X-GitHub-Delivery": "other-repo", "X-GitHub-Event": "status"},
+    )
+    assert response.status_code == 200
+    assert calls == []
+    assert session.query(Nudge).count() == 0
+
+    # The identical branch and failure in the task's own repo still work.
+    payload["repository"]["full_name"] = "owner/repo"
+    response = client.post(
+        "/webhook", json=payload,
+        headers={"X-GitHub-Delivery": "own-repo", "X-GitHub-Event": "status"},
+    )
+    assert response.status_code == 200
+    assert calls[0][0] == task.id
+    assert len(calls) == 1
+    assert session.query(Nudge).count() == 1

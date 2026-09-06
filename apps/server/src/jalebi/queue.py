@@ -34,7 +34,7 @@ from jalebi.adapters.types import AgentEvent
 from jalebi.config import Config
 from jalebi.db import CatalogAgent, Repo, Run, Session, Task, now
 from jalebi.events import TaskEvents
-from jalebi.git_workspace import GitWorkspace, PushLeaseFailed
+from jalebi.git_workspace import GitWorkspace, GitWorkspaceError, PushLeaseFailed
 from jalebi.github import GitHubClient
 
 logger = logging.getLogger(__name__)
@@ -46,6 +46,11 @@ KILL_GRACE_SECONDS = 5
 DEFAULT_TIMEOUT_MINUTES = 60
 STALL_TIMEOUT_SECONDS = 600  # default no-output stall threshold (settings-overridable)
 MAX_RECOVERY_TIMEOUT_MINUTES = 180  # cap on auto-recovery timeout escalation
+
+# F6 — durable-SSE cap enforcement cadence: prune_task_events scans the
+# whole task_events table, so sweeping on every publish would be wasteful;
+# sweep every _PRUNE_EVERY_N_PUBLISHES persisted publishes instead.
+_PRUNE_EVERY_N_PUBLISHES = 250
 
 GIT_USER_NAME = "Jalebi"
 GIT_USER_EMAIL = "jalebi@localhost"
@@ -183,9 +188,23 @@ def _kill_pid(pid: int) -> None:
 
 
 class TaskQueue:
-    def __init__(self, config: Config):
+    def __init__(
+        self,
+        config: Config,
+        db_session_factory=None,
+    ):
         self.config = config
-        self.events = TaskEvents()
+        self._db_session_factory = db_session_factory
+        # Phase 4 T4.3 — wire TaskEvents with DB persistence when running
+        # under create_app. Standalone TaskQueue() (tests) stays memory-only.
+        # F6 — the prune callback enforces PERSIST_CAP during long runs
+        # (throttled; startup still sweeps in app.py).
+        self.events = TaskEvents(
+            db_session_factory=db_session_factory,
+            prune_callback=self._prune_task_events_throttled,
+        )
+        self._prune_counter = 0
+        self._prune_lock = threading.Lock()
         # Items: ("task", task_id) | ("followup", task_id, body) | None (stop).
         self._queue: queue.Queue[object] = queue.Queue()
         self._running: dict[int, _RunState] = {}
@@ -195,6 +214,31 @@ class TaskQueue:
         self._target_concurrency = 0
 
     # -- pool lifecycle ----------------------------------------------------
+
+    def _prune_task_events_throttled(self, run_id: int) -> None:
+        """Enforce PERSIST_CAP on the durable task_events table (F6).
+
+        Called by ``TaskEvents.publish`` after every persisted publish;
+        sweeps at most every ``_PRUNE_EVERY_N_PUBLISHES`` calls in a FRESH
+        session (never the caller's — its transaction is still open).
+        Never raises.
+        """
+        from jalebi.events import PERSIST_CAP, prune_task_events
+
+        try:
+            with self._prune_lock:
+                self._prune_counter += 1
+                if self._prune_counter % _PRUNE_EVERY_N_PUBLISHES != 0:
+                    return
+            if self._db_session_factory is None:
+                return
+            session = self._db_session_factory()
+            try:
+                prune_task_events(session, PERSIST_CAP)
+            finally:
+                session.close()
+        except Exception:
+            logger.exception("throttled task_events prune failed for run %s", run_id)
 
     def start(self, concurrency: int) -> None:
         """Spawn ``concurrency`` workers (0 = paused queue)."""
@@ -350,6 +394,40 @@ class TaskQueue:
         return task.source_branch or "main"
 
     @staticmethod
+    def _pr_head_number(task: Task) -> int | None:
+        """PR number when the task is based on a PR head sentinel, else None."""
+        return tasks.pr_head_source_number(task.source_branch)
+
+    def _ensure_task_worktree(
+        self, git: GitWorkspace, task: Task, repo: Repo, token: str | None
+    ):
+        """Create (or reuse) the task's writable worktree, PR-head aware.
+
+        Freeform-family tasks with ``source_branch == "pr/<N>/head"`` are based
+        on the current PR head commit (same-repo or fork) so review feedback on
+        a fork PR can be addressed even though the fork branch never exists on
+        ``origin``. All other tasks use :meth:`_worktree_base`.
+        """
+        pr_number = self._pr_head_number(task)
+        if pr_number is not None:
+            if task.type in ("issue_fix", "pr_review"):
+                raise RuntimeError(
+                    f"task {task.id}: pr-head source is only valid for freeform tasks"
+                )
+            return git.create_worktree_from_pr_head(task.id, repo.full_name, pr_number, token)
+        return git.create_worktree(task.id, repo.full_name, self._worktree_base(task), token)
+
+    def _reset_task_branch(
+        self, git: GitWorkspace, task: Task, repo: Repo, token: str | None
+    ) -> None:
+        """First-run reset to the current base (PR-head aware)."""
+        pr_number = self._pr_head_number(task)
+        if pr_number is not None:
+            git.reset_branch_to_pr_head(task.id, repo.full_name, pr_number, token)
+        else:
+            git.reset_branch_to_base(task.id, repo.full_name, self._worktree_base(task))
+
+    @staticmethod
     def _agent_token_for(task: Task, token: str | None) -> str | None:
         """The token to expose to the agent subprocess.
 
@@ -429,11 +507,16 @@ class TaskQueue:
         session.add(run)
         task.status = "running"
         task.updated_at = now()
+        # A new run re-arms attention: a dismissal from a previous run must
+        # not hide this run's future needs_you (committed with the run below).
+        tasks.clear_attention_dismissal(session, task)
         session.commit()
         session.refresh(run)
         # Each run gets a fresh seq + replay buffer so a stale subscriber's seq
         # watermark can't discard the new run's events (SSE backfill, F4).
-        self.events.reset(task.id)
+        # Phase 4 T4.3 — per-run scoping so a stale tab can't silently drop a
+        # new run's low seqs against the prior run's high watermark.
+        self.events.reset(task.id, run_id=run.id)
         return run
 
     def _stream_and_finish(
@@ -463,7 +546,10 @@ class TaskQueue:
                 event = AgentEvent(type="message", text="Run cancelled by user.")
             if event.type in ("step", "message", "tool_call", "done", "error"):
                 entry = self._step_from_event(event, masker)
-                self.events.publish(task.id, entry)
+                # Phase 4 T4.3 — durable SSE timeline. ``session`` is the
+                # already-open ``_stream_and_finish`` session; events.publish
+                # inserts a task_events row in the same transaction.
+                self.events.publish(task.id, entry, run_id=run.id, session=session)
                 # Persist tool_call too so a reload doesn't lose console lines.
                 steps.append(entry)
                 if event.type in ("step", "message", "done", "error"):
@@ -502,6 +588,13 @@ class TaskQueue:
         run.session_id = handle.session_id
         run.finished_at = now()
         run.steps_json = json.dumps(steps[-MAX_STEPS:])
+        # T1.6: capture HEAD at run end (with -dirty suffix when the agent left
+        # uncommitted material). Best-effort — never block on a transient git issue.
+        try:
+            end_worktree = worktree or GitWorkspace.worktree_path(self.config.data_dir, task.id)
+            run.git_sha_end = self._stamp_git_sha(git, end_worktree)
+        except Exception:
+            logger.debug("git_sha_end capture failed for task %s", task.id)
 
         final_status: str = (
             "timed_out"
@@ -760,6 +853,15 @@ class TaskQueue:
                 self._maybe_recover(session, task, run)
                 return
 
+            # Phase 4 T4.1 — a task with unmet deps is gated to `blocked`; a
+            # re-dispatch (e.g. a followup or web-rerun landing while still
+            # blocked) must not start spawn.
+            if tasks.has_unmet_deps(session, task.id):
+                task.status = "blocked"
+                task.updated_at = now()
+                session.commit()
+                return
+
             run = self._prepare_run(session, task, cli)
             run.pat_name = task.pat_name
             session.commit()
@@ -774,13 +876,9 @@ class TaskQueue:
             stale_branch = git.branch_exists(task.id, repo.full_name)
             wt_path = GitWorkspace.worktree_path(self.config.data_dir, task.id)
             worktree_existed = (wt_path / ".git").is_file()
-            wt = git.create_worktree(
-                task.id, repo.full_name, self._worktree_base(task), token
-            )
+            wt = self._ensure_task_worktree(git, task, repo, token)
             if run.seq == 1 and stale_branch and not worktree_existed:
-                git.reset_branch_to_base(
-                    task.id, repo.full_name, self._worktree_base(task)
-                )
+                self._reset_task_branch(git, task, repo, token)
             worktree_bootstrap.bootstrap_worktree(
                 wt,
                 prompts.build_agent_md(task, repo, agent=agent, cli=cli),
@@ -797,6 +895,7 @@ class TaskQueue:
             )
             run.pid = getattr(state.handle.proc, "pid", None)
             run.model = effective_model  # record the effective (possibly agent-pinned) model
+            run.git_sha_start = self._stamp_git_sha(git, wt)  # T1.6: pre-spawn HEAD
             session.commit()
             self._start_status(session, task, repo, run, git, token)
             self._start_watchdog(task, state, timeout, stall_timeout=self._stall_timeout(session))
@@ -899,6 +998,7 @@ class TaskQueue:
             )
             run.pid = getattr(state.handle.proc, "pid", None)
             run.model = effective_model  # record the effective (possibly agent-pinned) model
+            run.git_sha_start = self._stamp_git_sha(git, wt)  # T1.6: pre-spawn HEAD
             session.commit()
             self._start_status(session, task, repo, run, git, token)
             self._start_watchdog(task, state, timeout, stall_timeout=self._stall_timeout(session))
@@ -1314,9 +1414,7 @@ class TaskQueue:
                     raise RuntimeError(f"pr_review task {task.id} has no PR number to resume")
                 wt = git.create_review_worktree(task.id, repo.full_name, pr_number, token)
             else:
-                wt = git.create_worktree(
-                    task.id, repo.full_name, self._worktree_base(task), token
-                )
+                wt = self._ensure_task_worktree(git, task, repo, token)
             worktree_bootstrap.bootstrap_worktree(
                 wt,
                 prompts.build_agent_md(task, repo, agent=agent, cli=cli),
@@ -1346,6 +1444,7 @@ class TaskQueue:
                     env=self._agent_env(session, task, repo, token),
                 )
             run.pid = getattr(state.handle.proc, "pid", None)
+            run.git_sha_start = self._stamp_git_sha(git, wt)  # T1.6: pre-spawn HEAD
             session.commit()
             self._start_status(session, task, repo, run, git, token)
             self._start_watchdog(task, state, timeout, stall_timeout=self._stall_timeout(session))
@@ -1529,6 +1628,7 @@ class TaskQueue:
                 )
                 run.steps_json = json.dumps(steps[-MAX_STEPS:])
             session.commit()
+            self._cascade_unblock(session, task.id)
             return pr_number
         finally:
             session.close()
@@ -1597,6 +1697,33 @@ class TaskQueue:
             for s in steps
         )
 
+    def _cascade_unblock(self, session, task_id: int) -> None:
+        """Flip every dependent whose deps are now all satisfied from
+        ``blocked``→``queued`` and re-enqueue it (Phase 4 T4.1).
+
+        Called on every terminal completion path. Safe to call when no
+        dependents exist (no-op).
+        """
+        from jalebi.tasks import dependents_for, has_unmet_deps
+
+        deps_unblocked: list[Task] = []
+        for dep_id in dependents_for(session, task_id):
+            dep = session.get(Task, dep_id)
+            if dep is None:
+                continue
+            if dep.status != "blocked":
+                continue
+            if has_unmet_deps(session, dep.id):
+                continue
+            dep.status = "queued"
+            dep.updated_at = now()
+            deps_unblocked.append(dep)
+        if deps_unblocked:
+            session.commit()
+            # Re-enqueue in original order; existing queue dispatch picks them up.
+            for dep in deps_unblocked:
+                self.enqueue(dep.id)
+
     def _maybe_recover(self, session, task: Task, run: Run) -> None:
         """Auto-recover a failed/timed_out run that never delivered its output.
 
@@ -1614,6 +1741,10 @@ class TaskQueue:
         bounded by its own timeout, and terminal/progress notifications keep the
         owner informed. ``task.retry_count`` is bumped for observability only.
         """
+        # Phase 4 T4.1 — when a task transitions to a satisfied terminal
+        # state, unblock any dependents whose deps are now all met.
+        if task.status in tasks.DEP_SATISFIED_STATUSES:
+            self._cascade_unblock(session, task.id)
         if run.status not in ("failed", "timed_out"):
             return
         policy = settings.get_setting(session, "retry_policy") or {}
@@ -1890,6 +2021,37 @@ class TaskQueue:
             return False
         return bool(settings.get_setting(session, "auto_publish"))
 
+    @staticmethod
+    def _guard_publish_branch(git: GitWorkspace, task_id: int) -> None:
+        """Translate a branch-mismatch from git into a ``PublishError``.
+
+        Runs first in ``_publish`` (and via the manual publish path's
+        pre-checks) so an agent that checked out/detached onto another ref
+        never has its branch pushed.
+        """
+        try:
+            git.assert_publish_branch(task_id)
+        except GitWorkspaceError as exc:
+            raise PublishError(str(exc)) from None
+
+    def _stamp_git_sha(self, git: GitWorkspace, worktree: Path) -> str | None:
+        """HEAD SHA with a ``-dirty`` suffix when the working tree is unclean.
+
+        Best-effort: returns None when the worktree has no commits yet (a
+        freshly-created worktree, or one whose ``HEAD`` is unborn) or when
+        the underlying git helper isn't reachable. Errors are swallowed so a
+        transient git issue never blocks run finalization.
+        """
+        try:
+            sha = git.rev_parse_head(worktree)
+        except (GitWorkspaceError, AttributeError):
+            return None
+        try:
+            dirty = bool(git.working_tree_status(worktree))
+        except (GitWorkspaceError, AttributeError):
+            dirty = False
+        return f"{sha}-dirty" if dirty else sha
+
     def _publish(
         self,
         task: Task,
@@ -1902,6 +2064,8 @@ class TaskQueue:
         target_branch: str | None = None,
         pr_number: int | None = None,
     ) -> int:
+        # Refuse to push when the worktree HEAD is not on jalebi/<id> (T1.5).
+        self._guard_publish_branch(git, task.id)
         if mode == "update_pr":
             return self._publish_update_pr(
                 task, repo, token, git, pr_number=pr_number
@@ -1923,8 +2087,9 @@ class TaskQueue:
         masker=None,
     ) -> int:
         # Ensure the worktree exists (it may have been cleaned for old tasks);
-        # create_worktree reuses the existing jalebi/<taskId> branch if present.
-        git.create_worktree(task.id, repo.full_name, task.target_branch, token)
+        # _ensure_task_worktree reuses the existing jalebi/<taskId> branch if
+        # present, and re-bases PR-head tasks on the current PR head.
+        self._ensure_task_worktree(git, task, repo, token)
         # Sync the task branch with the PR base BEFORE pushing so the PR is up to
         # date with target's progress made during the run and merges cleanly. A
         # conflict aborts the merge and surfaces the files instead of pushing a
@@ -2017,6 +2182,13 @@ class TaskQueue:
             raise PublishError(
                 f"PR #{pr_number} has no resolvable head branch"
             )
+        head_repo = pr.get("head_repo") or repo.full_name
+        is_fork = bool(pr.get("is_fork")) or (head_repo != repo.full_name)
+        if is_fork:
+            return self._publish_update_fork_pr(
+                task, repo, token, git, pr_number=pr_number, pr=pr,
+                head_branch=str(head_branch), fork_repo=str(head_repo),
+            )
         # The worktree is already ensured by ``publish_task`` (commits_ahead
         # gate ran on it), so ``jalebi/<id>`` is on disk — no second
         # create_worktree call needed.
@@ -2046,6 +2218,67 @@ class TaskQueue:
             pr_number,
             head_branch,
             (old_sha or "?")[:10],
+            (new_sha or "?")[:10],
+        )
+        return pr_number
+
+    def _publish_update_fork_pr(
+        self,
+        task: Task,
+        repo: Repo,
+        token: str,
+        git: GitWorkspace,
+        *,
+        pr_number: int,
+        pr: dict,
+        head_branch: str,
+        fork_repo: str,
+    ) -> int:
+        """Push ``jalebi/<id>`` onto a fork PR's head branch (Option 1).
+
+        The merge runs on the mirror's local ``fork-pr-<N>`` branch (based on
+        the current ``refs/pull/<N>/head``); the push goes directly to the fork
+        URL with ``--force-with-lease`` against the PR's recorded head SHA, so
+        a concurrently-moved fork branch is refused (412) instead of clobbered.
+        The agent never touches the fork — all of this runs in the queue
+        process. When the fork disallows maintainer edits, raises PublishError
+        guiding the owner to ``new_pr`` (Option 2 fallback).
+        """
+        if pr.get("maintainer_can_modify") is False:
+            raise PublishError(
+                f"PR #{pr_number} is from fork {fork_repo} which does not allow "
+                "maintainer edits — push to the fork is not permitted. Publish "
+                "with `new_pr` instead to open a separate PR on "
+                f"{repo.full_name}."
+            )
+        old_sha = pr.get("head_sha")
+        if not isinstance(old_sha, str) or not old_sha:
+            # No recorded head SHA (e.g. mocked PR payload) — push with a plain
+            # lease instead of refusing the publish.
+            old_sha = None
+        conflicts = git.merge_task_into_fork_head(task.id, repo.full_name, pr_number, token)
+        if conflicts:
+            raise PublishConflict(
+                f"pushing to PR #{pr_number} (fork {fork_repo}:{head_branch}) would conflict: "
+                + ", ".join(conflicts)
+                + " — the merge was aborted. Send a follow-up asking the agent to "
+                "resolve, then publish again."
+            )
+        try:
+            git.push_fork_head(
+                repo.full_name, pr_number, head_branch, fork_repo,
+                str(old_sha) if old_sha else None, token,
+            )
+        except PushLeaseFailed:
+            raise
+        new_sha = git.local_ref_sha(repo.full_name, GitWorkspace.fork_branch(pr_number))
+        logger.info(
+            "task %s updated fork PR #%s (%s:%s): %s -> %s",
+            task.id,
+            pr_number,
+            fork_repo,
+            head_branch,
+            (str(old_sha) if old_sha else "?")[:10],
             (new_sha or "?")[:10],
         )
         return pr_number

@@ -122,4 +122,207 @@ describe("Github", () => {
     await waitFor(() => expect(postSeen).toBe(true));
     expect(await screen.findByText("Bad credentials")).toBeInTheDocument();
   });
+
+  it("hints at the update endpoint when adding an existing account name", async () => {
+    let postSeen = false;
+    stubFetch({
+      "/api/github/tokens": async (_url: string, init?: RequestInit) => {
+        if (init?.method === "POST") {
+          postSeen = true;
+          return {
+            ok: false,
+            status: 409,
+            json: async () => ({
+              error: 'account "work" already exists — use PUT /api/github/tokens/work to update its token',
+            }),
+          };
+        }
+        return { ok: true, json: async () => ({ accounts: [ACCOUNT("work", "acct2")] }) };
+      },
+      "/api/github/repos": [],
+      "/api/repos": [],
+    });
+
+    render(
+      <MemoryRouter>
+        <Github />
+      </MemoryRouter>
+    );
+    await screen.findByRole("button", { name: "update token" });
+    await userEvent.click(screen.getByRole("button", { name: "update token" }));
+    await userEvent.type(screen.getByPlaceholderText("label (e.g. work, personal)"), "work");
+    await userEvent.type(screen.getByPlaceholderText("ghp_…"), "ghp_new");
+    await userEvent.click(screen.getByRole("button", { name: "Add account" }));
+
+    await waitFor(() => expect(postSeen).toBe(true));
+    expect(await screen.findByText(/already exists/i)).toBeInTheDocument();
+  });
+});
+
+
+// ---- Phase 4 T5.2 — per-account repo list scrollbar -------------------
+
+
+describe("Github page (token update)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function account() {
+    return ACCOUNT("work", "acct2");
+  }
+
+  it("updates an account's token via PUT", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.includes("/api/github/tokens") && init?.method === "PUT") {
+        expect(JSON.parse(init.body as string)).toEqual({ token: "ghp_new" });
+        return {
+          ok: true,
+          json: async () => ({ updated: "work", previous_login: "acct2", login: "acct2" }),
+        };
+      }
+      if (url.includes("/api/github/tokens")) {
+        return { ok: true, json: async () => ({ accounts: [account()] }) };
+      }
+      return { ok: true, json: async () => [] };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <MemoryRouter>
+        <Github />
+      </MemoryRouter>
+    );
+    await screen.findByRole("button", { name: "update token" });
+    await userEvent.click(screen.getByRole("button", { name: "update token" }));
+    await userEvent.type(screen.getByPlaceholderText("new ghp_…"), "ghp_new");
+    await userEvent.click(screen.getByRole("button", { name: "Update token" }));
+
+    await waitFor(() => {
+      const put = fetchMock.mock.calls.find(
+        (call) => call[0].includes("/api/github/tokens/work") && call[1]?.method === "PUT"
+      );
+      expect(put).toBeTruthy();
+    });
+  });
+
+  it("warns when the new token belongs to a different GitHub login", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.includes("/api/github/tokens") && init?.method === "PUT") {
+          return {
+            ok: true,
+            json: async () => ({ updated: "work", previous_login: "acct2", login: "other-user" }),
+          };
+        }
+        if (url.includes("/api/github/tokens")) {
+          return { ok: true, json: async () => ({ accounts: [account()] }) };
+        }
+        return { ok: true, json: async () => [] };
+      })
+    );
+
+    render(
+      <MemoryRouter>
+        <Github />
+      </MemoryRouter>
+    );
+    await screen.findByRole("button", { name: "update token" });
+    await userEvent.click(screen.getByRole("button", { name: "update token" }));
+    await userEvent.type(screen.getByPlaceholderText("new ghp_…"), "ghp_rotated");
+    await userEvent.click(screen.getByRole("button", { name: "Update token" }));
+
+    expect(await screen.findByText(/now authenticates as other-user \(was acct2\)/i)).toBeInTheDocument();
+  });
+
+  it("surfaces the error from a rejected update", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.includes("/api/github/tokens") && init?.method === "PUT") {
+          return {
+            ok: false,
+            status: 400,
+            json: async () => ({ stored: false, detail: { error: "Bad credentials" } }),
+          };
+        }
+        if (url.includes("/api/github/tokens")) {
+          return { ok: true, json: async () => ({ accounts: [account()] }) };
+        }
+        return { ok: true, json: async () => [] };
+      })
+    );
+
+    render(
+      <MemoryRouter>
+        <Github />
+      </MemoryRouter>
+    );
+    await screen.findByRole("button", { name: "update token" });
+    await userEvent.click(screen.getByRole("button", { name: "update token" }));
+    await userEvent.type(screen.getByPlaceholderText("new ghp_…"), "ghp_bad");
+    await userEvent.click(screen.getByRole("button", { name: "Update token" }));
+
+    expect(await screen.findByText("Bad credentials")).toBeInTheDocument();
+  });
+});
+
+describe("Github page (Phase 4 T5.2)", () => {
+  it("bounds each account's repo list in a scrollable wrapper below the count line", async () => {
+    const ACCOUNT = {
+      name: "primary",
+      login: "acct1",
+      token_type: "classic",
+      granted_scopes: ["repo"],
+      missing_scopes: [],
+      note: null,
+      valid: true,
+      error: null,
+    };
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes("/api/github/tokens")) {
+        return { ok: true, json: async () => ({ accounts: [ACCOUNT] }) };
+      }
+      if (url.includes("/api/github/repos")) {
+        return {
+          ok: true,
+          json: async () => [
+            {
+              full_name: "acct1/hello",
+              private: false,
+              default_branch: "main",
+              html_url: "https://example.invalid/h1",
+              account: "primary",
+            },
+            {
+              full_name: "acct1/world",
+              private: false,
+              default_branch: "main",
+              html_url: "https://example.invalid/h2",
+              account: "primary",
+            },
+          ],
+        };
+      }
+      if (url.includes("/api/repos")) {
+        return { ok: true, json: async () => [] };
+      }
+      return { ok: true, json: async () => [] };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <MemoryRouter>
+        <Github />
+      </MemoryRouter>
+    );
+    await screen.findByText("hello");
+    const count = await screen.findByText("Repositories (2)");
+    const wrapper = count.nextElementSibling as HTMLElement | null;
+    expect(wrapper).not.toBeNull();
+    expect(wrapper!.className).toContain("max-h-[26rem]");
+    expect(wrapper!.className).toContain("overflow-y-auto");
+    expect(wrapper!.contains(screen.getByText("hello"))).toBe(true);
+    expect(wrapper!.contains(count)).toBe(false);
+  });
 });

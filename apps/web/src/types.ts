@@ -13,6 +13,14 @@ export interface Artifact {
   created_at: string;
 }
 
+export interface FileEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  size: number;
+  extension: string;
+}
+
 export interface Run {
   id: number;
   seq: number;
@@ -24,6 +32,7 @@ export interface Run {
   started_at: string | null;
   finished_at: string | null;
   has_diff: boolean;
+  waiting_input?: boolean;
   steps: Step[];
   artifacts?: Artifact[];
 }
@@ -72,8 +81,35 @@ export interface Task {
   created_at: string;
   updated_at: string;
   run: Run | null;
+  waiting_input?: boolean;
+  attention: AttentionValue;
   followups?: Followup[];
   reviewers?: ReviewAssignment[];
+  depends_on?: number[];
+  blocked_by?: number[];
+  blocking?: number[];
+  blocked?: boolean;
+}
+
+export type AttentionValue = "working" | "needs_you" | "in_review" | "ready_to_merge" | "done";
+
+export type PublishCheckStatus = "ready" | "attention" | "blocked";
+
+export interface PublishCheckItem {
+  name: "branch" | "commits" | "conflict" | "ci" | "review" | "mergeable";
+  ok: boolean;
+  message: string;
+  ahead?: number;
+  conflicts?: { kind: string; path: string }[];
+  state?: string | null;
+  decision?: string | null;
+  mergeable?: boolean | null;
+}
+
+export interface PublishCheck {
+  status: PublishCheckStatus;
+  base_ref: string;
+  checks: PublishCheckItem[];
 }
 
 export interface Repo {
@@ -133,6 +169,9 @@ export interface GithubPr {
   state: string;
   base: string | null;
   head: string | null;
+  head_repo: string | null;
+  head_sha?: string | null;
+  is_fork?: boolean;
   author: string | null;
 }
 
@@ -184,6 +223,20 @@ export interface SettingsMap {
   webhook_url: string;
   webhook_secret: string;
   timezone: string;
+  ide_command: string;
+  ide_name: string;
+}
+
+export interface DetectedIde {
+  command: string;
+  name: string;
+  path?: string;
+}
+
+export interface IdeDetectResponse {
+  command: string;
+  name: string;
+  detected?: DetectedIde[];
 }
 
 export interface EnvVar {
@@ -244,7 +297,8 @@ export interface WebhookStatus {
   secret_set: boolean;
   reachable: boolean;
   repos: {
-    id: number;    full_name: string;
+    id: number;
+    full_name: string;
     webhook_registered: boolean;
     poll_fallback: boolean;
   }[];

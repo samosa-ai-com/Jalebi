@@ -79,6 +79,17 @@ def _all_tokens() -> list[tuple[str, str]]:
     ]
 
 
+def _meta(info: TokenInfo) -> dict:
+    """Storable metadata snapshot of a validated token."""
+    return {
+        "login": info.login,
+        "token_type": info.token_type,
+        "granted_scopes": info.granted_scopes,
+        "missing_scopes": info.missing_scopes,
+        "note": info.note,
+    }
+
+
 @bp.get("/repos")
 def repos() -> ResponseReturnValue:
     """List repositories across ALL accounts, each tagged with its account name.
@@ -149,7 +160,12 @@ def list_tokens() -> ResponseReturnValue:
 
 @bp.post("/tokens")
 def add_token() -> ResponseReturnValue:
-    """Add a named account (validated first). Body: {name, token}."""
+    """Add a named account (validated first). Body: {name, token}.
+
+    Adding an account whose name already exists is refused (409) — an existing
+    account's credential is changed via ``PUT /api/github/tokens/<name>`` so a
+    typo can never silently overwrite a token.
+    """
     config = _config()
     payload = request.get_json(silent=True)
     name = payload.get("name") if isinstance(payload, dict) else None
@@ -159,6 +175,18 @@ def add_token() -> ResponseReturnValue:
     if not token:
         return jsonify({"error": 'expected {"name": "<label>", "token": "<PAT>"}'}), 400
     name = name.strip()
+    if name in secrets.token_names(config):
+        return (
+            jsonify(
+                {
+                    "error": (
+                        f'account "{name}" already exists — use '
+                        f"PUT /api/github/tokens/{name} to update its token"
+                    )
+                }
+            ),
+            409,
+        )
 
     info, error = _validate(token)
     if error is not None:
@@ -167,19 +195,47 @@ def add_token() -> ResponseReturnValue:
     if not info.valid:
         return jsonify({"stored": False, "detail": asdict(info)}), 400
 
-    secrets.add_github_token(
-        config,
-        name,
-        token,
-        meta={
-            "login": info.login,
-            "token_type": info.token_type,
-            "granted_scopes": info.granted_scopes,
-            "missing_scopes": info.missing_scopes,
-            "note": info.note,
-        },
-    )
+    secrets.add_github_token(config, name, token, meta=_meta(info))
     return jsonify({"stored": True, "name": name, "detail": asdict(info)})
+
+
+@bp.put("/tokens/<name>")
+def update_token(name: str) -> ResponseReturnValue:
+    """Replace an existing account's PAT without touching any of its data.
+
+    Update preserves the account *name*, so every binding (``repos.pat_name``,
+    ``tasks.pat_name``, trigger/screening ownership) stays intact — no repos,
+    tasks, or history are deleted. The token is validated before storing and its
+    metadata is refreshed. ``previous_login`` vs ``login`` lets the UI flag an
+    accidental identity change (the account now authenticates as a different
+    GitHub user). Body: {"token": "<PAT>"}.
+    """
+    config = _config()
+    previous = secrets.token_meta(config, name)
+    if previous is None:
+        return jsonify({"error": f"no such token: {name}"}), 404
+
+    payload = request.get_json(silent=True)
+    token = payload.get("token") if isinstance(payload, dict) else None
+    if not token:
+        return jsonify({"error": 'expected {"token": "<PAT>"}'}), 400
+
+    info, error = _validate(token)
+    if error is not None:
+        return jsonify({"valid": False, "error": error}), 502
+    assert info is not None
+    if not info.valid:
+        return jsonify({"stored": False, "detail": asdict(info)}), 400
+
+    secrets.update_github_token(config, name, token, meta=_meta(info))
+    return jsonify(
+        {
+            "updated": name,
+            "detail": asdict(info),
+            "previous_login": previous.get("login"),
+            "login": info.login,
+        }
+    )
 
 
 @bp.delete("/tokens/<name>")

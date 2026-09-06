@@ -321,3 +321,34 @@ def test_toggle_check_runs_enabled(client, app, monkeypatch, session) -> None:
     # Empty payload rejected
     resp = client.patch(f"/api/repos/{rid}", json={})
     assert resp.status_code == 400
+
+
+def test_toggle_poll_fallback(client, app, monkeypatch) -> None:
+    """PATCH /api/repos/<id> also toggles poll_fallback (Phase 4 T2.1)."""
+    monkeypatch.setattr(routes_repos, "GitHubClient", FakeGitHubClient)
+    created = client.post(
+        "/api/repos", json={"full_name": "octocat/hello", "pat_name": "test"}
+    ).get_json()
+    rid = created["id"]
+    assert created["poll_fallback"] is False
+
+    resp = client.patch(f"/api/repos/{rid}", json={"poll_fallback": True})
+    assert resp.status_code == 200
+    assert resp.get_json()["poll_fallback"] is True
+
+    resp = client.patch(f"/api/repos/{rid}", json={"poll_fallback": False})
+    assert resp.status_code == 200
+    assert resp.get_json()["poll_fallback"] is False
+
+    # Non-bool rejected.
+    resp = client.patch(f"/api/repos/{rid}", json={"poll_fallback": "yes"})
+    assert resp.status_code == 400
+    assert "poll_fallback" in resp.get_json()["error"]
+
+    # Unknown repo
+    resp = client.patch("/api/repos/999999", json={"poll_fallback": True})
+    assert resp.status_code == 404
+
+    # Empty payload still rejected.
+    resp = client.patch(f"/api/repos/{rid}", json={})
+    assert resp.status_code == 400

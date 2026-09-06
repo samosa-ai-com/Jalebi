@@ -38,8 +38,16 @@ Blueprint `jalebi/routes/github.py` (`/api/github`):
 | Endpoint | Behavior |
 |---|---|
 | `GET /api/github/status` | Validates the configured token; 409 if none configured; returns `TokenInfo`. |
-| `PUT /api/github/token` | Validates a submitted PAT; if valid, stores it in `secrets.json` (0600); never echoes it. 400 on invalid. |
 | `GET /api/github/repos` | Lists the authenticated user's repos. 409 if no token. |
+
+Account vault (`jalebi/routes/github.py`, `/api/github/tokens` — see §9 for details):
+
+| Endpoint | Behavior |
+|---|---|
+| `GET /api/github/tokens` | Lists every named account with live status; never returns token values (only masked previews). |
+| `POST /api/github/tokens` | Adds a new named account (validated first). **409 if the name already exists** — an existing account's credential is changed via `PUT`, never silently overwritten. |
+| `PUT /api/github/tokens/<name>` | Replaces an existing account's PAT. Validates first (400 invalid / 502 unreachable / 404 unknown name); updates the token **and refreshes its metadata** without deleting any bound data — `repos.pat_name`/`tasks.pat_name` are name-keyed, so connected repos, tasks, and history survive. Returns `{updated, previous_login, login}` so the UI can flag an accidental identity change. |
+| `DELETE /api/github/tokens/<name>` | Removes the account AND everything tied to it (repos, tasks, runs, worktrees, mirrors); queued/running tasks cancelled first. See §11. |
 
 Connected-repo registry (`jalebi/routes/repos.py`, `/api/repos`):
 
@@ -56,6 +64,7 @@ Implemented via the same client (Phase 0): issue/PR context fetch, publish (crea
 - For a localhost-only install, GitHub cannot reach the machine — the listener must be exposed via a **tunnel (e.g. `cloudflared`/`ngrok`)**; the owner sets the public base URL in Settings (webhook_url). The app detects an unreachable webhook (`GET /api/webhook/status`) and warns in the Triggers page UI.
 - **Idempotency:** deliveries are deduped on `X-GitHub-Delivery`, so re-deliveries never double-run a task.
 - **Replay:** the Triggers page offers "replay" for any logged delivery.
+- **Auto-nudge (Phase 4 T4.2, default OFF):** every live delivery for a connected repo also passes through `nudger.on_webhook` — independent of trigger rules, so a failing `status` event on a `jalebi/<id>` branch enqueues a fix follow-up even with zero rules. Manual replays intentionally skip the nudge. Accepts both branch shapes (`"jalebi/12"` strings and real-GitHub `{"name": …}` objects).
 - **Full flow, rule matching, and dispatch:** see `docs/16-triggers.md`.
 
 ### Webhook listener flow
@@ -109,10 +118,11 @@ Implemented via the same client (Phase 0): issue/PR context fetch, publish (crea
 ## 9. Named PAT vault (multi-token)
 
 - Jalebi stores **named PATs** in the `0600` secrets file (`secrets.json` → `github_tokens: [{name, token}]`). Every PAT is an equal account — there is no primary/default and no fallback.
-- `GET/POST/DELETE /api/github/tokens` manage the vault; add validates first (`validate_token`), the UI sees only **masked** previews (never values).
+- `GET/POST/PUT/DELETE /api/github/tokens` manage the vault. **Add** (`POST`) validates first (`validate_token`) and refuses an existing name (409); **update** (`PUT /api/github/tokens/<name>`) validates, then swaps the token and refreshes its metadata via `secrets.update_github_token` — name-keyed bindings (`repos.pat_name`, `tasks.pat_name`) are untouched, so replacing a credential **never deletes repos, tasks, or history**. The UI sees only **masked** previews (never values); the update response's `previous_login`/`login` let the UI warn when the new token authenticates as a different GitHub user.
 - Tasks and follow-ups carry a `pat_name`; the queue resolves the token via `secrets.resolve_token(config, name)` (strict: named only, else `None` → an explicit error) and uses it for GitHub calls, the agent `JALEBI_GITHUB_TOKEN`, and masking. The agent env carries the selected PAT for GitHub **API** use but **no git push credentials** — Jalebi is the only pusher. **All** known PATs are masked at ingest.
 - New client methods (httpx): `list_issues`, `get_issue`, `comment_on_issue`, `list_prs`, `get_pr`, `post_pr_review` (event `COMMENT`), `list_branches`, `find_pr_by_head` (same-repo dedup).
 - `GET /api/github/context?repo=&account=` returns open issues + open PRs + branches for the task-form pickers.
+- Fork metadata: `list_prs` returns `head_repo` / `head_sha` / `is_fork` per PR; `get_pr` additionally returns `head_clone_url` and `maintainer_can_modify` (whether the fork allows maintainer pushes — drives the fork `update_pr` vs `new_pr`-fallback decision). `is_fork` is true when the head repo differs from the base repo (or GitHub marks it a fork); a missing head repo (deleted fork) is treated as same-repo so callers fall back to the origin path with a clear error.
 
 ## 10. Publish dedup & PR accuracy
 
@@ -131,3 +141,37 @@ Implemented via the same client (Phase 0): issue/PR context fetch, publish (crea
 - Task creation **requires an account**: the user-selected one, else the repo's bound account — never a fallback to anything else. The Credentials dropdown overrides the repo's account.
 - Removing an account **deletes its repos (connected AND soft-disconnected) and the tasks on them** (runs, follow-ups, artifacts, worktrees, mirrors). Queued/running tasks for the account are cancelled first. `DELETE /api/github/tokens/<name>` returns `{removed, repos_affected, tasks_affected}` so the UI can confirm.
 - GitHub list endpoints (`list_repos`/`list_issues`/`list_prs`/`list_branches`) follow `Link: rel="next"` pagination (capped at 10 pages) — nothing silently drops past page 1.
+
+---
+
+## 12. Phase 4 T2.1 — PR/CI polling observer
+
+When a connected repo has `poll_fallback=True`, a daemon thread (`jalebi.poller.Poller`, registered as `JALEBI_POLLER` in `create_app`, started in `main()`) ticks every **30 s** and writes normalized `PRFacts` to an in-memory map keyed by `(repo_id, pr_number)`.
+
+- **Default OFF.** No repo has the flag set on connect. The owner flips it on per-repo via `PATCH /api/repos/<id> {"poll_fallback": true}`. The flag also gates the new toggle for the same route (`check_runs_enabled` and `poll_fallback` may be PATCHed independently or together).
+- **Per-PR fan-out only when the head branch starts with `jalebi/`.** Any other head branch is ignored (the poller still records `last_checked_at` and stores the PR-list ETag, but does not fetch per-PR state).
+- **ETag cache** — a `dict[url_path, etag]` (FIFO eviction at `ETAG_CACHE_CAP = 512`). Three client methods participate:
+  - `list_open_prs(full_name, *, etag=None)` → `(prs, new_etag, not_modified)`.
+  - `list_check_runs_for_ref(full_name, ref, *, etag=None)` → `(state_body, new_etag, not_modified)`. **Reads combined commit-status**, not check-runs — PATs cannot read check-runs (GitHub-App-only). Combined-status is the same source `merge gating` uses, and is PAT-compatible.
+  - `list_reviews_for_pr(full_name, pr_number, *, etag=None)` → `(reviews, new_etag, not_modified)`. Unlike `list_pr_reviews` (the older F7.6 follow-up helper), this returns **all** records including empty-body `APPROVED` / `CHANGES_REQUESTED` so the poller's `_review_decision_from_reviews` aggregator sees the final states.
+- **304 short-circuit** — when the PR list returns 304, the poller skips the per-PR fan-out AND skips the stale-PR prune (the list didn't change, so the cached facts are still authoritative).
+- **PAT rotation (HTTP 401)** — the poller catches `GitHubUnauthorized`, drops that repo's facts + etags, and logs a warning. The next tick re-warms from scratch (the owner re-flips the flag if they want to keep polling).
+- **Transient errors** (`httpx.HTTPError` / non-401 `GitHubError`) — caught at the tick level; the repo is skipped for this tick, facts + etags retained.
+- **Stale-PR prune** — at the end of each successful tick, facts whose PR is no longer in the open-PR list (merged / closed) are dropped.
+- **Per-repo prune** — at the end of every tick, repos that were NOT polled this time (disconnected, or `poll_fallback` flipped off) have their facts + etags cleared. Closes the "stale facts after OFF" risk.
+- **Read API** — `routes/tasks._task_dict` calls `poller.pr_facts_for_task(task.repo_id, task.id)` and passes the result to `tasks.task_to_dict` which derives the `attention` field via `jalebi.attention.attention_for(task, run, pr_facts)`.
+- **Auto-nudge (Phase 4 T4.2, default OFF)** — the poller is constructed with the task queue and calls `nudger.on_poller_fact_change` only on transitions *into* `failure` / `changes_requested` (first sighting counts; signature dedup backstops). Best-effort; never fails the tick.
+
+### 12.1 `attention` (Phase 4 T2.2)
+
+One-word status consumed by the UI (T3) and `tasks.task_to_dict`:
+
+| Value | When |
+|-------|------|
+| `needs_you` | T0 waiting-for-input; or terminal with CI failure / `changes_requested`; or non-terminal with running CI failure. |
+| `working` | Queued / running / waiting_review (and no running-PR CI failure). |
+| `in_review` | Terminal with facts and no mergeable conflict. |
+| `ready_to_merge` | Terminal with facts and `mergeable == True`. |
+| `done` | Terminal `done` task with no PR facts (poller off, or not published yet). `cancelled` tasks and dismissed attention also evaluate to `done` — a user-cancelled/acknowledged task never demands attention (deliberate §16.3 deviation from the original plan). |
+
+T0's `waiting_input` flag takes precedence over everything. The derivation is pure (no network call) and runs at read time; in-memory state survives only as long as the process.

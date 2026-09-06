@@ -27,6 +27,9 @@ Flow (sub-second — no GitHub API calls on the webhook path, PRD §13):
    returns `200 {"deduplicated": true}` and never double-runs a task.
 3. **Repo resolution** — the payload's `repository.full_name` must match a
    **connected** repo; otherwise the delivery is recorded as `ignored`.
+   Auto-nudge receives this resolved repository ID and requires the task's
+   `repo_id` to match before recording/enqueuing a follow-up. A `jalebi/<id>`
+   branch in another connected repo cannot nudge that task.
 4. **Rule matching** — the event key is `X-GitHub-Event` + payload `action`
    (e.g. `pull_request.opened`), matched against the repo's **enabled** rules,
    honoring `branch_filter` (head OR base ref), `author_filter`, and

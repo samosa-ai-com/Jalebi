@@ -3,7 +3,7 @@ import json
 import pytest
 from flask.testing import FlaskClient
 
-from jalebi import repos, secrets
+from jalebi import repos, secrets, tasks
 from jalebi.db import Task
 
 
@@ -611,6 +611,101 @@ def test_run_diff_endpoint(client: FlaskClient, session) -> None:
     detail = client.get(f"/api/tasks/{task.id}").get_json()
     assert detail["run"]["has_diff"] is True
     assert "diff_text" not in detail["run"]
+    # waiting_input is always present (derived, read-time) on run + task dicts
+    assert "waiting_input" in detail
+    assert "waiting_input" in detail["run"]
+    assert detail["waiting_input"] is False  # no steps → no waiting signal
+
+
+def test_task_detail_exposes_waiting_input_true(client: FlaskClient, session) -> None:
+    from jalebi import clock
+    from jalebi import tasks as tasks_svc
+    from jalebi.db import Run, now
+
+    row, _ = repos.upsert_repo(
+        session,
+        full_name="owner/waiting",
+        default_branch="main",
+        clone_url="https://github.com/owner/waiting.git",
+        pat_name="test",
+    )
+    task = tasks_svc.create_task(session, type_="freeform", repo_id=row.id, prompt="x")
+    task.status = "done"
+    run = Run(
+        task_id=task.id,
+        seq=1,
+        status="done",
+        started_at=now(),
+        finished_at=now(),
+        steps_json=json.dumps(
+            [
+                {
+                    "type": "message",
+                    "text": "I have a plan; **waiting for explicit approval** before proceeding.",
+                    "ts": clock.to_iso(now()),
+                }
+            ]
+        ),
+    )
+    session.add(run)
+    session.commit()
+
+    detail = client.get(f"/api/tasks/{task.id}").get_json()
+    assert detail["waiting_input"] is True
+    assert detail["run"]["waiting_input"] is True
+
+
+def test_task_detail_waiting_input_false_for_normal_done_run(
+    client: FlaskClient, session
+) -> None:
+    from jalebi import clock
+    from jalebi import tasks as tasks_svc
+    from jalebi.db import Run, now
+
+    row, _ = repos.upsert_repo(
+        session,
+        full_name="owner/normal",
+        default_branch="main",
+        clone_url="https://github.com/owner/normal.git",
+        pat_name="test",
+    )
+    task = tasks_svc.create_task(session, type_="freeform", repo_id=row.id, prompt="x")
+    task.status = "done"
+    run = Run(
+        task_id=task.id,
+        seq=1,
+        status="done",
+        started_at=now(),
+        finished_at=now(),
+        steps_json=json.dumps(
+            [{"type": "message", "text": "All done.", "ts": clock.to_iso(now())}]
+        ),
+    )
+    session.add(run)
+    session.commit()
+
+    detail = client.get(f"/api/tasks/{task.id}").get_json()
+    assert detail["waiting_input"] is False
+    assert detail["run"]["waiting_input"] is False
+
+
+def test_task_detail_waiting_input_false_when_no_run(
+    client: FlaskClient, session
+) -> None:
+    from jalebi import tasks as tasks_svc
+
+    row, _ = repos.upsert_repo(
+        session,
+        full_name="owner/norun",
+        default_branch="main",
+        clone_url="https://github.com/owner/norun.git",
+        pat_name="test",
+    )
+    task = tasks_svc.create_task(session, type_="freeform", repo_id=row.id, prompt="x")
+
+    detail = client.get(f"/api/tasks/{task.id}").get_json()
+    assert detail["run"] is None
+    assert detail["waiting_input"] is False
 
 
 def test_rerun_interrupted(client: FlaskClient, session, repo_id: int) -> None:
@@ -646,3 +741,634 @@ def test_disconnected_repo_task_detail_keeps_repo_name(client, session) -> None:
     resp = client.get(f"/api/tasks/{task.id}")
     assert resp.status_code == 200
     assert resp.get_json()["repo_full_name"] == "owner/disc"
+
+
+# ---- Phase 4 T1.2 / T1.3 — GET /api/tasks/<id>/diff -------------------------
+
+
+def _seed_git_remote(tmp_path) -> str:
+    """Same helper as test_publish_modes.git_remote, duplicated to keep this
+    file's fixture surface small."""
+    import subprocess as _sp
+
+    remote = tmp_path / "remote.git"
+    work = tmp_path / "work"
+    _sp.run(["git", "init", "--bare", "--initial-branch=main", str(remote)], check=True)
+    _sp.run(["git", "clone", str(remote), str(work)], check=True, capture_output=True)
+    _sp.run(["git", "-C", str(work), "config", "user.email", "s@e.com"], check=True)
+    _sp.run(["git", "-C", str(work), "config", "user.name", "S"], check=True)
+    (work / "f.txt").write_text("seed\n")
+    _sp.run(["git", "-C", str(work), "add", "f.txt"], check=True)
+    _sp.run(["git", "-C", str(work), "commit", "-m", "seed"], check=True)
+    _sp.run(["git", "-C", str(work), "push", "-u", "origin", "main"], check=True)
+    return str(remote)
+
+
+def test_live_diff_default_against_target(
+    client: FlaskClient, session, tmp_path, app
+) -> None:
+    """Without ``?base=1`` the live diff falls back to diff_against_target."""
+    import subprocess as _sp
+
+    from jalebi import tasks as tasks_svc
+    from jalebi.config import Config
+    from jalebi.git_workspace import GitWorkspace
+
+    remote = _seed_git_remote(tmp_path)
+    row, _ = repos.upsert_repo(
+        session,
+        full_name="owner/repo",
+        default_branch="main",
+        clone_url=remote,
+        pat_name="test",
+    )
+    task = tasks_svc.create_task(
+        session, type_="freeform", repo_id=row.id, prompt="x"
+    )
+    config: Config = app.config["JALEBI_CONFIG"]
+    ws = GitWorkspace(config)
+    ws.ensure_mirror("owner/repo", remote)
+    wt = ws.create_worktree(task.id, "owner/repo", "main")
+    _sp.run(
+        ["git", "-C", str(wt), "config", "user.email", "a@b.com"], check=True
+    )
+    _sp.run(["git", "-C", str(wt), "config", "user.name", "A"], check=True)
+    (wt / "new.txt").write_text("agent work\n")
+    _sp.run(["git", "-C", str(wt), "add", "new.txt"], check=True)
+    _sp.run(["git", "-C", str(wt), "commit", "-m", "agent"], check=True)
+
+    resp = client.get(f"/api/tasks/{task.id}/diff")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["base"] is False
+    assert body["untracked"] is False
+    assert "new.txt" in body["diff"]
+
+
+def test_live_diff_untracked_param(
+    client: FlaskClient, session, tmp_path, app
+) -> None:
+    """``?untracked=1`` appends a synthetic add-hunk for the untracked file."""
+
+    from jalebi import tasks as tasks_svc
+    from jalebi.config import Config
+    from jalebi.git_workspace import GitWorkspace
+
+    remote = _seed_git_remote(tmp_path)
+    row, _ = repos.upsert_repo(
+        session,
+        full_name="owner/repo",
+        default_branch="main",
+        clone_url=remote,
+        pat_name="test",
+    )
+    task = tasks_svc.create_task(
+        session, type_="freeform", repo_id=row.id, prompt="x"
+    )
+    config: Config = app.config["JALEBI_CONFIG"]
+    ws = GitWorkspace(config)
+    ws.ensure_mirror("owner/repo", remote)
+    wt = ws.create_worktree(task.id, "owner/repo", "main")
+    (wt / "scratch.txt").write_text("untracked scratch\n")
+
+    resp = client.get(f"/api/tasks/{task.id}/diff?untracked=1")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["untracked"] is True
+    assert "+++ b/scratch.txt" in body["diff"]
+
+
+def test_live_diff_no_worktree_returns_409(client: FlaskClient, session, repo_id) -> None:
+    """A task with no worktree yet returns 409 (not 500)."""
+    from jalebi import tasks as tasks_svc
+
+    task = tasks_svc.create_task(
+        session, type_="freeform", repo_id=repo_id, prompt="x"
+    )
+    resp = client.get(f"/api/tasks/{task.id}/diff")
+    assert resp.status_code == 409
+
+
+# ---- Phase 4 T1.4 — GET /api/tasks/<id>/merge-check -------------------------
+
+
+def test_merge_check_clean_and_conflicting(
+    client: FlaskClient, session, tmp_path, app
+) -> None:
+    import subprocess as _sp
+
+    from jalebi import tasks as tasks_svc
+    from jalebi.config import Config
+    from jalebi.git_workspace import GitWorkspace
+
+    remote = _seed_git_remote(tmp_path)
+    row, _ = repos.upsert_repo(
+        session,
+        full_name="owner/repo",
+        default_branch="main",
+        clone_url=remote,
+        pat_name="test",
+    )
+    task = tasks_svc.create_task(
+        session, type_="freeform", repo_id=row.id, prompt="x"
+    )
+    config: Config = app.config["JALEBI_CONFIG"]
+    ws = GitWorkspace(config)
+    ws.ensure_mirror("owner/repo", remote)
+    wt = ws.create_worktree(task.id, "owner/repo", "main")
+
+    # Clean merge: an unrelated file lands on main.
+    src2 = tmp_path / "src2"
+    _sp.run(["git", "clone", remote, str(src2)], check=True, capture_output=True)
+    _sp.run(["git", "-C", str(src2), "config", "user.email", "a@b.com"], check=True)
+    _sp.run(["git", "-C", str(src2), "config", "user.name", "A"], check=True)
+    (src2 / "other.txt").write_text("target advanced\n")
+    _sp.run(["git", "-C", str(src2), "add", "other.txt"], check=True)
+    _sp.run(["git", "-C", str(src2), "commit", "-m", "advance"], check=True)
+    _sp.run(["git", "-C", str(src2), "push", "origin", "main"], check=True)
+
+    resp = client.get(f"/api/tasks/{task.id}/merge-check")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["ok"] is True
+    assert body["conflicts"] == []
+
+    # Conflicting case: same file diverges on both sides.
+    (wt / "f.txt").write_text("agent side\n")
+    _sp.run(["git", "-C", str(wt), "add", "f.txt"], check=True)
+    _sp.run(["git", "-C", str(wt), "commit", "-m", "agent"], check=True)
+    (src2 / "f.txt").write_text("remote side\n")
+    _sp.run(["git", "-C", str(src2), "add", "f.txt"], check=True)
+    _sp.run(["git", "-C", str(src2), "commit", "-m", "remote"], check=True)
+    _sp.run(["git", "-C", str(src2), "push", "origin", "main"], check=True)
+
+    resp = client.get(f"/api/tasks/{task.id}/merge-check")
+    body = resp.get_json()
+    assert body["ok"] is False
+    assert {"kind": "content", "path": "f.txt"} in body["conflicts"]
+
+
+def test_merge_check_missing_task(client: FlaskClient, session) -> None:
+    resp = client.get("/api/tasks/9999/merge-check")
+    assert resp.status_code == 404
+
+
+# ---- Phase 4 T2.2 — attention field on task dict ----------------------------
+
+
+def test_task_dict_exposes_attention_default_off(client: FlaskClient, repo_id) -> None:
+    """Without any poller facts seeded, attention falls back to the pure
+    task.status derivation."""
+    resp = client.post(
+        "/api/tasks",
+        json={"repo_id": repo_id, "type": "freeform", "prompt": "x"},
+    )
+    assert resp.status_code == 201
+    body = resp.get_json()
+    assert body["attention"] == "working"
+
+    # Detail endpoint likewise.
+    detail = client.get(f"/api/tasks/{body['id']}").get_json()
+    assert detail["attention"] == "working"
+
+
+def test_task_dict_attention_from_poller_facts(client: FlaskClient, app, repo_id) -> None:
+    """A task whose poller has facts consumes them via ``pr_facts_for_task``."""
+
+    resp = client.post(
+        "/api/tasks",
+        json={"repo_id": repo_id, "type": "freeform", "prompt": "x"},
+    )
+    task_id = resp.get_json()["id"]
+    # Manually mark the task as `done` to exercise the terminal-with-facts branch.
+    from jalebi.db import Session as DbSession
+    from jalebi.db import Task
+
+    session = DbSession()
+    try:
+        task = session.get(Task, task_id)
+        task.status = "done"
+        session.commit()
+    finally:
+        session.close()
+
+    poller = app.config["JALEBI_POLLER"]
+    poller.record_facts(
+        repo_id,
+        task_id,
+        pr_number=42,
+        facts={
+            "ci_state": "success",
+            "review_decision": "approved",
+            "mergeable": True,
+            "last_seen_at": "2026-08-17T00:00:00Z",
+        },
+    )
+    detail = client.get(f"/api/tasks/{task_id}").get_json()
+    assert detail["attention"] == "ready_to_merge"
+
+
+def test_task_dict_attention_working_no_poller(app, repo_id) -> None:
+    """With ``JALEBI_POLLER`` missing entirely (no app-key set), the route
+    returns the no-PR-facts branch (working for queued)."""
+
+    app.config.pop("JALEBI_POLLER", None)
+    # Use the app's test client so the route sees the popped config.
+    resp = app.test_client().post(
+        "/api/tasks",
+        json={"repo_id": repo_id, "type": "freeform", "prompt": "y"},
+    )
+    body = resp.get_json()
+    assert body["attention"] == "working"
+
+
+# ---- Phase 4 T3.2 — GET /api/tasks/<id>/publish-check -----------------------
+
+
+def _seed_pr_facts(app, repo_id, task_id, *, ci, review, mergeable):
+    """Inject PRFacts via the running poller (default-OFF tests skip the tick)."""
+    poller = app.config["JALEBI_POLLER"]
+    poller.record_facts(
+        repo_id,
+        task_id,
+        pr_number=99,
+        facts={
+            "ci_state": ci,
+            "review_decision": review,
+            "mergeable": mergeable,
+            "last_seen_at": "2026-08-17T00:00:00Z",
+        },
+    )
+
+
+def _setup_publish_check_task(app, client, session, tmp_path):
+    """Reusable fixture for publish-check tests: worktree + 1 commit ahead."""
+    import subprocess as _sp
+
+    from jalebi import tasks as tasks_svc
+    from jalebi.config import Config
+    from jalebi.git_workspace import GitWorkspace
+
+    remote = _seed_git_remote(tmp_path)
+    row, _ = repos.upsert_repo(
+        session,
+        full_name="owner/repo",
+        default_branch="main",
+        clone_url=remote,
+        pat_name="test",
+    )
+    task = tasks_svc.create_task(
+        session, type_="freeform", repo_id=row.id, prompt="x"
+    )
+    task.status = "done"
+    session.commit()
+    config: Config = app.config["JALEBI_CONFIG"]
+    ws = GitWorkspace(config)
+    ws.ensure_mirror("owner/repo", remote)
+    wt = ws.create_worktree(task.id, "owner/repo", "main")
+    # One commit ahead so the `commits` check passes.
+    _sp.run(["git", "-C", str(wt), "config", "user.email", "a@b.com"], check=True)
+    _sp.run(["git", "-C", str(wt), "config", "user.name", "A"], check=True)
+    (wt / "new.txt").write_text("agent\n")
+    _sp.run(["git", "-C", str(wt), "add", "new.txt"], check=True)
+    _sp.run(["git", "-C", str(wt), "commit", "-m", "agent"], check=True)
+    return task, ws, wt
+
+
+def test_publish_check_returns_ready(app, session, client, tmp_path) -> None:
+    task, _ws, _wt = _setup_publish_check_task(app, client, session, tmp_path)
+    _seed_pr_facts(
+        app,
+        task.repo_id,
+        task.id,
+        ci="success",
+        review="approved",
+        mergeable=True,
+    )
+    resp = client.get(f"/api/tasks/{task.id}/publish-check")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["status"] == "ready"
+    assert body["base_ref"] == "main"
+    by_name = {c["name"]: c for c in body["checks"]}
+    assert by_name["branch"]["ok"] is True
+    assert by_name["commits"]["ok"] is True
+    assert by_name["commits"]["ahead"] == 1
+    assert by_name["conflict"]["ok"] is True
+    assert by_name["ci"]["ok"] is True
+    assert by_name["review"]["ok"] is True
+    assert by_name["mergeable"]["ok"] is True
+
+
+def test_publish_check_blocks_on_branch_mismatch(
+    app, session, client, tmp_path
+) -> None:
+    import subprocess as _sp
+
+    task, _ws, wt = _setup_publish_check_task(app, client, session, tmp_path)
+    # Move HEAD off jalebi.
+    _sp.run(["git", "-C", str(wt), "checkout", "main"], check=True)
+    resp = client.get(f"/api/tasks/{task.id}/publish-check")
+    body = resp.get_json()
+    assert body["status"] == "blocked"
+    by_name = {c["name"]: c for c in body["checks"]}
+    assert by_name["branch"]["ok"] is False
+    assert "branch mismatch" in by_name["branch"]["message"]
+
+
+def test_publish_check_blocks_on_nothing_to_publish(
+    app, session, client, tmp_path
+) -> None:
+    """A task that was published / re-based ahead=0 → blocked (commits ahead = 0)."""
+    import subprocess as _sp
+
+    task, _ws, wt = _setup_publish_check_task(app, client, session, tmp_path)
+    # Reset the branch to origin/main so HEAD has no unique commits.
+    _sp.run(["git", "-C", str(wt), "reset", "--hard", "origin/main"], check=True)
+    resp = client.get(f"/api/tasks/{task.id}/publish-check")
+    body = resp.get_json()
+    assert body["status"] == "blocked"
+    by_name = {c["name"]: c for c in body["checks"]}
+    assert by_name["commits"]["ok"] is False
+    assert by_name["commits"]["ahead"] == 0
+
+
+def test_publish_check_blocks_on_predicted_conflict(
+    app, session, client, tmp_path
+) -> None:
+    import subprocess as _sp
+
+    task, _ws, _wt = _setup_publish_check_task(app, client, session, tmp_path)
+    # `_setup_publish_check_task` already seeded the bare remote + work clone.
+    # Use the same path it created to push a conflicting change to origin/main.
+    remote_url = str(tmp_path / "remote.git")
+    src2 = tmp_path / "src2_conflict"
+    _sp.run(["git", "clone", remote_url, str(src2)], check=True)
+    _sp.run(["git", "-C", str(src2), "config", "user.email", "a@b.com"], check=True)
+    _sp.run(["git", "-C", str(src2), "config", "user.name", "A"], check=True)
+    (src2 / "new.txt").write_text("remote side\n")
+    _sp.run(["git", "-C", str(src2), "add", "new.txt"], check=True)
+    _sp.run(["git", "-C", str(src2), "commit", "-m", "remote side"], check=True)
+    _sp.run(["git", "-C", str(src2), "push", "origin", "main"], check=True)
+    resp = client.get(f"/api/tasks/{task.id}/publish-check")
+    body = resp.get_json()
+    assert body["status"] == "blocked"
+    by_name = {c["name"]: c for c in body["checks"]}
+    assert by_name["conflict"]["ok"] is False
+
+
+def test_publish_check_attention_on_ci_failure(
+    app, session, client, tmp_path
+) -> None:
+    task, _ws, _wt = _setup_publish_check_task(app, client, session, tmp_path)
+    _seed_pr_facts(
+        app,
+        task.repo_id,
+        task.id,
+        ci="failure",
+        review="approved",
+        mergeable=True,
+    )
+    resp = client.get(f"/api/tasks/{task.id}/publish-check")
+    body = resp.get_json()
+    assert body["status"] == "attention"
+    by_name = {c["name"]: c for c in body["checks"]}
+    assert by_name["ci"]["ok"] is False
+    assert by_name["branch"]["ok"] is True  # branch is fine
+
+
+def test_publish_check_404_when_task_missing(client: FlaskClient) -> None:
+    resp = client.get("/api/tasks/99999/publish-check")
+    assert resp.status_code == 404
+
+
+def test_pr_head_source_helpers() -> None:
+    from jalebi import tasks as task_svc
+
+    assert task_svc.pr_head_source_number("pr/7/head") == 7
+    assert task_svc.pr_head_source_number("main") is None
+    assert task_svc.is_pr_head_source("pr/7/head") is True
+    assert task_svc.is_pr_head_source("main") is False
+
+
+def _fake_pr_client(monkeypatch, *, base="main"):
+    class FakeClient:
+        def __init__(self, token): ...
+
+        def get_pr(self, full_name, number):
+            return {
+                "number": number,
+                "title": "PR title",
+                "body": "PR body",
+                "html_url": "u",
+                "state": "open",
+                "base": base,
+                "head": "feat/x",
+                "head_repo": "fork/repo",
+                "is_fork": True,
+                "author": "bob",
+            }
+
+        def list_pr_reviews(self, full_name, number):
+            return []
+
+        def close(self): ...
+
+    monkeypatch.setattr("jalebi.routes.tasks.GitHubClient", FakeClient)
+
+
+def test_create_freeform_pr_head_source_sets_target_to_pr_base(
+    client: FlaskClient, repo_id: int, session, monkeypatch
+) -> None:
+    _fake_pr_client(monkeypatch, base="develop")
+    resp = client.post(
+        "/api/tasks",
+        json={
+            "repo_id": repo_id,
+            "type": "freeform",
+            "prompt": "address reviews",
+            "pr_number": 7,
+            "source_branch": "pr/7/head",
+        },
+    )
+    assert resp.status_code == 201
+    body = resp.get_json()
+    assert body["source_branch"] == "pr/7/head"
+    assert body["target_branch"] == "develop"
+    assert body["prs"] == [7]
+
+
+def test_create_pr_head_source_must_match_pr_number(
+    client: FlaskClient, repo_id: int, session, monkeypatch
+) -> None:
+    _fake_pr_client(monkeypatch)
+    resp = client.post(
+        "/api/tasks",
+        json={
+            "repo_id": repo_id,
+            "type": "freeform",
+            "prompt": "address reviews",
+            "pr_number": 8,
+            "source_branch": "pr/7/head",
+        },
+    )
+    assert resp.status_code == 400
+    assert "must match" in resp.get_json()["error"]
+
+
+def test_create_pr_head_source_rejected_for_issue_fix(
+    client: FlaskClient, repo_id: int, session, monkeypatch
+) -> None:
+    _fake_pr_client(monkeypatch)
+    resp = client.post(
+        "/api/tasks",
+        json={
+            "repo_id": repo_id,
+            "type": "issue_fix",
+            "prompt": "fix it",
+            "issue_number": 3,
+            "pr_number": 7,
+            "source_branch": "pr/7/head",
+        },
+    )
+    assert resp.status_code == 400
+    assert "freeform" in resp.get_json()["error"]
+
+
+def test_create_task_rejects_garbage_pr_number(
+    client: FlaskClient, repo_id: int, session, monkeypatch
+) -> None:
+    """F8: a non-numeric pr_number is a 400, never an unhandled 500."""
+    _fake_pr_client(monkeypatch)
+    for bad in ("abc", "7.5", 3.5, True):
+        resp = client.post(
+            "/api/tasks",
+            json={
+                "repo_id": repo_id,
+                "type": "freeform",
+                "prompt": "x",
+                "pr_number": bad,
+                "source_branch": "pr/7/head",
+            },
+        )
+        assert resp.status_code == 400, bad
+        assert "integer" in resp.get_json()["error"]
+    # Sanity: numeric strings still accepted.
+    resp = client.post(
+        "/api/tasks",
+        json={
+            "repo_id": repo_id,
+            "type": "freeform",
+            "prompt": "x",
+            "pr_number": "7",
+            "source_branch": "pr/7/head",
+        },
+    )
+    assert resp.status_code == 201
+
+
+def test_create_task_rejects_garbage_issue_number(
+    client: FlaskClient, repo_id: int, session
+) -> None:
+    """F8: a non-numeric issue_number is a 400, never an unhandled 500."""
+    resp = client.post(
+        "/api/tasks",
+        json={
+            "repo_id": repo_id,
+            "type": "issue_fix",
+            "prompt": "x",
+            "issue_number": "abc",
+        },
+    )
+    assert resp.status_code == 400
+    assert "integer" in resp.get_json()["error"]
+
+
+def test_cancel_task_allows_needs_approval(
+    client: FlaskClient, repo_id: int, session
+) -> None:
+    task = tasks.create_task(
+        session, type_="freeform", repo_id=repo_id, prompt="test cancel"
+    )
+    task.status = "needs_approval"
+    session.commit()
+
+    resp = client.post(f"/api/tasks/{task.id}/cancel")
+    assert resp.status_code == 200
+    assert resp.get_json()["status"] == "cancelled"
+
+    task_resp = client.get(f"/api/tasks/{task.id}")
+    assert task_resp.status_code == 200
+    assert task_resp.get_json()["status"] == "cancelled"
+    assert task_resp.get_json()["attention"] == "done"
+
+
+def test_dismiss_attention_endpoint(
+    client: FlaskClient, repo_id: int, session
+) -> None:
+    task = tasks.create_task(
+        session, type_="freeform", repo_id=repo_id, prompt="test dismiss"
+    )
+    task.status = "failed"
+    session.commit()
+
+    # Before dismissing, failed terminal without PR facts evaluates to needs_you
+    task_resp = client.get(f"/api/tasks/{task.id}")
+    assert task_resp.get_json()["attention"] == "needs_you"
+
+    # Dismiss attention
+    resp = client.post(f"/api/tasks/{task.id}/dismiss-attention")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["attention"] == "done"
+
+    # Confirm subsequent GET also returns done
+    task_resp2 = client.get(f"/api/tasks/{task.id}")
+    assert task_resp2.get_json()["attention"] == "done"
+
+
+def test_clear_attention_dismissal_helper(
+    client: FlaskClient, repo_id: int, session
+) -> None:
+    """clear_attention_dismissal removes the flag (True once, False after)."""
+    from jalebi import attention as attention_mod
+
+    task = tasks.create_task(
+        session, type_="freeform", repo_id=repo_id, prompt="test rearm"
+    )
+    task.status = "failed"
+    session.commit()
+
+    assert tasks.clear_attention_dismissal(session, task) is False
+    tasks.dismiss_task_attention(session, task.id)
+    assert attention_mod._is_attention_dismissed(task) is True
+    assert tasks.clear_attention_dismissal(session, task) is True
+    session.commit()
+    assert attention_mod._is_attention_dismissed(task) is False
+    assert tasks.clear_attention_dismissal(session, task) is False
+
+
+def test_prepare_run_rearms_dismissed_attention(
+    client: FlaskClient, repo_id: int, session, app
+) -> None:
+    """A new run (rerun/follow-up path via _prepare_run) clears a prior
+    dismissal so the new run's attention is live again."""
+    task = tasks.create_task(
+        session, type_="freeform", repo_id=repo_id, prompt="test rearm run"
+    )
+    task.status = "failed"
+    session.commit()
+
+    resp = client.post(f"/api/tasks/{task.id}/dismiss-attention")
+    assert resp.status_code == 200
+    assert resp.get_json()["attention"] == "done"
+
+    # The route commits in its own session; refresh so this session sees it
+    # (mirrors the worker, which always loads the task fresh).
+    session.refresh(task)
+    queue = app.config["JALEBI_QUEUE"]
+    queue._prepare_run(session, task, cli="opencode")
+    task_resp = client.get(f"/api/tasks/{task.id}")
+    # Running with no PR facts → working (NOT stuck at dismissed done).
+    assert task_resp.get_json()["attention"] == "working"
+

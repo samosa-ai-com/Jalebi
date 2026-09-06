@@ -44,3 +44,26 @@ A repo often needs environment variables to build/test/develop (DB URLs, API key
 
 - PRD §F17 (masking) — env-var values are treated as secrets at ingest.
 - Related: `docs/03-adapters.md` (agent env), `docs/10-security.md`.
+
+---
+
+## 8. Phase 4 T1.1 — env-var block-list
+
+`ENV_BLOCK_LIST` (frozenset) and `ENV_BLOCK_PREFIXES` (tuple of name prefixes) in `envvars.py` define names that MUST NOT appear in the agent subprocess environment, regardless of what the store contains.
+
+**Block-list contents** (`jalebi.envvars.is_blocked_env_name`):
+- Process / shell control: `PATH`, `HOME`, `LD_PRELOAD`, `NODE_OPTIONS`, `BASH_ENV`, `ENV`, `SHELLOPTS`, `BASHOPTS`, `NODE_TLS_REJECT_UNAUTHORIZED`, `PYTHONPATH`, `PYTHONSTARTUP`, `PYTHONINSPECT`, `GIT_SSH_COMMAND`, `GIT_SSH_VARIANT`, `GIT_ASKPASS`, `SSH_ASKPASS`.
+- Jalebi's own secrets / identity: `JALEBI_GITHUB_TOKEN`, `JALEBI_DATA_DIR`, `JALEBI_PORT`, `JALEBI_HOST`, `JALEBI_PASSWORD`.
+- GitHub CLI / API creds: `GH_TOKEN`, `GITHUB_TOKEN`.
+- git env control: `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_COMMON_DIR`, `GIT_CEILING_DIRECTORIES`, `GIT_OBJECT_DIRECTORY`, `GIT_ALTERNATE_OBJECT_DIRECTORIES`, `GIT_CONFIG_NOSYSTEM`, `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`.
+- Prefix: every name starting with `GIT_CONFIG_` (block-all — see rationale below).
+
+**Rationale (the override hole it closes):** `_agent_env` (`queue.py:374-376`) merges the task's stored env vars **on top of** the Jalebi-built env (never the other way around), so a task cannot override the token/identity/git hygiene the queue pins. The blocklist is the belt-and-suspenders: even if a row was inserted via a direct DB write (a legacy row, a future bug, or a misconfigured import), `values_for_names` filters blocked names before the dict reaches `_agent_env.update(...)`. Per-name at DEBUG; a single WARNING summary per `values_for_names` call when anything was dropped.
+
+**`GIT_CONFIG_*` block-all rationale:** the `GIT_CONFIG_*` namespace is the entire mechanism by which git injects arbitrary config into the subprocess; Jalebi pins `GIT_CONFIG_NOSYSTEM=1` / `GIT_CONFIG_GLOBAL=devnull` in `_build_agent_env` and never exposes push creds to the agent. Any stored `GIT_CONFIG_*` would either re-inject credential/`url.insteadOf` state or override Jalebi's pins. No legitimate user surface — block-all via the prefix tuple.
+
+**Write-time:** `upsert_env_var` raises `ValueError(f"env var name is blocked: {name}")` for any blocked name; the existing route maps `ValueError` to 400 with a clear message.
+
+**Import-time:** `import_env_file` (the `.env` POST endpoint) skips blocked lines and appends `<line> (blocked)` to the `skipped` list returned by the route — the file is partially imported and the user sees what was ignored.
+
+**Read-time:** `values_for_names` drops blocked names from the resolved dict before it is merged into the agent env by `_agent_env`. This is the critical choke point — it covers legacy rows that pre-date the blocklist.

@@ -38,6 +38,7 @@ const TASK = {
   prs: [],
   created_at: "2026-08-06T10:00:00",
   updated_at: "2026-08-06T10:01:00",
+  attention: "working",
   run: RUN,
   followups: [],
   reviewers: [],
@@ -81,17 +82,29 @@ describe("TaskDetail", () => {
     FakeEventSource.instances = [];
   });
 
-  function stubFetch(task: Record<string, unknown>, settings: Record<string, unknown> | null = null) {
+  function stubFetch(
+    task: Record<string, unknown>,
+    settings: Record<string, unknown> | null = null
+  ) {
     const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
       if (url.endsWith("/runs")) {
         return { ok: true, json: async () => [task.run ?? RUN] };
+      }
+      if (url.includes("/files")) {
+        return {
+          ok: true,
+          json: async () => ({ path: "", entries: [] }),
+        };
       }
       if (url.includes("/api/tasks")) {
         return { ok: true, json: async () => task };
       }
       if (url.includes("/api/settings")) {
         if (settings) return { ok: true, json: async () => settings };
-        return { ok: true, json: async () => ({ default_backend: "opencode", default_model: "m1" }) };
+        return {
+          ok: true,
+          json: async () => ({ default_backend: "opencode", default_model: "m1" }),
+        };
       }
       if (url.includes("/api/github/tokens")) {
         return { ok: true, json: async () => ({ accounts: [] }) };
@@ -152,14 +165,9 @@ describe("TaskDetail", () => {
 
     renderDetail();
     expect(await screen.findByText("Follow-up")).toBeInTheDocument();
-    expect(
-      screen.getByText(/Resume refreshes remote refs first/)
-    ).toBeInTheDocument();
+    expect(screen.getByText(/Resume refreshes remote refs first/)).toBeInTheDocument();
 
-    await userEvent.type(
-      screen.getByPlaceholderText(/Address the reviewer comments/),
-      "do more"
-    );
+    await userEvent.type(screen.getByPlaceholderText(/Address the reviewer comments/), "do more");
     await userEvent.click(screen.getByRole("button", { name: "Send follow-up" }));
 
     await waitFor(() => {
@@ -259,10 +267,7 @@ describe("TaskDetail", () => {
     expect(screen.getByText("out/shot.png")).toBeInTheDocument();
 
     const download = screen.getAllByText("download")[0];
-    expect(download.closest("a")).toHaveAttribute(
-      "href",
-      "/api/tasks/7/artifacts/1/download"
-    );
+    expect(download.closest("a")).toHaveAttribute("href", "/api/tasks/7/artifacts/1/download");
   });
 
   it("renders the run-end diff in the Diff section", async () => {
@@ -298,17 +303,36 @@ describe("TaskDetail", () => {
 
     renderDetail();
     expect(await screen.findByText("Diff")).toBeInTheDocument();
-    expect(await screen.findByText("diff --git a/f.txt b/f.txt")).toBeInTheDocument();
+    expect(await screen.findByText("f.txt")).toBeInTheDocument();
     expect(screen.getByText("+new")).toBeInTheDocument();
-    // The improved diff view shows a friendly file label + +/- stats.
-    expect(screen.getByText("f.txt")).toBeInTheDocument();
+    expect(screen.getByText("-old")).toBeInTheDocument();
+    // The improved diff view also surfaces a +/- tally (1 addition, 1 deletion).
+    expect(screen.getAllByText("+1").length + screen.getAllByText("−1").length).toBeGreaterThan(0);
     expect(screen.getAllByText("+1").length).toBeGreaterThan(0);
     expect(screen.getAllByText("−1").length).toBeGreaterThan(0);
   });
 
   it("shows run history with status, duration, and diff/artifact markers", async () => {
-    const run1 = { ...RUN, id: 1, seq: 1, status: "done", started_at: "2026-08-06T10:00:00", finished_at: "2026-08-06T10:00:30", has_diff: true };
-    const run2 = { ...RUN, id: 2, seq: 2, status: "running", started_at: "2026-08-06T10:01:00", finished_at: null, has_diff: false, model: "m2", artifacts: [{ id: 1, path: "logs/build.log", size: 2048, created_at: "2026-08-06T10:01:00" }] };
+    const run1 = {
+      ...RUN,
+      id: 1,
+      seq: 1,
+      status: "done",
+      started_at: "2026-08-06T10:00:00",
+      finished_at: "2026-08-06T10:00:30",
+      has_diff: true,
+    };
+    const run2 = {
+      ...RUN,
+      id: 2,
+      seq: 2,
+      status: "running",
+      started_at: "2026-08-06T10:01:00",
+      finished_at: null,
+      has_diff: false,
+      model: "m2",
+      artifacts: [{ id: 1, path: "logs/build.log", size: 2048, created_at: "2026-08-06T10:01:00" }],
+    };
     const task = { ...TASK, run: run2 };
     const fetchMock = vi.fn(async (url: string) => {
       if (url.endsWith("/runs")) {
@@ -340,6 +364,44 @@ describe("TaskDetail", () => {
     // Diff marker on run 1, artifact marker on run 2
     expect(screen.getByText("diff")).toBeInTheDocument();
     expect(screen.getByText("1 artifact")).toBeInTheDocument();
+  });
+
+  it("loads the selected historical snapshot and returns to the live diff", async () => {
+    const run1 = { ...RUN, id: 1, seq: 1, status: "done", has_diff: true };
+    const run2 = { ...run1, id: 2, seq: 2 };
+    const task = { ...TASK, status: "done", run: run2 };
+    const fetchMock = stubFetch(task);
+    const fallback = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/runs")) return { ok: true, json: async () => [run1, run2] };
+      if (url.includes("/diff")) {
+        const content = url.endsWith("/runs/1/diff") ? "historical content" : "current content";
+        return {
+          ok: true,
+          json: async () => ({
+            diff: `diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -0,0 +1 @@\n+${content}\n`,
+          }),
+        };
+      }
+      return fallback(url, init);
+    });
+    const user = userEvent.setup();
+    renderDetail();
+
+    expect(await screen.findByText("+current content")).toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.some(([url]) => url === "/api/tasks/7/diff?base=1&untracked=1")
+    ).toBe(true);
+    fetchMock.mockClear();
+    await user.click(screen.getByRole("button", { name: /^#1/ }));
+    expect(await screen.findByText("+historical content")).toBeInTheDocument();
+    expect(screen.queryByText("+current content")).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url]) => url === "/api/tasks/7/runs/1/diff")).toBe(true);
+    expect(fetchMock.mock.calls.some(([url]) => url.includes("/diff?"))).toBe(false);
+
+    await user.click(screen.getByRole("button", { name: /^#2/ }));
+    expect(await screen.findByText("+current content")).toBeInTheDocument();
+    expect(screen.queryByText("+historical content")).not.toBeInTheDocument();
   });
 
   it("shows Cancel for a queued task", async () => {
@@ -411,7 +473,9 @@ describe("TaskDetail", () => {
       ...TASK,
       status: "running",
       run: { ...RUN, id: 99, status: "running" },
-      followups: [{ id: 1, body: "do more", pat_name: null, model: null, created_at: "2026-08-06T10:02:00" }],
+      followups: [
+        { id: 1, body: "do more", pat_name: null, model: null, created_at: "2026-08-06T10:02:00" },
+      ],
     };
     let getCount = 0;
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
@@ -439,16 +503,10 @@ describe("TaskDetail", () => {
 
     renderDetail();
     await screen.findByText("Follow-up");
-    await userEvent.type(
-      screen.getByPlaceholderText(/Address the reviewer comments/),
-      "do more"
-    );
+    await userEvent.type(screen.getByPlaceholderText(/Address the reviewer comments/), "do more");
     await userEvent.click(screen.getByRole("button", { name: "Send follow-up" }));
 
-    await waitFor(
-      () => expect(screen.getByText("running")).toBeInTheDocument(),
-      { timeout: 5000 }
-    );
+    await waitFor(() => expect(screen.getByText("running")).toBeInTheDocument(), { timeout: 5000 });
   });
 
   it("shows assigned reviewers with status and can assign more", async () => {
@@ -511,8 +569,7 @@ describe("TaskDetail", () => {
     await userEvent.click(screen.getByRole("button", { name: /Auditor B/ }));
     await waitFor(() => {
       const assignCall = fetchMock.mock.calls.find(
-        ([url, init]) =>
-          String(url).includes("/api/tasks/7/reviewers") && init?.method === "POST"
+        ([url, init]) => String(url).includes("/api/tasks/7/reviewers") && init?.method === "POST"
       );
       expect(assignCall).toBeDefined();
       const body = JSON.parse((assignCall?.[1] as RequestInit).body as string) as {
@@ -557,9 +614,84 @@ describe("TaskDetail", () => {
 
     renderDetail();
     await screen.findByText("Follow-up");
-    expect(
-      await screen.findByRole("button", { name: "Address reviewers" })
-    ).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Address reviewers" })).toBeInTheDocument();
+  });
+
+  it("shows the waiting card for a waiting_input run", async () => {
+    const waitingTask = {
+      ...TASK,
+      status: "done",
+      run: {
+        ...RUN,
+        status: "done",
+        waiting_input: true,
+        finished_at: "2026-08-06T10:02:00",
+        steps: [
+          {
+            type: "message",
+            text: "# H\n\nPlan. **waiting for explicit approval**.",
+            ts: "2026-08-06T10:01:05",
+          },
+        ],
+      },
+    };
+    stubFetch(waitingTask);
+    vi.stubGlobal("EventSource", FakeEventSource);
+
+    renderDetail();
+    expect(await screen.findByText("Agent is waiting for your input")).toBeInTheDocument();
+    // The message is rendered as markdown in the card AND the timeline.
+    expect(screen.getAllByText(/Plan/).length).toBeGreaterThan(0);
+  });
+
+  it("does not show the waiting card when waiting_input is false", async () => {
+    const normalTask = {
+      ...TASK,
+      status: "done",
+      run: {
+        ...RUN,
+        status: "done",
+        waiting_input: false,
+        steps: [{ type: "message", text: "All done.", ts: "2026-08-06T10:01:05" }],
+      },
+    };
+    stubFetch(normalTask);
+    vi.stubGlobal("EventSource", FakeEventSource);
+
+    renderDetail();
+    await screen.findByText("Follow-up");
+    expect(screen.queryByText("Agent is waiting for your input")).toBeNull();
+  });
+
+  it("Reply in follow-up prefills the composer with quoted context", async () => {
+    const waitingTask = {
+      ...TASK,
+      status: "done",
+      run: {
+        ...RUN,
+        status: "done",
+        waiting_input: true,
+        finished_at: "2026-08-06T10:02:00",
+        steps: [
+          {
+            type: "message",
+            text: "# H\n\nPlan. **waiting for explicit approval**.",
+            ts: "2026-08-06T10:01:05",
+          },
+        ],
+      },
+    };
+    stubFetch(waitingTask);
+    vi.stubGlobal("EventSource", FakeEventSource);
+
+    renderDetail();
+    await screen.findByText("Agent is waiting for your input");
+    await userEvent.click(screen.getByRole("button", { name: "Reply in follow-up" }));
+
+    const textarea = screen.getByPlaceholderText(
+      /Address the reviewer comments/
+    ) as HTMLTextAreaElement;
+    expect(textarea.value.startsWith("> ")).toBe(true);
   });
 
   describe("publish modes", () => {
@@ -596,17 +728,22 @@ describe("TaskDetail", () => {
     }
 
     it("shows 'Publish' when no PR is linked", async () => {
-      stubFetchWithPublish(doneTask({ prs: [] }), { status: "done", mode: "new_pr", pr_number: 42 });
+      stubFetchWithPublish(doneTask({ prs: [] }), {
+        status: "done",
+        mode: "new_pr",
+        pr_number: 42,
+      });
       renderDetail();
       const btn = await screen.findByRole("button", { name: "Publish" });
       await userEvent.click(btn);
       const confirm = await screen.findByRole("button", { name: "Confirm" });
       await userEvent.click(confirm);
       await waitFor(() => {
-        const call = vi.mocked(fetch).mock.calls.find(
-          ([url, init]) =>
-            String(url).includes("/api/tasks/7/publish") && init?.method === "POST"
-        );
+        const call = vi
+          .mocked(fetch)
+          .mock.calls.find(
+            ([url, init]) => String(url).includes("/api/tasks/7/publish") && init?.method === "POST"
+          );
         expect(call).toBeDefined();
         const body = JSON.parse((call?.[1] as RequestInit).body as string) as {
           mode?: string;
@@ -617,20 +754,22 @@ describe("TaskDetail", () => {
     });
 
     it("defaults to 'Push to PR #N' when a PR was attached at creation", async () => {
-      stubFetchWithPublish(
-        doneTask({ prs: [9] }),
-        { status: "done", mode: "update_pr", pr_number: 9 }
-      );
+      stubFetchWithPublish(doneTask({ prs: [9] }), {
+        status: "done",
+        mode: "update_pr",
+        pr_number: 9,
+      });
       renderDetail();
       const btn = await screen.findByRole("button", { name: "Push to PR #9" });
       await userEvent.click(btn);
       const confirm = await screen.findByRole("button", { name: "Confirm" });
       await userEvent.click(confirm);
       await waitFor(() => {
-        const call = vi.mocked(fetch).mock.calls.find(
-          ([url, init]) =>
-            String(url).includes("/api/tasks/7/publish") && init?.method === "POST"
-        );
+        const call = vi
+          .mocked(fetch)
+          .mock.calls.find(
+            ([url, init]) => String(url).includes("/api/tasks/7/publish") && init?.method === "POST"
+          );
         expect(call).toBeDefined();
         const body = JSON.parse((call?.[1] as RequestInit).body as string) as {
           mode?: string;
@@ -642,10 +781,11 @@ describe("TaskDetail", () => {
     });
 
     it("Advanced disclosure exposes push_branch with a branch input", async () => {
-      stubFetchWithPublish(
-        doneTask({ prs: [] }),
-        { status: "done", mode: "push_branch", branch: "feature/manual" }
-      );
+      stubFetchWithPublish(doneTask({ prs: [] }), {
+        status: "done",
+        mode: "push_branch",
+        branch: "feature/manual",
+      });
       renderDetail();
       await screen.findByRole("button", { name: "Publish" });
       await userEvent.click(screen.getByRole("button", { name: "Advanced" }));
@@ -660,10 +800,11 @@ describe("TaskDetail", () => {
       const confirm = await screen.findByRole("button", { name: "Confirm" });
       await userEvent.click(confirm);
       await waitFor(() => {
-        const call = vi.mocked(fetch).mock.calls.find(
-          ([url, init]) =>
-            String(url).includes("/api/tasks/7/publish") && init?.method === "POST"
-        );
+        const call = vi
+          .mocked(fetch)
+          .mock.calls.find(
+            ([url, init]) => String(url).includes("/api/tasks/7/publish") && init?.method === "POST"
+          );
         expect(call).toBeDefined();
         const body = JSON.parse((call?.[1] as RequestInit).body as string) as {
           mode?: string;
@@ -712,20 +853,41 @@ describe("TaskDetail", () => {
       });
       const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
         if (init?.method === "POST" && url.includes("/publish")) {
-          return { ok: true, json: async () => ({ status: "done", mode: "update_pr", pr_number: 5 }) };
+          return {
+            ok: true,
+            json: async () => ({ status: "done", mode: "update_pr", pr_number: 5 }),
+          };
         }
         if (url.endsWith("/runs")) return { ok: true, json: async () => [task.run ?? RUN] };
         if (url.includes("/api/tasks")) return { ok: true, json: async () => task };
-        if (url.includes("/api/github/tokens")) return { ok: true, json: async () => ({ accounts: [] }) };
-        if (url.includes("/api/models")) return { ok: true, json: async () => ({ cli: "opencode", models: ["m1"] }) };
+        if (url.includes("/api/github/tokens"))
+          return { ok: true, json: async () => ({ accounts: [] }) };
+        if (url.includes("/api/models"))
+          return { ok: true, json: async () => ({ cli: "opencode", models: ["m1"] }) };
         if (url.includes("/api/github/context")) {
           return {
             ok: true,
             json: async () => ({
               issues: [],
               prs: [
-                { number: 1, title: "Phase 1", html_url: "u", state: "open", base: "main", head: "phase-1", author: "me" },
-                { number: 5, title: "Housekeeping", html_url: "u", state: "open", base: "main", head: "chore", author: "me" },
+                {
+                  number: 1,
+                  title: "Phase 1",
+                  html_url: "u",
+                  state: "open",
+                  base: "main",
+                  head: "phase-1",
+                  author: "me",
+                },
+                {
+                  number: 5,
+                  title: "Housekeeping",
+                  html_url: "u",
+                  state: "open",
+                  base: "main",
+                  head: "chore",
+                  author: "me",
+                },
               ],
               branches: ["main", "phase-1"],
             }),
@@ -755,9 +917,11 @@ describe("TaskDetail", () => {
       const confirm = await screen.findByRole("button", { name: "Confirm" });
       await userEvent.click(confirm);
       await waitFor(() => {
-        const call = vi.mocked(fetch).mock.calls.find(
-          ([url, init]) => String(url).includes("/api/tasks/7/publish") && init?.method === "POST"
-        );
+        const call = vi
+          .mocked(fetch)
+          .mock.calls.find(
+            ([url, init]) => String(url).includes("/api/tasks/7/publish") && init?.method === "POST"
+          );
         expect(call).toBeDefined();
         const body = JSON.parse((call?.[1] as RequestInit).body as string) as {
           mode?: string;
@@ -772,12 +936,17 @@ describe("TaskDetail", () => {
       const task = doneTask({ prs: [9], pat_name: "RB" });
       const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
         if (init?.method === "POST" && url.includes("/publish")) {
-          return { ok: true, json: async () => ({ status: "done", mode: "update_pr", pr_number: 9 }) };
+          return {
+            ok: true,
+            json: async () => ({ status: "done", mode: "update_pr", pr_number: 9 }),
+          };
         }
         if (url.endsWith("/runs")) return { ok: true, json: async () => [task.run ?? RUN] };
         if (url.includes("/api/tasks")) return { ok: true, json: async () => task };
-        if (url.includes("/api/github/tokens")) return { ok: true, json: async () => ({ accounts: [] }) };
-        if (url.includes("/api/models")) return { ok: true, json: async () => ({ cli: "opencode", models: ["m1"] }) };
+        if (url.includes("/api/github/tokens"))
+          return { ok: true, json: async () => ({ accounts: [] }) };
+        if (url.includes("/api/models"))
+          return { ok: true, json: async () => ({ cli: "opencode", models: ["m1"] }) };
         if (url.includes("/api/github/context")) {
           return { ok: false, status: 502, json: async () => ({ error: "no token" }) };
         }
@@ -797,9 +966,11 @@ describe("TaskDetail", () => {
       const confirm = await screen.findByRole("button", { name: "Confirm" });
       await userEvent.click(confirm);
       await waitFor(() => {
-        const call = vi.mocked(fetch).mock.calls.find(
-          ([url, init]) => String(url).includes("/api/tasks/7/publish") && init?.method === "POST"
-        );
+        const call = vi
+          .mocked(fetch)
+          .mock.calls.find(
+            ([url, init]) => String(url).includes("/api/tasks/7/publish") && init?.method === "POST"
+          );
         expect(call).toBeDefined();
         const body = JSON.parse((call?.[1] as RequestInit).body as string) as {
           mode?: string;
@@ -809,5 +980,361 @@ describe("TaskDetail", () => {
         expect(body.pr_number).toBe(9);
       });
     });
+  });
+});
+
+// ---- Phase 4 T3.2 — merge-readiness panel ------------------------------
+
+describe("TaskDetail (Phase 4 T3.2)", () => {
+  function stubFetchWithPublishCheck(
+    task: Record<string, unknown>,
+    settings: Record<string, unknown> | null,
+    publishCheck: Record<string, unknown> | null
+  ) {
+    const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
+      if (url.endsWith("/runs")) {
+        return { ok: true, json: async () => [task.run ?? RUN] };
+      }
+      if (url.includes("/publish-check")) {
+        if (publishCheck) return { ok: true, json: async () => publishCheck };
+        return { ok: true, json: async () => ({ status: "ready", base_ref: "main", checks: [] }) };
+      }
+      if (url.includes("/api/tasks")) {
+        return { ok: true, json: async () => task };
+      }
+      if (url.includes("/api/settings")) {
+        if (settings) return { ok: true, json: async () => settings };
+        return {
+          ok: true,
+          json: async () => ({ default_backend: "opencode", default_model: "m1" }),
+        };
+      }
+      if (url.includes("/api/github/tokens")) {
+        return { ok: true, json: async () => ({ accounts: [] }) };
+      }
+      if (url.includes("/api/models")) {
+        return { ok: true, json: async () => ({ cli: "opencode", models: ["m1"] }) };
+      }
+      return { ok: true, json: async () => REPOS };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  function renderDetail() {
+    return render(
+      <MemoryRouter initialEntries={["/tasks/7"]}>
+        <Routes>
+          <Route path="/tasks/:id" element={<TaskDetail />} />
+        </Routes>
+      </MemoryRouter>
+    );
+  }
+
+  it("shows the merge-readiness panel for a publishable task (ready)", async () => {
+    const done = {
+      ...TASK,
+      status: "done",
+      run: { ...RUN, status: "done", has_diff: true },
+      attention: "ready_to_merge",
+    };
+    stubFetchWithPublishCheck(done, null, {
+      status: "ready",
+      base_ref: "main",
+      checks: [
+        { name: "branch", ok: true, message: "on jalebi branch" },
+        { name: "commits", ok: true, ahead: 2, message: "2 commits ahead of origin/main" },
+        { name: "conflict", ok: true, conflicts: [], message: "no predicted conflicts" },
+        { name: "ci", ok: true, state: "success", message: "CI is green" },
+        { name: "review", ok: true, decision: "approved", message: "PR is approved" },
+        { name: "mergeable", ok: true, mergeable: true, message: "PR is mergeable" },
+      ],
+    });
+    renderDetail();
+    expect(await screen.findByText("Ready")).toBeInTheDocument();
+    expect(screen.getByText("CI is green")).toBeInTheDocument();
+    expect(screen.getByText("PR is approved")).toBeInTheDocument();
+  });
+
+  it("reflects a blocked state (branch mismatch)", async () => {
+    const done = {
+      ...TASK,
+      status: "done",
+      run: { ...RUN, status: "done", has_diff: true },
+      attention: "needs_you",
+    };
+    stubFetchWithPublishCheck(done, null, {
+      status: "blocked",
+      base_ref: "main",
+      checks: [
+        {
+          name: "branch",
+          ok: false,
+          message: "branch mismatch; agent left HEAD on main, expected jalebi/7",
+        },
+        { name: "commits", ok: true, ahead: 1, message: "1 commit ahead of origin/main" },
+      ],
+    });
+    renderDetail();
+    expect(await screen.findByText("Blocked")).toBeInTheDocument();
+    expect(
+      screen.getByText(/branch mismatch; agent left HEAD on main, expected jalebi\/7/i)
+    ).toBeInTheDocument();
+  });
+
+  it("shows dependency badges in the header for a blocked task", async () => {
+    const blocked = {
+      ...TASK,
+      status: "blocked",
+      depends_on: [3],
+      blocked_by: [3],
+      blocking: [],
+      blocked: true,
+    };
+    stubFetchWithPublishCheck(blocked, null, null);
+    renderDetail();
+    expect(await screen.findByText("⛔ blocked")).toBeInTheDocument();
+    expect(screen.getByText("depends on #3")).toBeInTheDocument();
+  });
+
+  it("places the Files panel above the Diff panel", async () => {
+    const withDiff = {
+      ...TASK,
+      status: "done",
+      run: { ...RUN, status: "done", has_diff: true },
+    };
+    stubFetchWithPublishCheck(withDiff, null, null);
+    renderDetail();
+    const filesH = await screen.findByText("Files");
+    const diffH = await screen.findByText("Diff");
+    expect(filesH.compareDocumentPosition(diffH) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});
+
+// ---- Phase 4 T6 — Open worktree ---------------------------------------
+
+describe("TaskDetail (Phase 4 T6 — open worktree)", () => {
+  it("posts /open-in-ide when ide_command is configured", async () => {
+    const waitingTask = {
+      ...TASK,
+      status: "done",
+      attention: "needs_you",
+      run: {
+        ...RUN,
+        status: "done",
+        finished_at: "2026-08-06T10:01:30",
+        waiting_input: true,
+        steps: [
+          {
+            type: "message",
+            text: "# H\n\nPlan. **waiting for explicit approval**.",
+            ts: "2026-08-06T10:01:00",
+          },
+        ],
+      },
+    };
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/runs")) {
+        return { ok: true, json: async () => [waitingTask.run] };
+      }
+      if (url.includes("/open-in-ide")) {
+        void init;
+        return { ok: true, json: async () => ({ ok: true, path: "/tmp/x" }) };
+      }
+      if (url.includes("/api/settings")) {
+        return {
+          ok: true,
+          json: async () => ({
+            default_backend: "opencode",
+            default_model: "m1",
+            ide_command: "code",
+          }),
+        };
+      }
+      if (url.includes("/api/tasks")) {
+        return { ok: true, json: async () => waitingTask };
+      }
+      if (url.includes("/api/github/tokens")) {
+        return { ok: true, json: async () => ({ accounts: [] }) };
+      }
+      if (url.includes("/api/models")) {
+        return { ok: true, json: async () => ({ cli: "opencode", models: ["m1"] }) };
+      }
+      return { ok: true, json: async () => REPOS };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <MemoryRouter initialEntries={["/tasks/7"]}>
+        <Routes>
+          <Route path="/tasks/:id" element={<TaskDetail />} />
+        </Routes>
+      </MemoryRouter>
+    );
+    await screen.findByText("Agent is waiting for your input");
+    await userEvent.click(screen.getByText("Open worktree"));
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(
+          ([url, init]) =>
+            String(url).includes("/api/tasks/7/open-in-ide") && init?.method === "POST"
+        )
+      ).toBe(true);
+    });
+  });
+
+  it("renders Open in <ideName> button in header and posts to open-in-ide", async () => {
+    const customTask = { ...TASK, status: "running" };
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      void init;
+      if (url.endsWith("/runs")) {
+        return { ok: true, json: async () => [] };
+      }
+      if (url.includes("/open-in-ide")) {
+        return { ok: true, json: async () => ({ ok: true, path: "/tmp/worktree" }) };
+      }
+      if (url.includes("/api/settings")) {
+        return {
+          ok: true,
+          json: async () => ({
+            default_backend: "opencode",
+            default_model: "m1",
+            ide_command: "cursor",
+            ide_name: "Cursor",
+          }),
+        };
+      }
+      if (url.includes("/api/tasks")) {
+        return { ok: true, json: async () => customTask };
+      }
+      if (url.includes("/api/github/tokens")) {
+        return { ok: true, json: async () => ({ accounts: [] }) };
+      }
+      if (url.includes("/api/models")) {
+        return { ok: true, json: async () => ({ cli: "opencode", models: ["m1"] }) };
+      }
+      return { ok: true, json: async () => REPOS };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <MemoryRouter initialEntries={["/tasks/7"]}>
+        <Routes>
+          <Route path="/tasks/:id" element={<TaskDetail />} />
+        </Routes>
+      </MemoryRouter>
+    );
+    const ideBtns = await screen.findAllByText("Open in Cursor");
+    expect(ideBtns.length).toBeGreaterThanOrEqual(1);
+    await userEvent.click(ideBtns[0]);
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(
+          ([url, init]) =>
+            String(url).includes("/api/tasks/7/open-in-ide") && init?.method === "POST"
+        )
+      ).toBe(true);
+    });
+  });
+
+  it("keeps Open worktree disabled with a settings link when unconfigured", async () => {
+    const waitingTask = {
+      ...TASK,
+      status: "done",
+      attention: "needs_you",
+      run: {
+        ...RUN,
+        status: "done",
+        finished_at: "2026-08-06T10:01:30",
+        waiting_input: true,
+        steps: [
+          {
+            type: "message",
+            text: "waiting for your approval.",
+            ts: "2026-08-06T10:01:00",
+          },
+        ],
+      },
+    };
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/runs")) {
+        return { ok: true, json: async () => [waitingTask.run] };
+      }
+      if (url.includes("/api/settings")) {
+        return {
+          ok: true,
+          json: async () => ({
+            default_backend: "opencode",
+            default_model: "m1",
+            ide_command: "",
+          }),
+        };
+      }
+      if (url.includes("/api/tasks")) {
+        return { ok: true, json: async () => waitingTask };
+      }
+      if (url.includes("/api/github/tokens")) {
+        return { ok: true, json: async () => ({ accounts: [] }) };
+      }
+      if (url.includes("/api/models")) {
+        return { ok: true, json: async () => ({ cli: "opencode", models: ["m1"] }) };
+      }
+      return { ok: true, json: async () => REPOS };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <MemoryRouter initialEntries={["/tasks/7"]}>
+        <Routes>
+          <Route path="/tasks/:id" element={<TaskDetail />} />
+        </Routes>
+      </MemoryRouter>
+    );
+    await screen.findByText("Agent is waiting for your input");
+    const btn = screen.getByText("Open worktree") as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    expect(screen.getByText("configure IDE in Settings")).toBeInTheDocument();
+  });
+});
+
+// ---- Phase 4 T7 — FileBrowser mounting ----------------------------------
+
+describe("TaskDetail (Phase 4 T7 — file browser)", () => {
+  function renderNoFilesTask(task: Record<string, unknown>) {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/runs"))
+        return { ok: true, json: async () => (task.run ? [task.run] : []) };
+      if (url.includes("/files"))
+        return { ok: true, json: async () => ({ path: "", entries: [] }) };
+      if (url.includes("/api/tasks")) return { ok: true, json: async () => task };
+      if (url.includes("/api/settings"))
+        return {
+          ok: true,
+          json: async () => ({ default_backend: "opencode", default_model: "m1" }),
+        };
+      if (url.includes("/api/github/tokens"))
+        return { ok: true, json: async () => ({ accounts: [] }) };
+      if (url.includes("/api/models"))
+        return { ok: true, json: async () => ({ cli: "opencode", models: ["m1"] }) };
+      return { ok: true, json: async () => REPOS };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return render(
+      <MemoryRouter initialEntries={["/tasks/7"]}>
+        <Routes>
+          <Route path="/tasks/:id" element={<TaskDetail />} />
+        </Routes>
+      </MemoryRouter>
+    );
+  }
+
+  it("mounts FileBrowser when the task has a run", async () => {
+    const doneTask = { ...TASK, status: "done", run: { ...RUN, status: "done" } };
+    renderNoFilesTask(doneTask);
+    expect(await screen.findByText("Files")).toBeInTheDocument();
+  });
+
+  it("does not mount FileBrowser when the task has no run", async () => {
+    const noRun = { ...TASK, run: null };
+    renderNoFilesTask(noRun);
+    await screen.findByText("fix the bug");
+    expect(screen.queryByText("Files")).toBeNull();
   });
 });

@@ -410,3 +410,75 @@ Each tier must pass the full gate before the next begins.
 3. **T7 edit-in-worktree:** deferred to a later phase; Phase 4 is read-only viewing.
 4. **8.4 placement:** "Running now" panel lives on the Tasks page (default); a
    dedicated `/running` route is optional and cheap once the component exists.
+
+---
+
+## 16. Post-plan additions (owner-approved scope extensions)
+
+Four features landed on `phase-4` after the T0–T7 tiers, reviewed in the
+pre-PR audit and formally folded into Phase 4 here:
+
+### 16.1 GitHub PAT rotation (`PUT /api/github/tokens/<name>`)
+
+Replaces a named account's token **without deleting the account's data**:
+the name-keyed binding (`repos.pat_name` / `tasks.pat_name`) means
+connected repos, tasks, runs, triggers, and history are untouched (locked
+by test). `POST /api/github/tokens` returns **409** when the name already
+exists (points at PUT) so a typo can never silently overwrite an account.
+The UI shows an "update token" form per account card and warns when the
+new token authenticates as a different login. A mid-run swap leaves the
+already-started agent on its injected token; subsequent ops use the new
+one. See `docs/05-github-integration.md` §9, `docs/08-ui.md` §11.
+
+### 16.2 Fork-PR fix flow (PR-head worktree + fork push)
+
+A freeform task linked to a fork PR can base its worktree on the PR head
+via the `pr/<N>/head` sentinel source (`pr_head_source_number` /
+`effective_diff_base`; no fork remote is ever added — the mirror fetches
+`refs/pull/<N>/head`). Publishing an `update_pr` to a fork pushes
+`fork-pr-<N>:<head>` with `--force-with-lease=<branch>:<head_sha>` (412
+on a moved fork, never a silent clobber) and refuses with a `new_pr`
+guidance error when `maintainer_can_modify == false`. Agent hard-rule
+"never add remotes / never push" is unchanged — all fork writes run in
+the queue process. `pr_number`/`issue_number` payload fields are strictly
+validated (ints + digit strings; 400, never 500). See `docs/02`
+(sentinel), `docs/04` (§7–§8), `docs/05` (fork metadata), `docs/06`.
+
+### 16.3 Attention dismissal + cancelled-task semantics
+
+- `POST /api/tasks/<id>/dismiss-attention` persists
+  `attention_dismissed: true` (+ timestamp) in `context_json` (zero
+  schema change); Tasks rows (`Dismiss`) and `WaitingCard` (`Reject
+  proposal`) expose it; `POST /cancel` also accepts `needs_approval`.
+- **Deliberate deviation from §4.1/§6.2:** `task.status == "cancelled"`
+  evaluates to `attention == "done"` and `"cancelled"` is excluded from
+  `WAITING_INPUT_STATUSES` — a user-cancelled task never demands
+  attention (motivated by Task 41). This overrides the plan's
+  "terminal includes cancelled" wording by owner decision.
+- A dismissal is scoped to its run: `queue._prepare_run` clears it via
+  `tasks.clear_attention_dismissal`, so reruns/follow-ups re-arm
+  attention. See `docs/02` (`context_json`), `docs/08-ui.md` §9d.
+
+### 16.4 IDE connector expansion
+
+`IDE_CANDIDATES` grows to 28 popular/agentic IDEs (Antigravity, Cursor,
+Windsurf, Zed, Fleet, Positron, Sublime, full JetBrains family, Emacs,
+Neovim, Helix, …); `detect_all_ides()` + `GET /api/ide/detect` return
+every PATH-discovered candidate. Settings shows a quick-pick grid
+(one click saves `ide_command` + `ide_name`), a custom-command input
+with live found ✓/✕, Test-open, and Disable. "Open in IDE" affordances:
+TaskDetail header button (with transient success state), personalized
+`WaitingCard` action, and `FileBrowser` panel button. Zero migrations;
+existing data untouched. See `docs/08-ui.md` §9f, `docs/10-security.md`.
+
+### 16.5 Pre-PR audit fixes (not new features)
+
+The Codex pre-PR audit (2026-09-06) produced correctness fixes folded
+into the same branch: T7 intermediate-symlink `.git` bypass (+
+case-insensitive `.git`), T4.2 nudger wiring (webhook route + poller
+transitions; webhook branch parsing fixed for real `{"name": …}`
+payloads), T4.1 dependency badges + `blocked` StatusBadge, T4.4
+one-card-per-task + card PR links (plus a `GhLink` `##N` → `#N` fix),
+attention re-arm on new runs, SSE throttled prune + no-duplicate replay,
+FileBrowser completion refresh + History→Files→Diff placement, and
+strict `pr_number`/`issue_number` validation. Details in `HANDOFF.md`.

@@ -11,9 +11,10 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from flask import Flask, Response, current_app, g, jsonify, request, send_from_directory
 from flask.typing import ResponseReturnValue
 
-from jalebi import artifacts, clock, db, masking, notify, secrets, settings
+from jalebi import artifacts, clock, db, ide, masking, notify, secrets, settings
 from jalebi.adapters import available_adapters, get_adapter
 from jalebi.config import Config, load_config, repo_root
+from jalebi.poller import Poller
 from jalebi.queue import TaskQueue
 from jalebi.routes.catalog import bp as catalog_bp
 from jalebi.routes.envvars import bp as envvars_bp
@@ -124,6 +125,9 @@ _SETTING_VALIDATORS = {
     ),
     "webhook_secret": lambda v: isinstance(v, str),
     "timezone": _valid_timezone,
+    # Phase 4 T6 — IDE connector.
+    "ide_command": ide.validate_ide_command,
+    "ide_name": lambda v: isinstance(v, str),
 }
 
 
@@ -278,8 +282,13 @@ def create_app(config: Config | None = None) -> Flask:
         finally:
             session.close()
 
-    app.config["JALEBI_QUEUE"] = TaskQueue(config)
+    app.config["JALEBI_QUEUE"] = TaskQueue(
+        config, db_session_factory=db.get_session
+    )
     app.config["JALEBI_SCREENING"] = ScreeningScheduler(config)
+    app.config["JALEBI_POLLER"] = Poller(
+        config, queue=app.config["JALEBI_QUEUE"]
+    )  # Phase 4 T2.1 — default OFF; queue wired for the T4.2 auto-nudge
 
     app.register_blueprint(github_bp)
     app.register_blueprint(repos_bp)
@@ -395,6 +404,34 @@ def create_app(config: Config | None = None) -> Flask:
             return jsonify({"ok": False, "error": error or "notification failed"}), 400
         return jsonify({"ok": True})
 
+    # ---- Phase 4 T6 — IDE connector endpoints -----------------------------
+
+    @app.get("/api/ide/status")
+    def ide_status() -> ResponseReturnValue:
+        """What's currently configured + whether the command resolves."""
+        session = db.get_session()
+        return jsonify(ide.ide_status(session))
+
+    @app.get("/api/ide/detect")
+    def ide_detect() -> ResponseReturnValue:
+        """Probe the whitelist for installed IDEs on PATH."""
+        all_detected = ide.detect_all_ides()
+        first = all_detected[0] if all_detected else None
+        return jsonify({
+            "detected": all_detected,
+            "command": first["command"] if first else "",
+            "name": first["name"] if first else "",
+        })
+
+    @app.post("/api/ide/test")
+    def ide_test() -> ResponseReturnValue:
+        """Open the configured IDE on a scratch dir to confirm it launches."""
+        session = db.get_session()
+        ok, error = ide.test_open(session)
+        if not ok:
+            return jsonify({"ok": False, "error": error}), 400
+        return jsonify({"ok": True})
+
     # SPA: serve the built React app (index.html + assets) so the UI lives on the
     # same origin as the API. Werkzeug prioritizes the literal /api routes above
     # this catch-all.
@@ -429,6 +466,12 @@ def main() -> None:
             pruned = artifacts.prune_artifacts(session, config.data_dir, ttl)
             if pruned:
                 logger.info("pruned %s expired artifact(s)", pruned)
+            # Phase 4 T4.3 — cap the durable task_events table (per-run).
+            from jalebi.events import prune_task_events
+
+            events_pruned = prune_task_events(session)
+            if events_pruned:
+                logger.info("pruned %s expired task_events row(s)", events_pruned)
         finally:
             session.close()
     recovered = queue.recover()
@@ -438,7 +481,14 @@ def main() -> None:
     scheduler = app.config["JALEBI_SCREENING"]
     scheduler.start()
     logger.info("screening scheduler started")
-    app.run(host=config.host, port=config.port, threaded=True)
+    poller = app.config["JALEBI_POLLER"]
+    poller.start()
+    logger.info("pr polling observer started (default off; enable per repo)")
+    try:
+        app.run(host=config.host, port=config.port, threaded=True)
+    finally:
+        poller.stop()
+        poller.join(timeout=2)
 
 
 if __name__ == "__main__":

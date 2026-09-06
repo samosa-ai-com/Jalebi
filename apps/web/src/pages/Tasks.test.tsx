@@ -24,6 +24,7 @@ const TASKS = [
     prs: [],
     created_at: "2026-08-06T10:00:00",
     updated_at: "2026-08-06T10:05:00",
+    attention: "needs_you",
     run: null,
     followups: [],
   },
@@ -58,9 +59,18 @@ const DEFAULT_HANDLERS = {
   "/api/models": { cli: "opencode", models: ["opencode-go/deepseek-v4-flash"] },
   "/api/settings": { default_backend: "opencode", default_model: "opencode-go/deepseek-v4-flash" },
   "/api/github/tokens": {
-
     accounts: [
-      { name: "work", login: "acct2", masked: "ghp_****", token_type: "classic", granted_scopes: ["repo"], missing_scopes: [], note: null, valid: true, error: null },
+      {
+        name: "work",
+        login: "acct2",
+        masked: "ghp_****",
+        token_type: "classic",
+        granted_scopes: ["repo"],
+        missing_scopes: [],
+        note: null,
+        valid: true,
+        error: null,
+      },
     ],
   },
   "/api/github/context": { issues: [], prs: [], branches: ["main", "dev"] },
@@ -174,7 +184,9 @@ describe("Tasks", () => {
     await userEvent.selectOptions(screen.getByLabelText("Task type"), "pr_review");
     expect(screen.queryByLabelText("Source branch")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Target branch (PR base)")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Target branch (worktree base / PR base)")).not.toBeInTheDocument();
+    expect(
+      screen.queryByLabelText("Target branch (worktree base / PR base)")
+    ).not.toBeInTheDocument();
   });
 
   it("freeform keeps both branch pickers", async () => {
@@ -196,7 +208,15 @@ describe("Tasks", () => {
       "/api/github/context": {
         issues: [],
         prs: [
-          { number: 1, title: "Phase 1", html_url: "u", state: "open", base: "main", head: "phase-1", author: "me" },
+          {
+            number: 1,
+            title: "Phase 1",
+            html_url: "u",
+            state: "open",
+            base: "main",
+            head: "phase-1",
+            author: "me",
+          },
         ],
         branches: ["main", "dev"],
       },
@@ -215,12 +235,83 @@ describe("Tasks", () => {
     expect(picker).toHaveValue("1");
   });
 
+  it("fork PR offers a PR-head worktree base and sends the sentinel on create", async () => {
+    const fetchMock = stubFetch({
+      ...DEFAULT_HANDLERS,
+      "/api/github/context": {
+        issues: [],
+        prs: [
+          {
+            number: 7,
+            title: "Zen fix",
+            html_url: "u",
+            state: "open",
+            base: "main",
+            head: "feat/zen",
+            head_repo: "ramon/repo",
+            is_fork: true,
+            author: "ramon",
+          },
+        ],
+        branches: ["main", "dev"],
+      },
+    });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+
+    await screen.findByText("New task");
+    const picker = await screen.findByLabelText("Link PR (optional)");
+    await userEvent.selectOptions(picker, "7");
+
+    const useHead = await screen.findByRole("button", {
+      name: /Base the worktree on PR #7 head/,
+    });
+    await userEvent.click(useHead);
+
+    const source = screen.getByLabelText("Source branch") as HTMLSelectElement;
+    expect(source.value).toBe("pr/7/head");
+    expect(screen.getByRole("option", { name: /PR #7 head/ })).toBeInTheDocument();
+
+    await userEvent.type(screen.getByPlaceholderText("Instructions…"), "address reviews");
+    await userEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      const postCall = fetchMock.mock.calls.find(
+        (call) => call[0] === "/api/tasks" && call[1]?.method === "POST"
+      );
+      expect(postCall).toBeTruthy();
+      const body = JSON.parse(postCall![1]!.body as string) as Record<string, unknown>;
+      expect(body).toMatchObject({
+        pr_number: 7,
+        source_branch: "pr/7/head",
+        target_branch: "main",
+      });
+    });
+  });
+
   it("shows env-var chips and sends selected env_vars on create", async () => {
     const fetchMock = stubFetch({
       ...DEFAULT_HANDLERS,
       "/api/envvars": [
-        { id: 1, name: "DATABASE_URL", masked: "post***", repo_id: null, repo_full_name: null, created_at: "2026-08-08T00:00:00" },
-        { id: 2, name: "API_KEY", masked: "sk-***", repo_id: 1, repo_full_name: "owner/repo", created_at: "2026-08-08T00:00:00" },
+        {
+          id: 1,
+          name: "DATABASE_URL",
+          masked: "post***",
+          repo_id: null,
+          repo_full_name: null,
+          created_at: "2026-08-08T00:00:00",
+        },
+        {
+          id: 2,
+          name: "API_KEY",
+          masked: "sk-***",
+          repo_id: 1,
+          repo_full_name: "owner/repo",
+          created_at: "2026-08-08T00:00:00",
+        },
       ],
     });
 
@@ -280,7 +371,10 @@ describe("Tasks", () => {
     const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
       if (url.includes("/api/settings")) {
         await settingsPromise;
-        return { ok: true, json: async () => ({ default_backend: "opencode", default_model: "x" }) };
+        return {
+          ok: true,
+          json: async () => ({ default_backend: "opencode", default_model: "x" }),
+        };
       }
       if (url.includes("/api/models")) {
         return { ok: true, json: async () => ({ cli: "opencode", models: ["x"] }) };
@@ -326,5 +420,153 @@ describe("Tasks", () => {
     const values = [...typeSelect.options].map((o) => o.value);
     expect(values).toContain("freeform");
     expect(values).not.toContain("screen_finding");
+  });
+});
+
+// ---- Phase 4 T3.1 — Needs-you filter + attention dot + stat card ----------
+
+describe("Tasks page (Phase 4 T3.1)", () => {
+  function renderTasks() {
+    return render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+  }
+
+  it("shows the 'Needs you' filter chip and isolates needs_you rows", async () => {
+    stubFetch({ "/api/tasks": TASKS });
+    renderTasks();
+    expect(await screen.findByRole("button", { name: "Needs you" })).toBeInTheDocument();
+    // The needs_you row is visible by default.
+    expect(screen.getByText("needs you")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Needs you" }));
+    // The filtered list still shows the needs_you row.
+    expect(screen.getByText("needs you")).toBeInTheDocument();
+  });
+
+  it("renders the 'Needs you' stat card with the correct count", async () => {
+    stubFetch({ "/api/tasks": TASKS });
+    renderTasks();
+    await waitFor(() => expect(screen.getAllByText("Needs you").length).toBeGreaterThanOrEqual(2));
+    // The card itself is the second surface containing "Needs you".
+    const needsYouCards = screen.getAllByText("Needs you");
+    const cardSurface = needsYouCards.find((el) => el.classList?.contains("uppercase"));
+    expect(cardSurface).toBeTruthy();
+  });
+
+  it("renders the AttentionBadge next to the StatusBadge", async () => {
+    stubFetch({ "/api/tasks": TASKS });
+    renderTasks();
+    // The AttentionBadge label is `needs you` (underscores stripped).
+    expect(await screen.findByText("needs you")).toBeInTheDocument();
+    // The StatusBadge label is the raw status.
+    expect(screen.getByText("done")).toBeInTheDocument();
+  });
+
+  it("renders the Dismiss button on needs_you rows and allows dismissing attention", async () => {
+    stubFetch({
+      "/api/tasks/1/dismiss-attention": { ...TASKS[0], attention: "done" },
+      "/api/tasks": TASKS,
+    });
+    renderTasks();
+    const dismissBtn = await screen.findByRole("button", { name: "Dismiss" });
+    expect(dismissBtn).toBeInTheDocument();
+    await userEvent.click(dismissBtn);
+    // After dismiss, the task's attention becomes "done" and the dismiss button is removed
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument();
+    });
+  });
+
+  it("renders dependency badges and the blocked pill for a blocked task", async () => {
+    const blocked = {
+      ...TASKS[0],
+      id: 3,
+      status: "blocked",
+      depends_on: [1],
+      blocked_by: [1],
+      blocking: [4],
+      blocked: true,
+    };
+    stubFetch({ "/api/tasks": [blocked] });
+    renderTasks();
+    expect(await screen.findByText("⛔ blocked")).toBeInTheDocument();
+    expect(screen.getByText("depends on #1")).toBeInTheDocument();
+    expect(screen.getByText("blocks #4")).toBeInTheDocument();
+    expect(screen.getByText("blocked")).toBeInTheDocument();
+  });
+
+  it("renders no dependency badges for a task without edges", async () => {
+    stubFetch({ "/api/tasks": TASKS });
+    renderTasks();
+    await screen.findByText("do the thing");
+    expect(screen.queryByText("⛔ blocked")).not.toBeInTheDocument();
+    expect(screen.queryByText(/depends on #/)).not.toBeInTheDocument();
+  });
+});
+
+// ---- Phase 4 T4.4 — running-now panel contract --------------------------
+
+describe("Tasks page (Phase 4 T4.4)", () => {
+  it("renders one card per queued/running task with PR links (no cap)", async () => {
+    const many = [1, 2, 3, 4, 5, 6].map((i) => ({
+      ...TASKS[0],
+      id: i,
+      status: i % 2 ? "running" : "queued",
+      prompt: `job ${i}`,
+      prs: [10 + i],
+      pr_number: null,
+      run: null,
+    }));
+    stubFetch({ ...DEFAULT_HANDLERS, "/api/tasks": many });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    for (let i = 1; i <= 6; i++) await screen.findByText(`job ${i}`);
+    // One PR anchor per card (titles are unique to cards).
+    for (let i = 1; i <= 6; i++) {
+      const cardLink = screen.getByTitle(`PR #${10 + i} on owner/repo`);
+      expect(cardLink).toHaveAttribute(
+        "href",
+        `https://github.com/owner/repo/pull/${10 + i}`
+      );
+    }
+  });
+
+  it("renders PR numbers with a single # in task rows", async () => {
+    stubFetch({ ...DEFAULT_HANDLERS, "/api/tasks": [{ ...TASKS[0], prs: [5] }] });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    await screen.findByText("do the thing");
+    expect(screen.getByText("#5")).toBeInTheDocument();
+    expect(screen.queryByText("##5")).not.toBeInTheDocument();
+  });
+});
+
+// ---- Phase 4 T5.3 — table sticky header + bounded scroll ---------------
+describe("Tasks page (Phase 4 T5.3)", () => {
+  it("wraps the table in a bounded scroll container with a sticky header", async () => {
+    const t1 = { ...TASKS[0] };
+    const t2 = { ...TASKS[0], id: 2, prompt: "another one" };
+    stubFetch({ "/api/tasks": [t1, t2] });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    await screen.findByText("do the thing");
+    const table = screen.getByRole("table");
+    const wrapper = table.parentElement as HTMLElement;
+    expect(wrapper.className).toContain("overflow-y-auto");
+    expect(wrapper.className).toContain("max-h-[60vh]");
+    const thead = table.querySelector("thead") as HTMLElement;
+    expect(thead.className).toContain("sticky");
+    expect(wrapper.contains(screen.getByText("do the thing"))).toBe(true);
   });
 });

@@ -2,21 +2,39 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, taskEvents } from "../api/client";
 import { StatusBadge } from "../components/StatusBadge";
+import { AttentionBadge } from "../components/AttentionBadge";
+import { DepBadges } from "../components/DepBadges";
+import FileBrowser from "../components/FileBrowser";
+import Markdown from "../components/Markdown";
+import { MergeReadinessPanel } from "../components/MergeReadinessPanel";
+import WaitingCard from "../components/WaitingCard";
 import PublishDialog from "../components/PublishDialog";
-import type { Account, Artifact, CatalogAgent, Followup, GithubPr, Repo, Run, SseEvent, Task } from "../types";
+import { parseUnifiedDiff } from "../lib/unifiedDiff";
+import { useInView } from "../lib/useInView";
+import type {
+  Account,
+  Artifact,
+  CatalogAgent,
+  Followup,
+  GithubPr,
+  Repo,
+  Run,
+  SseEvent,
+  Task,
+} from "../types";
 
-const TERMINAL = new Set(["done", "failed", "timed_out", "cancelled", "needs_approval", "interrupted"]);
+const TERMINAL = new Set([
+  "done",
+  "failed",
+  "timed_out",
+  "cancelled",
+  "needs_approval",
+  "interrupted",
+]);
 
 const MAX_LIVE = 500; // live timeline buffer cap (backend persists last 500 steps)
 
-const PHASE_ORDER = [
-  "scanning",
-  "planning",
-  "implementing",
-  "testing",
-  "reviewing",
-  "creating_pr",
-];
+const PHASE_ORDER = ["scanning", "planning", "implementing", "testing", "reviewing", "creating_pr"];
 
 const PHASE_STYLE: Record<string, string> = {
   scanning: "bg-ink-700/40 text-ink-300",
@@ -37,12 +55,52 @@ const STEP_DOT: Record<string, string> = {
 };
 
 const TEXT_EXTENSIONS = new Set([
-  "txt", "md", "json", "log", "py", "js", "ts", "tsx", "jsx", "sh", "yaml", "yml",
-  "toml", "csv", "html", "css", "go", "rs", "java", "c", "h", "cpp", "hpp",
+  "txt",
+  "md",
+  "json",
+  "log",
+  "py",
+  "js",
+  "ts",
+  "tsx",
+  "jsx",
+  "sh",
+  "yaml",
+  "yml",
+  "toml",
+  "csv",
+  "html",
+  "css",
+  "go",
+  "rs",
+  "java",
+  "c",
+  "h",
+  "cpp",
+  "hpp",
 ]);
 const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "ico", "bmp"]);
 
-function Action({ onClick, children, disabled }: { onClick: () => void; children: string; disabled?: boolean }) {
+// Phase 4 T5.3 — step-type colors (background + text), aligned with the
+// StatusBadge dot pattern so the timeline visually pulls from the same palette.
+const STEP_STYLE: Record<string, string> = {
+  step: "bg-ink-700/30 text-ink-300",
+  message: "bg-sky-500/10 text-sky-300",
+  tool_call: "bg-chai-500/10 text-chai-300",
+  diff: "bg-green-500/10 text-green-300",
+  done: "bg-green-500/10 text-green-300",
+  error: "bg-red-500/10 text-red-300",
+};
+
+function Action({
+  onClick,
+  children,
+  disabled,
+}: {
+  onClick: () => void;
+  children: string;
+  disabled?: boolean;
+}) {
   return (
     <button onClick={onClick} disabled={disabled} className="btn-ghost disabled:opacity-40">
       {children}
@@ -68,13 +126,19 @@ function PublishButton({
 }: {
   task: Task;
   disabled: boolean;
-  onPick: (opts: { mode: "new_pr" | "update_pr" | "push_branch"; branch?: string; pr_number?: number }) => void;
+  onPick: (opts: {
+    mode: "new_pr" | "update_pr" | "push_branch";
+    branch?: string;
+    pr_number?: number;
+  }) => void;
 }) {
   const hasLinkedPr = task.prs && task.prs.length > 0;
   const defaultPr = hasLinkedPr ? task.prs[0] : undefined;
   const [showAdvanced, setShowAdvanced] = useState(false);
   // Explicit mode choice in the Advanced panel (null = not chosen → smart default).
-  const [advancedModeChoice, setAdvancedModeChoice] = useState<"new_pr" | "update_pr" | "push_branch" | null>(null);
+  const [advancedModeChoice, setAdvancedModeChoice] = useState<
+    "new_pr" | "update_pr" | "push_branch" | null
+  >(null);
   // Explicit pick in the update_pr dropdown ("" = not picked → smart default).
   const [pickedPr, setPickedPr] = useState<number | "">("");
   const [branchInput, setBranchInput] = useState<string>("");
@@ -120,14 +184,16 @@ function PublishButton({
     (p) => p.head === task.source_branch && !linkedNumbers.has(p.number)
   );
   const effectiveDefaultPr = defaultPr ?? matchingOpenPr?.number;
-  const defaultMode: "new_pr" | "update_pr" = effectiveDefaultPr !== undefined ? "update_pr" : "new_pr";
+  const defaultMode: "new_pr" | "update_pr" =
+    effectiveDefaultPr !== undefined ? "update_pr" : "new_pr";
   const advancedMode: "new_pr" | "update_pr" | "push_branch" =
     advancedModeChoice ?? (defaultMode === "update_pr" ? "update_pr" : "new_pr");
   const advancedPr: number | undefined = pickedPr === "" ? effectiveDefaultPr : pickedPr;
 
-  const primaryLabel = defaultMode === "update_pr" && effectiveDefaultPr !== undefined
-    ? `Push to PR #${effectiveDefaultPr}`
-    : "Publish";
+  const primaryLabel =
+    defaultMode === "update_pr" && effectiveDefaultPr !== undefined
+      ? `Push to PR #${effectiveDefaultPr}`
+      : "Publish";
 
   // Selectable PRs: linked PRs first (labeled by number), then the repo's open
   // PRs with title + head→base so the owner can pick any PR to update.
@@ -135,7 +201,10 @@ function PublishButton({
   for (const n of task.prs ?? []) prOptions.push({ number: n, label: `PR #${n}` });
   for (const p of openPrs ?? []) {
     if (linkedNumbers.has(p.number)) continue;
-    prOptions.push({ number: p.number, label: `#${p.number} — ${p.title} (${p.head} → ${p.base})` });
+    prOptions.push({
+      number: p.number,
+      label: `#${p.number} — ${p.title} (${p.head} → ${p.base})`,
+    });
   }
 
   return (
@@ -172,7 +241,9 @@ function PublishButton({
                 checked={advancedMode === "new_pr"}
                 onChange={() => setAdvancedModeChoice("new_pr")}
               />
-              <span>Open a new PR (push <span className="font-mono">jalebi/{task.id}</span> → target)</span>
+              <span>
+                Open a new PR (push <span className="font-mono">jalebi/{task.id}</span> → target)
+              </span>
             </label>
             <label className="flex items-center gap-2">
               <input
@@ -197,13 +268,19 @@ function PublishButton({
                   </option>
                 ))}
                 {openPrs === null && prOptions.length === 0 && (
-                  <option value="" disabled>loading PRs…</option>
+                  <option value="" disabled>
+                    loading PRs…
+                  </option>
                 )}
                 {prsLoadFailed && (
-                  <option value="" disabled>couldn't load PRs</option>
+                  <option value="" disabled>
+                    couldn't load PRs
+                  </option>
                 )}
                 {openPrs !== null && !prsLoadFailed && prOptions.length === 0 && (
-                  <option value="" disabled>no open PRs in this repo</option>
+                  <option value="" disabled>
+                    no open PRs in this repo
+                  </option>
                 )}
               </select>
             )}
@@ -258,7 +335,7 @@ function ToolCallEntry({ step }: { step: SseEvent }) {
   try {
     const data = JSON.parse(step.text ?? "{}");
     const tool = data.tool ?? "";
-    title = data.title ? `${tool} — ${data.title}` : (tool || (step.text ?? ""));
+    title = data.title ? `${tool} — ${data.title}` : tool || (step.text ?? "");
     details = JSON.stringify(
       { tool: data.tool, input: data.input, output: data.output, status: data.status },
       null,
@@ -284,16 +361,18 @@ function TimelineItem({ step, index }: { step: SseEvent; index: number }) {
   const dot = STEP_DOT[step.type] ?? "bg-ink-600";
   return (
     <li
-      className="relative flex gap-3 animate-fade-up"
+      className="relative flex gap-3 animate-fade-up before:absolute before:left-[3.5px] before:top-[9px] before:bottom-[-12px] before:w-px before:bg-ink-800/70 before:content-[''] last:before:hidden"
       style={{ animationDelay: `${Math.min(index * 0.02, 0.3)}s` }}
     >
       <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ring-2 ring-ink-950 ${dot}`} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <span className="font-mono text-[11px] text-ink-600">
-            {step.ts?.slice(11, 19) ?? ""}
-          </span>
-          <span className="font-mono text-[11px] uppercase tracking-wide text-ink-500">
+          <span className="font-mono text-[11px] text-ink-600">{step.ts?.slice(11, 19) ?? ""}</span>
+          <span
+            className={`rounded px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide ${
+              STEP_STYLE[step.type] ?? "bg-ink-700/30 text-ink-300"
+            }`}
+          >
             {step.type}
           </span>
           {step.phase && (
@@ -310,6 +389,8 @@ function TimelineItem({ step, index }: { step: SseEvent; index: number }) {
           <div className="mt-0.5">
             <ToolCallEntry step={step} />
           </div>
+        ) : step.type === "message" && step.text ? (
+          <Markdown className="mt-0.5">{step.text}</Markdown>
         ) : (
           step.text && <p className="mt-0.5 text-sm leading-snug text-ink-300">{step.text}</p>
         )}
@@ -353,13 +434,16 @@ function FollowUpComposer({
   followups,
   accounts,
   onSent,
+  prefill,
 }: {
   task: Task;
   followups: Followup[];
   accounts: Account[];
   onSent: () => void;
+  prefill?: { nonce: number; text: string } | null;
 }) {
   const [text, setText] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [patName, setPatName] = useState("");
   const [model, setModel] = useState("");
   const [cli, setCli] = useState(task.cli ?? "");
@@ -394,13 +478,29 @@ function FollowUpComposer({
     };
   }, [cli]);
 
+  // A fresh nonce per click (even for the same text) re-triggers this effect,
+  // pre-filling the composer with the quoted final message and focusing it.
+  // setState-in-effect is intentional: we need to mirror a parent-driven input
+  // (the WaitingCard reply button) into the composer's local state, plus
+  // imperatively focus + scroll the textarea. React's lint rule is overly
+  // strict for this "prop-driven state reset" case.
+  useEffect(() => {
+    if (!prefill) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setText(prefill.text);
+    const el = textareaRef.current;
+    if (el) {
+      el.focus();
+      el.scrollIntoView?.({ block: "center" });
+    }
+  }, [prefill]);
+
   // Compare against the value the queue will actually use, not against the
   // task's pinned backend alone — a task with no pin resolves to
   // ``default_backend``, so "Reuse task backend" (cli = "") is NOT a change.
   const resolvedTaskCli = task.cli ?? defaultBackend ?? "opencode";
   const resolvedCurrentCli = cli || (task.cli ?? defaultBackend ?? "opencode");
-  const backendChanged =
-    cli !== "" && resolvedCurrentCli !== resolvedTaskCli;
+  const backendChanged = cli !== "" && resolvedCurrentCli !== resolvedTaskCli;
 
   const hasPr = (task.prs?.length ?? 0) > 0 || task.pr_number != null;
   // "Address reviewers" only makes sense on the fixer task: a pr_review task's
@@ -455,8 +555,8 @@ function FollowUpComposer({
     <section className="surface p-5 animate-fade-up">
       <h2 className="panel-title mb-3">Follow-up</h2>
       <p className="mb-3 text-xs leading-relaxed text-ink-500">
-        Send a follow-up to resume this task&apos;s session in the same worktree and branch —
-        the agent picks up where it left off.
+        Send a follow-up to resume this task&apos;s session in the same worktree and branch — the
+        agent picks up where it left off.
       </p>
       <form onSubmit={submit} className="space-y-3">
         <div className="grid gap-3 sm:grid-cols-2">
@@ -500,6 +600,7 @@ function FollowUpComposer({
           </p>
         )}
         <textarea
+          ref={textareaRef}
           value={text}
           onChange={(e) => setText(e.target.value)}
           rows={3}
@@ -507,8 +608,8 @@ function FollowUpComposer({
           className="field resize-y"
         />
         <p className="text-[11px] leading-relaxed text-ink-600">
-          Resume refreshes remote refs first, then continues your worktree&apos;s local
-          commits; review worktrees move to the current PR head.
+          Resume refreshes remote refs first, then continues your worktree&apos;s local commits;
+          review worktrees move to the current PR head.
         </p>
         {error && <p className="text-xs text-red-400">{error}</p>}
         <div className="flex justify-end gap-2">
@@ -610,7 +711,9 @@ function ReviewersCard({
         </ul>
       ) : (
         <p className="mb-3 text-xs text-ink-500">
-          No reviewers assigned yet. Assign catalog reviewers (kind <code className="font-mono">reviewer</code>) to review this PR — each runs its own review task and posts its comments.
+          No reviewers assigned yet. Assign catalog reviewers (kind{" "}
+          <code className="font-mono">reviewer</code>) to review this PR — each runs its own review
+          task and posts its comments.
         </p>
       )}
 
@@ -695,11 +798,10 @@ function ArtifactPreview({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-3 border-b border-ink-800 px-5 py-3">
-          <h3 className="min-w-0 flex-1 truncate font-mono text-sm text-ink-100">{artifact.path}</h3>
-          <a
-            href={api.artifactUrl(taskId, artifact.id)}
-            className="btn-ghost !px-3 !py-1 text-xs"
-          >
+          <h3 className="min-w-0 flex-1 truncate font-mono text-sm text-ink-100">
+            {artifact.path}
+          </h3>
+          <a href={api.artifactUrl(taskId, artifact.id)} className="btn-ghost !px-3 !py-1 text-xs">
             Download
           </a>
           <button onClick={onClose} className="btn-ghost !px-2 !py-1 text-xs">
@@ -749,53 +851,92 @@ function diffLineClass(line: string): string {
   return "text-ink-300";
 }
 
-function fileLabel(header: string): string {
-  // "diff --git a/foo/bar.ts b/foo/bar.ts" -> "foo/bar.ts" (renames shown as a → b).
-  const m = header.match(/^diff --git a\/(.*?) b\/(.*)$/);
-  if (!m) return header;
-  const [a, b] = [m[1], m[2]];
-  if (a === "dev/null") return b;
-  if (b === "dev/null") return a;
-  return a === b ? a : `${a} → ${b}`;
+const STATUS_LETTER: Record<string, string> = {
+  added: "A",
+  removed: "D",
+  modified: "M",
+  renamed: "R",
+  binary: "B",
+};
+
+function pathLabel(file: {
+  oldPath: string | null;
+  newPath: string | null;
+  status: string;
+}): string {
+  const target = file.newPath ?? file.oldPath ?? "?";
+  if (file.status === "renamed" && file.oldPath && file.newPath) {
+    return `${file.oldPath} → ${file.newPath}`;
+  }
+  return target;
 }
 
-function fileStats(lines: string[]): { add: number; del: number } {
-  let add = 0;
-  let del = 0;
-  for (const line of lines) {
-    if (line.startsWith("+++ ") || line.startsWith("--- ")) continue;
-    if (line.startsWith("+")) add += 1;
-    else if (line.startsWith("-")) del += 1;
-  }
-  return { add, del };
+function DiffFileSection({
+  file,
+  defaultOpen,
+}: {
+  file: ReturnType<typeof parseUnifiedDiff>[number];
+  defaultOpen: boolean;
+}) {
+  const { ref, inView } = useInView<HTMLDivElement>();
+  const letter = STATUS_LETTER[file.status] ?? "M";
+  return (
+    <details open={defaultOpen}>
+      <summary className="cursor-pointer select-none font-mono text-xs text-ink-200 transition-colors hover:text-syrup-300">
+        <span
+          className={`mr-2 inline-block w-4 text-center font-bold ${
+            file.status === "added"
+              ? "text-green-400"
+              : file.status === "removed"
+                ? "text-red-400"
+                : file.status === "renamed"
+                  ? "text-chai-300"
+                  : file.status === "binary"
+                    ? "text-ink-500"
+                    : "text-syrup-300"
+          }`}
+        >
+          {letter}
+        </span>
+        <span className="text-ink-100">{pathLabel(file)}</span>
+        {file.additions > 0 && <span className="ml-2 text-green-400">+{file.additions}</span>}
+        {file.deletions > 0 && <span className="ml-2 text-red-400">−{file.deletions}</span>}
+      </summary>
+      <div ref={ref}>
+        {file.binary ? (
+          <p className="mt-1 rounded bg-ink-900/60 p-3 font-mono text-[11px] text-ink-400">
+            binary file — use Artifacts below to download.
+          </p>
+        ) : inView || typeof IntersectionObserver === "undefined" ? (
+          <pre className="mt-1 max-h-96 overflow-auto whitespace-pre rounded bg-ink-900/60 p-2 font-mono text-[11px] leading-relaxed">
+            {file.hunks.map((hunk, h) => (
+              <div key={h}>
+                {hunk.header && <div className={diffLineClass(hunk.header)}>{hunk.header}</div>}
+                {hunk.lines.map((line, j) => (
+                  <div key={j} className={diffLineClass(line)}>
+                    {line}
+                  </div>
+                ))}
+              </div>
+            ))}
+          </pre>
+        ) : (
+          <p className="mt-1 rounded bg-ink-900/60 p-3 font-mono text-[11px] text-ink-500">
+            scroll to load…
+          </p>
+        )}
+      </div>
+    </details>
+  );
 }
 
 function DiffView({ diff }: { diff: string }) {
-  // Split the unified diff into per-file chunks on `diff --git` headers.
-  const files = useMemo(() => {
-    const chunks: { header: string; lines: string[] }[] = [];
-    let current: { header: string; lines: string[] } | null = null;
-    for (const line of diff.split("\n")) {
-      if (line.startsWith("diff --git ")) {
-        current = { header: line, lines: [] };
-        chunks.push(current);
-      } else if (current) {
-        current.lines.push(line);
-      } else if (line.trim()) {
-        chunks.push({ header: "(header)", lines: [line] });
-      }
-    }
-    return chunks;
-  }, [diff]);
-
+  const files = useMemo(() => parseUnifiedDiff(diff), [diff]);
   if (files.length === 0) {
     return <p className="text-sm text-ink-500">No diff.</p>;
   }
   const totals = files.reduce(
-    (acc, f) => {
-      const s = fileStats(f.lines);
-      return { add: acc.add + s.add, del: acc.del + s.del };
-    },
+    (acc, f) => ({ add: acc.add + f.additions, del: acc.del + f.deletions }),
     { add: 0, del: 0 }
   );
   return (
@@ -807,66 +948,39 @@ function DiffView({ diff }: { diff: string }) {
         <span className="text-green-400">+{totals.add}</span>
         <span className="text-red-400">−{totals.del}</span>
       </div>
-      {files.map((file, i) => {
-        const stats = fileStats(file.lines);
-        return (
-          <details key={`${file.header}-${i}`} open={files.length === 1}>
-            <summary className="cursor-pointer select-none font-mono text-xs text-ink-200 transition-colors hover:text-syrup-300">
-              <span className="text-ink-100">{fileLabel(file.header)}</span>
-              {stats.add > 0 && (
-                <span className="ml-2 text-green-400">+{stats.add}</span>
-              )}
-              {stats.del > 0 && (
-                <span className="ml-2 text-red-400">−{stats.del}</span>
-              )}
-            </summary>
-            <pre className="mt-1 max-h-96 overflow-auto whitespace-pre rounded bg-ink-900/60 p-2 font-mono text-[11px] leading-relaxed">
-              <div className={diffLineClass(file.header)}>{file.header}</div>
-              {file.lines.map((line, j) => (
-                <div key={j} className={diffLineClass(line)}>
-                  {line}
-                </div>
-              ))}
-            </pre>
-          </details>
-        );
-      })}
+      {files.map((file, i) => (
+        <DiffFileSection
+          key={`${file.newPath ?? file.oldPath ?? i}`}
+          file={file}
+          defaultOpen={files.length === 1}
+        />
+      ))}
     </div>
   );
 }
 
-function DiffSection({
-  taskId,
-  run,
-}: {
-  taskId: number;
-  run: Run;
-}) {
+function DiffSection({ taskId, run, isLatest }: { taskId: number; run: Run; isLatest: boolean }) {
   const [diff, setDiff] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!run.has_diff) return;
     let cancelled = false;
-    api
-      .getRunDiff(taskId, run.id)
+    const request = isLatest ? api.getLiveDiff(taskId) : api.getRunDiff(taskId, run.id);
+    request
       .then((r) => !cancelled && setDiff(r.diff))
       .catch((e) => !cancelled && setError(e instanceof Error ? e.message : "failed to load diff"));
     return () => {
       cancelled = true;
     };
-  }, [taskId, run.id, run.has_diff]);
+  }, [taskId, run.has_diff, run.id, isLatest]);
 
   if (!run.has_diff) return null;
   return (
     <section className="surface p-5 animate-fade-up">
       <h2 className="panel-title mb-3">Diff</h2>
       {error && <p className="text-xs text-red-400">{error}</p>}
-      {diff === null ? (
-        <p className="text-sm text-ink-500">Loading…</p>
-      ) : (
-        <DiffView diff={diff} />
-      )}
+      {diff === null ? <p className="text-sm text-ink-500">Loading…</p> : <DiffView diff={diff} />}
     </section>
   );
 }
@@ -946,8 +1060,14 @@ export default function TaskDetail() {
       .getAgents(true)
       .then((a) => setAgents(a.filter((x) => x.kind === "reviewer")))
       .catch(() => {});
-    api.getRepos().then(setRepos).catch(() => {});
-    api.getTokens().then((t) => setAccounts(t.accounts ?? [])).catch(() => {});
+    api
+      .getRepos()
+      .then(setRepos)
+      .catch(() => {});
+    api
+      .getTokens()
+      .then((t) => setAccounts(t.accounts ?? []))
+      .catch(() => {});
   }, [taskId]);
 
   useEffect(() => {
@@ -957,15 +1077,14 @@ export default function TaskDetail() {
   // Cancel / Re-run / Publish: serialized, with errors surfaced inline instead of
   // silently swallowed (D-4). The ref check is synchronous so two clicks in the
   // same tick (before React re-renders) cannot double-fire.
-  function runAction(fn: () => Promise<unknown>) {    if (actionInFlightRef.current) return;
+  function runAction(fn: () => Promise<unknown>) {
+    if (actionInFlightRef.current) return;
     actionInFlightRef.current = true;
     setActionBusy(true);
     setActionError(null);
     fn()
       .then(load)
-      .catch((e) =>
-        setActionError(e instanceof Error ? e.message : "action failed")
-      )
+      .catch((e) => setActionError(e instanceof Error ? e.message : "action failed"))
       .finally(() => {
         actionInFlightRef.current = false;
         setActionBusy(false);
@@ -1059,45 +1178,203 @@ export default function TaskDetail() {
     ? (runs.find((r) => r.id === selectedRunId) ?? task.run ?? runs[runs.length - 1] ?? null)
     : null;
   const previewStepsLen = previewRun?.steps?.length ?? 0;
-  const previewIsLatest = task !== null && (selectedRunId === null || selectedRunId === task.run?.id);
+  const previewIsLatest =
+    task !== null && (selectedRunId === null || selectedRunId === task.run?.id);
   const previewTimelineLen = previewIsLatest ? previewStepsLen + live.length : previewStepsLen;
-  const timelineRef = useAutoScroll<HTMLOListElement>(previewTimelineLen, followScroll);
-  const consoleRef = useAutoScroll<HTMLPreElement>(previewTimelineLen, followScroll);
+  const timelineRef = useAutoScroll<HTMLDivElement>(previewTimelineLen, followScroll);
+  const consoleRef = useAutoScroll<HTMLDivElement>(previewTimelineLen, followScroll);
+  const [replyPrefill, setReplyPrefill] = useState<{ nonce: number; text: string } | null>(null);
+  const replyNonce = useRef(0);
+  // Phase 4 T6 — whether an IDE command is configured (for Open worktree).
+  const [ideConfigured, setIdeConfigured] = useState(false);
+  const [ideName, setIdeName] = useState<string | null>(null);
+  const [ideError, setIdeError] = useState<string | null>(null);
+  const [ideBusy, setIdeBusy] = useState(false);
+  const [ideOpened, setIdeOpened] = useState(false);
+  const ideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (ideTimerRef.current) clearTimeout(ideTimerRef.current);
+    };
+  }, []);
+
+  // Fetch ide settings once to decide whether "Open worktree" is available.
+  useEffect(() => {
+    api
+      .getSettings()
+      .then((s) => {
+        setIdeConfigured(Boolean(s.ide_command));
+        setIdeName(s.ide_name || null);
+      })
+      .catch(() => {});
+  }, []);
+
+  const openInIde = () => {
+    if (ideBusy || !task) return;
+    setIdeBusy(true);
+    setIdeError(null);
+    setIdeOpened(false);
+    if (ideTimerRef.current) clearTimeout(ideTimerRef.current);
+    api
+      .openInIde(task.id)
+      .then(() => {
+        setIdeOpened(true);
+        ideTimerRef.current = setTimeout(() => setIdeOpened(false), 3000);
+      })
+      .catch((e) => setIdeError(e instanceof Error ? e.message : "failed to open in IDE"))
+      .finally(() => setIdeBusy(false));
+  };
 
   if (error) return <p className="text-red-400">{error}</p>;
   if (!task) return <p className="text-ink-500">Loading…</p>;
 
-  const repoName = task.repo_full_name ?? repos.find((r) => r.id === task.repo_id)?.full_name ?? `repo#${task.repo_id}`;
+  const repoName =
+    task.repo_full_name ??
+    repos.find((r) => r.id === task.repo_id)?.full_name ??
+    `repo#${task.repo_id}`;
   const selectedRun =
     runs.find((r) => r.id === selectedRunId) ?? task.run ?? runs[runs.length - 1] ?? null;
   const steps = selectedRun?.steps ?? [];
+  const finalMessage = (() => {
+    if (!selectedRun?.waiting_input) return null;
+    for (let i = steps.length - 1; i >= 0; i--) {
+      const s = steps[i];
+      if (s.type === "message" && s.text) return s.text;
+    }
+    return null;
+  })();
+  const canReply = runs.some((r) => r.session_id) && TERMINAL.has(task.status);
   const timeline = isLatest ? [...steps, ...live] : steps;
   const consoleLines = timeline.filter((s) => s.type === "message" || s.type === "tool_call");
 
   const lastPhase = timeline.reduce<string | null>((acc, s) => s.phase ?? acc, null);
   const phaseIndex = lastPhase ? PHASE_ORDER.indexOf(lastPhase) : -1;
 
+  function handleDismissAttention() {
+    if (!task) return;
+    api
+      .dismissAttention(task.id)
+      .then((updated) => setTask(updated))
+      .catch((e) => setError(e.message));
+  }
+
+  let ideButtonLabel = `Open in ${ideName || "IDE"}`;
+  if (ideOpened) {
+    ideButtonLabel = `Opened in ${ideName || "IDE"} ✓`;
+  } else if (ideBusy) {
+    ideButtonLabel = "Opening…";
+  }
+
   return (
     <div className="space-y-6 animate-fade-up">
-      <div className="flex flex-wrap items-center gap-3">
-        <Link to="/" className="text-sm text-ink-500 transition-colors hover:text-syrup-300">
-          ← Tasks
-        </Link>
-        <h1 className="text-2xl font-bold tracking-tight text-ink-100">Task #{task.id}</h1>
-        <StatusBadge status={task.status} />
-        <span className="mx-1 hidden h-4 w-px bg-ink-800 sm:block" />
-        <span className="font-mono text-xs text-ink-500">
-          {repoName}
-          <span className="mx-1.5 text-ink-700">·</span>
-          {task.model ?? "default model"}
-          {task.pat_name && (
-            <>
-              <span className="mx-1.5 text-ink-700">·</span>
-              {accounts.find((a) => a.name === task.pat_name)?.login ?? task.pat_name}
-            </>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <Link to="/" className="text-sm text-ink-500 transition-colors hover:text-syrup-300">
+            ← Tasks
+          </Link>
+          <h1 className="text-2xl font-bold tracking-tight text-ink-100">Task #{task.id}</h1>
+          <StatusBadge status={task.status} />
+          <DepBadges
+            dependsOn={task.depends_on}
+            blockedBy={task.blocked_by}
+            blocking={task.blocking}
+            blocked={task.blocked}
+          />
+          {task.attention && task.attention !== "working" && (
+            <div className="flex items-center gap-1.5">
+              <AttentionBadge attention={task.attention} />
+              {task.attention === "needs_you" && (
+                <button
+                  type="button"
+                  onClick={handleDismissAttention}
+                  className="rounded px-1.5 py-0.5 text-[10px] font-medium text-ink-400 ring-1 ring-ink-700/60 hover:bg-ink-800 hover:text-ink-200 transition-colors"
+                  title="Dismiss attention for this task"
+                >
+                  Dismiss
+                </button>
+              )}
+            </div>
           )}
-        </span>
+          <span className="mx-1 hidden h-4 w-px bg-ink-800 sm:block" />
+          <span className="font-mono text-xs text-ink-500">
+            {repoName}
+            <span className="mx-1.5 text-ink-700">·</span>
+            {task.model ?? "default model"}
+            {task.pat_name && (
+              <>
+                <span className="mx-1.5 text-ink-700">·</span>
+                {accounts.find((a) => a.name === task.pat_name)?.login ?? task.pat_name}
+              </>
+            )}
+          </span>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {ideConfigured ? (
+            <button
+              type="button"
+              onClick={openInIde}
+              disabled={ideBusy}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-ink-700/60 bg-ink-900/60 px-3 py-1.5 text-xs font-medium text-ink-200 transition-colors hover:border-syrup-500/50 hover:bg-ink-800 hover:text-syrup-200 disabled:opacity-50"
+              title={`Open worktree in ${ideName || "configured IDE"}`}
+            >
+              <svg className="h-3.5 w-3.5 text-syrup-400" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M2 3.75C2 2.784 2.784 2 3.75 2h8.5c.966 0 1.75.784 1.75 1.75v8.5A1.75 1.75 0 0 1 12.25 14h-8.5A1.75 1.75 0 0 1 2 12.25Zm1.75-.25a.25.25 0 0 0-.25.25v8.5c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25v-8.5a.25.25 0 0 0-.25-.25Z" />
+                <path d="M5.78 5.47a.75.75 0 0 1 0 1.06L4.81 7.5l.97.97a.75.75 0 1 1-1.06 1.06l-1.5-1.5a.75.75 0 0 1 0-1.06l1.5-1.5a.75.75 0 0 1 1.06 0Zm4.44 0a.75.75 0 0 1 1.06 0l1.5 1.5a.75.75 0 0 1 0 1.06l-1.5 1.5a.75.75 0 0 1-1.06-1.06l.97-.97-.97-.97a.75.75 0 0 1 0-1.06Z" />
+              </svg>
+              <span>{ideButtonLabel}</span>
+            </button>
+          ) : (
+            <Link
+              to="/settings"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-dashed border-ink-800 px-3 py-1.5 text-xs text-ink-500 transition-colors hover:border-ink-700 hover:text-ink-400"
+              title="Configure IDE in Settings to open worktrees directly"
+            >
+              <span>Configure IDE…</span>
+            </Link>
+          )}
+        </div>
       </div>
+
+      {ideError && (
+        <div className="flex items-center justify-between rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-400">
+          <span>Failed to open in IDE: {ideError}</span>
+          <button
+            type="button"
+            onClick={() => setIdeError(null)}
+            className="ml-2 font-bold text-red-300 hover:text-white"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {finalMessage && selectedRun && (
+        <>
+          <WaitingCard
+            run={selectedRun}
+            message={finalMessage}
+            canReply={canReply}
+            onReply={() => {
+              const quoted = finalMessage
+                .split("\n")
+                .map((l) => `> ${l}`)
+                .join("\n");
+              replyNonce.current += 1;
+              setReplyPrefill({ nonce: replyNonce.current, text: `${quoted}\n\n` });
+            }}
+            ideConfigured={ideConfigured}
+            ideName={ideName}
+            onOpenWorktree={openInIde}
+            onReject={() => {
+              if (window.confirm("Reject this proposal and dismiss attention?")) {
+                handleDismissAttention();
+              }
+            }}
+          />
+        </>
+      )}
 
       <section className="surface p-6">
         <div className="flex items-center justify-between gap-4">
@@ -1139,7 +1416,9 @@ export default function TaskDetail() {
             <a
               className="btn-ghost !px-3 !py-1 text-xs text-syrup-300"
               href={`https://github.com/${repoName}/${
-                task.pr_number ? `pull/${task.pr_number}` : `commits/${task.source_branch || task.target_branch || "main"}`
+                task.pr_number
+                  ? `pull/${task.pr_number}`
+                  : `commits/${task.source_branch || task.target_branch || "main"}`
               }`}
               target="_blank"
               rel="noreferrer"
@@ -1182,19 +1461,19 @@ export default function TaskDetail() {
       </section>
 
       <div className="flex flex-wrap gap-2">
+        {(task.status === "needs_approval" || canManualPublish(task)) && (
+          <MergeReadinessPanel taskId={task.id} refreshKey={task.updated_at} />
+        )}
+      </div>
+
+      <div className="flex flex-wrap gap-2">
         {(task.status === "running" || task.status === "queued") && (
-          <Action
-            onClick={() => runAction(() => api.cancelTask(task.id))}
-            disabled={actionBusy}
-          >
+          <Action onClick={() => runAction(() => api.cancelTask(task.id))} disabled={actionBusy}>
             Cancel
           </Action>
         )}
         {TERMINAL.has(task.status) && task.status !== "needs_approval" && (
-          <Action
-            onClick={() => runAction(() => api.rerunTask(task.id))}
-            disabled={actionBusy}
-          >
+          <Action onClick={() => runAction(() => api.rerunTask(task.id))} disabled={actionBusy}>
             Re-run
           </Action>
         )}
@@ -1219,10 +1498,7 @@ export default function TaskDetail() {
             }}
           />
         )}
-        <Action
-          onClick={deleteTask}
-          disabled={actionBusy}
-        >
+        <Action onClick={deleteTask} disabled={actionBusy}>
           Delete
         </Action>
         {actionError && <p className="text-xs text-red-400">{actionError}</p>}
@@ -1247,6 +1523,7 @@ export default function TaskDetail() {
             load();
             setFollowUpPending(true);
           }}
+          prefill={replyPrefill}
         />
       )}
 
@@ -1279,59 +1556,84 @@ export default function TaskDetail() {
       )}
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <section className="surface flex min-h-[24rem] flex-col p-5">
-          <div className="mb-3 flex items-center justify-between gap-2">
-            <h2 className="panel-title">Timeline</h2>
-            <label className="flex shrink-0 items-center gap-1.5 text-[11px] text-ink-500">
-              <input
-                type="checkbox"
-                checked={followScroll}
-                onChange={(e) => setFollowScroll(e.target.checked)}
-                className="accent-syrup-500"
-              />
-              auto-scroll
-            </label>
+        <section className="surface flex h-[30rem] flex-col p-5">
+          <div ref={timelineRef} className="min-h-0 flex-1 overflow-y-auto pr-2">
+            <div className="sticky top-0 z-10 bg-ink-900/85 pb-3 backdrop-blur-sm">
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="panel-title">Timeline</h2>
+                <label className="flex shrink-0 items-center gap-1.5 text-[11px] text-ink-500">
+                  <input
+                    type="checkbox"
+                    checked={followScroll}
+                    onChange={(e) => setFollowScroll(e.target.checked)}
+                    className="accent-syrup-500"
+                  />
+                  auto-scroll
+                </label>
+              </div>
+            </div>
+            <ol className="space-y-3 text-sm">
+              {timeline.length === 0 && <li className="text-ink-600">No steps yet.</li>}
+              {timeline.map((step, i) => (
+                <TimelineItem
+                  key={step.seq ?? `${step.ts ?? "?"}-${step.type}`}
+                  step={step}
+                  index={i}
+                />
+              ))}
+            </ol>
           </div>
-          <ol ref={timelineRef} className="space-y-3 overflow-y-auto pr-2 text-sm">
-            {timeline.length === 0 && <li className="text-ink-600">No steps yet.</li>}
-            {timeline.map((step, i) => (
-              <TimelineItem
-                key={step.seq ?? `${step.ts ?? "?"}-${step.type}`}
-                step={step}
-                index={i}
-              />
-            ))}
-          </ol>
         </section>
-        <section className="surface flex min-h-[24rem] flex-col p-5">
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="panel-title">Console</h2>
-            <span className="font-mono text-[11px] text-ink-600">
-              {consoleLines.length} {consoleLines.length === 1 ? "line" : "lines"}
-            </span>
-          </div>
-          <pre ref={consoleRef} className="flex-1 overflow-y-auto whitespace-pre-wrap pr-2 font-mono text-xs leading-relaxed text-ink-300">
-            {consoleLines.length === 0 ? "No output yet." : ""}
-            {consoleLines.map((line) => (
-              <div key={line.seq ?? `${line.ts ?? "?"}-${line.type}`} className="flex gap-2">
-                <span
-                  className={`shrink-0 select-none ${
-                    line.type === "tool_call" ? "text-chai-500" : "text-ink-700"
-                  }`}
-                >
-                  {line.type === "tool_call" ? "⚙" : "›"}
-                </span>
-                <span className={line.type === "tool_call" ? "text-chai-300" : "text-ink-300"}>
-                  {line.text}
+        <section className="surface flex h-[30rem] flex-col p-5">
+          <div ref={consoleRef} className="min-h-0 flex-1 overflow-y-auto pr-2">
+            <div className="sticky top-0 z-10 bg-ink-900/85 pb-3 backdrop-blur-sm">
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="panel-title">Console</h2>
+                <span className="font-mono text-[11px] tabular-nums text-ink-500">
+                  {consoleLines.length} {consoleLines.length === 1 ? "line" : "lines"}
+                  {selectedRun?.started_at
+                    ? ` · ${runDuration(selectedRun.started_at, selectedRun.finished_at)}`
+                    : ""}
                 </span>
               </div>
-            ))}
-          </pre>
+            </div>
+            <pre className="whitespace-pre-wrap font-mono text-xs leading-relaxed text-ink-300">
+              {consoleLines.length === 0 ? "No output yet." : ""}
+              {consoleLines.map((line) => (
+                <div key={line.seq ?? `${line.ts ?? "?"}-${line.type}`} className="flex gap-2">
+                  <span
+                    className={`shrink-0 select-none ${
+                      line.type === "tool_call" ? "text-chai-500" : "text-ink-700"
+                    }`}
+                  >
+                    {line.type === "tool_call" ? "⚙" : "›"}
+                  </span>
+                  <span className={line.type === "tool_call" ? "text-chai-300" : "text-ink-300"}>
+                    {line.text}
+                  </span>
+                </div>
+              ))}
+            </pre>
+          </div>
         </section>
       </div>
 
       {selectedRun && (
-        <DiffSection key={selectedRun.id} taskId={task.id} run={selectedRun} />
+        <FileBrowser
+          taskId={task.id}
+          refreshSignal={live.length}
+          onOpenInIde={ideConfigured ? openInIde : undefined}
+          ideName={ideName}
+        />
+      )}
+
+      {selectedRun && (
+        <DiffSection
+          key={`${selectedRun.id}:${isLatest}`}
+          taskId={task.id}
+          run={selectedRun}
+          isLatest={isLatest}
+        />
       )}
 
       {runs.length > 1 && (
@@ -1339,7 +1641,8 @@ export default function TaskDetail() {
           <div className="mb-3 flex items-center justify-between gap-2">
             <h2 className="panel-title">Run history</h2>
             <p className="text-xs text-ink-500">
-              The live stream follows the latest run. Click a run to view its logs, diff, and artifacts.
+              The live stream follows the latest run. Click a run to view its logs, diff, and
+              artifacts.
             </p>
           </div>
           <ol className="divide-y divide-ink-800/70">
@@ -1351,7 +1654,9 @@ export default function TaskDetail() {
                     type="button"
                     onClick={() => setSelectedRunId(r.id)}
                     className={`flex w-full items-center gap-3 px-2 py-2.5 text-left transition-colors ${
-                      active ? "rounded-lg bg-ink-850/80 ring-1 ring-inset ring-syrup-500/40" : "hover:bg-ink-850/40"
+                      active
+                        ? "rounded-lg bg-ink-850/80 ring-1 ring-inset ring-syrup-500/40"
+                        : "hover:bg-ink-850/40"
                     }`}
                   >
                     <span className="font-mono text-sm text-ink-200">#{r.seq}</span>
@@ -1384,13 +1689,7 @@ export default function TaskDetail() {
         </section>
       )}
 
-      {preview && (
-        <ArtifactPreview
-          taskId={task.id}
-          artifact={preview}
-          onClose={closePreview}
-        />
-      )}
+      {preview && <ArtifactPreview taskId={task.id} artifact={preview} onClose={closePreview} />}
 
       {publishDialogOpen && publishOptions && (
         <PublishDialog

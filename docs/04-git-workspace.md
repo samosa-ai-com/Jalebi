@@ -54,6 +54,7 @@ Jalebi uses the **git CLI** (not libgit2) for all repo operations. Each task/age
 - **`issue_fix` (single-target model):** a single **target branch** picker (the PR base). The worktree is based on that same branch, so the PR diff is exactly the agent's fix and merges cleanly by construction. This supersedes PRD §F8's two-selector design ("source `main`, target `development`"): diverged source/target produced PRs that smuggled source-only commits into the target or silently conflicted.
 - **Other task types (freeform):** a **source branch** (the worktree base) and a **target branch** (the PR base) remain available.
 - **`pr_review`:** branch pickers are hidden — the review worktree checks out the PR head, so branches are irrelevant.
+- **Fork-PR fix flow (freeform only):** when a freeform task links a fork PR, the source may be the sentinel **`pr/<N>/head`** instead of an origin branch. `create_worktree_from_pr_head()` bases writable `jalebi/<id>` on the current `refs/pull/<N>/head` commit (fetched like review worktrees — no fork remote is ever added), so a fork branch that never exists on `origin` can still be addressed. `reset_branch_to_pr_head()` is the first-run reset equivalent. Diff/conflict checks for these tasks run against `origin/<target_branch>` (the PR base) via `tasks.effective_diff_base()` — the sentinel never reaches git.
 
 ## 8. Publish (PRD §F9)
 
@@ -65,11 +66,13 @@ Jalebi uses the **git CLI** (not libgit2) for all repo operations. Each task/age
 - **Issue comments on new PR only:** the "Jalebi opened a pull request for this issue" comment is posted **only when a PR is newly created**, never when re-publishing to an existing open PR (follow-up pushes stay silent).
 - **Three publish modes** (manual publish via the UI; auto-publish always uses `new_pr`):
 
-  | Mode | What it does | When to use |
-  |---|---|---|
-  | `new_pr` *(default, current behaviour)* | Push `jalebi/<id>` → target, open a new PR (or reuse an existing open PR with that head). | The agent's work is a standalone change. |
-  | `update_pr` | Fast-forward (or merge) `jalebi/<id>` into an existing PR's head branch, force-push with `--force-with-lease`. | The agent's commits should land on top of an existing PR (e.g. addressing review feedback or adding to a branch the user already opened). |
-  | `push_branch` | Fast-forward (or merge) `jalebi/<id>` into a named branch, force-push with `--force-with-lease`. No PR interaction. | The agent's work goes onto a feature branch with no PR. |
+   | Mode | What it does | When to use |
+   |---|---|---|
+   | `new_pr` *(default, current behaviour)* | Push `jalebi/<id>` → target, open a new PR (or reuse an existing open PR with that head). | The agent's work is a standalone change. |
+   | `update_pr` | Fast-forward (or merge) `jalebi/<id>` into an existing PR's head branch, force-push with `--force-with-lease`. | The agent's commits should land on top of an existing PR (e.g. addressing review feedback or adding to a branch the user already opened). |
+   | `push_branch` | Fast-forward (or merge) `jalebi/<id>` into a named branch, force-push with `--force-with-lease`. No PR interaction. | The agent's work goes onto a feature branch with no PR. |
+
+   **Fork-PR `update_pr` (Option 1 with `new_pr` fallback):** when the target PR's head lives on a fork (`head_repo != base repo`), the queue merges `jalebi/<id>` into the mirror-local `fork-pr-<N>` branch (recreated at the current PR head each time) and pushes `fork-pr-<N>:<head_branch>` directly to `https://github.com/<fork>.git` with `--force-with-lease=<branch>:<head_sha>` — no remote is added (agents remain forbidden from adding remotes; the queue owns fork writes). A concurrently-moved fork branch is refused as `PushLeaseFailed` (412). When the fork disallows maintainer edits (`maintainer_can_modify == false`), publish is refused with a `PublishError` guiding the owner to `new_pr` instead (a separate origin PR, leaving the fork untouched).
 
   All three run in Jalebi's queue/server process — never in the agent subprocess. `auth_env` (git push credentials) is never applied to the agent env, so the agent still cannot push directly (see `docs/10-security.md`).
 
@@ -111,3 +114,17 @@ Jalebi uses the **git CLI** (not libgit2) for all repo operations. Each task/age
 - `create_review_worktree(task_id, full_name, pr_number)` fetches `refs/pull/<n>/head` into the mirror (works for same-repo **and** fork PRs without touching the fork) and checks it out **detached** into `ws/task-<id>-review`. Reviewers read/validate but can never push.
 - `list_branches(full_name)` lists `origin/*` from the mirror (task-form branch pickers).
 - The same per-CLI guard + identity bootstrap applies to review worktrees.
+
+---
+
+## 13. Phase 4 T1 — diff quality + publish guards
+
+- **`GitWorkspace.diff_against_base(worktree, base_branch)`** (T1.2) — cherry-pick-aware cumulative diff. Uses `git merge-base origin/<base_branch> HEAD` for the true common ancestor, then `git log --cherry-pick --right-only --reverse <base>..HEAD --format=%H` to drop patch-equivalent commits. Falls back to a plain two-dot range diff if there is no common ancestor. A fully-merged branch (all commits patch-equivalent) collapses to `""`. Read-only — never mutates the worktree.
+- **`GitWorkspace.diff_with_untracked(worktree, tracked_diff)`** (T1.3) — appends synthesized `diff --git` / `new file mode 100644` / `--- /dev/null` / `+++ b/<rel>` hunks for each file in `git ls-files --others --exclude-standard`. Binary files (NUL byte in the first 8 KB) and files over `_UNTRACKED_DIFF_SIZE_CAP` (1 MB) are omitted. Rejects absolute/traversal paths, case-insensitive `.git` segments, and resolved paths outside the worktree. Every component is opened relative to its parent with `O_NOFOLLOW`, refusing direct and intermediate symlinks even during a concurrent swap. Only regular files are read, with a bounded read to handle growth after the size check. Pure read of the working tree; composes with both `diff_against_target` and `diff_against_base`.
+- **`GitWorkspace.predict_conflicts(full_name, task_id, base_ref)`** (T1.4) — runs `git merge-tree --write-tree origin/<base_ref> jalebi/<task_id>` on the **mirror** (never the worktree — no worktree mutation, no abort dance). Returns `[(kind, path), ...]` parsed from the file-info lines (stages 1/2/3) + `CONFLICT (kind)` lines; empty when the merge would be clean. Requires git ≥ 2.38. Caller runs `ensure_mirror` first.
+- **`GitWorkspace.assert_publish_branch(task_id)`** (T1.5) — refuses to publish when the worktree HEAD is not on `jalebi/<task_id>`. An agent may checkout/detach onto another branch; publishing would then push the wrong ref. Raises `GitWorkspaceError`; the queue's `_publish` (`queue.py:_guard_publish_branch`) is the first line of every publish path and translates it into `PublishError`. The guard runs in `_publish` (which covers both the manual `publish_task` route and the auto-publish path in `_stream_and_finish`).
+- **`GET /api/tasks/<id>/diff?base=1&untracked=1`** — live diff of the worktree branch. Default (`?base=0&untracked=0`) matches the existing run-end snapshot behavior. `?base=1` switches to `diff_against_base`; `?untracked=1` appends the untracked-file hunks. Returns `{diff, base, untracked}`. Additive, zero observable change to existing pages.
+- **`GET /api/tasks/<id>/merge-check`** — predictive conflict check. Runs `predict_conflicts` on the mirror (read-only); returns `{ok, conflicts: [{kind, path}]}`. Calls `assert_publish_branch` first (refuses 409 with `kind: "branch_mismatch"` when the worktree HEAD is not on the canonical branch). 404 when the task or repo is missing.
+- **`GitWorkspace.rev_parse_head(worktree)`** (T1.6 helper used by the queue) — returns the full SHA of the worktree's HEAD; raises `GitWorkspaceError` when the worktree has no commits yet. The queue wraps this with a `-dirty` suffix when `git status --porcelain` is non-empty.
+
+**New endpoints are not consumed by the existing UI today.** T3 (diff viewer upgrade) wires `?base=1&untracked=1`; the merge-readiness panel (T3.2) wires `/merge-check`. Until then the endpoints sit as additive API surface verified by the integration tests in `tests/test_api_tasks.py`.

@@ -259,6 +259,78 @@ def test_list_prs(monkeypatch) -> None:
     assert prs[0]["head"] == "jalebi/7"
 
 
+def test_list_prs_marks_fork_heads(monkeypatch) -> None:
+    client = make_client()
+    body = [
+        {
+            "number": 7,
+            "title": "fork PR",
+            "html_url": "u",
+            "state": "open",
+            "base": {"ref": "main", "repo": {"full_name": "owner/repo"}},
+            "head": {
+                "ref": "feat/x",
+                "sha": "abc",
+                "repo": {"full_name": "fork/repo", "fork": True},
+            },
+            "user": {"login": "contrib"},
+        },
+        {
+            "number": 8,
+            "title": "same-repo PR",
+            "html_url": "u",
+            "state": "open",
+            "base": {"ref": "main", "repo": {"full_name": "owner/repo"}},
+            "head": {
+                "ref": "feat/y",
+                "sha": "def",
+                "repo": {"full_name": "owner/repo", "fork": False},
+            },
+            "user": {"login": "owner"},
+        },
+    ]
+    monkeypatch.setattr(client, "_request", lambda method, path, **kw: (200, body, {}))
+    prs = client.list_prs("owner/repo")
+    assert prs[0]["is_fork"] is True
+    assert prs[0]["head_repo"] == "fork/repo"
+    assert prs[0]["head_sha"] == "abc"
+    assert prs[1]["is_fork"] is False
+    assert prs[1]["head_repo"] == "owner/repo"
+
+
+def test_get_pr_returns_fork_metadata(monkeypatch) -> None:
+    client = make_client()
+    payload = {
+        "number": 7,
+        "title": "t",
+        "body": "b",
+        "html_url": "u",
+        "state": "open",
+        "base": {"ref": "main", "repo": {"full_name": "owner/repo"}},
+        "head": {
+            "ref": "feat/x",
+            "sha": "abc123",
+            "repo": {
+                "full_name": "fork/repo",
+                "fork": True,
+                "clone_url": "https://github.com/fork/repo.git",
+            },
+        },
+        "maintainer_can_modify": True,
+        "user": {"login": "contrib"},
+    }
+    monkeypatch.setattr(
+        client, "_request", lambda method, path, **kw: (200, payload, {})
+    )
+    pr = client.get_pr("owner/repo", 7)
+    assert pr["head"] == "feat/x"
+    assert pr["head_repo"] == "fork/repo"
+    assert pr["head_clone_url"] == "https://github.com/fork/repo.git"
+    assert pr["is_fork"] is True
+    assert pr["maintainer_can_modify"] is True
+    assert pr["head_sha"] == "abc123"
+
+
 def test_post_pr_review(monkeypatch) -> None:
     """GitHub returns 200 OK on a successful review POST, not 201."""
     client = make_client()
@@ -319,3 +391,120 @@ def test_list_repos_follows_pagination(monkeypatch) -> None:
     names = [r["full_name"] for r in client.list_repos()]
     assert names == ["o/repo0", "o/repo1", "o/repo2"]
     assert calls == [1, 2]
+
+
+# ---- Phase 4 T2.1 — poller-facing read methods with ETag --------------------
+
+
+def _make_response(status_code: int, body=None, headers=None):
+    """Build a minimal ``httpx.Response`` for the poller's ``_request_etag``."""
+    import httpx
+
+    return httpx.Response(
+        status_code=status_code,
+        json=body,
+        request=httpx.Request("GET", "https://api.github.com/x"),
+        headers=headers or {},
+    )
+
+
+def test_list_open_prs_returns_mergeable_and_head_sha(monkeypatch) -> None:
+
+
+    client = make_client()
+    prs = [
+        {
+            "number": 9,
+            "head": {"ref": "jalebi/7", "sha": "abc123"},
+            "mergeable": True,
+        }
+    ]
+    monkeypatch.setattr(
+        client._http,
+        "request",
+        lambda method, path, **kw: _make_response(200, prs, {"ETag": 'W/"e1"'}),
+    )
+    payload, etag, not_modified = client.list_open_prs("owner/repo")
+    assert etag == 'W/"e1"'
+    assert not_modified is False
+    assert payload == [
+        {"number": 9, "head": "jalebi/7", "head_sha": "abc123", "mergeable": True}
+    ]
+
+
+def test_list_open_prs_sends_if_none_match_and_304(monkeypatch) -> None:
+
+    client = make_client()
+
+    def fake_request(method, path, **kw):
+        headers = kw.get("headers") or {}
+        if "If-None-Match" in headers:
+            return _make_response(304, None, {"ETag": headers["If-None-Match"]})
+        return _make_response(200, [{"number": 1, "head": {"ref": "x", "sha": "s"}}], {})
+
+    monkeypatch.setattr(client._http, "request", fake_request)
+    # First call — no etag yet.
+    body1, etag1, nm1 = client.list_open_prs("owner/repo")
+    assert nm1 is False
+    assert etag1 is None
+    # Second call with the same etag → 304.
+    body2, etag2, nm2 = client.list_open_prs("owner/repo", etag='W/"e1"')
+    assert nm2 is True
+    assert body2 == []
+
+
+def test_list_check_runs_for_ref_hits_commit_status_endpoint(monkeypatch) -> None:
+    from jalebi.github import PR_STATUS_PATH
+
+    client = make_client()
+    captured_paths = []
+
+    def fake_request(method, path, **kw):
+        captured_paths.append(path)
+        return _make_response(
+            200,
+            {
+                "state": "success",
+                "total_count": 1,
+                "statuses": [{"state": "success", "context": "ci/test"}],
+            },
+            {"ETag": 'W/"ci2"'},
+        )
+
+    monkeypatch.setattr(client._http, "request", fake_request)
+    body, etag, not_modified = client.list_check_runs_for_ref("owner/repo", "abc123")
+    assert not_modified is False
+    assert etag == 'W/"ci2"'
+    assert body["state"] == "success"
+    assert body["total_count"] == 1
+    assert captured_paths[0] == PR_STATUS_PATH.format(
+        full_name="owner/repo", ref="abc123"
+    )
+
+
+def test_list_reviews_for_pr_returns_all_review_states(monkeypatch) -> None:
+
+    client = make_client()
+    reviews = [
+        {"state": "APPROVED", "submitted_at": "2026-08-17T00:00:00Z"},
+        {"state": "CHANGES_REQUESTED", "submitted_at": "2026-08-18T00:00:00Z"},
+    ]
+    monkeypatch.setattr(
+        client._http,
+        "request",
+        lambda method, path, **kw: _make_response(200, reviews, {"ETag": 'W/"rv1"'}),
+    )
+    body, etag, _ = client.list_reviews_for_pr("owner/repo", 3)
+    assert etag == 'W/"rv1"'
+    assert [r["state"] for r in body] == ["APPROVED", "CHANGES_REQUESTED"]
+
+
+def test_list_open_prs_raises_on_401(monkeypatch) -> None:
+    from jalebi.github import GitHubUnauthorized
+
+    client = make_client()
+    monkeypatch.setattr(
+        client._http, "request", lambda *a, **kw: _make_response(401, None)
+    )
+    with pytest.raises(GitHubUnauthorized):
+        client.list_open_prs("owner/repo")

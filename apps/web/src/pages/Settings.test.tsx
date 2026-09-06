@@ -8,7 +8,12 @@ const SETTINGS = {
   auto_publish: true,
   ntfy_topic: "",
   default_timeout_minutes: 60,
-  retry_policy: { auto_retry: false, continue_prompt: "continue", timeout_multiplier: 2, max_timeout_minutes: 180 },
+  retry_policy: {
+    auto_retry: false,
+    continue_prompt: "continue",
+    timeout_multiplier: 2,
+    max_timeout_minutes: 180,
+  },
   stall_timeout_seconds: 600,
   secret_patterns: [],
   artifact_ttl_days: 7,
@@ -22,11 +27,44 @@ const SETTINGS = {
   webhook_url: "",
   webhook_secret: "",
   timezone: "local",
+  ide_command: "",
+  ide_name: "",
 };
 
-function makeFetchMock() {
+function makeFetchMock(settingsOverrides: Partial<typeof SETTINGS> = {}) {
+  const currentSettings = { ...SETTINGS, ...settingsOverrides };
   return vi.fn(async (url: string, init?: RequestInit) => {
     if (String(url).includes("/api/notify/test")) {
+      return { ok: true, json: async () => ({ ok: true }) };
+    }
+    if (String(url).includes("/api/ide/status")) {
+      return {
+        ok: true,
+        json: async () => ({
+          command: currentSettings.ide_command,
+          name: currentSettings.ide_name,
+          found: Boolean(currentSettings.ide_command),
+        }),
+      };
+    }
+    if (String(url).includes("/api/ide/detect")) {
+      return {
+        ok: true,
+        json: async () => ({
+          command: "code",
+          name: "Visual Studio Code",
+          detected: [
+            { command: "code", name: "Visual Studio Code", path: "/usr/bin/code" },
+            {
+              command: "antigravity",
+              name: "Google Antigravity",
+              path: "/usr/local/bin/antigravity",
+            },
+          ],
+        }),
+      };
+    }
+    if (String(url).includes("/api/ide/test")) {
       return { ok: true, json: async () => ({ ok: true }) };
     }
     if (String(url).includes("/api/settings") && init?.method === "POST") {
@@ -39,7 +77,7 @@ function makeFetchMock() {
     if (String(url).includes("/api/repos")) {
       return { ok: true, json: async () => [] };
     }
-    return { ok: true, json: async () => SETTINGS };
+    return { ok: true, json: async () => currentSettings };
   });
 }
 
@@ -107,8 +145,7 @@ describe("Settings", () => {
 
     await waitFor(() => {
       const postCall = fetchMock.mock.calls.find(
-        ([url, init]) =>
-          String(url).includes("/api/settings") && init?.method === "POST"
+        ([url, init]) => String(url).includes("/api/settings") && init?.method === "POST"
       );
       expect(postCall).toBeTruthy();
       const body = JSON.parse((postCall?.[1] as RequestInit).body as string) as {
@@ -149,5 +186,57 @@ describe("Settings", () => {
     expect([...backendSelect.options].map((o) => o.value)).toEqual(
       expect.arrayContaining(["opencode", "codex", "claude"])
     );
+  });
+});
+
+// ---- Phase 4 T6 — IDE settings section ---------------------------------
+
+describe("Settings (Phase 4 T6 — IDE)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("renders the IDE section with detected IDEs", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Settings />);
+    expect(await screen.findByText("IDE")).toBeInTheDocument();
+    expect(await screen.findByText("Visual Studio Code")).toBeInTheDocument();
+    expect(screen.getByText("Google Antigravity")).toBeInTheDocument();
+    expect(screen.getByText("Custom command…")).toBeInTheDocument();
+  });
+
+  it("selecting a detected IDE saves ide_command and ide_name", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Settings />);
+    await screen.findByText("IDE");
+    const antBtn = await screen.findByText("Google Antigravity");
+    await userEvent.click(antBtn);
+    await waitFor(() => {
+      const calls = fetchMock.mock.calls.filter(
+        ([url, init]) => String(url).includes("/api/settings") && init?.method === "POST"
+      );
+      const keys = calls.map(([, init]) => JSON.parse((init?.body as string) || "{}"));
+      expect(keys.some((k) => k.key === "ide_command" && k.value === "antigravity")).toBe(true);
+      expect(keys.some((k) => k.key === "ide_name" && k.value === "Google Antigravity")).toBe(true);
+    });
+  });
+
+  it("Test open POSTs to /api/ide/test when configured", async () => {
+    const fetchMock = makeFetchMock({ ide_command: "code", ide_name: "Visual Studio Code" });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Settings />);
+    await screen.findByText("IDE");
+    const testBtn = await screen.findByText("Test open");
+    expect(testBtn).not.toBeDisabled();
+    await userEvent.click(testBtn);
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(
+          ([url, init]) => String(url).includes("/api/ide/test") && init?.method === "POST"
+        )
+      ).toBe(true);
+    });
   });
 });

@@ -81,3 +81,46 @@ Remaining risk (documented): for codex specifically, multi-token wrapper calls (
 - Each saved PAT is a separate account, but **all** PAT values live only in the `0600` `secrets.json`; API/UI never return raw values (masked previews only).
 - All known PAT values are added to the ingest masker — any token echoed by an agent is redacted everywhere.
 - The per-worktree gh-guard and env hygiene apply identically regardless of which account a task runs under.
+
+---
+
+## 12. Phase 4 T1 security additions
+
+- **Untracked diff confinement (T1.3).** Reject traversal, absolute paths, `.git` segments, and resolved paths outside the worktree. Open every path component with `O_NOFOLLOW` relative to a directory descriptor so direct/intermediate symlinks and concurrent symlink swaps cannot expose external file contents. Read only regular files, bounded to the 1 MB cap; nonblocking open prevents FIFOs from hanging the request.
+- **Env-var block-list (`envvars.ENV_BLOCK_LIST` + `ENV_BLOCK_PREFIXES`, T1.1).** Closes the override hole in `_agent_env` where a stored env var could replace a Jalebi-pinned value (`GIT_CONFIG_KEY_0` re-injecting credential / `url.insteadOf` state, `JALEBI_GITHUB_TOKEN` overriding the queue's account selection, etc.). Block-all for the `GIT_CONFIG_*` prefix — there is no legitimate user surface. See `docs/14-env-vars.md` §8 for the full list and rationale.
+- **Branch-mismatch guard before publish (T1.5).** `GitWorkspace.assert_publish_branch` refuses when the worktree HEAD is not on `jalebi/<taskId>`; an agent that checked out / detached onto another branch would otherwise push the wrong ref. Runs as the first line of `TaskQueue._publish` (covers both the manual `publish_task` route and the auto-publish path in `_stream_and_finish`).
+- **Predictive conflict check via `git merge-tree --write-tree` on the mirror (T1.4).** Read-only (no worktree mutation, no abort dance). Branch is always the canonical `jalebi/<id>` — never client-supplied. Path-safety: paths come from the merge-tree file-info lines (stages 1/2/3), kinds from `CONFLICT (kind)` lines; fallback to `content` when no `CONFLICT` line is found. Requires git ≥ 2.38.
+
+---
+
+## 13. Phase 4 T6 — IDE spawn
+
+`apps/server/src/jalebi/ide.py` — the **validator is the security boundary** for spawning an IDE on a task worktree:
+
+- `validate_ide_command(value)` requires a non-empty string that matches `^[A-Za-z0-9._/=:-]+$` (no whitespace, no shell metacharacters, no quoting). A bare name must resolve via `shutil.which`; an absolute path must exist on disk (`os.path.isfile`).
+- `open_in_ide(command, path)` resolves the command and spawns `[resolved, str(path)]` via `subprocess.Popen` with `start_new_session=True`, `stdout=DEVNULL`, `stderr=DEVNULL`, `close_fds=True`, and **no shell**. The rendered argv is the only surface an attacker can influence — it's always `[resolved_binary, canonical_worktree_path]`, nothing user-controlled.
+- `POST /api/tasks/<id>/open-in-ide` reads the command from the validated setting only (409 when empty); the worktree path is the canonical `GitWorkspace.worktree_path` (404 when the worktree doesn't exist).
+- `start_new_session=True` detaches the IDE from Jalebi so the user can close their terminal; it survives a server restart. Only mocked in CI — tests never actually launch an IDE.
+
+---
+
+## 14. Phase 4 T7 — in-worktree file serving
+
+`apps/server/src/jalebi/workspace_files.py` serves a task's worktree files
+read-only for the browser. The worktree root is the security boundary:
+
+- **Containment:** `target = (root / rel_path).resolve()`; require
+  `target.is_relative_to(root.resolve())` else `"path escapes worktree"`.
+- **Symlinks refused on every path component:** the raw path is walked
+  prefix-by-prefix and any symlink (`link/config` where `link -> .git` or
+  `-> /outside`) is refused before resolving — checking only the final
+  component misses intermediate symlinks.
+- **`.git` refused (case-insensitive):** any `.git`/`.Git`/`.GIT` segment in
+  the resolved relative parts **or** the raw parts (covers symlink-into-.git
+  and `foo/../.git` alike; case-insensitivity matters on non-Linux mounts).
+- **Absolute client paths rejected** (`Path(rel_path).is_absolute()`).
+- **Size cap** (256 KB) + **NUL-byte sniff** (binary → 415). Content is
+  masked with the same `_masker` the diff/artifact endpoints use before it
+  reaches the browser.
+- **Read-only:** no write endpoints; editing in the worktree is out of
+  scope for Phase 4.

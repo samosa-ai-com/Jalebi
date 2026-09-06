@@ -13,6 +13,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    String,
     Text,
     UniqueConstraint,
     create_engine,
@@ -78,6 +79,9 @@ TASK_STATUSES = (
     "timed_out",
     "interrupted",
     "cancelled",
+    # Phase 4 T4.1 — a task whose `depends_on` edges include an unmet dep
+    # stays at "blocked" until cascade_unblock flips it back to "queued".
+    "blocked",
 )
 
 
@@ -90,7 +94,7 @@ class Task(Base):
         ),
         CheckConstraint(
             "status IN ('queued','running','waiting_review','needs_approval','done',"
-            "'failed','timed_out','interrupted','cancelled')",
+            "'failed','timed_out','interrupted','cancelled','blocked')",
             name="ck_tasks_status",
         ),
         Index("ix_tasks_repo_id", "repo_id"),
@@ -162,6 +166,8 @@ class Run(Base):
     steps_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     artifacts_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     diff_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    git_sha_start: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    git_sha_end: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class Followup(Base):
@@ -451,6 +457,97 @@ class Setting(Base):
 
     key: Mapped[str] = mapped_column(Text, primary_key=True)
     value: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+# ---- Phase 4 T4.1 — task dependency graph -------------------------------
+
+
+class TaskDependency(Base):
+    """DAG edge: ``task_id`` depends on ``depends_on_id`` (both Task rows).
+
+    Cascade-deletes on either side (deleting a task also drops its edges).
+    The self-ref CHECK constraint is enforced by the migration; the unique
+    pair constraint prevents duplicate edges.
+    """
+
+    __tablename__ = "task_dependencies"
+    __table_args__ = (
+        CheckConstraint("task_id != depends_on_id", name="ck_dep_self_ref"),
+        UniqueConstraint("task_id", "depends_on_id", name="uq_dep_pair"),
+        Index("ix_dep_task_id", "task_id"),
+        Index("ix_dep_depends_on_id", "depends_on_id"),
+    )
+
+    task_id: Mapped[int] = mapped_column(
+        ForeignKey("tasks.id", ondelete="CASCADE"), primary_key=True
+    )
+    depends_on_id: Mapped[int] = mapped_column(
+        ForeignKey("tasks.id", ondelete="CASCADE"), primary_key=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=now, server_default=sa.text("CURRENT_TIMESTAMP")
+    )
+
+
+# ---- Phase 4 T4.3 — durable SSE timeline ----------------------------------
+
+
+class TaskEvent(Base):
+    """A persisted step event (one row per ``events.publish``).
+
+    The in-memory ring buffer still serves the live fanout (low latency);
+    this table is the durable record so a tab reload after a restart
+    backfills the whole timeline via ``TaskEvents.subscribe(after_seq=N)``.
+    Per-(task, run) cap of 2000 rows is enforced in code.
+    """
+
+    __tablename__ = "task_events"
+    __table_args__ = (
+        Index("ix_task_events_task_seq", "task_id", "seq"),
+        Index("ix_task_events_task_run", "task_id", "run_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    task_id: Mapped[int] = mapped_column(
+        ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False
+    )
+    run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("runs.id", ondelete="CASCADE"), nullable=True
+    )
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=now, server_default=sa.text("CURRENT_TIMESTAMP")
+    )
+
+
+# ---- Phase 4 T4.2 — auto-nudge dedup --------------------------------------
+
+
+class Nudge(Base):
+    """A single delivered nudge, keyed by a stable signature.
+
+    The unique pair (task_id, signature) is the dedup mechanism — the
+    same ``signature`` never produces a second nudge. Signatures are built
+    by ``nudger.py``: ``f"{task_id}:{kind}:{ref}"`` where ``ref`` is the
+    underlying event id (review id, status context+sha, etc.).
+    """
+
+    __tablename__ = "nudges"
+    __table_args__ = (
+        UniqueConstraint("task_id", "signature", name="uq_nudge_sig"),
+        Index("ix_nudges_task_id", "task_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    task_id: Mapped[int] = mapped_column(
+        ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False
+    )
+    signature: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=now, server_default=sa.text("CURRENT_TIMESTAMP")
+    )
 
 
 _engine: Engine | None = None

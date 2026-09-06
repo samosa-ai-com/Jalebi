@@ -324,11 +324,15 @@ def test_exception_path_closes_out_pending_status(app, session, repo_row, monkey
     q._run_task(task.id)
 
     def _settled() -> bool:
+        # Roll back any idle snapshot transaction first: the worker commits
+        # in its own sessions, and a stale snapshot would otherwise keep
+        # returning the pre-run status for the whole poll window (load flake).
+        session.rollback()
         t = tasks.get_task(session, task.id)
         return t is not None and t.status == "failed"
 
     session.expire_all()
-    assert _wait_until(_settled), "task did not settle to failed"
+    assert _wait_until(_settled, timeout=10.0), "task did not settle to failed"
     t = tasks.get_task(session, task.id)
     assert t is not None
     assert t.status == "failed"

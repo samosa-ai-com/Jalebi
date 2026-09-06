@@ -176,6 +176,125 @@ def test_add_token_missing_fields(client: FlaskClient) -> None:
     assert resp.status_code == 400
 
 
+def test_add_token_existing_name_conflicts(client: FlaskClient, app, monkeypatch) -> None:
+    """POST refuses to silently overwrite an existing account — use PUT to update."""
+    monkeypatch.setattr(routes_github, "GitHubClient", FakeClient)
+    resp = client.post("/api/github/tokens", json={"name": "test", "token": "ghp_x"})
+    assert resp.status_code == 409
+    assert "PUT /api/github/tokens/test" in resp.get_json()["error"]
+    # The existing account's token was NOT overwritten.
+    assert secrets.get_named_token(app.config["JALEBI_CONFIG"], "test") == "ghp_test"
+
+
+def test_update_token_replaces_without_touching_data(
+    client: FlaskClient, app, monkeypatch, session
+) -> None:
+    """PUT replaces only the credential — repos/tasks bound by name survive."""
+    from jalebi import db, repos
+    from jalebi import tasks as tasks_svc
+
+    monkeypatch.setattr(routes_github, "GitHubClient", FakeClient)
+    secrets.add_github_token(
+        app.config["JALEBI_CONFIG"], "work", "ghp_work", meta={"login": "octocat"}
+    )
+    row, _ = repos.upsert_repo(
+        session,
+        full_name="octocat/hello",
+        default_branch="main",
+        clone_url="https://github.com/octocat/hello.git",
+        pat_name="work",
+    )
+    task = tasks_svc.create_task(
+        session, type_="freeform", repo_id=row.id, prompt="x", pat_name="work"
+    )
+    repo_id, task_id = row.id, task.id
+
+    resp = client.put("/api/github/tokens/work", json={"token": "ghp_new"})
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["updated"] == "work"
+    assert body["login"] == "octocat"
+    assert body["previous_login"] == "octocat"
+    assert secrets.get_named_token(app.config["JALEBI_CONFIG"], "work") == "ghp_new"
+
+    # Nothing was deleted — the same rows still exist, still bound to "work".
+    session.expire_all()
+    repo = session.get(db.Repo, repo_id)
+    assert repo is not None
+    assert repo.pat_name == "work"
+    got = tasks_svc.get_task(session, task_id)
+    assert got is not None
+    assert got.pat_name == "work"
+
+
+def test_update_token_unknown_name_404(client: FlaskClient, monkeypatch) -> None:
+    monkeypatch.setattr(routes_github, "GitHubClient", FakeClient)
+    resp = client.put("/api/github/tokens/nope", json={"token": "ghp_x"})
+    assert resp.status_code == 404
+
+
+def test_update_token_missing_field(client: FlaskClient, app, monkeypatch) -> None:
+    monkeypatch.setattr(routes_github, "GitHubClient", FakeClient)
+    secrets.add_github_token(app.config["JALEBI_CONFIG"], "work", "ghp_work")
+    resp = client.put("/api/github/tokens/work", json={})
+    assert resp.status_code == 400
+
+
+def test_update_token_invalid_rejected(client: FlaskClient, app, monkeypatch) -> None:
+    class RejectingClient:
+        def __init__(self, token: str):
+            self.token = token
+
+        def validate_token(self) -> TokenInfo:
+            return TokenInfo(valid=False, error="Bad credentials")
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(routes_github, "GitHubClient", RejectingClient)
+    secrets.add_github_token(app.config["JALEBI_CONFIG"], "work", "ghp_work")
+    resp = client.put("/api/github/tokens/work", json={"token": "ghp_bad"})
+    assert resp.status_code == 400
+    assert resp.get_json()["stored"] is False
+    # The previous token is untouched on a rejected update.
+    assert secrets.get_named_token(app.config["JALEBI_CONFIG"], "work") == "ghp_work"
+
+
+def test_update_token_never_echoes_value(client: FlaskClient, app, monkeypatch) -> None:
+    monkeypatch.setattr(routes_github, "GitHubClient", FakeClient)
+    secrets.add_github_token(app.config["JALEBI_CONFIG"], "work", "ghp_work")
+    resp = client.put("/api/github/tokens/work", json={"token": "ghp_new_secret"})
+    assert resp.status_code == 200
+    assert "ghp_new_secret" not in resp.get_data(as_text=True)
+
+
+def test_update_token_reports_login_change(client: FlaskClient, app, monkeypatch) -> None:
+    class LoginClient:
+        def __init__(self, token: str):
+            self.token = token
+
+        def validate_token(self) -> TokenInfo:
+            return TokenInfo(
+                valid=True,
+                login="new-user",
+                token_type="classic",
+                granted_scopes=[],
+                missing_scopes=[],
+            )
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(routes_github, "GitHubClient", LoginClient)
+    secrets.add_github_token(
+        app.config["JALEBI_CONFIG"], "work", "ghp_work", meta={"login": "old-user"}
+    )
+    resp = client.put("/api/github/tokens/work", json={"token": "ghp_new"})
+    body = resp.get_json()
+    assert body["previous_login"] == "old-user"
+    assert body["login"] == "new-user"
+
+
 def test_repos_tagged_by_account(client: FlaskClient, app, monkeypatch) -> None:
     secrets.add_github_token(app.config["JALEBI_CONFIG"], "work", "ghp_work")
 

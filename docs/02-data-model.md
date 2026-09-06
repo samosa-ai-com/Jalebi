@@ -41,7 +41,7 @@
 | `id` | int PK | |
 | `type` | text CHECK | `issue_fix` \| `pr_review` \| `freeform` \| `screen_finding` \| `triggered` |
 | `repo_id` | int FK → repos | |
-| `source_branch` | text, default `'main'` | worktree base for freeform (and other non-issue_fix types); **unused for `issue_fix`** (single-target model) |
+| `source_branch` | text, default `'main'` | worktree base for freeform (and other non-issue_fix types); **unused for `issue_fix`** (single-target model). May be the sentinel **`pr/<N>/head`** (freeform only, must match the linked `pr_number`) meaning "base the worktree on the current head of PR #N" — used for fork PRs whose branch never exists on origin; diff/conflict checks for these tasks run against `target_branch` via `tasks.effective_diff_base()` |
 | `target_branch` | text, default `'main'` | PR base; also the worktree base for `issue_fix` |
 | `agent_id` | text null | catalog agent slug — **no FK yet**; FK added in Phase 1 |
 | `model` | text null | |
@@ -49,7 +49,7 @@
 | `pat_name` | text null | the **account** that runs this task (required at creation; no default) |
 | `issues_json` | text null | JSON list of linked issue numbers |
 | `prs_json` | text null | JSON list of linked PR numbers (any type that links a PR, e.g. `pr_review` and freeform "fix the issues in this PR") |
-| `context_json` | text null | masked issue/PR context embedded into the agent brief; fetched at creation for **any** linked issue/PR (not just `issue_fix`/`pr_review`). PR context includes `reviews` — the PR's current review comments (masked), so a freeform task linked to a PR can address them directly. Review text is truncated (per-comment and total) with a marker so large reviews can't bloat the agent brief |
+| `context_json` | text null | masked issue/PR context embedded into the agent brief; fetched at creation for **any** linked issue/PR (not just `issue_fix`/`pr_review`). PR context includes `reviews` — the PR's current review comments (masked), so a freeform task linked to a PR can address them directly. Review text is truncated (per-comment and total) with a marker so large reviews can't bloat the agent brief. PR entries also carry fork metadata (`head_repo`, `head_sha`, `is_fork`, `maintainer_can_modify`) backing the fork-PR fix flow. Also stores `attention_dismissed: true` and `attention_dismissed_at` when the owner dismisses attention. A dismissal is scoped to its run: `queue._prepare_run` clears it (via `tasks.clear_attention_dismissal`) whenever a new run starts, so a rerun/follow-up re-arms attention instead of hiding the new run's future `needs_you`. |
 | `env_vars_json` | text null | JSON list of env-var **names** injected into the agent subprocess env |
 | `prompt` | text | instructions |
 | `status` | text CHECK, default `'queued'` | `queued` \| `running` \| `waiting_review` \| `needs_approval` \| `done` \| `failed` \| `timed_out` \| `interrupted` \| `cancelled` |
@@ -297,3 +297,19 @@ runs  0───1 review_assignments  (run_id, set when the reviewer run starts)
 ## 5. Not yet implemented (later phases)
 
 None — all Phase-0/1/2 tables are materialized. (Phase 3 adds no new tables.)
+
+---
+
+## 6. Phase 4 schema additions
+
+- **`runs.git_sha_start`** (`runs.git_sha_start`, `String(64)`, nullable) — added by Alembic migration `7b4c5d6e7f80`. The full SHA of the worktree's HEAD captured pre-spawn in each of `_run_task`, `_run_review`, and `_run_followup`; `None` when the worktree is unborn. Suffix `-dirty` when `git status --porcelain` is non-empty at capture time.
+- **`runs.git_sha_end`** (`runs.git_sha_end`, `String(64)`, nullable) — same migration, captured in `_stream_and_finish` after the agent process exits. Best-effort (a transient git error never blocks run finalization); same `-dirty` suffix semantics.
+- Exposed via `tasks.run_to_dict(run)` keys `"git_sha_start"` and `"git_sha_end"` (`None` when unset).
+
+- **T2 adds no new tables.** The polling observer stores normalized `PRFacts` in an in-memory map (`(repo_id, pr_number) → PRFacts`) — ephemeral by design; the poller refetches every 30 s so a durable table would only avoid a bounded cold-start GitHub hammering (PRD Goal #10). The `event_deliveries` table is the durable analog. The pre-existing `repos.last_checked_at` column is updated after every successful tick; the pre-existing `repos.poll_fallback` column (Boolean, default false) is now also settable via `PATCH /api/repos/<id>`.
+
+- **T4 (`8a9b0c1d2e30`) added three new tables:**
+  - `task_dependencies(task_id FK→tasks, depends_on_id FK→tasks, created_at)` — composite PK `(task_id, depends_on_id)`, self-ref CHECK, two-side CASCADE. Dep edges are dropped from both directions inside `delete_tasks_cascade`.
+  - `task_events(id, task_id FK→tasks, run_id FK→runs, seq, payload_json, created_at)` — durable SSE timeline (Phase 4 T4.3). Per-(task, run) cap at 2000 (`prune_task_events` startup sweep).
+  - `nudges(id, task_id FK→tasks, signature, kind, created_at)` — auto-nudge dedup (Phase 4 T4.2). Unique pair `(task_id, signature)`.
+  - `tasks.status` widened to include `"blocked"` (T4.1). A blocked task sits with deps unmet; cleared by `cascade_unblock` when the last unsatisfied dep finishes.
