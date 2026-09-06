@@ -639,6 +639,7 @@ type SortKey = "id" | "updated_at" | "status";
 const PAGE_SIZE = 10;
 
 function GhLink({ repo, kind, number }: { repo: string; kind: "pull" | "issues"; number: number }) {
+  const label = kind === "pull" ? `#${number}` : `issue #${number}`;
   return (
     <a
       className="font-mono text-xs text-syrup-400 hover:text-syrup-300"
@@ -646,7 +647,7 @@ function GhLink({ repo, kind, number }: { repo: string; kind: "pull" | "issues";
       target="_blank"
       rel="noreferrer"
     >
-      {kind === "pull" ? "#" : "issue "}#{number}
+      {label}
     </a>
   );
 }
@@ -772,14 +773,18 @@ export default function Tasks() {
         ))}
       </div>
 
-      {/* Phase 4 T4.4 — live "running now" panel */}
+      {/* Phase 4 T4.4 — live "running now" panel: one card per
+          queued/running task, scroll-bounded for long queues. */}
       {visible.some((t) => t.status === "running" || t.status === "queued") && (
-        <div className="space-y-2">
+        <div className="max-h-[24rem] space-y-2 overflow-y-auto">
           {visible
             .filter((t) => t.status === "running" || t.status === "queued")
-            .slice(0, 4)
             .map((t) => (
-              <RunningCard key={t.id} task={t} />
+              <RunningCard
+                key={t.id}
+                task={t}
+                repoName={t.repo_full_name ?? repoName(repos, t.repo_id)}
+              />
             ))}
         </div>
       )}

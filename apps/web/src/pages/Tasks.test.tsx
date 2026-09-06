@@ -506,8 +506,50 @@ describe("Tasks page (Phase 4 T3.1)", () => {
   });
 });
 
-// ---- Phase 4 T5.3 — table sticky header + bounded scroll ---------------
+// ---- Phase 4 T4.4 — running-now panel contract --------------------------
 
+describe("Tasks page (Phase 4 T4.4)", () => {
+  it("renders one card per queued/running task with PR links (no cap)", async () => {
+    const many = [1, 2, 3, 4, 5, 6].map((i) => ({
+      ...TASKS[0],
+      id: i,
+      status: i % 2 ? "running" : "queued",
+      prompt: `job ${i}`,
+      prs: [10 + i],
+      pr_number: null,
+      run: null,
+    }));
+    stubFetch({ ...DEFAULT_HANDLERS, "/api/tasks": many });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    for (let i = 1; i <= 6; i++) await screen.findByText(`job ${i}`);
+    // One PR anchor per card (titles are unique to cards).
+    for (let i = 1; i <= 6; i++) {
+      const cardLink = screen.getByTitle(`PR #${10 + i} on owner/repo`);
+      expect(cardLink).toHaveAttribute(
+        "href",
+        `https://github.com/owner/repo/pull/${10 + i}`
+      );
+    }
+  });
+
+  it("renders PR numbers with a single # in task rows", async () => {
+    stubFetch({ ...DEFAULT_HANDLERS, "/api/tasks": [{ ...TASKS[0], prs: [5] }] });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    await screen.findByText("do the thing");
+    expect(screen.getByText("#5")).toBeInTheDocument();
+    expect(screen.queryByText("##5")).not.toBeInTheDocument();
+  });
+});
+
+// ---- Phase 4 T5.3 — table sticky header + bounded scroll ---------------
 describe("Tasks page (Phase 4 T5.3)", () => {
   it("wraps the table in a bounded scroll container with a sticky header", async () => {
     const t1 = { ...TASKS[0] };

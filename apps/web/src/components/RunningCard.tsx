@@ -8,13 +8,13 @@
  *   - step count
  *   - last `message`-type step text
  *   - backend / CLI tag
- *   - PR link
+ *   - PR link (first linked PR, when the repo name is known)
  *   - inline activity sparkline (40×16, 40-bucket tool-call density)
  *
  * No new dependencies; the existing 5 s `/api/tasks` poll feeds the panel.
  * Per-task SSE (`taskEvents`) keeps the step count + last-message fresh in
- * between polls; bounded to the current queue concurrency (≤ 4) by the
- * Tasks page.
+ * between polls. The Tasks page renders one card per queued/running task
+ * inside a scroll-bounded panel.
  */
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
@@ -61,7 +61,7 @@ function Sparkline({ bars }: { bars: number[] }) {
   );
 }
 
-export function RunningCard({ task }: { task: Task }) {
+export function RunningCard({ task, repoName }: { task: Task; repoName?: string }) {
   const run = task.run;
   const [, setTick] = useState(0);
   // Re-render every 1 s so the elapsed timer advances.
@@ -88,6 +88,8 @@ export function RunningCard({ task }: { task: Task }) {
   const lastMsg = lastMessageText(steps as never) ?? null;
   const bars = buildActivityBars(steps as never);
   const elapsed = formatElapsed(run?.started_at ?? null);
+  const prNumber =
+    task.prs?.length ? task.prs[0] : (task.pr_number ?? null);
 
   return (
     <div className="surface flex flex-wrap items-center gap-3 px-4 py-3">
@@ -118,6 +120,17 @@ export function RunningCard({ task }: { task: Task }) {
           {task.cli}
           {task.model ? `:${task.model}` : ""}
         </span>
+      )}
+      {repoName && prNumber != null && (
+        <a
+          className="font-mono text-xs text-syrup-400 hover:text-syrup-300"
+          href={`https://github.com/${repoName}/pull/${prNumber}`}
+          target="_blank"
+          rel="noreferrer"
+          title={`PR #${prNumber} on ${repoName}`}
+        >
+          #{prNumber}
+        </a>
       )}
       {bars.length > 0 && <Sparkline bars={bars} />}
     </div>
