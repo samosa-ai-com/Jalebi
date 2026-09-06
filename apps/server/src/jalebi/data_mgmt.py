@@ -182,6 +182,134 @@ def delete_backup(data_dir: Path, name: str) -> bool:
     return True
 
 
+class RestoreError(Exception):
+    """Restoration failed (the live DB is untouched or rolled back)."""
+
+
+class RestoreBusy(Exception):
+    """Tasks are queued/running — restore refused to protect live work."""
+
+
+def backup_integrity(data_dir: Path, name: str) -> tuple[bool, str | None]:
+    """Read-only ``PRAGMA integrity_check`` on a backup. Never writes."""
+    try:
+        path = backup_file(data_dir, name)
+    except ValueError:
+        return False, "unknown backup"
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=30)
+        try:
+            rows = conn.execute("PRAGMA integrity_check").fetchall()
+        finally:
+            conn.close()
+    except Exception as exc:
+        return False, f"unreadable backup: {exc}"
+    if rows == [("ok",)]:
+        return True, None
+    return False, "; ".join(str(r[0]) for r in rows[:3])
+
+
+def busy_task_count(session: Session) -> int:
+    """Tasks that would be endangered by a restore (queued/running)."""
+    return (
+        session.execute(
+            select(func.count())
+            .select_from(Task)
+            .where(Task.status.in_(("queued", "running")))
+        ).scalar()
+        or 0
+    )
+
+
+def restore_backup(config, session: Session, name: str, queue=None) -> dict:
+    """Restore the live DB from a backup (execute path — preview first).
+
+    Order protects the current database: idle gate → read-only integrity
+    check → safety snapshot (new file only) → engine dispose → swap →
+    re-init/migrate/seed/resync. Anything failing before the swap leaves the
+    live DB untouched; a swap failure rolls back from the safety snapshot.
+    """
+    from jalebi import clock, db
+    from jalebi import settings as settings_mod
+
+    data_dir = Path(config.data_dir)
+    try:
+        source = backup_file(data_dir, name)
+    except ValueError:
+        raise RestoreError("unknown backup")
+    if busy_task_count(session) > 0:
+        raise RestoreBusy("tasks are queued or running — finish or cancel them first")
+    ok, detail = backup_integrity(data_dir, name)
+    if not ok:
+        raise RestoreError(detail or "backup failed integrity check")
+
+    # Safety snapshot BEFORE touching anything live.
+    safety = create_backup(data_dir)
+    live = data_dir / "data.db"
+
+    session.close()
+    db.close_db()
+    for suffix in ("-wal", "-shm"):
+        try:
+            (data_dir / f"data.db{suffix}").unlink()
+        except FileNotFoundError:
+            pass
+
+    def _swap(src: Path, dst: Path) -> None:
+        incoming = sqlite3.connect(f"file:{src}?mode=ro", uri=True, timeout=60)
+        try:
+            outgoing = sqlite3.connect(str(dst), timeout=60)
+            try:
+                incoming.backup(outgoing)
+            finally:
+                outgoing.close()
+        finally:
+            incoming.close()
+
+    def _reopen() -> tuple[int, str]:
+        db.init_db(config.db_url)
+        db.run_migrations(config.db_url)
+        fresh = db.Session()
+        try:
+            settings_mod.seed_defaults(fresh)
+            raw_concurrency = settings_mod.get_setting(fresh, "concurrency")
+            concurrency = raw_concurrency if isinstance(raw_concurrency, int) else 4
+            zone = str(settings_mod.get_setting(fresh, "timezone") or "")
+        finally:
+            fresh.close()
+        clock.set_zone(zone)
+        if queue is not None:
+            try:
+                queue.set_concurrency(concurrency)
+            except Exception:
+                pass
+        return concurrency, zone
+
+    try:
+        _swap(source, live)
+    except Exception as exc:
+        raise RestoreError(f"restore copy failed (live DB untouched): {exc}")
+    try:
+        _reopen()
+    except Exception as exc:
+        # Roll back from the safety snapshot, then report.
+        try:
+            db.close_db()
+            _swap(data_dir / BACKUP_DIRNAME / safety["name"], live)
+            _reopen()
+            raise RestoreError(
+                f"restore failed and was rolled back to {safety['name']}: {exc}"
+            )
+        except RestoreError:
+            raise
+        except Exception as exc2:
+            raise RestoreError(
+                f"restore failed AND rollback failed ({exc2}); "
+                f"manual recovery from {safety['name']}: {exc}"
+            )
+    return {"restored": name, "safety_backup": safety["name"]}
+
+
 def vacuum(data_dir: Path) -> dict:
     """Checkpoint the WAL and rebuild the DB file; returns size before/after."""
     db_path = Path(data_dir) / "data.db"

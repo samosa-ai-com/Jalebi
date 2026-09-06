@@ -21,6 +21,7 @@ import type {
   SettingsMap,
   SseEvent,
   Task,
+  RestorePreview,
   TimezoneList,
   TokensResponse,
   TriggerRule,
@@ -327,6 +328,16 @@ export const api = {
       method: "DELETE",
     }),
   backupDownloadUrl: (name: string) => `/api/data/backups/${encodeURIComponent(name)}/download`,
+  restoreBackup: (name: string, input: { dry_run: boolean; confirm?: string }) =>
+    request<{
+      dry_run: boolean;
+      preview: RestorePreview;
+      restored?: string;
+      safety_backup?: string;
+    }>(`/api/data/backups/${encodeURIComponent(name)}/restore`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
   vacuumData: () =>
     request<{ before: number; after: number }>("/api/data/vacuum", { method: "POST" }),
   pruneData: (input: {

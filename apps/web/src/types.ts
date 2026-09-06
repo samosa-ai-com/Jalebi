@@ -268,6 +268,13 @@ export interface PrunePreview {
   old_logs: number;
 }
 
+export interface RestorePreview {
+  backup: string;
+  integrity_ok: boolean;
+  integrity_detail: string | null;
+  busy_tasks: number;
+}
+
 export interface DetectedIde {
   command: string;
   name: string;

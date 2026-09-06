@@ -280,3 +280,60 @@ def test_backup_is_consistent_snapshot(client: FlaskClient, config: Config) -> N
         os.unlink(tmp)
     assert snap_rows == live_rows
     assert live_rows.get("concurrency") == "5"
+
+
+def test_restore_dry_run_then_execute(client: FlaskClient, session) -> None:
+    """Dry run touches nothing; execute swaps the DB back (safety first)."""
+    client.post("/api/settings", json={"key": "concurrency", "value": 7})
+    backup_a = client.post("/api/data/backups").get_json()
+    client.post("/api/settings", json={"key": "concurrency", "value": 2})
+
+    dry = client.post(
+        f"/api/data/backups/{backup_a['name']}/restore", json={"dry_run": True}
+    ).get_json()
+    assert dry["dry_run"] is True
+    assert dry["preview"]["integrity_ok"] is True
+    assert dry["preview"]["busy_tasks"] == 0
+    assert client.get("/api/settings").get_json()["concurrency"] == 2
+
+    # No confirm → still a preview.
+    again = client.post(
+        f"/api/data/backups/{backup_a['name']}/restore", json={"dry_run": False}
+    ).get_json()
+    assert again["dry_run"] is True
+
+    done = client.post(
+        f"/api/data/backups/{backup_a['name']}/restore",
+        json={"dry_run": False, "confirm": "RESTORE"},
+    ).get_json()
+    assert done["dry_run"] is False
+    assert done["restored"] == backup_a["name"]
+    assert done["safety_backup"].endswith(".db")
+    assert done["safety_backup"] != backup_a["name"]
+    assert client.get("/api/settings").get_json()["concurrency"] == 7
+    names = [b["name"] for b in client.get("/api/data/backups").get_json()]
+    assert done["safety_backup"] in names
+
+
+def test_restore_refuses_when_busy_and_unknown(client: FlaskClient, session) -> None:
+    repo_id = _repo(session)
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_id, prompt="busy")
+    assert task.status == "queued"
+    backup = client.post("/api/data/backups").get_json()
+
+    # Dry run still reports instead of refusing.
+    dry = client.post(
+        f"/api/data/backups/{backup['name']}/restore", json={"dry_run": True}
+    ).get_json()
+    assert dry["dry_run"] is True
+    assert dry["preview"]["busy_tasks"] == 1
+
+    resp = client.post(
+        f"/api/data/backups/{backup['name']}/restore",
+        json={"dry_run": False, "confirm": "RESTORE"},
+    )
+    assert resp.status_code == 409
+
+    assert client.get("/api/data/backups/nope.db/restore").status_code == 404
+    resp = client.post("/api/data/backups/nope.db/restore", json={"dry_run": False})
+    assert resp.status_code == 404

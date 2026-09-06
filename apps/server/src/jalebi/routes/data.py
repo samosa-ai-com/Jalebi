@@ -54,6 +54,45 @@ def delete_backup(name: str) -> ResponseReturnValue:
     return jsonify({"deleted": name})
 
 
+@bp.post("/backups/<name>/restore")
+def restore_backup(name: str) -> ResponseReturnValue:
+    """Preview (default) or execute a restore from a backup.
+
+    Body: ``{"dry_run": true}`` (default) returns integrity + idle checks
+    without writing anything. Execute with ``{"dry_run": false, "confirm":
+    "RESTORE"}``: refuses while tasks are queued/running (409) or the backup
+    fails integrity (400); otherwise swaps the live DB (safety snapshot first,
+    rollback on failure) and re-syncs clock + queue.
+    """
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        return jsonify({"error": "expected a JSON object"}), 400
+    config: Config = current_app.config["JALEBI_CONFIG"]
+    session = db.get_session()
+    ok, detail = data_mgmt.backup_integrity(config.data_dir, name)
+    if not ok and detail == "unknown backup":
+        return jsonify({"error": "unknown backup"}), 404
+    preview = {
+        "backup": name,
+        "integrity_ok": ok,
+        "integrity_detail": detail,
+        "busy_tasks": data_mgmt.busy_task_count(session),
+    }
+    if payload.get("dry_run", True) or payload.get("confirm") != "RESTORE":
+        return jsonify({"dry_run": True, "preview": preview})
+    if not ok:
+        return jsonify({"error": detail or "backup failed integrity check"}), 400
+    try:
+        result = data_mgmt.restore_backup(
+            config, session, name, queue=current_app.config.get("JALEBI_QUEUE")
+        )
+    except data_mgmt.RestoreBusy as exc:
+        return jsonify({"error": str(exc)}), 409
+    except data_mgmt.RestoreError as exc:
+        return jsonify({"error": str(exc)}), 500
+    return jsonify({"dry_run": False, "preview": preview, **result})
+
+
 @bp.post("/vacuum")
 def vacuum() -> ResponseReturnValue:
     """Checkpoint the WAL + rebuild the DB file; returns size before/after."""

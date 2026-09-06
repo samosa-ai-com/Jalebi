@@ -67,8 +67,44 @@ function makeFetchMock(settingsOverrides: Partial<typeof SETTINGS> = {}, models:
         json: async () => ({ sizes: {}, counts: {}, tasks_by_status: {} }),
       };
     }
+    if (String(url).includes("/restore")) {
+      const body = init?.method === "POST" ? JSON.parse((init.body as string) || "{}") : {};
+      if (body.dry_run === false && body.confirm === "RESTORE") {
+        return {
+          ok: true,
+          json: async () => ({
+            dry_run: false,
+            preview: {
+              backup: "data-20260101-000000.db",
+              integrity_ok: true,
+              integrity_detail: null,
+              busy_tasks: 0,
+            },
+            restored: "data-20260101-000000.db",
+            safety_backup: "data-20260102-000000.db",
+          }),
+        };
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          dry_run: true,
+          preview: {
+            backup: "data-20260101-000000.db",
+            integrity_ok: true,
+            integrity_detail: null,
+            busy_tasks: 0,
+          },
+        }),
+      };
+    }
     if (String(url).includes("/api/data/backups")) {
-      return { ok: true, json: async () => [] };
+      return {
+        ok: true,
+        json: async () => [
+          { name: "data-20260101-000000.db", size: 1234, created_at: "2026-01-01" },
+        ],
+      };
     }
     if (String(url).includes("/api/data/prune")) {
       return {
@@ -497,6 +533,29 @@ describe("Settings (recovery + data)", () => {
     expect(await screen.findAllByText("bad value")).toHaveLength(2);
   });
 
+  it("restore previews the backup then executes on RESTORE", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Settings />);
+    await expand(/Data management/);
+    await userEvent.click(await screen.findByText("restore"));
+    expect(await screen.findByText("Integrity check:")).toBeInTheDocument();
+    expect(screen.getByText("passed", { exact: false })).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("Type RESTORE to confirm restore"), "RESTORE");
+    await userEvent.click(screen.getByRole("button", { name: "Restore now" }));
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(
+          ([url, init]) =>
+            String(url).includes("/restore") &&
+            init?.method === "POST" &&
+            String(init.body).includes("RESTORE")
+        )
+      ).toBe(true);
+    });
+    expect(await screen.findByText(/restored .* safety snapshot/)).toBeInTheDocument();
+  });
+
   it("unchecking a backend saves the reduced enabled list", async () => {
     const fetchMock = makeFetchMock();
     vi.stubGlobal("fetch", fetchMock);
@@ -530,9 +589,7 @@ describe("Settings (recovery + data)", () => {
       const bodies = fetchMock.mock.calls
         .filter(([url, init]) => String(url).includes("/api/settings") && init?.method === "POST")
         .map(([, init]) => JSON.parse((init?.body as string) || "{}"));
-      expect(
-        bodies.some((b) => b.key === "timezone" && b.value === "Asia/Kolkata")
-      ).toBe(true);
+      expect(bodies.some((b) => b.key === "timezone" && b.value === "Asia/Kolkata")).toBe(true);
     });
   });
 
@@ -547,9 +604,7 @@ describe("Settings (recovery + data)", () => {
         .filter(([url, init]) => String(url).includes("/api/settings") && init?.method === "POST")
         .map(([, init]) => JSON.parse((init?.body as string) || "{}"));
       expect(
-        bodies.some(
-          (b) => b.key === "secret_patterns" && b.value.includes("AKIA[0-9A-Z]{16}")
-        )
+        bodies.some((b) => b.key === "secret_patterns" && b.value.includes("AKIA[0-9A-Z]{16}"))
       ).toBe(true);
     });
   });

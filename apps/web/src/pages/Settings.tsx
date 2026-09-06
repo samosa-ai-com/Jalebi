@@ -7,6 +7,7 @@ import type {
   EnvVar,
   PrunePreview,
   Repo,
+  RestorePreview,
   SettingsMap,
   TimezoneList,
 } from "../types";
@@ -940,10 +941,12 @@ function DataSection({
   query,
   onVisibility,
   resetKey,
+  onRestored,
 }: {
   query: string;
   onVisibility: (id: string, visible: boolean) => void;
   resetKey: number;
+  onRestored: () => void;
 }) {
   const [usage, setUsage] = useState<DataUsage | null>(null);
   const [usageErr, setUsageErr] = useState<string | null>(null);
@@ -954,6 +957,9 @@ function DataSection({
   const [scopes, setScopes] = useState<string[]>(PRUNE_SCOPES.map((s) => s.key));
   const [preview, setPreview] = useState<PrunePreview | null>(null);
   const [confirm, setConfirm] = useState("");
+  const [restoreName, setRestoreName] = useState<string | null>(null);
+  const [restorePreview, setRestorePreview] = useState<RestorePreview | null>(null);
+  const [restoreConfirm, setRestoreConfirm] = useState("");
 
   function reload() {
     api
@@ -999,6 +1005,34 @@ function DataSection({
       setPreview(res.preview);
       const c = res.preview.tasks.count;
       return `preview: ${c} task(s), ${res.preview.orphan_worktrees.length} orphan worktree(s), ${res.preview.deliveries} deliveries would be removed`;
+    });
+  }
+
+  async function previewRestore(name: string) {
+    setRestoreName(name);
+    setRestorePreview(null);
+    setRestoreConfirm("");
+    await runBusy(`restore-${name}`, async () => {
+      const res = await api.restoreBackup(name, { dry_run: true });
+      setRestorePreview(res.preview);
+      if (!res.preview.integrity_ok) {
+        return `backup problem: ${res.preview.integrity_detail ?? "integrity check failed"}`;
+      }
+      if (res.preview.busy_tasks > 0) {
+        return `dry run OK, but ${res.preview.busy_tasks} task(s) are queued or running`;
+      }
+      return "dry run OK — type RESTORE below to swap the live database";
+    });
+  }
+
+  async function execRestore(name: string) {
+    await runBusy(`restore-exec-${name}`, async () => {
+      const res = await api.restoreBackup(name, { dry_run: false, confirm: "RESTORE" });
+      setRestoreName(null);
+      setRestorePreview(null);
+      setRestoreConfirm("");
+      onRestored();
+      return `restored ${res.restored}; safety snapshot: ${res.safety_backup}`;
     });
   }
 
@@ -1087,8 +1121,9 @@ function DataSection({
       {/* Backups */}
       <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-ink-400">Backups</h3>
       <p className="mb-2 text-[11px] leading-relaxed text-ink-600">
-        Consistent snapshot of the live database (safe while running). Restore: stop the server,
-        replace <span className="font-mono">data.db</span> with the backup, start again.
+        Consistent snapshot of the live database (safe while running). Restoring swaps the live
+        database back — a dry run first, a safety snapshot always, and it refuses while tasks are
+        queued or running.
       </p>
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <button
@@ -1137,6 +1172,13 @@ function DataSection({
               </a>
               <button
                 type="button"
+                onClick={() => previewRestore(b.name)}
+                className="text-ink-400 hover:text-ink-200 underline-offset-2 hover:underline"
+              >
+                restore
+              </button>
+              <button
+                type="button"
                 onClick={() =>
                   runBusy(`del-${b.name}`, async () => {
                     await api.deleteBackup(b.name);
@@ -1150,6 +1192,74 @@ function DataSection({
             </li>
           ))}
         </ul>
+      )}
+      {restoreName && (
+        <div className="mb-5 rounded-lg border border-ink-800 bg-ink-900/50 p-3 text-xs text-ink-400">
+          <p className="font-mono text-[11px] text-ink-300">{restoreName}</p>
+          {restorePreview ? (
+            <>
+              <ul className="mt-1 list-disc pl-5">
+                <li>
+                  Integrity check:{" "}
+                  {restorePreview.integrity_ok ? (
+                    <span className="text-green-300">passed</span>
+                  ) : (
+                    <span className="text-red-400">failed — {restorePreview.integrity_detail}</span>
+                  )}
+                </li>
+                <li>
+                  {restorePreview.busy_tasks === 0 ? (
+                    "No tasks queued or running."
+                  ) : (
+                    <span className="text-amber-300">
+                      {restorePreview.busy_tasks} task(s) queued or running — finish or cancel them
+                      first.
+                    </span>
+                  )}
+                </li>
+              </ul>
+              <p className="mt-1 text-[11px] text-ink-600">
+                Restoring takes effect immediately. A safety snapshot of the current database is
+                saved first and named in the result.
+              </p>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <input
+                  value={restoreConfirm}
+                  onChange={(e) => setRestoreConfirm(e.target.value)}
+                  placeholder="type RESTORE to confirm"
+                  aria-label="Type RESTORE to confirm restore"
+                  className="field w-48 font-mono text-xs"
+                />
+                <button
+                  type="button"
+                  onClick={() => execRestore(restoreName)}
+                  disabled={
+                    busy !== null ||
+                    restoreConfirm !== "RESTORE" ||
+                    !restorePreview.integrity_ok ||
+                    restorePreview.busy_tasks > 0
+                  }
+                  className="btn-ghost text-xs text-red-300 disabled:opacity-40"
+                >
+                  {busy === `restore-exec-${restoreName}` ? "Restoring…" : "Restore now"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRestoreName(null);
+                    setRestorePreview(null);
+                    setRestoreConfirm("");
+                  }}
+                  className="btn-ghost text-xs"
+                >
+                  Cancel
+                </button>
+              </div>
+            </>
+          ) : (
+            <p className="mt-1 text-[11px] text-ink-600">Checking backup…</p>
+          )}
+        </div>
       )}
 
       {/* Prune */}
@@ -1210,7 +1320,7 @@ function DataSection({
               {preview.orphan_artifacts.length} orphan artifact dir(s)
             </li>
             <li>
-              {preview.deliveries} webhook deliverie(s), {preview.screening_runs} old screening
+              {preview.deliveries} webhook deliveries, {preview.screening_runs} old screening
               run(s), {preview.old_logs} log file(s)
             </li>
           </ul>
@@ -1297,7 +1407,7 @@ export default function Settings() {
     };
   }, [settings?.default_backend]);
 
-  useEffect(() => {
+  function loadSettings() {
     api
       .getSettings()
       .then((s) => {
@@ -1307,6 +1417,7 @@ export default function Settings() {
           ...s,
           auto_nudge: s.auto_nudge ?? false,
           adapter_model_lists: s.adapter_model_lists ?? {},
+          enabled_backends: s.enabled_backends ?? [...AGENT_CLIS],
           retry_policy: {
             auto_retry: rp.auto_retry ?? false,
             continue_prompt: rp.continue_prompt ?? "continue",
@@ -1318,6 +1429,10 @@ export default function Settings() {
         });
       })
       .catch((e) => setLoadError(e.message));
+  }
+
+  useEffect(() => {
+    loadSettings();
     api
       .getRepos()
       .then((r) => {
@@ -1614,14 +1729,14 @@ export default function Settings() {
           </Row>
           <Row
             label="Model overrides"
-            desc="Pin each backend's model dropdown to your own list (e.g. a custom provider) without touching adapter code. Empty = the adapter's own list."
+            desc="Force what each backend offers in every model dropdown across the app (new tasks, follow-ups, screens, agents). Use it for a custom provider or to hide models you never pick. Empty = the backend's built-in list."
             status={badge("adapter_model_lists")}
             error={fieldState["adapter_model_lists"]?.msg}
           >
-            <div className="flex flex-col items-end gap-2">
+            <div className="flex w-full max-w-lg flex-col items-end gap-2">
               {AGENT_CLIS.map((cli) => (
-                <label key={cli} className="flex items-center gap-2 text-xs text-ink-400">
-                  {cli}
+                <label key={cli} className="flex w-full items-center gap-2 text-xs text-ink-400">
+                  <span className="w-16 shrink-0 font-mono">{cli}</span>
                   <TextInput
                     value={(settings.adapter_model_lists?.[cli] ?? []).join(", ")}
                     onCommit={(v) => {
@@ -1635,10 +1750,10 @@ export default function Settings() {
                         "adapter_model_lists"
                       );
                     }}
-                    placeholder="comma-separated, empty = default"
+                    placeholder="comma-separated models, empty = built-in list"
                     ariaLabel={`Model override for ${cli}`}
                     mono
-                    className="field w-64 text-xs"
+                    className="field w-full text-xs"
                   />
                 </label>
               ))}
@@ -2092,7 +2207,12 @@ export default function Settings() {
         resetKey={bulkN}
       />
 
-      <DataSection query={query} onVisibility={handleVisibility} resetKey={bulkN} />
+      <DataSection
+        query={query}
+        onVisibility={handleVisibility}
+        resetKey={bulkN}
+        onRestored={() => loadSettings()}
+      />
     </div>
   );
 }
