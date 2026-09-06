@@ -73,3 +73,14 @@ def test_datetime_wrapper_sunday_shift():
     dt = datetime(2026, 8, 9, 6, 0)
     assert cron_matches_datetime("0 6 * * 0", dt)
     assert not cron_matches_datetime("0 6 * * 1", dt)
+
+
+def test_full_range_dom_with_dow_matches_daily():
+    """Vixie rule keys off literal `*`: `1-31` is restricted, so OR applies and
+    `0 6 1-31 * 1` matches every day — not Mondays only."""
+    assert cron_matches("0 6 1-31 * 1", 0, 6, 15, 6, 2)  # Tuesday 15th
+    assert cron_matches("0 6 1-31 * 1", 0, 6, 21, 6, 1)  # Monday 21st
+    assert not cron_matches("0 6 1-31 * 1", 30, 6, 15, 6, 2)  # wrong minute
+    # Star fields keep single-side semantics.
+    assert cron_matches("0 6 * * 1", 0, 6, 21, 6, 1)
+    assert not cron_matches("0 6 * * 1", 0, 6, 15, 6, 2)

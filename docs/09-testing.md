@@ -202,3 +202,22 @@ After any code change, run the relevant tests and build before marking work done
 - **Suite totals now:** server **875 passed**, web **144 passed.**
   Ruff, ESLint, `tsc --noEmit`, Prettier, production build clean (the Vite
   large-chunk warning remains).
+
+- **Screening round — Codex review (23 items) + full fix (server +13, web +8):**
+  - `test_screening.py` (+7), `test_cron.py` (+1), `test_api_screening.py` (+5):
+    strict findings parsing + garbage-fails-run, stale-run reconcile,
+    delete-race recheck, nullable clears, model-drop on backend switch, finding
+    caps, cron full-range OR, strict input types, preflight-failure runs with
+    masking, SSE 404, summary lists.
+  - AGY-review follow-ups (+4 server): 409-on-held-lock, no-ghost-row on
+    runtime failure, strict rejection of non-finding arrays, scheduler-tick
+    preflight persistence.
+  - `Screenings.test.tsx` (+7), `App.test.tsx` (+1): loading state, card
+    latest-run summary, prompt-review composer + task link, run-now endpoint +
+    inline error, delete-disabled mid-run, model reset, branch/history error
+    states, nav badge.
+  - AGY-review frontend follow-ups (+2 web): badge clears on navigation,
+    card refresh waits for the background run row.
+- **Suite totals now:** server **892 passed**, web **154 passed.**
+  Ruff, ESLint, `tsc --noEmit`, Prettier, production build clean (the Vite
+  large-chunk warning remains).

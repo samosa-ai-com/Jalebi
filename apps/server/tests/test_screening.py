@@ -594,3 +594,139 @@ def test_scheduler_skips_when_none_due(app, session, repo_row, monkeypatch):
     # Tuesday 08:00 → the Monday 06:00 screen is not due.
     ran = scheduler.tick(now_dt=datetime(2026, 8, 11, 8, 0))
     assert ran == 0
+
+
+def test_parse_findings_strict_distinguishes_garbage_from_empty():
+    """Strict parsing reports validity: garbage/truncation is not a clean audit."""
+    findings, ok = screening.parse_findings_strict("here is my report: all good, no JSON")
+    assert (findings, ok) == ([], False)
+    findings, ok = screening.parse_findings_strict('[{"severity": "high", "title":')
+    assert (findings, ok) == ([], False)
+    findings, ok = screening.parse_findings_strict("")
+    assert (findings, ok) == ([], False)
+    findings, ok = screening.parse_findings_strict("[]")
+    assert ok is True and findings == []
+    findings, ok = screening.parse_findings_strict(
+        '```json\n[{"severity": "low", "title": "T"}]\n```'
+    )
+    assert ok is True and len(findings) == 1
+    # Lenient wrapper keeps its old contract.
+    assert screening.parse_findings("no json here") == []
+
+
+def test_garbage_output_fails_run_instead_of_clean_done(
+    session, repo_row, engine, monkeypatch
+):
+    """Unparseable agent output must fail the run — a `done` would watermark the
+    HEAD and silently suppress the next tick (false negative)."""
+    _install_adapter(monkeypatch, FakeHandle(_done_events("prose without any array")))
+    screen = _make_screen(session, repo_row)
+    run = engine.run_screen(session, screen, force=True)
+    assert run is not None
+    assert run.status == "failed"
+    assert "unparseable" in (run.error or "")
+
+
+def test_reconcile_stale_runs(session, repo_row):
+    """Startup recovery marks crash-orphaned non-terminal runs failed."""
+    screen = _make_screen(session, repo_row)
+    session.add_all(
+        [
+            ScreeningRun(screening_id=screen.id, head_sha="a", status="running"),
+            ScreeningRun(screening_id=screen.id, head_sha="b", status="queued"),
+            ScreeningRun(screening_id=screen.id, head_sha="c", status="done"),
+        ]
+    )
+    session.commit()
+    assert screening.reconcile_stale_runs(session) == 2
+    rows = {
+        r.head_sha: (r.status, r.error)
+        for r in session.query(ScreeningRun).filter_by(screening_id=screen.id)
+    }
+    assert rows["a"][0] == "failed" and rows["a"][1]
+    assert rows["b"][0] == "failed"
+    assert rows["c"][0] == "done"
+
+
+def test_run_screen_refuses_deleted_screen(session, repo_row, engine, monkeypatch):
+    """The post-lock liveness re-check closes the delete-during-preflight race."""
+    _install_adapter(monkeypatch, FakeHandle(_done_events("[]")))
+    screen = _make_screen(session, repo_row)
+    screen_id = screen.id
+    session.delete(screen)
+    session.commit()
+    ghost = screening.get_screen(session, screen_id)
+    assert ghost is None
+    # Rebuild a detached stand-in carrying the deleted id.
+    from jalebi.db import Screening
+
+    standin = Screening(
+        id=screen_id, repo_id=repo_row.id, name="G", system_prompt="P",
+        cadence_cron="0 6 * * 1",
+    )
+    with pytest.raises(screening.ScreeningError, match="deleted"):
+        engine.run_screen(session, standin)
+
+
+def test_update_screen_null_clears_nullable_fields(session, repo_row):
+    """Explicit null clears scope/branch/backend/model pins; omitted keys stay."""
+    screen = screening.create_screen(
+        session, repo_id=repo_row.id, name="S", system_prompt="P",
+        cadence_cron="0 6 * * 1", scope_branch="main", cli="opencode",
+        model="m-1",
+    )
+    screening.update_screen(session, screen, system_prompt="P2")
+    assert screen.scope_branch == "main"  # omitted → kept
+    assert screen.model == "m-1"
+    screening.update_screen(session, screen, scope_branch=None, model=None)
+    assert screen.scope_branch is None
+    assert screen.model is None
+
+
+def test_update_screen_cli_change_drops_stale_model(session, repo_row):
+    """Switching backend without a new model drops the old pin (it belonged to
+    the old backend); an explicit new model in the same call is kept."""
+    screen = screening.create_screen(
+        session, repo_id=repo_row.id, name="S", system_prompt="P",
+        cadence_cron="0 6 * * 1", cli="opencode", model="m-1",
+    )
+    screening.update_screen(session, screen, cli="claude")
+    assert screen.cli == "claude"
+    assert screen.model is None
+    screening.update_screen(session, screen, cli="opencode", model="m-2")
+    assert (screen.cli, screen.model) == ("opencode", "m-2")
+
+
+def test_finding_file_path_capped():
+    """Untrusted `file` values are capped before they can reach task prompts."""
+    finding = screening._normalize_finding(
+        {"severity": "high", "title": "T", "file": "x" * 2000}
+    )
+    assert finding is not None and len(finding["file"]) == 500
+
+
+def test_parse_strict_rejects_non_finding_arrays():
+    """A valid JSON array with zero usable findings is garbage, not clean."""
+    findings, ok = screening.parse_findings_strict('[{"error": "rate limited"}]')
+    assert (findings, ok) == ([], False)
+    findings, ok = screening.parse_findings_strict('["just a string", 42]')
+    assert (findings, ok) == ([], False)
+    findings, ok = screening.parse_findings_strict(
+        '[{"severity": "high", "title": "Real"}, {"bogus": 1}]'
+    )
+    assert ok is True and len(findings) == 1
+
+
+def test_scheduler_tick_records_preflight_failure(session, repo_row, app):
+    """Scheduled preflight failures land in run history, not just the log."""
+    from jalebi.db import ScreeningRun
+
+    screen = _make_screen(session, repo_row, cadence_cron="* * * * *")
+    repo_row.connected = False
+    session.commit()
+    scheduler = screening.ScreeningScheduler(app.config["JALEBI_CONFIG"])
+    assert scheduler.tick() == 0
+    rows = session.query(ScreeningRun).filter_by(screening_id=screen.id).all()
+    assert len(rows) == 1
+    assert rows[0].status == "failed"
+    assert "not connected" in (rows[0].error or "")

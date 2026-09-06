@@ -7,14 +7,15 @@ finding into a ``screen_finding`` task explicitly.
 
 Design (kept simple per PRD Goal #10):
 - One daemon thread (``ScreeningScheduler``) wakes every 60s, matches each
-  enabled screen's 5-field cron against the current UTC clock (``cron.py``),
-  and runs due screens one at a time.
+  enabled screen's 5-field cron against the configured app wall clock
+  (``clock.now`` — the ``timezone`` setting, default machine-local;
+  ``cron.py``), and runs due screens one at a time.
 - **Baseline dedup:** a screen skips a tick when its last terminal run audited
   the same HEAD (the audited HEAD is the dedup watermark). "Run now" forces.
 - Each run checks out a **detached, read-only worktree** at the branch HEAD,
-  drives the opencode adapter with the screen's system prompt + a structured
-  "return a JSON array" instruction, masks all output, and stores the parsed
-  findings on the run row.
+  drives the screen's pinned backend (or the default backend) with the screen's
+  system prompt + a structured "return a JSON array" instruction, masks all
+  output, and stores the parsed findings on the run row.
 - Findings notify via ntfy when ``notify_ntfy`` is set.
 """
 
@@ -58,6 +59,11 @@ class ScreeningError(Exception):
     """A screening operation failed for a domain reason."""
 
 
+class ScreeningBusyError(ScreeningError):
+    """The screen already has a run in flight (lock held) — no work started,
+    no run row created. Callers must not record this as a failed run."""
+
+
 class _WatchState:
     """Mutable watchdog state shared between the run loop and its watchdog thread."""
 
@@ -77,8 +83,21 @@ def parse_findings(text: str) -> list[dict[str, object]]:
     ``[`` ... matching ``]`` pair. Invalid/non-array output yields ``[]`` (the
     raw output is preserved on the run for inspection).
     """
+    findings, _ = parse_findings_strict(text)
+    return findings
+
+
+def parse_findings_strict(text: str) -> tuple[list[dict[str, object]], bool]:
+    """Like :func:`parse_findings` but also reports whether the output was a
+    well-formed findings array.
+
+    ``ok=False`` means the agent returned no parseable array (garbage,
+    truncation, prose) — the engine records the run ``failed`` instead of a
+    misleading clean ``done``. An explicit empty array is ``ok=True`` (a real
+    clean audit).
+    """
     if not text:
-        return []
+        return [], False
     stripped = text.strip()
     # Drop a ```json ... ``` fence around the array if the agent wrapped it.
     if stripped.startswith("```"):
@@ -89,7 +108,7 @@ def parse_findings(text: str) -> list[dict[str, object]]:
         stripped = stripped.strip()
     start = stripped.find("[")
     if start == -1:
-        return []
+        return [], False
     # Find the matching close bracket, skipping brackets inside JSON string
     # literals (a finding's detail/recommendation may contain `]` or `[`).
     depth = 0
@@ -116,13 +135,13 @@ def parse_findings(text: str) -> list[dict[str, object]]:
                 end = i + 1
                 break
     if end == -1:
-        return []
+        return [], False
     try:
         raw = json.loads(stripped[start:end])
     except (json.JSONDecodeError, ValueError):
-        return []
+        return [], False
     if not isinstance(raw, list):
-        return []
+        return [], False
     findings: list[dict[str, object]] = []
     for item in raw:
         if not isinstance(item, dict):
@@ -132,7 +151,10 @@ def parse_findings(text: str) -> list[dict[str, object]]:
             findings.append(finding)
         if len(findings) >= MAX_FINDINGS:
             break
-    return findings
+    # A non-empty array with zero usable findings is garbage (e.g. an error
+    # object the agent returned instead of findings) — not a clean audit.
+    ok = not raw or len(findings) > 0
+    return findings, ok
 
 
 def _mask_findings(findings: list[dict[str, object]], masker) -> list[dict[str, object]]:
@@ -151,22 +173,34 @@ def _mask_findings(findings: list[dict[str, object]], masker) -> list[dict[str, 
 
 
 def _normalize_finding(item: dict) -> dict[str, object] | None:
-    """Coerce one raw finding into the PRD shape; ``None`` if unusable."""
+    """Coerce one raw finding into the PRD shape; ``None`` if unusable.
+
+    String fields are capped: finding content is untrusted agent output and
+    flows into task prompts — an unbounded ``file`` path must not become a
+    prompt-injection preamble.
+    """
     title = item.get("title")
     if not isinstance(title, str) or not title.strip():
         return None
     severity = item.get("severity")
     if severity not in SEVERITIES:
         severity = "medium"
+
+    def _capped(value: object, limit: int) -> str | None:
+        if not isinstance(value, str) or not value:
+            return None
+        value = value.strip()
+        return value[:limit] if len(value) > limit else value
+
+    line = item.get("line")
     finding: dict[str, object] = {
         "severity": severity,
-        "title": title.strip(),
-        "file": item.get("file") if isinstance(item.get("file"), str) else None,
-        "line": item.get("line") if isinstance(item.get("line"), int) else None,
-        "detail": item.get("detail") if isinstance(item.get("detail"), str) else None,
-        "recommendation": (
-            item.get("recommendation") if isinstance(item.get("recommendation"), str) else None
-        ),
+        "title": _capped(title, 500),
+        "file": _capped(item.get("file"), 500),
+        # bool is an int subclass — `line: true` is not a line number.
+        "line": line if isinstance(line, int) and not isinstance(line, bool) else None,
+        "detail": _capped(item.get("detail"), 4000),
+        "recommendation": _capped(item.get("recommendation"), 4000),
     }
     return finding
 
@@ -205,6 +239,36 @@ def screen_to_dict(screen: Screening) -> dict[str, object]:
         "notify_ntfy": screen.notify_ntfy,
         "created_at": clock.to_iso(screen.created_at),
         "updated_at": clock.to_iso(screen.updated_at),
+    }
+
+
+def run_summary_to_dict(run: ScreeningRun) -> dict[str, object]:
+    """Lightweight latest-run card summary: counts by severity, no findings blob.
+
+    The list endpoint serves one of these per screen — shipping full findings +
+    50KB outputs per card would bloat the response (N+1 heavy rows).
+    """
+    counts: dict[str, int] = {}
+    if run.findings_json:
+        try:
+            parsed = json.loads(run.findings_json)
+            if isinstance(parsed, list):
+                for f in parsed:
+                    if isinstance(f, dict):
+                        sev = str(f.get("severity") or "medium")
+                        counts[sev] = counts.get(sev, 0) + 1
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return {
+        "id": run.id,
+        "screening_id": run.screening_id,
+        "head_sha": run.head_sha,
+        "status": run.status,
+        "started_at": clock.to_iso(run.started_at) if run.started_at else None,
+        "finished_at": clock.to_iso(run.finished_at) if run.finished_at else None,
+        "finding_counts": counts,
+        "finding_total": sum(counts.values()),
+        "error": run.error,
     }
 
 
@@ -325,6 +389,11 @@ def create_screen(
     return screen
 
 
+#: Sentinel for "argument omitted" in ``update_screen`` — distinct from the
+#: explicit ``None`` the API sends when the owner clears a nullable field.
+_UNSET: object = object()
+
+
 def update_screen(
     session: Session,
     screen: Screening,
@@ -332,12 +401,20 @@ def update_screen(
     name: str | None = None,
     system_prompt: str | None = None,
     cadence_cron: str | None = None,
-    scope_branch: str | None = None,
-    cli: str | None = None,
-    model: str | None = None,
+    scope_branch: object = _UNSET,
+    cli: object = _UNSET,
+    model: object = _UNSET,
     enabled: bool | None = None,
     notify_ntfy: bool | None = None,
 ) -> Screening:
+    """Partial update: omitted arguments are left alone.
+
+    An explicit ``None`` on a nullable field (``scope_branch``/``cli``/``model``)
+    clears it — previously uncleared-forever because ``None`` also meant
+    "omitted". Switching ``cli`` without a new ``model`` drops the stale model
+    pin (it belonged to the old backend). Required fields treat ``None`` as
+    omitted (they cannot be cleared).
+    """
     if name is not None:
         if not str(name).strip():
             raise ScreeningError("name is required")
@@ -352,16 +429,30 @@ def update_screen(
         except CronError as exc:
             raise ScreeningError(f"invalid cadence_cron: {exc}") from exc
         screen.cadence_cron = str(cadence_cron).strip()
-    if scope_branch is not None:
-        screen.scope_branch = str(scope_branch).strip() or None
-    if cli is not None:
-        screen.cli = _normalize_cli(cli)
-    if model is not None:
-        screen.model = _normalize_model(model)
+    if scope_branch is not _UNSET:
+        if scope_branch is not None and not isinstance(scope_branch, str):
+            raise ScreeningError("scope_branch must be a string or null")
+        screen.scope_branch = (
+            str(scope_branch).strip() or None if scope_branch is not None else None
+        )
+    if cli is not _UNSET:
+        if cli is not None and not isinstance(cli, str):
+            raise ScreeningError("cli must be a string or null")
+        screen.cli = _normalize_cli(cli)  # type: ignore[arg-type]
+        if model is _UNSET:
+            screen.model = None  # stale pin belonged to the old backend
+    if model is not _UNSET:
+        if model is not None and not isinstance(model, str):
+            raise ScreeningError("model must be a string or null")
+        screen.model = _normalize_model(model)  # type: ignore[arg-type]
     if enabled is not None:
-        screen.enabled = bool(enabled)
+        if not isinstance(enabled, bool):
+            raise ScreeningError("enabled must be a boolean")
+        screen.enabled = enabled
     if notify_ntfy is not None:
-        screen.notify_ntfy = bool(notify_ntfy)
+        if not isinstance(notify_ntfy, bool):
+            raise ScreeningError("notify_ntfy must be a boolean")
+        screen.notify_ntfy = notify_ntfy
     screen.updated_at = now()
     session.commit()
     session.refresh(screen)
@@ -417,6 +508,17 @@ def latest_run(session: Session, screening_id: int) -> ScreeningRun | None:
     )
 
 
+def _masker_for(session: Session, config: Config):
+    """Build the run masker (PATs + secret_patterns) for error paths."""
+    raw_patterns = settings.get_setting(session, "secret_patterns") or []
+    patterns = (
+        [str(p) for p in raw_patterns if isinstance(p, str)]
+        if isinstance(raw_patterns, list)
+        else []
+    )
+    return masking.build_masker(secrets.all_token_values(config), patterns)
+
+
 class ScreeningEngine:
     """Executes one screen pass (read-only audit) and records its run."""
 
@@ -440,8 +542,14 @@ class ScreeningEngine:
         """
         lock = self._locks.setdefault(screen.id, threading.Lock())
         if not lock.acquire(blocking=False):
-            raise ScreeningError(f"screen '{screen.name}' is already running")
+            raise ScreeningBusyError(f"screen '{screen.name}' is already running")
         try:
+            # Re-check liveness under the lock: the screen may have been
+            # deleted after the caller fetched it but before the run row was
+            # inserted (the delete route refuses in-flight rows, not this
+            # window).
+            if session.get(Screening, screen.id) is None:
+                raise ScreeningError("screen was deleted before the run started")
             return self._run_screen_locked(session, screen, force=force)
         finally:
             lock.release()
@@ -633,23 +741,33 @@ class ScreeningEngine:
             run.output_json = json.dumps({"message": masker(output_text)})
             if ended_with_error or watch.reason is not None:
                 run.status = "failed"
-                run.error = str(watch.reason or "agent exited with an error")
+                run.error = masker(str(watch.reason or "agent exited with an error"))
             else:
-                findings = _mask_findings(parse_findings(output_text), masker)
-                run.findings_json = json.dumps(findings)
-                run.status = "done"
+                findings, ok = parse_findings_strict(output_text)
+                if not ok:
+                    # Unparseable output is NOT a clean audit: recording `done`
+                    # would watermark the HEAD and silently suppress the next
+                    # tick. Fail loudly so the owner sees it in history.
+                    run.status = "failed"
+                    run.error = "agent returned unparseable findings output"
+                else:
+                    run.findings_json = json.dumps(_mask_findings(findings, masker))
+                    run.status = "done"
             run.finished_at = now()
             session.commit()
             if run.status == "done":
                 self._notify_findings(session, screen, repo, run, masker)
         except Exception as exc:  # noqa: BLE001 - run failures are recorded, not fatal
-            logger.warning("screening run %s failed: %s", run.id, exc)
+            # masker is always bound inside this try (built before the worktree
+            # step); run errors are masked before persistence/logging (F17).
+            masked = masker(str(exc))
+            logger.warning("screening run %s failed: %s", run.id, masked)
             try:
                 session.rollback()
             except Exception:  # noqa: BLE001 - never mask the original error
                 pass
             run.status = "failed"
-            run.error = str(exc)[:2000]
+            run.error = masked[:2000]
             run.finished_at = now()
             try:
                 session.commit()
@@ -702,6 +820,49 @@ class ScreeningEngine:
         )
 
 
+def reconcile_stale_runs(session: Session) -> int:
+    """Mark crash-orphaned non-terminal runs failed (startup recovery).
+
+    At (re)start no screening run can legitimately be active — the engine
+    lives in this process. Without this, a kill between run-row insert and
+    terminal commit leaves a forever-`running` row that dedup ignores (so the
+    next tick double-audits). Returns the count reconciled.
+    """
+    stale = list(
+        session.execute(
+            select(ScreeningRun).where(ScreeningRun.status.in_(("queued", "running")))
+        ).scalars()
+    )
+    for run in stale:
+        run.status = "failed"
+        run.error = "server restarted while this run was in flight"
+        run.finished_at = now()
+    if stale:
+        session.commit()
+    return len(stale)
+
+
+def record_failed_run(session: Session, screening_id: int, error: str) -> ScreeningRun:
+    """Record a preflight failure as a failed run (no HEAD audited).
+
+    Failures before the run row exists (no PAT, bad branch, mirror/fetch
+    errors) would otherwise vanish into the server log while the API already
+    answered `{ok: true}`. The caller masks ``error`` first.
+    """
+    run = ScreeningRun(
+        screening_id=screening_id,
+        head_sha=None,
+        status="failed",
+        started_at=now(),
+        finished_at=now(),
+        error=error,
+    )
+    session.add(run)
+    session.commit()
+    session.refresh(run)
+    return run
+
+
 class ScreeningScheduler:
     """Daemon thread that runs due screens on their cron cadence."""
 
@@ -714,6 +875,17 @@ class ScreeningScheduler:
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
             return
+        # A crash between run-row insert and terminal commit leaves stale
+        # non-terminal rows: at startup no run can legitimately be active, so
+        # reconcile them before the first tick (never double-audit, never a
+        # forever-`running` row).
+        from jalebi import db  # local import avoids a cycle at module load
+
+        session = db.Session()
+        try:
+            reconcile_stale_runs(session)
+        finally:
+            session.close()
         self._thread = threading.Thread(
             target=self._loop, name="jalebi-screening", daemon=True
         )
@@ -741,8 +913,21 @@ class ScreeningScheduler:
                 try:
                     if self.engine.run_screen(session, screen) is not None:
                         ran += 1
-                except ScreeningError as exc:
+                except ScreeningBusyError as exc:
+                    # Serialized scheduler colliding with a manual run: nothing
+                    # started, nothing to record.
                     logger.warning("screen %s (%s): %s", screen.name, screen.id, exc)
+                except ScreeningError as exc:
+                    # Scheduled preflight failures belong in run history too,
+                    # not just the server log.
+                    logger.warning("screen %s (%s): %s", screen.name, screen.id, exc)
+                    try:
+                        masker = _masker_for(session, self.config)
+                        record_failed_run(session, screen.id, masker(str(exc))[:2000])
+                    except Exception:  # noqa: BLE001 - best-effort visibility
+                        logger.exception(
+                            "could not record failed screening run %s", screen.id
+                        )
             return ran
         finally:
             session.close()

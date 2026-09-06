@@ -393,6 +393,18 @@ export interface ScreeningRun {
   error: string | null;
 }
 
+export interface ScreeningRunSummary {
+  id: number;
+  screening_id: number;
+  head_sha: string | null;
+  status: "queued" | "running" | "done" | "failed";
+  started_at: string | null;
+  finished_at: string | null;
+  finding_counts: Record<string, number>;
+  finding_total: number;
+  error: string | null;
+}
+
 export interface Screen {
   id: number;
   repo_id: number;
@@ -406,7 +418,7 @@ export interface Screen {
   notify_ntfy: boolean;
   created_at: string;
   updated_at: string;
-  latest_run?: ScreeningRun | null;
+  latest_run?: ScreeningRunSummary | null;
 }
 
 export interface ScreenTemplate {

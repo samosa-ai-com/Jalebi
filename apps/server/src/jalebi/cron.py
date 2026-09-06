@@ -92,8 +92,10 @@ def cron_matches(expr: str, minute: int, hour: int, dom: int, month: int, dow: i
     ]
     minute_m, hour_m, dom_m, month_m, dow_m = matchers
     time_match = minute in minute_m and hour in hour_m and month in month_m
-    dom_restricted = len(dom_m) < 31
-    dow_restricted = len(dow_m) < 7
+    # Vixie rule keys off whether the field was literally `*`, not the matched
+    # set size: `0 6 1-31 * 1` must match every day (OR), not Mondays only.
+    dom_restricted = fields[2] != "*"
+    dow_restricted = fields[4] != "*"
     if dom_restricted and dow_restricted:
         date_match = dom in dom_m or dow in dow_m
     else:

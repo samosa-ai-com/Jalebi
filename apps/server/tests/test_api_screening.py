@@ -147,3 +147,167 @@ def test_unknown_screen_404(client):
     assert client.put("/api/screenings/999", json={}).status_code == 404
     assert client.delete("/api/screenings/999").status_code == 404
     assert client.post("/api/screenings/999/run").status_code == 404
+
+
+def test_create_rejects_strict_types(client, repo_row):
+    """Booleans must be real booleans (`bool('false')` is True); repo_id must
+    be a real int (`True` is an int subclass); pins must be strings."""
+    res = client.post("/api/screenings", json=_payload(repo_row, enabled="false"))
+    assert res.status_code == 400
+    res = client.post("/api/screenings", json=_payload(repo_row, repo_id=True))
+    assert res.status_code == 400
+    res = client.post("/api/screenings", json=_payload(repo_row, cli=123))
+    assert res.status_code == 400
+    res = client.post("/api/screenings", json=_payload(repo_row, notify_ntfy=1))
+    assert res.status_code == 400
+
+
+def test_update_null_clears_and_omitted_keeps(client, repo_row):
+    """PUT is present-key: explicit null clears nullable fields, omitted keys
+    (including booleans) are left alone."""
+    res = client.post(
+        "/api/screenings",
+        json=_payload(repo_row, scope_branch="main", cli="opencode", model="m-1"),
+    )
+    assert res.status_code == 201
+    screen_id = res.get_json()["id"]
+
+    res = client.put(f"/api/screenings/{screen_id}", json={"name": "Renamed"})
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body["name"] == "Renamed"
+    assert body["scope_branch"] == "main"  # omitted → kept
+    assert body["enabled"] is True  # omitted bool → kept (was reset to False before)
+
+    res = client.put(
+        f"/api/screenings/{screen_id}",
+        json={"scope_branch": None, "cli": None, "model": None},
+    )
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body["scope_branch"] is None
+    assert body["cli"] is None
+    assert body["model"] is None
+
+
+def test_preflight_failure_records_failed_run_masked(client, repo_row, app, monkeypatch):
+    """A 'Run now' whose preflight fails must leave a failed, secret-masked run
+    in history instead of vanishing into the server log."""
+    import time as _time
+
+    from jalebi import screening as screening_mod
+
+    res = client.post("/api/screenings", json=_payload(repo_row))
+    assert res.status_code == 201
+    screen_id = res.get_json()["id"]
+
+    def _boom(session, screen, force=False):
+        raise screening_mod.ScreeningError("no PAT account bound (token ghp_test)")
+
+    monkeypatch.setattr(
+        app.config["JALEBI_SCREENING"].engine, "run_screen", _boom
+    )
+    res = client.post(f"/api/screenings/{screen_id}/run")
+    assert res.status_code == 200
+
+    deadline = _time.time() + 10
+    runs = []
+    while _time.time() < deadline:
+        runs = client.get(f"/api/screenings/{screen_id}/runs").get_json()
+        if runs and runs[0]["status"] == "failed":
+            break
+        _time.sleep(0.2)
+    assert runs and runs[0]["status"] == "failed"
+    assert "ghp_test" not in (runs[0]["error"] or "")
+    assert "***" in (runs[0]["error"] or "")
+
+
+def test_unknown_run_events_404(client):
+    """Subscribing to a nonexistent run answers 404 immediately (no hang)."""
+    res = client.get("/api/screenings/runs/999999/events")
+    assert res.status_code == 404
+    assert "error" in res.get_json()
+
+
+def test_list_latest_run_is_summary(client, repo_row, session):
+    """The list endpoint ships a lightweight summary per screen — counts, no
+    findings blob, no 50KB output."""
+    from jalebi.db import ScreeningRun
+
+    res = client.post("/api/screenings", json=_payload(repo_row))
+    screen_id = res.get_json()["id"]
+    session.add(
+        ScreeningRun(
+            screening_id=screen_id,
+            head_sha="abc",
+            status="done",
+            findings_json='[{"severity": "high", "title": "T"},'
+            '{"severity": "high", "title": "U"},'
+            '{"severity": "low", "title": "V"}]',
+            output_json='{"message": "' + ("x" * 40000) + '"}',
+        )
+    )
+    session.commit()
+
+    items = client.get("/api/screenings").get_json()
+    mine = next(s for s in items if s["id"] == screen_id)
+    latest = mine["latest_run"]
+    assert latest["status"] == "done"
+    assert latest["finding_total"] == 3
+    assert latest["finding_counts"] == {"high": 2, "low": 1}
+    assert "findings" not in latest
+    assert "output" not in latest
+
+
+def test_run_now_409_when_already_running(client, repo_row, app):
+    """A synchronous 409 when the per-screen lock is held — the conflict is
+    inline, not a silent no-op discovered after the 200."""
+    import threading as _threading
+
+    res = client.post("/api/screenings", json=_payload(repo_row))
+    screen_id = res.get_json()["id"]
+    engine = app.config["JALEBI_SCREENING"].engine
+    lock = engine._locks.setdefault(screen_id, _threading.Lock())
+    lock.acquire()
+    try:
+        res = client.post(f"/api/screenings/{screen_id}/run")
+        assert res.status_code == 409
+        assert "already running" in res.get_json()["error"]
+    finally:
+        lock.release()
+
+
+def test_runtime_failure_records_single_row_no_ghost(client, repo_row, app, monkeypatch, session):
+    """A runtime failure (row already committed by the engine) must not gain a
+    second ghost row from the route's preflight recorder."""
+    import time as _time
+
+    from jalebi import screening as screening_mod
+    from jalebi.db import ScreeningRun
+
+    res = client.post("/api/screenings", json=_payload(repo_row))
+    screen_id = res.get_json()["id"]
+
+    def _fail_after_row(session, screen, force=False):
+        run = ScreeningRun(screening_id=screen.id, head_sha="abc", status="running")
+        session.add(run)
+        session.commit()
+        raise screening_mod.ScreeningError("agent exploded")
+
+    monkeypatch.setattr(
+        app.config["JALEBI_SCREENING"].engine, "run_screen", _fail_after_row
+    )
+    assert client.post(f"/api/screenings/{screen_id}/run").status_code == 200
+
+    deadline = _time.time() + 10
+    while _time.time() < deadline:
+        count = session.query(ScreeningRun).filter_by(screening_id=screen_id).count()
+        if count >= 1:
+            break
+        _time.sleep(0.2)
+    _time.sleep(0.5)  # let a wrongful ghost row appear if the bug is present
+    session.expire_all()
+    rows = session.query(ScreeningRun).filter_by(screening_id=screen_id).all()
+    # Exactly the engine's own row — the route must not add a ghost preflight row.
+    assert len(rows) == 1
+    assert rows[0].head_sha == "abc"
