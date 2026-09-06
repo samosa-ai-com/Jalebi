@@ -1277,3 +1277,49 @@ def test_dismiss_attention_endpoint(
     task_resp2 = client.get(f"/api/tasks/{task.id}")
     assert task_resp2.get_json()["attention"] == "done"
 
+
+def test_clear_attention_dismissal_helper(
+    client: FlaskClient, repo_id: int, session
+) -> None:
+    """clear_attention_dismissal removes the flag (True once, False after)."""
+    from jalebi import attention as attention_mod
+
+    task = tasks.create_task(
+        session, type_="freeform", repo_id=repo_id, prompt="test rearm"
+    )
+    task.status = "failed"
+    session.commit()
+
+    assert tasks.clear_attention_dismissal(session, task) is False
+    tasks.dismiss_task_attention(session, task.id)
+    assert attention_mod._is_attention_dismissed(task) is True
+    assert tasks.clear_attention_dismissal(session, task) is True
+    session.commit()
+    assert attention_mod._is_attention_dismissed(task) is False
+    assert tasks.clear_attention_dismissal(session, task) is False
+
+
+def test_prepare_run_rearms_dismissed_attention(
+    client: FlaskClient, repo_id: int, session, app
+) -> None:
+    """A new run (rerun/follow-up path via _prepare_run) clears a prior
+    dismissal so the new run's attention is live again."""
+    task = tasks.create_task(
+        session, type_="freeform", repo_id=repo_id, prompt="test rearm run"
+    )
+    task.status = "failed"
+    session.commit()
+
+    resp = client.post(f"/api/tasks/{task.id}/dismiss-attention")
+    assert resp.status_code == 200
+    assert resp.get_json()["attention"] == "done"
+
+    # The route commits in its own session; refresh so this session sees it
+    # (mirrors the worker, which always loads the task fresh).
+    session.refresh(task)
+    queue = app.config["JALEBI_QUEUE"]
+    queue._prepare_run(session, task, cli="opencode")
+    task_resp = client.get(f"/api/tasks/{task.id}")
+    # Running with no PR facts → working (NOT stuck at dismissed done).
+    assert task_resp.get_json()["attention"] == "working"
+

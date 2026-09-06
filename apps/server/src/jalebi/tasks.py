@@ -482,7 +482,27 @@ def dismiss_task_attention(session: Session, task_id: int) -> Task | None:
     ctx["attention_dismissed"] = True
     ctx["attention_dismissed_at"] = clock.to_iso(now())
     task.context_json = json.dumps(ctx)
-    task.updated_at = now()
     session.commit()
     return task
+
+
+def clear_attention_dismissal(session: Session, task: Task) -> bool:
+    """Clear a prior attention dismissal when a new run starts.
+
+    A dismissal acknowledges the *previous* run's state; a rerun or
+    follow-up re-arms attention so this run's future ``needs_you`` is
+    never hidden. Returns True when anything was cleared. The caller
+    owns the commit (``queue._prepare_run`` persists it with the run).
+    """
+    if not task.context_json:
+        return False
+    try:
+        ctx = json.loads(task.context_json)
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(ctx, dict) or not ctx.pop("attention_dismissed", None):
+        return False
+    ctx.pop("attention_dismissed_at", None)
+    task.context_json = json.dumps(ctx)
+    return True
 

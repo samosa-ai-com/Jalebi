@@ -469,6 +469,9 @@ class TaskQueue:
         session.add(run)
         task.status = "running"
         task.updated_at = now()
+        # A new run re-arms attention: a dismissal from a previous run must
+        # not hide this run's future needs_you (committed with the run below).
+        tasks.clear_attention_dismissal(session, task)
         session.commit()
         session.refresh(run)
         # Each run gets a fresh seq + replay buffer so a stale subscriber's seq
