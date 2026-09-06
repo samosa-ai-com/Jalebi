@@ -45,6 +45,7 @@ default only for a key added by a code update before the next restart.
 | `default_backend` / `default_model` | live (resolved per run when an action doesn't pick its own) |
 | `adapter_model_lists` | live (read per `/api/models` call) |
 | `auto_nudge` | live (checked per poller/webhook fact change) |
+| `enabled_backends` | live (Backend pickers read it per `/api/backends` call; dispatch falls back per run) |
 | `secret_patterns` | live (per run/prompt ingest) |
 | `default_timeout_minutes` | live (used for new tasks / watchdog fallback) |
 | `retry_policy` (`auto_retry`, `continue_prompt`, `timeout_multiplier`, `max_timeout_minutes`, `max_attempts`, `non_retryable_patterns`) | live (per run completion). **Recovery is bounded**: at most `max_attempts` (default 3) auto-recoveries per task, then the task stays `failed` with a give-up note; failures matching a `non_retryable_patterns` phrase fail immediately with no recovery. Only the first failure and the final give-up/success notify — intermediate attempts are timeline-only; the give-up push quotes the reason and respects `notify_on_failed`. A manual cancel while a recovery is queued stays cancelled (the follow-up path bails on `cancelled`). |
@@ -57,8 +58,11 @@ default only for a key added by a code update before the next restart.
 
 Settings values are **type-validated** on `POST /api/settings` (rejects `"false"` for a bool, non-integers for numbers, non-list `secret_patterns`, unsupported `default_backend`, empty `default_model`); `secret_patterns` must be compilable regexes; `ntfy_topic` must be empty, a bare topic, or an `http(s)://` URL. Backends: opencode, codex, claude.
 
-## 4. Security hardening
+## 3a. Automatic cleanup (what the app deletes on its own)
 
+Only one thing: **task artifacts** older than `artifact_ttl_days` are deleted at startup (`0` disables it). Tasks, runs, timelines, deliveries, worktrees, mirrors, and backups are **never auto-deleted** — they only go away via manual prune in Settings → Data management (always previewed first).
+
+## 4. Security hardening
 - Prompts, follow-up bodies, PR title/body, run-end diffs, and artifacts are masked with the **PAT and `secret_patterns`** at ingest — pattern-secrets never reach GitHub PRs.
 - Unknown `/api/*` paths return `404` JSON (they do not fall through to the SPA `index.html`).
 - Artifact downloads are path-traversal-safe; the PAT never appears in argv, URLs, or logs (git auth via `GIT_CONFIG_*` Basic header). Agent children spawn in their own session and cancel/timeout kill the whole process group.

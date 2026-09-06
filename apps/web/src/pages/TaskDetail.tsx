@@ -11,6 +11,7 @@ import WaitingCard from "../components/WaitingCard";
 import PublishDialog from "../components/PublishDialog";
 import { parseUnifiedDiff } from "../lib/unifiedDiff";
 import { useInView } from "../lib/useInView";
+import { useBackends } from "../hooks/useBackends";
 import type {
   Account,
   Artifact,
@@ -451,6 +452,7 @@ function FollowUpComposer({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [defaultBackend, setDefaultBackend] = useState<string | null>(null);
+  const backendOptions = useBackends();
 
   // Fetch the global default backend so the "fresh session" warning exactly
   // matches the queue's resolution (which uses ``cli || task.cli ||
@@ -575,7 +577,7 @@ function FollowUpComposer({
             <span className="mb-1.5 block text-xs font-medium text-ink-400">Backend</span>
             <select value={cli} onChange={(e) => setCli(e.target.value)} className="field">
               <option value="">Reuse task backend</option>
-              {["opencode", "codex", "claude"].map((c) => (
+              {backendOptions.map((c) => (
                 <option key={c} value={c}>
                   {c}
                 </option>

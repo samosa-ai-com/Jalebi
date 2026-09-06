@@ -513,6 +513,11 @@ class ScreeningEngine:
             or settings.get_setting(session, "default_backend")
             or "opencode"
         )
+        # A pin disabled after the screen was created falls back to the first
+        # enabled backend instead of failing the audit (logged in _enabled_cli).
+        from jalebi.queue import TaskQueue
+
+        effective_cli = TaskQueue._enabled_cli(session, effective_cli)
 
         # Screening audits *untrusted* repository code (the highest prompt-injection
         # exposure in the system) — the agent gets no PAT. Codex is the only backend

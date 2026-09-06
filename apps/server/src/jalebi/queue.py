@@ -47,11 +47,6 @@ DEFAULT_TIMEOUT_MINUTES = 60
 STALL_TIMEOUT_SECONDS = 600  # default no-output stall threshold (settings-overridable)
 MAX_RECOVERY_TIMEOUT_MINUTES = 180  # cap on auto-recovery timeout escalation
 
-# F6 — durable-SSE cap enforcement cadence: prune_task_events scans the
-# whole task_events table, so sweeping on every publish would be wasteful;
-# sweep every _PRUNE_EVERY_N_PUBLISHES persisted publishes instead.
-_PRUNE_EVERY_N_PUBLISHES = 250
-
 GIT_USER_NAME = "Jalebi"
 GIT_USER_EMAIL = "jalebi@localhost"
 
@@ -197,14 +192,11 @@ class TaskQueue:
         self._db_session_factory = db_session_factory
         # Phase 4 T4.3 — wire TaskEvents with DB persistence when running
         # under create_app. Standalone TaskQueue() (tests) stays memory-only.
-        # F6 — the prune callback enforces PERSIST_CAP during long runs
-        # (throttled; startup still sweeps in app.py).
+        # No automatic prune: timeline data is never auto-deleted (owner
+        # decision) — it grows until pruned manually via Settings → Data.
         self.events = TaskEvents(
             db_session_factory=db_session_factory,
-            prune_callback=self._prune_task_events_throttled,
         )
-        self._prune_counter = 0
-        self._prune_lock = threading.Lock()
         # Items: ("task", task_id) | ("followup", task_id, body) | None (stop).
         self._queue: queue.Queue[object] = queue.Queue()
         self._running: dict[int, _RunState] = {}
@@ -214,31 +206,6 @@ class TaskQueue:
         self._target_concurrency = 0
 
     # -- pool lifecycle ----------------------------------------------------
-
-    def _prune_task_events_throttled(self, run_id: int) -> None:
-        """Enforce PERSIST_CAP on the durable task_events table (F6).
-
-        Called by ``TaskEvents.publish`` after every persisted publish;
-        sweeps at most every ``_PRUNE_EVERY_N_PUBLISHES`` calls in a FRESH
-        session (never the caller's — its transaction is still open).
-        Never raises.
-        """
-        from jalebi.events import PERSIST_CAP, prune_task_events
-
-        try:
-            with self._prune_lock:
-                self._prune_counter += 1
-                if self._prune_counter % _PRUNE_EVERY_N_PUBLISHES != 0:
-                    return
-            if self._db_session_factory is None:
-                return
-            session = self._db_session_factory()
-            try:
-                prune_task_events(session, PERSIST_CAP)
-            finally:
-                session.close()
-        except Exception:
-            logger.exception("throttled task_events prune failed for run %s", run_id)
 
     def start(self, concurrency: int) -> None:
         """Spawn ``concurrency`` workers (0 = paused queue)."""
@@ -776,6 +743,22 @@ class TaskQueue:
         cap = cap if isinstance(cap, int) and cap >= 1 else MAX_RECOVERY_TIMEOUT_MINUTES
         return min(max(1, int(base * (multiplier**retries))), cap)
 
+    @staticmethod
+    def _enabled_cli(session, cli: str) -> str:
+        """Fall back to the first enabled backend when ``cli`` was disabled.
+
+        Tasks/screens pinned to a backend that the owner later disabled must
+        still run instead of 500ing mid-dispatch; the substitution is logged.
+        """
+        enabled = settings.get_setting(session, "enabled_backends")
+        if not isinstance(enabled, list) or not enabled:
+            return cli
+        if cli in enabled:
+            return cli
+        fallback = next((c for c in enabled if isinstance(c, str) and c), "opencode")
+        logger.warning("backend %s is disabled; running on %s instead", cli, fallback)
+        return fallback
+
     def _run_task(self, task_id: int) -> None:
         session = Session()
         run: Run | None = None
@@ -815,6 +798,7 @@ class TaskQueue:
                 or "opencode"
             )
             cli, agent_skills = self._agent_run_opts(session, task, resolved_cli)
+            cli = self._enabled_cli(session, cli)
             agent = self._catalog_agent(session, task)
             effective_model = task.model or (agent.model if agent is not None else None)
             if not effective_model:
@@ -1381,6 +1365,7 @@ class TaskQueue:
             effective_model = model or task.model or prev.model
 
             cli, agent_skills = self._agent_run_opts(session, task, resolved_cli)
+            cli = self._enabled_cli(session, cli)
             agent = self._catalog_agent(session, task)
             if agent is not None and agent.model:
                 effective_model = effective_model or agent.model

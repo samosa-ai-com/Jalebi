@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
+import { useBackends } from "../hooks/useBackends";
 import type { CatalogAgent, CatalogSkill } from "../types";
 
 const EMPTY: CatalogAgent = {
@@ -78,6 +79,7 @@ function AgentForm({
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [models, setModels] = useState<string[]>([]);
+  const backendOptions = useBackends();
 
   useEffect(() => {
     // Follow the CLI override selected in THIS form (blank = global default).
@@ -165,20 +167,26 @@ function AgentForm({
 
       <div className="grid gap-4 sm:grid-cols-2">
         <label className="block">
-          <span className="mb-1.5 block text-xs font-medium text-ink-400">CLI override (optional)</span>
+          <span className="mb-1.5 block text-xs font-medium text-ink-400">
+            CLI override (optional)
+          </span>
           <select
             value={form.cli ?? ""}
             onChange={(e) => set({ cli: e.target.value })}
             className="field"
           >
             <option value="">default (global setting)</option>
-            <option value="opencode">opencode</option>
-            <option value="codex">codex</option>
-            <option value="claude">claude</option>
+            {backendOptions.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
           </select>
         </label>
         <label className="block">
-          <span className="mb-1.5 block text-xs font-medium text-ink-400">Model pin (optional)</span>
+          <span className="mb-1.5 block text-xs font-medium text-ink-400">
+            Model pin (optional)
+          </span>
           <select
             value={form.model ?? ""}
             onChange={(e) => set({ model: e.target.value || "" })}
@@ -238,7 +246,11 @@ function AgentForm({
         Enabled (selectable in new tasks)
       </label>
 
-      {msg && <p className={`text-xs ${msg.kind === "ok" ? "text-green-400" : "text-red-400"}`}>{msg.text}</p>}
+      {msg && (
+        <p className={`text-xs ${msg.kind === "ok" ? "text-green-400" : "text-red-400"}`}>
+          {msg.text}
+        </p>
+      )}
 
       <div className="flex justify-end gap-2">
         <button type="button" onClick={onCancel} className="btn-ghost">

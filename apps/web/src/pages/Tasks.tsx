@@ -5,6 +5,7 @@ import { AttentionBadge } from "../components/AttentionBadge";
 import { DepBadges } from "../components/DepBadges";
 import { RunningCard } from "../components/RunningCard";
 import { StatusBadge } from "../components/StatusBadge";
+import { useBackends } from "../hooks/useBackends";
 import type { Account, CatalogAgent, GithubContext, Repo, SettingsMap, Task } from "../types";
 
 function repoName(repos: Repo[], id: number): string {
@@ -100,6 +101,7 @@ function CreateTask({
   const [models, setModels] = useState<string[]>([]);
   const [agentCli, setAgentCli] = useState<string | null>(null);
   const [settings, setSettings] = useState<SettingsMap | null>(null);
+  const backendOptions = useBackends();
   const [agents, setAgents] = useState<CatalogAgent[]>([]);
   const [reviewers, setReviewers] = useState<string[]>([]);
   const [envVars, setEnvVars] = useState<string[]>([]);
@@ -511,7 +513,7 @@ function CreateTask({
           onChange={setAgentCli}
           disabled={settingsLoading}
         >
-          {["opencode", "codex", "claude"].map((c) => (
+          {backendOptions.map((c) => (
             <option key={c} value={c}>
               {c}
             </option>

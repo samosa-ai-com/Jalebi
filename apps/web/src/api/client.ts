@@ -1,5 +1,6 @@
 import type {
   BackupInfo,
+  BackendsResponse,
   CatalogAgent,
   CatalogSkill,
   DataUsage,
@@ -20,6 +21,7 @@ import type {
   SettingsMap,
   SseEvent,
   Task,
+  TimezoneList,
   TokensResponse,
   TriggerRule,
   WebhookStatus,
@@ -64,6 +66,8 @@ export interface CreateTaskInput {
 export const api = {
   getHealth: () => request<Health>("/api/health"),
   getSettings: () => request<SettingsMap>("/api/settings"),
+  getBackends: () => request<BackendsResponse>("/api/backends"),
+  getTimezones: () => request<TimezoneList>("/api/timezones"),
   getModels: (cli?: string) =>
     request<{ cli: string; models: string[] }>(
       cli ? `/api/models?cli=${encodeURIComponent(cli)}` : "/api/models"

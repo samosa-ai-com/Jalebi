@@ -20,6 +20,7 @@ const SETTINGS = {
   default_backend: "opencode",
   default_model: "",
   adapter_model_lists: {},
+  enabled_backends: ["opencode", "codex", "claude"],
   auto_nudge: false,
   notify_on_done: true,
   notify_on_failed: true,
@@ -39,6 +40,26 @@ function makeFetchMock(settingsOverrides: Partial<typeof SETTINGS> = {}, models:
     if (String(url).includes("/api/models")) {
       const cli = new URL(String(url), "http://localhost").searchParams.get("cli");
       return { ok: true, json: async () => ({ cli: cli ?? "opencode", models }) };
+    }
+    if (String(url).includes("/api/backends")) {
+      return {
+        ok: true,
+        json: async () => ({
+          backends: ["opencode", "codex", "claude"],
+          enabled: ["opencode", "codex", "claude"],
+          default: "opencode",
+        }),
+      };
+    }
+    if (String(url).includes("/api/timezones")) {
+      return {
+        ok: true,
+        json: async () => ({
+          local: "local",
+          common: ["Asia/Kolkata"],
+          all: ["Asia/Kolkata", "UTC"],
+        }),
+      };
     }
     if (String(url).includes("/api/data/usage")) {
       return {
@@ -474,5 +495,62 @@ describe("Settings (recovery + data)", () => {
     await userEvent.tab();
     await waitFor(() => expect(input).toHaveValue(4));
     expect(await screen.findAllByText("bad value")).toHaveLength(2);
+  });
+
+  it("unchecking a backend saves the reduced enabled list", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Settings />);
+    await expand(/Agent defaults/);
+    expect(await screen.findByText("Active backends")).toBeInTheDocument();
+    const section = screen.getByRole("heading", { name: "Active backends" }).closest("section")!;
+    await userEvent.click(within(section).getByRole("checkbox", { name: "claude" }));
+    await waitFor(() => {
+      const bodies = fetchMock.mock.calls
+        .filter(([url, init]) => String(url).includes("/api/settings") && init?.method === "POST")
+        .map(([, init]) => JSON.parse((init?.body as string) || "{}"));
+      expect(
+        bodies.some(
+          (b) =>
+            b.key === "enabled_backends" &&
+            JSON.stringify(b.value) === JSON.stringify(["opencode", "codex"])
+        )
+      ).toBe(true);
+    });
+  });
+
+  it("timezone dropdown saves the chosen zone", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Settings />);
+    await expand(/Queue & timeouts/);
+    const select = await screen.findByRole("combobox", { name: "Timezone" });
+    await userEvent.selectOptions(select, "Asia/Kolkata");
+    await waitFor(() => {
+      const bodies = fetchMock.mock.calls
+        .filter(([url, init]) => String(url).includes("/api/settings") && init?.method === "POST")
+        .map(([, init]) => JSON.parse((init?.body as string) || "{}"));
+      expect(
+        bodies.some((b) => b.key === "timezone" && b.value === "Asia/Kolkata")
+      ).toBe(true);
+    });
+  });
+
+  it("ticking a secret preset saves the combined pattern list", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Settings />);
+    await expand(/Queue & timeouts/);
+    await userEvent.click(await screen.findByRole("checkbox", { name: "AWS access keys" }));
+    await waitFor(() => {
+      const bodies = fetchMock.mock.calls
+        .filter(([url, init]) => String(url).includes("/api/settings") && init?.method === "POST")
+        .map(([, init]) => JSON.parse((init?.body as string) || "{}"));
+      expect(
+        bodies.some(
+          (b) => b.key === "secret_patterns" && b.value.includes("AKIA[0-9A-Z]{16}")
+        )
+      ).toBe(true);
+    });
   });
 });

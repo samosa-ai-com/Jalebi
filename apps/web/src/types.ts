@@ -219,6 +219,7 @@ export interface SettingsMap {
   default_backend: string;
   default_model: string;
   adapter_model_lists: Record<string, string[]>;
+  enabled_backends: string[];
   notify_on_done: boolean;
   notify_on_failed: boolean;
   notify_on_progress: boolean;
@@ -235,6 +236,18 @@ export interface DataUsage {
   sizes: Record<string, number>;
   counts: Record<string, number>;
   tasks_by_status: Record<string, number>;
+}
+
+export interface TimezoneList {
+  local: string;
+  common: string[];
+  all: string[];
+}
+
+export interface BackendsResponse {
+  backends: string[];
+  enabled: string[];
+  default: string;
 }
 
 export interface BackupInfo {

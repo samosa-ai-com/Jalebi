@@ -198,9 +198,8 @@ def test_reset_scopes_seq_per_run(session) -> None:
     assert bus._seq[(7, 2)] == 1
 
 
-def test_throttled_prune_sweeps_table(session, config, monkeypatch) -> None:
-    """F6: the queue's prune callback sweeps the table every N persists."""
-    import jalebi.events as events_mod
+def test_no_automatic_event_prune(session, config) -> None:
+    """Timeline data is never auto-deleted: publishing never trims the table."""
     from jalebi import db as db_mod
     from jalebi import repos
     from jalebi.db import Run, Task
@@ -219,19 +218,15 @@ def test_throttled_prune_sweeps_table(session, config, monkeypatch) -> None:
     run = Run(task_id=task.id, seq=1, status="running")
     session.add(run)
     session.commit()
+
+    q = TaskQueue(config, db_session_factory=db_mod.get_session)
+    assert q.events._prune_callback is None
     for i in range(5):
-        session.add(
-            TaskEvent(
-                task_id=task.id, run_id=run.id, seq=i + 1, payload_json="{}"
-            )
+        q.events.publish(
+            task.id,
+            {"type": "message", "text": str(i)},
+            run_id=run.id,
+            session=session,
         )
     session.commit()
-
-    monkeypatch.setattr(events_mod, "PERSIST_CAP", 3)
-    monkeypatch.setattr("jalebi.queue._PRUNE_EVERY_N_PUBLISHES", 2)
-    q = TaskQueue(config, db_session_factory=db_mod.get_session)
-    q._prune_task_events_throttled(run.id)  # 1st call → below cadence
     assert session.query(TaskEvent).filter_by(task_id=task.id).count() == 5
-    q._prune_task_events_throttled(run.id)  # 2nd call → sweep to cap 3
-    session.expire_all()
-    assert session.query(TaskEvent).filter_by(task_id=task.id).count() == 3

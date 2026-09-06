@@ -8,6 +8,7 @@ import type {
   PrunePreview,
   Repo,
   SettingsMap,
+  TimezoneList,
 } from "../types";
 
 function formatBytes(n: number): string {
@@ -80,10 +81,10 @@ function Section({
         type="button"
         onClick={toggle}
         aria-expanded={shown}
-        className="flex w-full items-center justify-between gap-2 text-left"
+        className="flex w-full items-center justify-between gap-2 py-2.5 text-left"
       >
         <h2 className="panel-title">{title}</h2>
-        <span className="text-ink-500 font-mono text-sm" aria-hidden>
+        <span className="px-1 font-mono text-base text-ink-500" aria-hidden>
           {shown ? "▾" : "▸"}
         </span>
       </button>
@@ -483,6 +484,90 @@ function IDESettings({
 }
 
 const AGENT_CLIS = ["opencode", "codex", "claude"];
+
+// Common secret formats offered as one-click presets (plus free-form regex).
+const SECRET_PRESETS = [
+  { label: "AWS access keys", pattern: "AKIA[0-9A-Z]{16}" },
+  { label: "GitHub tokens", pattern: "gh[pousr]_[A-Za-z0-9_]{20,}" },
+  { label: "Slack tokens", pattern: "xox[baprs]-[A-Za-z0-9-]{10,}" },
+  { label: "Stripe live keys", pattern: "sk_live_[A-Za-z0-9]{16,}" },
+  { label: "OpenAI keys", pattern: "sk-[A-Za-z0-9]{20,}" },
+  { label: "Private keys", pattern: "-----BEGIN [A-Z ]*PRIVATE KEY-----" },
+  {
+    label: "Generic key assignments",
+    pattern: "(?i)(api[_-]?key|secret|token)\\s*[:=]\\s*['\"]?\\S+",
+  },
+];
+
+/** Preset checkboxes + custom-regex textarea. Saves the combined list. */
+function SecretPatternsInput({
+  value,
+  onCommit,
+}: {
+  value: string[];
+  onCommit: (v: string[]) => Promise<boolean> | boolean | void;
+}) {
+  const [custom, setCustom] = useState(() =>
+    value.filter((p) => !SECRET_PRESETS.some((s) => s.pattern === p)).join("\n")
+  );
+  const [lastValue, setLastValue] = useState(value);
+  if (lastValue !== value) {
+    setLastValue(value);
+    setCustom(value.filter((p) => !SECRET_PRESETS.some((s) => s.pattern === p)).join("\n"));
+  }
+  const customLines = () =>
+    custom
+      .split("\n")
+      .map((s) => s.trim())
+      .filter(Boolean);
+  const commit = async (patterns: string[]) => {
+    const ok = await onCommit(patterns);
+    if (ok === false) {
+      setCustom(value.filter((p) => !SECRET_PRESETS.some((s) => s.pattern === p)).join("\n"));
+    }
+  };
+  return (
+    <div className="w-full max-w-md space-y-2">
+      <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+        {SECRET_PRESETS.map((s) => {
+          const checked = value.includes(s.pattern);
+          return (
+            <label
+              key={s.pattern}
+              title={s.pattern}
+              className="flex cursor-pointer items-center gap-2 rounded border border-ink-800 px-2 py-1.5 text-[11px] text-ink-300"
+            >
+              <input
+                type="checkbox"
+                checked={checked}
+                onChange={() => {
+                  const next = checked
+                    ? value.filter((p) => p !== s.pattern)
+                    : [...value, s.pattern];
+                  void commit(next);
+                }}
+                className="accent-amber-500"
+              />
+              {s.label}
+            </label>
+          );
+        })}
+      </div>
+      <textarea
+        rows={3}
+        value={custom}
+        onChange={(e) => setCustom(e.target.value)}
+        onBlur={() => {
+          const presets = value.filter((p) => SECRET_PRESETS.some((s) => s.pattern === p));
+          void commit([...presets, ...customLines()]);
+        }}
+        placeholder={"Add your own regex, one per line…\nsk-[A-Za-z0-9]{20,}"}
+        aria-label="Custom secret patterns"
+        className="field w-full resize-y font-mono text-xs"
+      />
+    </div>
+  );
+}
 
 const SECTION_IDS = [
   "agent",
@@ -960,6 +1045,13 @@ function DataSection({
       onVisibility={onVisibility}
     >
       {usageErr && <p className="mb-3 text-xs text-red-400">{usageErr}</p>}
+      <div className="mb-4 rounded-lg border border-ink-800 bg-ink-900/50 p-3 text-[11px] leading-relaxed text-ink-400">
+        <span className="font-semibold text-ink-200">Automatic cleanup:</span> only task artifacts
+        older than the retention setting are auto-deleted (once, at startup — see Queue &amp;
+        timeouts). Tasks, runs, timelines, deliveries, worktrees, and backups are{" "}
+        <span className="font-semibold text-ink-200">never auto-deleted</span> — they only go away
+        when you prune them below, always previewed first.
+      </div>
       {/* Storage meter */}
       <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-ink-400">
         Storage {totalSize > 0 && <span className="text-ink-600">· {formatBytes(totalSize)}</span>}
@@ -1169,6 +1261,8 @@ export default function Settings() {
 
   // Model options for the Default model dropdown — follow the Default backend.
   const [defaultModels, setDefaultModels] = useState<string[]>([]);
+  // Timezone options for the Timezone dropdown (null = still loading).
+  const [timezones, setTimezones] = useState<TimezoneList | null>(null);
   // Settings search: filters rows, hides empty sections, forces matches open.
   const [query, setQuery] = useState("");
   const [visibleSections, setVisibleSections] = useState<Record<string, boolean>>({});
@@ -1233,6 +1327,10 @@ export default function Settings() {
       .catch(() => {
         setReposLoaded(true);
       });
+    api
+      .getTimezones()
+      .then((t) => setTimezones(t))
+      .catch(() => {});
   }, []);
 
   function mark(key: string, entry: { state: "saving" | "saved" | "error"; msg?: string }) {
@@ -1306,6 +1404,11 @@ export default function Settings() {
   const modelInList =
     settings.default_model !== "" && defaultModels.includes(settings.default_model);
   const showCustomModel = defaultModels.length === 0 || !modelInList;
+  const tzKnown =
+    !timezones ||
+    (settings.timezone ?? "local") === "local" ||
+    timezones.common.includes(settings.timezone ?? "") ||
+    timezones.all.includes(settings.timezone ?? "");
 
   const noMatches =
     query.trim() !== "" &&
@@ -1320,14 +1423,14 @@ export default function Settings() {
           Runtime behaviour of the queue and the agent. Most changes apply immediately; artifact
           retention applies on the next start.
         </p>
-        <div className="mt-3 flex max-w-md flex-wrap items-center gap-2">
+        <div className="mt-3 flex flex-wrap items-center gap-2">
           <div className="relative min-w-52 flex-1">
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Filter settings… (e.g. timeout, model, backup)"
               aria-label="Filter settings"
-              className="field w-full pr-8 text-sm"
+              className="field w-full py-2.5 pr-8 text-base"
             />
             {query && (
               <button
@@ -1386,13 +1489,63 @@ export default function Settings() {
                 className="field w-44"
                 aria-label="Default backend"
               >
-                {AGENT_CLIS.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
+                {(settings.enabled_backends?.length ? settings.enabled_backends : AGENT_CLIS).map(
+                  (c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  )
+                )}
               </select>
             </label>
+          </Row>
+          <Row
+            label="Active backends"
+            desc="Which backends the app may use. Every backend/model picker across the app offers only these. The default backend can't be switched off, and at least one must stay on. Runs pinned to a backend you switch off fall back to the first active one."
+            status={badge("enabled_backends")}
+            error={fieldState["enabled_backends"]?.msg}
+          >
+            <div className="flex flex-wrap justify-end gap-2">
+              {AGENT_CLIS.map((c) => {
+                const enabledList = settings.enabled_backends ?? [...AGENT_CLIS];
+                const enabled = enabledList.includes(c);
+                const isDefault = settings.default_backend === c;
+                const isLast = enabled && enabledList.length === 1;
+                const locked = isDefault || isLast;
+                return (
+                  <label
+                    key={c}
+                    title={
+                      isDefault
+                        ? "The default backend can't be switched off"
+                        : isLast
+                          ? "At least one backend must stay on"
+                          : `Include ${c}`
+                    }
+                    className={`flex cursor-pointer items-center gap-1.5 rounded border px-2 py-1.5 font-mono text-xs ${
+                      enabled
+                        ? "border-syrup-500/60 bg-syrup-500/10 text-ink-100"
+                        : "border-ink-800 text-ink-600"
+                    } ${locked ? "cursor-not-allowed opacity-60" : ""}`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={enabled}
+                      disabled={locked}
+                      onChange={() => {
+                        const current = settings.enabled_backends ?? [...AGENT_CLIS];
+                        void save(
+                          "enabled_backends",
+                          enabled ? current.filter((x) => x !== c) : [...current, c]
+                        );
+                      }}
+                      className="accent-amber-500"
+                    />
+                    {c}
+                  </label>
+                );
+              })}
+            </div>
           </Row>
           <Row
             label="Default model"
@@ -1558,7 +1711,7 @@ export default function Settings() {
           </Row>
           <Row
             label="Artifact retention"
-            desc="Days to keep task artifacts before cleanup. Applies on the next start."
+            desc="Artifacts are files an agent created but never committed (captured per run, shown in the task's Artifacts card). This keeps them N days, then auto-deletes them at startup. Repos, worktrees, tasks, and logs are never touched by this."
             status={badge("artifact_ttl_days")}
             error={fieldState["artifact_ttl_days"]?.msg}
           >
@@ -1571,40 +1724,63 @@ export default function Settings() {
           </Row>
           <Row
             label="Timezone"
-            desc="The app's wall clock (screening cron + all timestamps). `local` = this machine's zone; or an IANA name like Asia/Kolkata."
+            desc="The app's wall clock (screening cron + all timestamps). `local` = this machine's zone."
             status={badge("timezone")}
             error={fieldState["timezone"]?.msg}
           >
-            <TextInput
-              value={settings.timezone ?? "local"}
-              onCommit={(v) => save("timezone", v.trim() || "local")}
-              placeholder="local"
-              ariaLabel="Timezone"
-              mono
-              className="field w-44 text-xs"
-            />
+            {timezones ? (
+              <label className="flex items-center gap-2 text-xs text-ink-400">
+                Zone
+                <select
+                  value={tzKnown ? (settings.timezone ?? "local") : "__unknown__"}
+                  onChange={(e) => void save("timezone", e.target.value)}
+                  className="field w-52"
+                  aria-label="Timezone"
+                >
+                  <option value="local">local (this machine)</option>
+                  {!tzKnown && (
+                    <option value="__unknown__" disabled>
+                      {settings.timezone} (unknown — pick one)
+                    </option>
+                  )}
+                  <optgroup label="Common">
+                    {timezones.common.map((z) => (
+                      <option key={z} value={z}>
+                        {z}
+                      </option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="All">
+                    {timezones.all
+                      .filter((z) => !timezones.common.includes(z))
+                      .map((z) => (
+                        <option key={z} value={z}>
+                          {z}
+                        </option>
+                      ))}
+                  </optgroup>
+                </select>
+              </label>
+            ) : (
+              <TextInput
+                value={settings.timezone ?? "local"}
+                onCommit={(v) => save("timezone", v.trim() || "local")}
+                placeholder="local"
+                ariaLabel="Timezone"
+                mono
+                className="field w-44 text-xs"
+              />
+            )}
           </Row>
           <Row
             label="Secret patterns"
-            desc="Regex patterns (one per line) redacted from agent output."
+            desc="Tick common secret formats and/or add your own regex (one per line). Anything matching is redacted from agent output, prompts, diffs, and notifications."
             status={badge("secret_patterns")}
             error={fieldState["secret_patterns"]?.msg}
           >
-            <textarea
-              rows={3}
-              defaultValue={(settings.secret_patterns ?? []).join("\n")}
-              onBlur={(e) =>
-                void save(
-                  "secret_patterns",
-                  e.target.value
-                    .split("\n")
-                    .map((s) => s.trim())
-                    .filter(Boolean)
-                )
-              }
-              placeholder={"AKIA[0-9A-Z]{16}\nsk-[A-Za-z0-9]{20,}"}
-              aria-label="Secret patterns"
-              className="field max-w-md resize-y font-mono"
+            <SecretPatternsInput
+              value={settings.secret_patterns ?? []}
+              onCommit={(list) => save("secret_patterns", list)}
             />
           </Row>
         </div>
@@ -1745,6 +1921,36 @@ export default function Settings() {
         keywords="ntfy notify push alerts test pings"
         onVisibility={handleVisibility}
       >
+        <p className="mb-4 text-[11px] leading-relaxed text-ink-600">
+          New to ntfy? Start with the{" "}
+          <a
+            href="https://ntfy.sh"
+            target="_blank"
+            rel="noreferrer"
+            className="text-ink-300 underline underline-offset-2 hover:text-ink-100"
+          >
+            ntfy website
+          </a>{" "}
+          (cloud topics), the{" "}
+          <a
+            href="https://github.com/binwiederhier/ntfy"
+            target="_blank"
+            rel="noreferrer"
+            className="text-ink-300 underline underline-offset-2 hover:text-ink-100"
+          >
+            ntfy GitHub repo
+          </a>{" "}
+          (docs + Android/iOS apps), or{" "}
+          <a
+            href="https://docs.ntfy.sh/install/"
+            target="_blank"
+            rel="noreferrer"
+            className="text-ink-300 underline underline-offset-2 hover:text-ink-100"
+          >
+            self-host it
+          </a>{" "}
+          and paste your server URL below. Jalebi is the only sender — no account needed.
+        </p>
         <div className="grid gap-4 md:grid-cols-2">
           <div className="space-y-4">
             <label className="block">
@@ -1853,12 +2059,8 @@ export default function Settings() {
               className="field text-xs"
             />
             <span className="mt-1 block text-[11px] text-ink-500">
-              GitHub posts to{" "}
-              <span className="font-mono">
-                {settings.webhook_url
-                  ? `${settings.webhook_url.replace(/\/$/, "")}/webhook`
-                  : "<url>/webhook"}
-              </span>
+              GitHub delivers event payloads to the <span className="font-mono">/webhook</span> path
+              on this URL.
             </span>
           </label>
           <label className="block">

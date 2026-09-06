@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
+import { useBackends } from "../hooks/useBackends";
 import type { Repo, Screen, ScreenTemplate, ScreeningRun } from "../types";
 
 const DEFAULT_CRON = "0 6 * * 1";
@@ -27,7 +28,9 @@ function StatusPill({ status }: { status: string }) {
     failed: "bg-red-500/15 text-red-300",
   };
   return (
-    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${map[status] ?? "bg-ink-700/50 text-ink-300"}`}>
+    <span
+      className={`rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${map[status] ?? "bg-ink-700/50 text-ink-300"}`}
+    >
       {status}
     </span>
   );
@@ -52,9 +55,10 @@ function ScreenForm({
   const [scopeBranch, setScopeBranch] = useState(editing?.scope_branch ?? "");
   const [cron, setCron] = useState(editing?.cadence_cron ?? DEFAULT_CRON);
   const [systemPrompt, setSystemPrompt] = useState(
-    editing?.system_prompt ?? (templates[0]?.system_prompt ?? "")
+    editing?.system_prompt ?? templates[0]?.system_prompt ?? ""
   );
   const [cli, setCli] = useState(editing?.cli ?? "");
+  const backendOptions = useBackends();
   const [model, setModel] = useState(editing?.model ?? "");
   const [enabled, setEnabled] = useState(editing?.enabled ?? true);
   const [notify, setNotify] = useState(editing?.notify_ntfy ?? true);
@@ -216,7 +220,11 @@ function ScreenForm({
           <span className="mb-1.5 block text-xs font-medium text-ink-400">
             Cadence (5-field cron)
           </span>
-          <input value={cron} onChange={(e) => setCron(e.target.value)} className="field font-mono" />
+          <input
+            value={cron}
+            onChange={(e) => setCron(e.target.value)}
+            className="field font-mono"
+          />
         </label>
       </div>
 
@@ -231,7 +239,9 @@ function ScreenForm({
             {p.label}
           </button>
         ))}
-        <span className="text-xs text-ink-500">— or type a cron like `30 1 * * *` (1:30 AM local).</span>
+        <span className="text-xs text-ink-500">
+          — or type a cron like `30 1 * * *` (1:30 AM local).
+        </span>
       </div>
 
       <label>
@@ -249,9 +259,11 @@ function ScreenForm({
           <span className="mb-1.5 block text-xs font-medium text-ink-400">Backend</span>
           <select value={cli} onChange={(e) => setCli(e.target.value)} className="field">
             <option value="">default (global setting)</option>
-            <option value="opencode">opencode</option>
-            <option value="codex">codex</option>
-            <option value="claude">claude</option>
+            {backendOptions.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
           </select>
         </label>
         <label>
@@ -368,8 +380,7 @@ function RunHistory({ screen }: { screen: Screen }) {
                       className="btn-ghost mt-1 w-fit !px-2 !py-1 text-xs"
                       onClick={async () => {
                         try {
-                          const cap = (s: string | null | undefined) =>
-                            s ? s.slice(0, 2000) : "";
+                          const cap = (s: string | null | undefined) => (s ? s.slice(0, 2000) : "");
                           const location = f.file
                             ? ` in ${f.file}${f.line != null ? `:${f.line}` : ""}`
                             : "";
@@ -384,7 +395,9 @@ function RunHistory({ screen }: { screen: Screen }) {
                           });
                           window.alert("Created a screen_finding task.");
                         } catch (err) {
-                          window.alert(err instanceof Error ? err.message : "failed to create task");
+                          window.alert(
+                            err instanceof Error ? err.message : "failed to create task"
+                          );
                         }
                       }}
                     >
@@ -461,7 +474,12 @@ function ScreenCard({
       <p className="mt-2 font-mono text-xs text-ink-500">{screen.cadence_cron}</p>
 
       <div className="mt-4 flex items-center gap-2">
-        <button type="button" onClick={runNow} disabled={running} className="btn-ghost !px-2.5 !py-1 text-xs">
+        <button
+          type="button"
+          onClick={runNow}
+          disabled={running}
+          className="btn-ghost !px-2.5 !py-1 text-xs"
+        >
           {running ? "Starting…" : "Run now"}
         </button>
         <button type="button" onClick={onOpen} className="btn-ghost !px-2.5 !py-1 text-xs">
@@ -507,8 +525,14 @@ export default function Screenings() {
 
   useEffect(() => {
     load();
-    api.getRepos().then(setRepos).catch(() => {});
-    api.getScreenTemplates().then(setTemplates).catch(() => {});
+    api
+      .getRepos()
+      .then(setRepos)
+      .catch(() => {});
+    api
+      .getScreenTemplates()
+      .then(setTemplates)
+      .catch(() => {});
   }, [load]);
 
   return (

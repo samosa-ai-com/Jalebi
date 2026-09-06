@@ -67,6 +67,11 @@ DEFAULTS: dict[str, object] = {
     # default is always configured.
     "default_backend": "opencode",
     "default_model": "",
+    # Backends the app may use. Every backend/model picker in the UI offers
+    # only these; runs pinned to a backend that was disabled later fall back
+    # to the first enabled one (logged). Never empty; always contains
+    # ``default_backend`` (both enforced on save).
+    "enabled_backends": ["opencode", "codex", "claude"],
     # Owner override of each adapter's curated model list: {cli: [model names]}.
     # Consumed by GET /api/models; lets the owner pin the task-form model dropdown
     # (e.g. for a custom provider) without touching adapter code. {} = adapters'

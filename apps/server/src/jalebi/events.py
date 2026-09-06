@@ -22,7 +22,10 @@ from sqlalchemy.orm import Session
 logger = logging.getLogger(__name__)
 
 BUFFER_SIZE = 500
-PERSIST_CAP = 2000  # per (task_id, run_id); trimmed on every insert
+# Historic per-(task_id, run_id) cap, enforced only by manual prune
+# (``prune_task_events``). Nothing calls it automatically: timeline data is
+# never auto-deleted — it grows until pruned via Settings → Data management.
+PERSIST_CAP = 2000
 
 
 class TaskEvents:
@@ -41,8 +44,9 @@ class TaskEvents:
         self._seq: dict[tuple[int, int | None], int] = {}
         self._lock = threading.Lock()
         self._db_session_factory = db_session_factory
-        # prune_callback(run_id) is invoked after every persisted publish;
-        # the queue wires it to a throttled PERSIST_CAP sweep (F6).
+        # prune_callback(run_id) is invoked after every persisted publish.
+        # Nothing wires one: timeline auto-prune is disabled by design (the
+        # owner prunes manually via Settings → Data management).
         self._prune_callback = prune_callback
 
     def subscribe(

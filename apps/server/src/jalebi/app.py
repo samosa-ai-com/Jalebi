@@ -12,7 +12,7 @@ from flask import Flask, Response, current_app, g, jsonify, request, send_from_d
 from flask.typing import ResponseReturnValue
 
 from jalebi import artifacts, clock, db, ide, masking, notify, secrets, settings
-from jalebi.adapters import available_adapters, get_adapter
+from jalebi.adapters import ADAPTERS, available_adapters, get_adapter
 from jalebi.config import Config, load_config, repo_root
 from jalebi.poller import Poller
 from jalebi.queue import TaskQueue
@@ -97,6 +97,36 @@ def _valid_timezone(v) -> bool:
         return False
 
 
+COMMON_TIMEZONES = [
+    "Pacific/Honolulu",
+    "America/Anchorage",
+    "America/Los_Angeles",
+    "America/Denver",
+    "America/Chicago",
+    "America/New_York",
+    "America/Sao_Paulo",
+    "Atlantic/Azores",
+    "Europe/London",
+    "Europe/Berlin",
+    "Europe/Paris",
+    "Europe/Moscow",
+    "Africa/Cairo",
+    "Asia/Dubai",
+    "Asia/Karachi",
+    "Asia/Kolkata",
+    "Asia/Dhaka",
+    "Asia/Bangkok",
+    "Asia/Singapore",
+    "Asia/Tokyo",
+    "Asia/Seoul",
+    "Asia/Shanghai",
+    "Australia/Perth",
+    "Australia/Sydney",
+    "Pacific/Auckland",
+    "UTC",
+]
+
+
 def _valid_adapter_model_lists(v) -> bool:
     """adapter_model_lists: {cli: [model names]} overriding each adapter's curated list.
 
@@ -110,6 +140,15 @@ def _valid_adapter_model_lists(v) -> bool:
         and isinstance(models, list)
         and all(isinstance(m, str) and m.strip() for m in models)
         for cli, models in v.items()
+    )
+
+
+def _valid_enabled_backends(v) -> bool:
+    """enabled_backends: non-empty subset of the registered adapters."""
+    return (
+        isinstance(v, list)
+        and len(v) > 0
+        and all(isinstance(c, str) and c in ALLOWED_AGENT_CLIS for c in v)
     )
 
 
@@ -127,6 +166,7 @@ _SETTING_VALIDATORS = {
     "artifact_ttl_days": lambda v: isinstance(v, int) and v >= 1,
     "default_backend": lambda v: v in ALLOWED_AGENT_CLIS,
     "default_model": lambda v: isinstance(v, str) and bool(v.strip()),
+    "enabled_backends": _valid_enabled_backends,
     "adapter_model_lists": _valid_adapter_model_lists,
     "notify_on_done": lambda v: isinstance(v, bool),
     "notify_on_failed": lambda v: isinstance(v, bool),
@@ -362,6 +402,34 @@ def create_app(config: Config | None = None) -> Flask:
             models = []
         return jsonify({"cli": cli, "models": models})
 
+    @app.get("/api/timezones")
+    def list_timezones() -> ResponseReturnValue:
+        """IANA timezones for the Settings dropdown (plus ``local`` first)."""
+        from zoneinfo import available_timezones
+
+        try:
+            all_zones = sorted(available_timezones())
+        except Exception:
+            all_zones = []
+        return jsonify({"local": "local", "common": COMMON_TIMEZONES, "all": all_zones})
+
+    @app.get("/api/backends")
+    def list_backends() -> ResponseReturnValue:
+        """Backends the app may use: registry order with enabled flags."""
+        session = db.get_session()
+        enabled = settings.get_setting(session, "enabled_backends")
+        if not isinstance(enabled, list):
+            enabled = list(ADAPTERS)
+        order = list(ADAPTERS)
+        default = str(settings.get_setting(session, "default_backend") or "opencode")
+        return jsonify(
+            {
+                "backends": order,
+                "enabled": [c for c in order if c in enabled],
+                "default": default,
+            }
+        )
+
     @app.post("/api/settings")
     def update_settings() -> ResponseReturnValue:
         payload = request.get_json(silent=True)
@@ -375,6 +443,29 @@ def create_app(config: Config | None = None) -> Flask:
         if validator is not None and not validator(value):
             return jsonify({"error": f"invalid value for {key}"}), 400
         session = db.get_session()
+        # Cross-field invariant: the default backend must stay enabled, and at
+        # least one backend must stay enabled (shape already validated above).
+        if key == "enabled_backends" and isinstance(value, list):
+            default_backend = str(settings.get_setting(session, "default_backend"))
+            if default_backend not in value:
+                return (
+                    jsonify(
+                        {
+                            "error": (
+                                f"cannot disable {default_backend}: it is the default "
+                                "backend (change the default first)"
+                            )
+                        }
+                    ),
+                    400,
+                )
+        if key == "default_backend" and isinstance(value, str):
+            enabled = settings.get_setting(session, "enabled_backends") or []
+            if not isinstance(enabled, list) or value not in enabled:
+                return (
+                    jsonify({"error": f"{value} is not an enabled backend"}),
+                    400,
+                )
         # A write-only secret that was fetched masked and re-submitted unchanged
         # must not clobber the stored value; empty clears it.
         if key == "webhook_secret" and value == settings.SECRET_MASK:
@@ -480,12 +571,8 @@ def main() -> None:
             pruned = artifacts.prune_artifacts(session, config.data_dir, ttl)
             if pruned:
                 logger.info("pruned %s expired artifact(s)", pruned)
-            # Phase 4 T4.3 — cap the durable task_events table (per-run).
-            from jalebi.events import prune_task_events
-
-            events_pruned = prune_task_events(session)
-            if events_pruned:
-                logger.info("pruned %s expired task_events row(s)", events_pruned)
+            # Timeline data (task_events) is never auto-deleted by design —
+            # it grows until pruned manually via Settings → Data management.
         finally:
             session.close()
     recovered = queue.recover()

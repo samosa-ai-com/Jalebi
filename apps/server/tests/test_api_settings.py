@@ -45,6 +45,43 @@ def test_ntfy_topic_accepts_topic_or_url(client: FlaskClient) -> None:
     assert resp.status_code == 400
 
 
+def test_enabled_backends_validated_and_listed(client: FlaskClient) -> None:
+    """enabled_backends: non-empty known subset; default must stay enabled."""
+    body = client.get("/api/backends").get_json()
+    assert body["backends"] == ["opencode", "codex", "claude"]
+    assert body["enabled"] == ["opencode", "codex", "claude"]
+    assert body["default"] == "opencode"
+
+    # A valid subset saves and is reflected.
+    resp = client.post(
+        "/api/settings", json={"key": "enabled_backends", "value": ["opencode", "codex"]}
+    )
+    assert resp.status_code == 200
+    assert client.get("/api/backends").get_json()["enabled"] == ["opencode", "codex"]
+
+    # The default backend can't be switched off (change the default first).
+    resp = client.post("/api/settings", json={"key": "enabled_backends", "value": ["codex"]})
+    assert resp.status_code == 400
+    # Empty / unknown / non-list rejected.
+    for bad in ([], ["gemini"], "opencode", [None]):
+        resp = client.post("/api/settings", json={"key": "enabled_backends", "value": bad})
+        assert resp.status_code == 400, bad
+
+    # The default backend must be an enabled one.
+    resp = client.post("/api/settings", json={"key": "default_backend", "value": "claude"})
+    assert resp.status_code == 400
+    resp = client.post("/api/settings", json={"key": "default_backend", "value": "codex"})
+    assert resp.status_code == 200
+
+
+def test_timezones_endpoint(client: FlaskClient) -> None:
+    body = client.get("/api/timezones").get_json()
+    assert body["local"] == "local"
+    assert "Asia/Kolkata" in body["common"]
+    assert "UTC" in body["all"]
+    assert body["all"] == sorted(body["all"])
+
+
 def test_ntfy_url_no_longer_valid(client: FlaskClient) -> None:
     """ntfy_url was merged into ntfy_topic — the old key is rejected."""
     resp = client.post("/api/settings", json={"key": "ntfy_url", "value": "https://ntfy.sh"})

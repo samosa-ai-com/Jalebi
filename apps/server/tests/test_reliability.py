@@ -891,6 +891,16 @@ def test_always_failing_task_notifies_twice_then_stops(    q, session, repo_row,
     assert len(tasks.runs_for_task(session, task.id)) == 2
 
 
+def test_enabled_cli_falls_back_to_first_enabled(q, session) -> None:
+    """A run pinned to a disabled backend uses the first enabled one."""
+    from jalebi.queue import TaskQueue
+
+    settings.set_setting(session, "enabled_backends", ["opencode", "codex", "claude"])
+    assert TaskQueue._enabled_cli(session, "codex") == "codex"
+    settings.set_setting(session, "enabled_backends", ["opencode"])
+    assert TaskQueue._enabled_cli(session, "codex") == "opencode"
+
+
 def test_give_up_respects_notify_on_failed_off(q, session, repo_row, monkeypatch) -> None:
     """With failure notifications off, the give-up push is suppressed too."""
     _no_publish(session)
