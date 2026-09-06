@@ -116,6 +116,51 @@ def test_symlink_rejected(
     assert "symlink" in resp.get_json()["error"].lower()
 
 
+def test_intermediate_symlink_into_git_rejected(
+    client: FlaskClient, session, app, config: Config, tmp_path
+) -> None:
+    """`linkdir/...` where `linkdir` is a symlink must be refused even when
+    the final component is not itself a symlink (bypass for the old
+    final-component-only check, e.g. `linkdir -> .git`)."""
+    task_id = _make_task(session)
+    wt = _seed_worktree(config, task_id, tmp_path / "outside")
+    (wt / "sub" / "inner.txt").write_text("inner\n")
+    os.symlink(wt / "sub", wt / "linkdir")
+    resp = client.get(f"/api/tasks/{task_id}/files/content?path=linkdir/inner.txt")
+    assert resp.status_code == 400
+    assert "symlink" in resp.get_json()["error"].lower()
+    resp = client.get(f"/api/tasks/{task_id}/files?path=linkdir")
+    assert resp.status_code == 400
+    assert "symlink" in resp.get_json()["error"].lower()
+
+
+def test_git_case_variant_rejected(
+    client: FlaskClient, session, app, config: Config, tmp_path
+) -> None:
+    """`.Git`/`.GIT` must be refused like `.git` (case-insensitive mounts)."""
+    task_id = _make_task(session)
+    _seed_worktree(config, task_id, tmp_path / "outside")
+    for variant in ("Git", "GIT"):
+        resp = client.get(f"/api/tasks/{task_id}/files?path=.git/../.{variant}")
+        assert resp.status_code == 400
+        assert "inside .git" in resp.get_json()["error"].lower()
+
+
+def test_intermediate_symlink_escaping_root_rejected(
+    client: FlaskClient, session, app, config: Config, tmp_path
+) -> None:
+    """`extdir/secret.txt` where `extdir -> <outside>` must not escape root."""
+    task_id = _make_task(session)
+    wt = _seed_worktree(config, task_id, tmp_path / "outside")
+    outside = tmp_path / "outside2"
+    outside.mkdir(parents=True, exist_ok=True)
+    (outside / "secret.txt").write_text("outside\n")
+    os.symlink(outside, wt / "extdir")
+    resp = client.get(f"/api/tasks/{task_id}/files/content?path=extdir/secret.txt")
+    assert resp.status_code == 400
+    assert "symlink" in resp.get_json()["error"].lower()
+
+
 def test_binary_file_returns_415(
     client: FlaskClient, session, app, config: Config, tmp_path
 ) -> None:

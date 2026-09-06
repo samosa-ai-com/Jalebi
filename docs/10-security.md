@@ -110,10 +110,13 @@ read-only for the browser. The worktree root is the security boundary:
 
 - **Containment:** `target = (root / rel_path).resolve()`; require
   `target.is_relative_to(root.resolve())` else `"path escapes worktree"`.
-- **Symlinks refused:** checked on the **raw** (unresolved) path before
-  resolve — `resolve()` would otherwise follow a symlink outside the root
-  and the containment check would reject it first with the wrong message.
-- **`.git` refused:** any `.git` segment in the raw path parts.
+- **Symlinks refused on every path component:** the raw path is walked
+  prefix-by-prefix and any symlink (`link/config` where `link -> .git` or
+  `-> /outside`) is refused before resolving — checking only the final
+  component misses intermediate symlinks.
+- **`.git` refused (case-insensitive):** any `.git`/`.Git`/`.GIT` segment in
+  the resolved relative parts **or** the raw parts (covers symlink-into-.git
+  and `foo/../.git` alike; case-insensitivity matters on non-Linux mounts).
 - **Absolute client paths rejected** (`Path(rel_path).is_absolute()`).
 - **Size cap** (256 KB) + **NUL-byte sniff** (binary → 415). Content is
   masked with the same `_masker` the diff/artifact endpoints use before it

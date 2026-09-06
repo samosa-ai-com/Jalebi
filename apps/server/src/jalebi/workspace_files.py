@@ -28,16 +28,38 @@ def _resolve(config, task_id: int, rel_path: str) -> tuple[Path, str | None]:
     if not isinstance(rel_path, str) or Path(rel_path).is_absolute():
         return root, "invalid path"
     raw = root / rel_path
-    # Refuse symlinks on the raw (unresolved) path — resolve() would follow a
-    # symlink outside the root, so check before resolving.
+    # Refuse symlinks anywhere along the client-supplied path — checking
+    # only the final component misses an intermediate symlink such as
+    # ``link/config`` where ``link -> .git`` (or -> /outside). Walk each
+    # prefix of the raw path before resolving.
+    cur = root
+    for part in Path(rel_path).parts:
+        if part in ("", "."):
+            continue
+        cur = cur / part
+        try:
+            if cur.is_symlink():
+                return root, "refusing symlink"
+        except OSError:
+            return root, "invalid path"
+    # Legacy direct check: the final component itself is a symlink.
     if raw.is_symlink():
         return root, "refusing symlink"
     target = raw.resolve()
-    # Containment.
-    if not target.is_relative_to(root.resolve()):
+    # Containment on the resolved path (the true security boundary).
+    root_real = root.resolve()
+    if not target.is_relative_to(root_real):
         return root, "path escapes worktree"
-    # .git segments (use the raw parts so a `foo/../.git` can't slip through).
-    if ".git" in raw.parts:
+    # .git segments (case-insensitive: `.Git`/`.GIT` resolve to the same
+    # directory on case-insensitive mounts) on the RESOLVED relative path
+    # so an intermediate symlink into .git is caught even if the raw parts
+    # name no .git segment. Keep the raw-parts check too so `foo/../.git`
+    # can't slip through on resolution quirks.
+    resolved_parts = target.relative_to(root_real).parts
+    if (
+        any(p.lower() == ".git" for p in resolved_parts)
+        or any(p.lower() == ".git" for p in raw.parts)
+    ):
         return root, "path is inside .git"
     return target, None
 
