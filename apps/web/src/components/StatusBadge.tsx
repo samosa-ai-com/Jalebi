@@ -8,6 +8,7 @@ const STATUS_STYLES: Record<string, string> = {
   cancelled: "bg-ink-600/20 text-ink-400 ring-ink-600/40",
   interrupted: "bg-ink-600/20 text-ink-300 ring-ink-600/40",
   needs_approval: "bg-purple-500/10 text-purple-300 ring-purple-500/40",
+  blocked: "bg-orange-500/10 text-orange-300 ring-orange-500/40",
 };
 
 function dot(status: string): string {
@@ -24,6 +25,8 @@ function dot(status: string): string {
     case "needs_approval":
     case "waiting_review":
       return "bg-purple-400";
+    case "blocked":
+      return "bg-orange-400";
     default:
       return "bg-ink-500";
   }

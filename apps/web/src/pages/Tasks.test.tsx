@@ -478,6 +478,32 @@ describe("Tasks page (Phase 4 T3.1)", () => {
       expect(screen.queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument();
     });
   });
+
+  it("renders dependency badges and the blocked pill for a blocked task", async () => {
+    const blocked = {
+      ...TASKS[0],
+      id: 3,
+      status: "blocked",
+      depends_on: [1],
+      blocked_by: [1],
+      blocking: [4],
+      blocked: true,
+    };
+    stubFetch({ "/api/tasks": [blocked] });
+    renderTasks();
+    expect(await screen.findByText("⛔ blocked")).toBeInTheDocument();
+    expect(screen.getByText("depends on #1")).toBeInTheDocument();
+    expect(screen.getByText("blocks #4")).toBeInTheDocument();
+    expect(screen.getByText("blocked")).toBeInTheDocument();
+  });
+
+  it("renders no dependency badges for a task without edges", async () => {
+    stubFetch({ "/api/tasks": TASKS });
+    renderTasks();
+    await screen.findByText("do the thing");
+    expect(screen.queryByText("⛔ blocked")).not.toBeInTheDocument();
+    expect(screen.queryByText(/depends on #/)).not.toBeInTheDocument();
+  });
 });
 
 // ---- Phase 4 T5.3 — table sticky header + bounded scroll ---------------

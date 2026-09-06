@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { api, taskEvents } from "../api/client";
 import { StatusBadge } from "../components/StatusBadge";
 import { AttentionBadge } from "../components/AttentionBadge";
+import { DepBadges } from "../components/DepBadges";
 import FileBrowser from "../components/FileBrowser";
 import Markdown from "../components/Markdown";
 import { MergeReadinessPanel } from "../components/MergeReadinessPanel";
@@ -1274,6 +1275,12 @@ export default function TaskDetail() {
           </Link>
           <h1 className="text-2xl font-bold tracking-tight text-ink-100">Task #{task.id}</h1>
           <StatusBadge status={task.status} />
+          <DepBadges
+            dependsOn={task.depends_on}
+            blockedBy={task.blocked_by}
+            blocking={task.blocking}
+            blocked={task.blocked}
+          />
           {task.attention && task.attention !== "working" && (
             <div className="flex items-center gap-1.5">
               <AttentionBadge attention={task.attention} />

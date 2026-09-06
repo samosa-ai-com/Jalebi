@@ -85,6 +85,10 @@ export interface Task {
   attention: AttentionValue;
   followups?: Followup[];
   reviewers?: ReviewAssignment[];
+  depends_on?: number[];
+  blocked_by?: number[];
+  blocking?: number[];
+  blocked?: boolean;
 }
 
 export type AttentionValue = "working" | "needs_you" | "in_review" | "ready_to_merge" | "done";

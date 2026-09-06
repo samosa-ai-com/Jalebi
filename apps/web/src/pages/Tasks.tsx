@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import { AttentionBadge } from "../components/AttentionBadge";
+import { DepBadges } from "../components/DepBadges";
 import { RunningCard } from "../components/RunningCard";
 import { StatusBadge } from "../components/StatusBadge";
 import type { Account, CatalogAgent, GithubContext, Repo, SettingsMap, Task } from "../types";
@@ -868,6 +869,12 @@ export default function Tasks() {
                       <div className="flex flex-wrap items-center gap-1.5">
                         <StatusBadge status={t.status} />
                         <AttentionBadge attention={t.attention ?? "working"} />
+                        <DepBadges
+                          dependsOn={t.depends_on}
+                          blockedBy={t.blocked_by}
+                          blocking={t.blocking}
+                          blocked={t.blocked}
+                        />
                         {t.attention === "needs_you" && (
                           <button
                             type="button"

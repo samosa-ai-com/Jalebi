@@ -1043,6 +1043,21 @@ describe("TaskDetail (Phase 4 T3.2)", () => {
       screen.getByText(/branch mismatch; agent left HEAD on main, expected jalebi\/7/i)
     ).toBeInTheDocument();
   });
+
+  it("shows dependency badges in the header for a blocked task", async () => {
+    const blocked = {
+      ...TASK,
+      status: "blocked",
+      depends_on: [3],
+      blocked_by: [3],
+      blocking: [],
+      blocked: true,
+    };
+    stubFetchWithPublishCheck(blocked, null, null);
+    renderDetail();
+    expect(await screen.findByText("⛔ blocked")).toBeInTheDocument();
+    expect(screen.getByText("depends on #3")).toBeInTheDocument();
+  });
 });
 
 // ---- Phase 4 T6 — Open worktree ---------------------------------------
