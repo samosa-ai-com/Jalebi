@@ -14,6 +14,7 @@ import type {
   PrunePreview,
   PublishCheck,
   Repo,
+  ReplayResponse,
   Run,
   Screen,
   ScreeningRun,
@@ -114,11 +115,11 @@ export const api = {
     repo_id: number;
     event: string;
     action: string;
-    branch_filter?: string;
+    branch_filter?: string | null;
     label_filter?: string[];
-    author_filter?: string;
+    author_filter?: string | null;
     agent_ids?: string[];
-    custom_instructions?: string;
+    custom_instructions?: string | null;
     enabled?: boolean;
   }) =>
     request<TriggerRule>("/api/triggers", {
@@ -146,7 +147,7 @@ export const api = {
     request<{ deleted: number }>(`/api/triggers/${id}`, { method: "DELETE" }),
   getDeliveries: () => request<EventDelivery[]>("/api/webhooks/deliveries"),
   replayDelivery: (id: number) =>
-    request<{ matched: number; results: unknown[] }>(`/api/webhooks/deliveries/${id}/replay`, {
+    request<ReplayResponse>(`/api/webhooks/deliveries/${id}/replay`, {
       method: "POST",
     }),
   getScreenTemplates: () => request<ScreenTemplate[]>("/api/screenings/templates"),

@@ -13,7 +13,7 @@ from flask import Blueprint, current_app, jsonify, request
 from flask.typing import ResponseReturnValue
 from sqlalchemy import select
 
-from jalebi import db, masking, nudger, secrets, settings, webhooks
+from jalebi import clock, db, masking, nudger, secrets, settings, webhooks
 from jalebi.config import Config
 from jalebi.db import Repo
 from jalebi.queue import TaskQueue
@@ -110,7 +110,7 @@ def webhook() -> ResponseReturnValue:
 
     event_key = f"{event}.{action}" if action else event
     context = webhooks.event_context(payload)
-    rules = webhooks.matching_rules(session, repo, event_key, context)
+    rules = webhooks.matching_rules(session, repo, event_key, context, event=event)
 
     if not rules:
         _complete_delivery(
@@ -119,14 +119,23 @@ def webhook() -> ResponseReturnValue:
         )
         return jsonify({"ok": True, "matched": False})
 
+    trigger = {
+        "delivery_id": delivery_id,
+        "event": event_key,
+        "received_at": clock.to_iso(reserved.received_at),
+    }
     results = []
     masker = _masker(session)
     for rule in rules:
         try:
             summary = webhooks.dispatch_rule(
-                session, _queue(), rule, repo, context, masker=masker
+                session, _queue(), rule, repo, context, masker=masker,
+                trigger=trigger,
             )
         except Exception as exc:  # one bad rule must not fail the whole delivery
+            # Roll back so a DB-level failure in one rule can't poison the
+            # session and turn _complete_delivery's commit into a 500.
+            session.rollback()
             summary = [{"type": "error", "error": str(exc)}]
         results.append({"rule_id": rule.id, "action": rule.action, "work": summary})
 
@@ -240,17 +249,22 @@ def deliveries() -> ResponseReturnValue:
 def replay(delivery_id: int) -> ResponseReturnValue:
     """Re-run a stored delivery through the matcher (a manual re-delivery).
 
-    Idempotent: a rule that already created work in the *original* delivery is
-    not dispatched again (its stored work is returned as a no-op), so replaying
-    never creates duplicate tasks/PRs — for `start_review` *and* the
-    task-creating actions (`triage_issue`/`create_task`). A rule added *after*
-    the delivery still fires.
+    Idempotent: a rule whose stored work already contains a real (non-error)
+    entry is not dispatched again (its stored work is returned as a no-op), so
+    replaying never creates duplicate tasks/PRs — for `start_review` *and* the
+    task-creating actions (`triage_issue`/`create_task`). Error-only work is
+    retried (the previous attempt produced nothing to duplicate). A rule added
+    *after* the delivery still fires. The replayed outcome is persisted back
+    onto the delivery so the log shows what actually happened.
     """
     session = db.get_session()
     delivery = session.get(db.EventDelivery, delivery_id)
     if delivery is None:
         return jsonify({"error": "delivery not found"}), 404
-    payload = json.loads(delivery.payload_json)
+    try:
+        payload = json.loads(delivery.payload_json)
+    except (ValueError, TypeError):
+        return jsonify({"error": "stored delivery payload is corrupt"}), 500
     full_name = delivery.repo_full_name
     repo = None
     if full_name:
@@ -267,22 +281,28 @@ def replay(delivery_id: int) -> ResponseReturnValue:
     if delivery.result:
         try:
             prior_rules = json.loads(delivery.result).get("rules") or []
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, AttributeError):
             prior_rules = []
     for entry in prior_rules:
         if isinstance(entry, dict) and isinstance(entry.get("rule_id"), int):
-            # Treat the rule as already dispatched whenever its stored result
-            # carries a ``work`` key — including empty lists and error-only
-            # lists. The previous ``if entry.get("work"):`` predicate treated
-            # ``work == []`` as not-yet-dispatched and re-ran dispatch_rule on
-            # every replay (no-op rules like ``rerun_review`` with nothing to
-            # re-enqueue would loop forever).
-            if "work" in entry:
+            # Skip only when the stored work actually did something — a rule
+            # whose work is empty or error-only produced nothing to duplicate,
+            # so replay retries it.
+            work = entry.get("work") or []
+            if any(
+                isinstance(item, dict) and item.get("type") != "error"
+                for item in work
+            ):
                 already_dispatched.add(entry["rule_id"])
 
     event_key = f"{delivery.event}.{delivery.action}" if delivery.action else delivery.event
     context = webhooks.event_context(payload)
-    rules = webhooks.matching_rules(session, repo, event_key, context)
+    rules = webhooks.matching_rules(session, repo, event_key, context, event=delivery.event)
+    trigger = {
+        "delivery_id": delivery.github_delivery_id,
+        "event": event_key,
+        "received_at": clock.to_iso(delivery.received_at),
+    }
     results = []
     masker = _masker(session)
     for rule in rules:
@@ -298,9 +318,16 @@ def replay(delivery_id: int) -> ResponseReturnValue:
             continue
         try:
             summary = webhooks.dispatch_rule(
-                session, _queue(), rule, repo, context, masker=masker
+                session, _queue(), rule, repo, context, masker=masker,
+                trigger=trigger,
             )
         except Exception as exc:
+            session.rollback()
             summary = [{"type": "error", "error": str(exc)}]
         results.append({"rule_id": rule.id, "action": rule.action, "work": summary})
+    _complete_delivery(
+        session, delivery, repo_id=repo.id,
+        status="matched" if _any_rule_produced_work(results) else "failed",
+        result={"rules": results},
+    )
     return jsonify({"matched": len(rules), "results": results})

@@ -109,7 +109,24 @@ def list_deliveries(session: Session, limit: int = 100) -> list[EventDelivery]:
     )
 
 
+def _safe_json_list(raw: str | None) -> list:
+    """Parse a JSON list column defensively (corrupt rows must not 500 reads)."""
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
 def delivery_to_dict(delivery: EventDelivery) -> dict[str, object]:
+    result: object = None
+    if delivery.result:
+        try:
+            result = json.loads(delivery.result)
+        except (ValueError, TypeError):
+            result = None
     return {
         "id": delivery.id,
         "github_delivery_id": delivery.github_delivery_id,
@@ -119,7 +136,7 @@ def delivery_to_dict(delivery: EventDelivery) -> dict[str, object]:
         "repo_full_name": delivery.repo_full_name,
         "received_at": clock.to_iso(delivery.received_at),
         "status": delivery.status,
-        "result": json.loads(delivery.result) if delivery.result else None,
+        "result": result,
     }
 
 
@@ -159,6 +176,11 @@ def create_rule(
         raise WebhookError(f"invalid action: {action!r}")
     if action == "start_review" and not agent_ids:
         raise WebhookError("start_review requires agent_ids (catalog reviewers)")
+    if action in ("triage_issue", "create_task") and not (custom_instructions or "").strip():
+        raise WebhookError(f"{action} requires custom_instructions (the task prompt)")
+    for name, value in (("label_filter", label_filter), ("agent_ids", agent_ids)):
+        if value is not None and not isinstance(value, list):
+            raise WebhookError(f"{name} must be a list of strings")
     row = TriggerRule(
         repo_id=repo_id,
         event=event,
@@ -182,11 +204,32 @@ def update_rule(session: Session, rule_id: int, **fields) -> TriggerRule:
     if row is None:
         raise KeyError(rule_id)
     if "event" in fields and fields["event"] is not None:
+        if not str(fields["event"]).strip():
+            raise WebhookError("event is required")
         row.event = fields["event"]
     if "action" in fields and fields["action"] is not None:
         if fields["action"] not in RULE_ACTIONS:
             raise WebhookError(f"invalid action: {fields['action']!r}")
         row.action = fields["action"]
+    # Cross-field re-validation on the effective post-update state: switching a
+    # rule to start_review needs reviewers, switching to triage/create needs a
+    # prompt — otherwise the rule saves fine and fails at every runtime.
+    effective_action = fields.get("action") or row.action
+    effective_agents = fields.get("agent_ids")
+    if effective_agents is None:
+        effective_agents = _safe_json_list(row.agent_ids_json)
+    effective_instructions = fields.get("custom_instructions")
+    if effective_instructions is None:
+        effective_instructions = row.custom_instructions
+    if effective_action == "start_review" and not effective_agents:
+        raise WebhookError("start_review requires agent_ids (catalog reviewers)")
+    if effective_action in ("triage_issue", "create_task") and not (
+        effective_instructions or ""
+    ).strip():
+        raise WebhookError(f"{effective_action} requires custom_instructions (the task prompt)")
+    for name, key in (("label_filter", "label_filter"), ("agent_ids", "agent_ids")):
+        if key in fields and fields[key] is not None and not isinstance(fields[key], list):
+            raise WebhookError(f"{name} must be a list of strings")
     if "branch_filter" in fields:
         row.branch_filter = fields["branch_filter"] or None
     if "label_filter" in fields:
@@ -224,9 +267,9 @@ def rule_to_dict(rule: TriggerRule) -> dict[str, object]:
         "event": rule.event,
         "action": rule.action,
         "branch_filter": rule.branch_filter,
-        "label_filter": json.loads(rule.label_filter) if rule.label_filter else [],
+        "label_filter": _safe_json_list(rule.label_filter),
         "author_filter": rule.author_filter,
-        "agent_ids": json.loads(rule.agent_ids_json) if rule.agent_ids_json else [],
+        "agent_ids": _safe_json_list(rule.agent_ids_json),
         "custom_instructions": rule.custom_instructions,
         "enabled": rule.enabled,
         "created_at": clock.to_iso(rule.created_at),
@@ -279,12 +322,22 @@ def matching_rules(
     repo: Repo,
     event_key: str,
     context: dict,
+    *,
+    event: str | None = None,
 ) -> list[TriggerRule]:
-    """Enabled rules for ``repo`` whose event + scope filters match."""
+    """Enabled rules for ``repo`` whose event + scope filters match.
+
+    A rule matches when its event equals the full ``event_key``
+    (``pull_request.opened``) or the bare ``event`` (``pull_request_review`` —
+    GitHub always sends review actions like ``submitted``, so a bare rule
+    event would otherwise never fire).
+    """
     rules = list_rules(session, repo.id)
     matched: list[TriggerRule] = []
     for rule in rules:
-        if not rule.enabled or rule.event != event_key:
+        if not rule.enabled:
+            continue
+        if rule.event != event_key and (event is None or rule.event != event):
             continue
         if not _scope_matches(rule, context):
             continue
@@ -305,7 +358,7 @@ def _scope_matches(rule: TriggerRule, context: dict) -> bool:
         if not author or author != rule.author_filter:
             return False
     if rule.label_filter:
-        required = json.loads(rule.label_filter) if rule.label_filter else []
+        required = _safe_json_list(rule.label_filter)
         labels = set(context.get("labels") or [])
         if not required or not all(label in labels for label in required):
             return False
@@ -322,31 +375,34 @@ def dispatch_rule(
     repo: Repo,
     context: dict,
     masker=None,
+    trigger: dict | None = None,
 ) -> list[dict]:
     """Act on a matched rule; returns a summary list of created/re-enqueued work.
 
     ``queue`` is the TaskQueue (for enqueueing). ``masker`` masks the task
-    prompt at creation. No GitHub API calls happen here (webhook path stays
-    fast); a rule may create tasks that the queue then runs like manual ones.
+    prompt at creation. ``trigger`` (delivery id, event, timestamp) is stamped
+    into created tasks' context so the UI can show which event started a task.
+    No GitHub API calls happen here (webhook path stays fast); a rule may
+    create tasks that the queue then runs like manual ones.
     """
     if rule.action == "start_review":
-        return _dispatch_start_review(session, queue, rule, repo, context, masker)
+        return _dispatch_start_review(session, queue, rule, repo, context, masker, trigger)
     if rule.action == "triage_issue":
-        return _dispatch_triage_issue(session, queue, rule, repo, context, masker)
+        return _dispatch_triage_issue(session, queue, rule, repo, context, masker, trigger)
     if rule.action == "create_task":
-        return _dispatch_create_task(session, queue, rule, repo, context, masker)
+        return _dispatch_create_task(session, queue, rule, repo, context, masker, trigger)
     if rule.action == "rerun_review":
         return _dispatch_rerun_review(session, queue, repo, context)
     return []
 
 
-def _dispatch_start_review(session, queue, rule, repo, context, masker) -> list[dict]:
+def _dispatch_start_review(session, queue, rule, repo, context, masker, trigger=None) -> list[dict]:
     pr_number = context.get("pr_number")
     if not pr_number:
         return []
     from jalebi import reviews
 
-    agent_ids = json.loads(rule.agent_ids_json) if rule.agent_ids_json else []
+    agent_ids = _safe_json_list(rule.agent_ids_json)
     # Never create a second reviewer task for an agent already assigned to this
     # PR (e.g. on replay of a delivery, or a re-triggered rule). Existing
     # assignments are left as-is.
@@ -360,20 +416,25 @@ def _dispatch_start_review(session, queue, rule, repo, context, masker) -> list[
     created = reviews.assign_reviewers(
         session, repo, int(pr_number), fresh, queue=queue, masker=masker
     )
+    if trigger:
+        from jalebi import tasks as _tasks
+
+        for task in created:
+            _tasks.stamp_triggered_by(session, task, trigger)
     summary = []
     for task in created:
         summary.append({"type": "review", "task_id": task.id, "agent_id": task.agent_id})
     return summary
 
 
-def _dispatch_triage_issue(session, queue, rule, repo, context, masker) -> list[dict]:
+def _dispatch_triage_issue(session, queue, rule, repo, context, masker, trigger=None) -> list[dict]:
     issue_number = context.get("issue_number")
     if not issue_number:
         return []
     from jalebi import tasks
 
     prompt = (rule.custom_instructions or "").strip() or f"Fix issue #{issue_number}."
-    agent_ids = json.loads(rule.agent_ids_json) if rule.agent_ids_json else []
+    agent_ids = _safe_json_list(rule.agent_ids_json)
     # The issue body/title are UNTRUSTED webhook payload and may contain secrets
     # (a PAT pasted in an issue). Mask them before they reach the task context
     # (which flows into the worktree AGENTS.md).
@@ -381,25 +442,30 @@ def _dispatch_triage_issue(session, queue, rule, repo, context, masker) -> list[
     body_raw = str(context.get("body") or "")
     masked_title = masker(title_raw) if masker else title_raw
     masked_body = masker(body_raw) if masker else body_raw
+    task_context: dict = {
+        "issues": [
+            {
+                "number": int(issue_number),
+                "title": masked_title,
+                "body": masked_body,
+                "html_url": "",
+            }
+        ]
+    }
+    if trigger:
+        task_context["triggered_by"] = trigger
     try:
         task = tasks.create_task(
             session,
             type_="issue_fix",
             repo_id=repo.id,
             prompt=prompt,
+            source_branch=repo.default_branch or "main",
+            target_branch=repo.default_branch or "main",
             agent_id=str(agent_ids[0]) if agent_ids else None,
             pat_name=repo.pat_name,
             issues=[int(issue_number)],
-            context={
-                "issues": [
-                    {
-                        "number": int(issue_number),
-                        "title": masked_title,
-                        "body": masked_body,
-                        "html_url": "",
-                    }
-                ]
-            },
+            context=task_context,
             publish_mode="auto",
             masker=masker,
         )
@@ -409,21 +475,25 @@ def _dispatch_triage_issue(session, queue, rule, repo, context, masker) -> list[
     return [{"type": "issue_fix", "task_id": task.id}]
 
 
-def _dispatch_create_task(session, queue, rule, repo, context, masker) -> list[dict]:
+def _dispatch_create_task(session, queue, rule, repo, context, masker, trigger=None) -> list[dict]:
     from jalebi import tasks
 
     prompt = (rule.custom_instructions or "").strip()
     if not prompt:
         return [{"type": "error", "error": "create_task requires custom_instructions"}]
-    agent_ids = json.loads(rule.agent_ids_json) if rule.agent_ids_json else []
+    agent_ids = _safe_json_list(rule.agent_ids_json)
+    task_context = {"triggered_by": trigger} if trigger else None
     try:
         task = tasks.create_task(
             session,
             type_="freeform",
             repo_id=repo.id,
             prompt=prompt,
+            source_branch=repo.default_branch or "main",
+            target_branch=repo.default_branch or "main",
             agent_id=str(agent_ids[0]) if agent_ids else None,
             pat_name=repo.pat_name,
+            context=task_context,
             publish_mode="manual",
             masker=masker,
         )
@@ -437,6 +507,7 @@ def _dispatch_rerun_review(session, queue, repo, context) -> list[dict]:
     pr_number = context.get("pr_number")
     if not pr_number:
         return []
+    from jalebi import reviews
     # Re-enqueue the PR's existing reviewer tasks (a fresh review pass per task).
     assignments = list(
         session.execute(
@@ -466,6 +537,10 @@ def _dispatch_rerun_review(session, queue, repo, context) -> list[dict]:
             continue
         task.status = "queued"
         task.updated_at = now()
+        # The assignment registry must follow the task back to queued —
+        # otherwise PR cards report the reviewer as posted/failed while the
+        # fresh pass is still waiting in the queue.
+        reviews.set_assignment_status(session, task.id, "queued")
         queue.enqueue(task.id)
         summary.append({"type": "rerun_review", "task_id": task.id})
     session.commit()

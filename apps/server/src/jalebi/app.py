@@ -317,6 +317,9 @@ def create_app(config: Config | None = None) -> Flask:
 
     app = Flask(__name__)
     app.config["JALEBI_CONFIG"] = config
+    # /webhook is auth-exempt by design (the HMAC signature is its auth), so
+    # cap request bodies: oversized deliveries 413 instead of exhausting memory.
+    app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
 
     db.init_db(config.db_url)
     db.run_migrations(config.db_url)
@@ -548,6 +551,19 @@ def create_app(config: Config | None = None) -> Flask:
     def api_not_found(rest: str) -> ResponseReturnValue:
         # Unknown /api/* paths must 404 as JSON, not fall through to the SPA.
         return jsonify({"error": f"no such route: /api/{rest}"}), 404
+
+    @app.post("/api/<path:rest>")
+    @app.put("/api/<path:rest>")
+    @app.patch("/api/<path:rest>")
+    @app.delete("/api/<path:rest>")
+    def api_not_found_write(rest: str) -> ResponseReturnValue:
+        # Same JSON 404 for writes — otherwise an unknown POST answers HTML
+        # 405 (the GET catch-all claims the path for another method).
+        return jsonify({"error": f"no such route: /api/{rest}"}), 404
+
+    @app.errorhandler(413)
+    def api_too_large(_exc) -> ResponseReturnValue:
+        return jsonify({"error": "request body exceeds 10 MB"}), 413
 
     @app.get("/<path:filename>")
     def spa_files(filename: str) -> ResponseReturnValue:

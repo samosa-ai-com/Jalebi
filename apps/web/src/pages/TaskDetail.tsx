@@ -1459,6 +1459,18 @@ export default function TaskDetail() {
             <dt className="text-ink-600">Retries</dt>
             <dd className="mt-0.5 font-mono text-ink-300">{task.retry_count}</dd>
           </div>
+          {task.triggered_by && (
+            <div>
+              <dt className="text-ink-600">Started by</dt>
+              <dd
+                className="mt-0.5 font-mono text-ink-300"
+                title={`delivery ${task.triggered_by.delivery_id}`}
+              >
+                {task.triggered_by.event} ·{" "}
+                {new Date(task.triggered_by.received_at).toLocaleString()}
+              </dd>
+            </div>
+          )}
         </dl>
       </section>
 

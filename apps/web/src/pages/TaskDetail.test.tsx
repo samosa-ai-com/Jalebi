@@ -138,6 +138,22 @@ describe("TaskDetail", () => {
     expect(screen.getByText("running")).toBeInTheDocument();
   });
 
+  it("shows which webhook event started a triggered task", async () => {
+    stubFetch({
+      ...TASK,
+      triggered_by: {
+        delivery_id: "d-origin-1",
+        event: "push",
+        received_at: "2026-08-06T10:00:00",
+      },
+    });
+    vi.stubGlobal("EventSource", FakeEventSource);
+
+    renderDetail();
+    expect(await screen.findByText("Started by")).toBeInTheDocument();
+    expect(screen.getByText(/push ·/)).toBeInTheDocument();
+  });
+
   it("streams live events into the console", async () => {
     stubFetch(TASK);
     vi.stubGlobal("EventSource", FakeEventSource);

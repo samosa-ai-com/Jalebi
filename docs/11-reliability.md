@@ -64,7 +64,10 @@ Only one thing: **task artifacts** older than `artifact_ttl_days` are deleted at
 
 ## 4. Security hardening
 - Prompts, follow-up bodies, PR title/body, run-end diffs, and artifacts are masked with the **PAT and `secret_patterns`** at ingest — pattern-secrets never reach GitHub PRs.
-- Unknown `/api/*` paths return `404` JSON (they do not fall through to the SPA `index.html`).
+- Unknown `/api/*` paths return `404` JSON (they do not fall through to the SPA `index.html`) —
+  for GET *and* write methods (an unknown POST used to answer HTML 405).
+- Request bodies are capped at 10 MB (`413` JSON) — the auth-exempt `/webhook` listener
+  never buffers unboundedly.
 - Artifact downloads are path-traversal-safe; the PAT never appears in argv, URLs, or logs (git auth via `GIT_CONFIG_*` Basic header). Agent children spawn in their own session and cancel/timeout kill the whole process group.
 - **Stall guard** (`settings.stall_timeout_seconds`, default 600s) bounds the empty-stream/hang failure mode — a quiet-but-healthy sub-agent/tool phase gets a generous window, and if it still trips, **auto-recovery** (see `docs/06-task-queue.md` §7) resumes/restarts the run instead of stranding the task. The per-task timeout remains the last line of defence.
 

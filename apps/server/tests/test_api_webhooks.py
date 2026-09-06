@@ -444,17 +444,23 @@ def test_webhook_concurrent_redelivery_only_dispatches_once(
     assert len(tasks_service.list_tasks(session)) == 1
 
 
-def test_all_rules_error_marks_delivery_failed(client, session, repo) -> None:
+def test_all_rules_error_marks_delivery_failed(client, session, repo, monkeypatch) -> None:
     """A delivery whose rules only returned error work must record status=failed
     (not the prior hardcoded "matched"), so the Triggers page Delivery log
     doesn't lie about success."""
     from jalebi import tasks as tasks_service
 
-    # create_task with no custom_instructions is rejected before create_task is
-    # even called (webhooks._dispatch_create_task returns an error list).
+    # create_task rules now require instructions at creation; force the runtime
+    # error by making the task insert itself fail.
     rule = webhooks.create_rule(
         session, repo_id=repo, event="push", action="create_task",
+        custom_instructions="Sync the changelog.",
     )
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("db is on fire")
+
+    monkeypatch.setattr(tasks_service, "create_task", _boom)
 
     res = client.post(
         "/webhook",
@@ -468,7 +474,7 @@ def test_all_rules_error_marks_delivery_failed(client, session, repo) -> None:
     assert len(body["results"]) == 1
     assert body["results"][0]["rule_id"] == rule.id
     assert body["results"][0]["work"] == [
-        {"type": "error", "error": "create_task requires custom_instructions"}
+        {"type": "error", "error": "db is on fire"}
     ]
     delivery = webhooks.list_deliveries(session)[0]
     assert delivery.status == "failed"
@@ -478,7 +484,7 @@ def test_all_rules_error_marks_delivery_failed(client, session, repo) -> None:
     assert len(tasks_service.list_tasks(session)) == 0
 
 
-def test_mixed_one_ok_one_error_keeps_matched(client, session, repo) -> None:
+def test_mixed_one_ok_one_error_keeps_matched(client, session, repo, monkeypatch) -> None:
     """When at least one rule produces real work and another errors, the
     delivery stays status=matched (regression guard vs over-correction)."""
     from jalebi import tasks as tasks_service
@@ -489,7 +495,17 @@ def test_mixed_one_ok_one_error_keeps_matched(client, session, repo) -> None:
     )
     err_rule = webhooks.create_rule(
         session, repo_id=repo, event="push", action="create_task",
+        custom_instructions="ERR boom.",
     )
+
+    real_create = tasks_service.create_task
+
+    def _selective_boom(*args, **kwargs):
+        if "ERR" in str(kwargs.get("prompt", "")):
+            raise RuntimeError("boom")
+        return real_create(*args, **kwargs)
+
+    monkeypatch.setattr(tasks_service, "create_task", _selective_boom)
 
     res = client.post(
         "/webhook",
@@ -537,16 +553,28 @@ def test_webhook_empty_work_marks_delivery_failed(client, session, repo) -> None
     assert rule.id == body["results"][0]["rule_id"]
 
 
-def test_replay_of_errored_delivery_skips_rule(
+def test_replay_of_errored_delivery_retries_rule(
     client, session, repo, monkeypatch
 ) -> None:
-    """A delivery whose rule stored error work (a failed dispatch) must be a
-    no-op on replay — the rule is NOT re-dispatched (it would only error again)."""
+    """A delivery whose rule stored error-only work must be RETRIED on replay
+    (the attempt produced nothing to duplicate), not skipped."""
     from jalebi import tasks as tasks_service
 
-    rule = webhooks.create_rule(
+    webhooks.create_rule(
         session, repo_id=repo, event="push", action="create_task",
+        custom_instructions="Sync the changelog.",
     )
+
+    calls = {"n": 0}
+    real_create = tasks_service.create_task
+
+    def _fail_once(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("transient lock")
+        return real_create(*args, **kwargs)
+
+    monkeypatch.setattr(tasks_service, "create_task", _fail_once)
 
     res = client.post(
         "/webhook",
@@ -556,37 +584,41 @@ def test_replay_of_errored_delivery_skips_rule(
     body = res.get_json()
     assert res.status_code == 200
     assert body["matched"] is False
-    assert body["results"][0]["work"] == [
-        {"type": "error", "error": "create_task requires custom_instructions"}
-    ]
+    assert body["results"][0]["work"][0]["type"] == "error"
     delivery = webhooks.list_deliveries(session)[0]
     assert delivery.status == "failed"
     assert len(tasks_service.list_tasks(session)) == 0
-
-    def _must_not_redispatch(*args, **kwargs):
-        raise AssertionError("replay re-dispatched an already-dispatched rule")
-
-    monkeypatch.setattr(webhooks, "dispatch_rule", _must_not_redispatch)
 
     replay_res = client.post(f"/api/webhooks/deliveries/{delivery.id}/replay")
     assert replay_res.status_code == 200
     replay_body = replay_res.get_json()
     assert replay_body["matched"] == 1
-    assert replay_body["results"][0]["rule_id"] == rule.id
-    assert replay_body["results"][0]["note"] == "already dispatched — skipped"
-    assert replay_body["results"][0]["work"] == []
-    assert len(tasks_service.list_tasks(session)) == 0
+    assert "note" not in replay_body["results"][0]  # retried, not skipped
+    assert replay_body["results"][0]["work"][0]["type"] == "freeform"
+    assert len(tasks_service.list_tasks(session)) == 1
+
+    # The retried outcome is persisted; a second replay skips (no duplicates).
+    # (expire: the route commits on its own session; this session cached the row.)
+    session.expire_all()
+    stored: dict = json.loads(
+        webhooks.list_deliveries(session)[0].result or "{}"
+    )
+    assert stored["rules"][0]["work"][0]["type"] == "freeform"
+    assert webhooks.list_deliveries(session)[0].status == "matched"
+    replay2 = client.post(f"/api/webhooks/deliveries/{delivery.id}/replay")
+    assert replay2.get_json()["results"][0]["note"] == "already dispatched — skipped"
+    assert len(tasks_service.list_tasks(session)) == 1
 
 
-def test_replay_of_empty_work_delivery_skips_rule(
+def test_replay_of_empty_work_delivery_retries_without_duplicates(
     client, session, repo, monkeypatch
 ) -> None:
     """A rule whose stored work is ``[]`` (e.g. rerun_review with nothing to
-    re-run, start_review when all reviewers are already assigned) must also be
-    a no-op on replay. The old ``if entry.get("work")`` predicate treated
-    empty lists as not-dispatched, so replay re-ran ``dispatch_rule`` every
-    time — fixed by presence-of-``work``-key."""
-    rule = webhooks.create_rule(
+    re-run) is re-evaluated on replay — and still creates nothing. The outcome
+    is persisted so the log reflects the replay."""
+    from jalebi import tasks as tasks_service
+
+    webhooks.create_rule(
         session, repo_id=repo, event="push", action="rerun_review",
     )
 
@@ -603,19 +635,25 @@ def test_replay_of_empty_work_delivery_skips_rule(
     stored: dict = json.loads(delivery.result or "{}")
     assert stored["rules"][0]["work"] == []
 
-    def _must_not_redispatch(*args, **kwargs):
-        raise AssertionError("replay re-dispatched an already-dispatched rule")
+    calls = {"n": 0}
+    real_dispatch = webhooks.dispatch_rule
 
-    monkeypatch.setattr(webhooks, "dispatch_rule", _must_not_redispatch)
+    def _counting_dispatch(*args, **kwargs):
+        calls["n"] += 1
+        return real_dispatch(*args, **kwargs)
+
+    monkeypatch.setattr(webhooks, "dispatch_rule", _counting_dispatch)
 
     replay_res = client.post(f"/api/webhooks/deliveries/{delivery.id}/replay")
     assert replay_res.status_code == 200
     replay_body = replay_res.get_json()
     assert replay_body["matched"] == 1
-    assert replay_body["results"][0]["rule_id"] == rule.id
-    assert replay_body["results"][0]["note"] == "already dispatched — skipped"
+    assert calls["n"] == 1  # re-evaluated, not skipped
+    assert "note" not in replay_body["results"][0]
     assert replay_body["results"][0]["work"] == []
-
+    assert len(tasks_service.list_tasks(session)) == 0
+    # Persisted back onto the delivery.
+    assert webhooks.list_deliveries(session)[0].result is not None
 
 def test_completed_delivery_with_multiple_rules_stores_all_in_result(
     client, session, repo
@@ -730,3 +768,299 @@ def test_status_delivery_cannot_nudge_another_repos_task(client, session, repo, 
     assert calls[0][0] == task.id
     assert len(calls) == 1
     assert session.query(Nudge).count() == 1
+
+
+def test_pull_request_review_rule_fires_on_submitted(client, session, repo) -> None:
+    """A bare `pull_request_review` rule must fire when GitHub delivers
+    `pull_request_review` + action `submitted` (the event key is suffixed, the
+    rule event is not — exact matching used to drop these silently)."""
+    from jalebi import tasks as tasks_service
+
+    webhooks.create_rule(
+        session, repo_id=repo, event="pull_request_review",
+        action="create_task", custom_instructions="Review follow-up.",
+    )
+    payload = {
+        "action": "submitted",
+        "repository": {"full_name": "owner/repo"},
+        "pull_request": {
+            "number": 7, "title": "T", "base": {"ref": "main"},
+            "head": {"ref": "feature/y"}, "user": {"login": "bob"}, "labels": [],
+        },
+        "review": {"state": "commented", "body": "nice"},
+    }
+    res = client.post(
+        "/webhook",
+        headers={"X-GitHub-Delivery": "d-review-1", "X-GitHub-Event": "pull_request_review"},
+        json=payload,
+    )
+    body = res.get_json()
+    assert res.status_code == 200
+    assert body["matched"] is True
+    assert body["results"][0]["work"][0]["type"] == "freeform"
+    assert len(tasks_service.list_tasks(session)) == 1
+    assert webhooks.list_deliveries(session)[0].status == "matched"
+
+
+def test_update_rule_null_clears_branch_filter(client, session, repo) -> None:
+    """PUT with an explicit null clears an optional field; omitted keys are
+    left alone (previously neither path could clear anything)."""
+    rule = webhooks.create_rule(
+        session, repo_id=repo, event="push", action="create_task",
+        branch_filter="main", custom_instructions="Do it.",
+    )
+    res = client.put(
+        f"/api/triggers/{rule.id}",
+        json={"author_filter": "octocat"},
+    )
+    assert res.status_code == 200
+    assert res.get_json()["branch_filter"] == "main"  # omitted → kept
+    assert res.get_json()["author_filter"] == "octocat"
+
+    res = client.put(f"/api/triggers/{rule.id}", json={"branch_filter": None})
+    assert res.status_code == 200
+    assert res.get_json()["branch_filter"] is None
+
+
+def test_rerun_review_resets_assignment_status(client, session, repo) -> None:
+    """Re-enqueueing a review task must move its assignment back to queued —
+    otherwise the registry reports posted/failed while the pass is waiting."""
+    from jalebi import catalog, reviews
+
+    catalog.create_agent(session, id="auditor-a", name="A", kind="reviewer", enabled=True)
+    row = session.get(repos.Repo, repo)
+    (task,) = reviews.assign_reviewers(session, row, 9, ["auditor-a"])
+    task.status = "done"
+    session.commit()
+    assignment = reviews.assignment_by_task(session, task.id)
+    assert assignment is not None
+    # Simulate the finished first pass the rerun is meant to repeat.
+    assignment.status = "posted"
+    session.commit()
+
+    webhooks.create_rule(
+        session, repo_id=repo, event="pull_request.synchronize", action="rerun_review"
+    )
+    payload = {
+        "action": "synchronize",
+        "repository": {"full_name": "owner/repo"},
+        "pull_request": {
+            "number": 9, "title": "T", "base": {"ref": "main"},
+            "head": {"ref": "feature/z"}, "user": {"login": "bob"}, "labels": [],
+        },
+    }
+    res = client.post(
+        "/webhook",
+        headers={"X-GitHub-Delivery": "d-rerun-1", "X-GitHub-Event": "pull_request"},
+        json=payload,
+    )
+    assert res.status_code == 200
+    assert res.get_json()["matched"] is True
+    assert session.get(repos.Repo, repo) is not None
+    session.expire_all()
+    refetched = reviews.assignment_by_task(session, task.id)
+    assert refetched is not None and refetched.status == "queued"
+
+
+def test_create_rule_rejects_missing_instructions_and_bad_lists(client, session, repo) -> None:
+    """create_task/triage_issue without a prompt, and non-list filters/agent
+    ids, are 400s at save time — not silent failures at runtime."""
+    res = client.post(
+        "/api/triggers",
+        json={"repo_id": repo, "event": "push", "action": "create_task"},
+    )
+    assert res.status_code == 400
+    assert "custom_instructions" in res.get_json()["error"]
+
+    res = client.post(
+        "/api/triggers",
+        json={"repo_id": repo, "event": "push", "action": "create_task",
+              "custom_instructions": "Do it.", "label_filter": "bug"},
+    )
+    assert res.status_code == 400
+    assert "label_filter" in res.get_json()["error"]
+
+    rule = webhooks.create_rule(
+        session, repo_id=repo, event="push", action="create_task",
+        custom_instructions="Do it.",
+    )
+    res = client.put(f"/api/triggers/{rule.id}", json={"action": "start_review"})
+    assert res.status_code == 400
+    assert "agent_ids" in res.get_json()["error"]
+
+
+def test_triage_uses_repo_default_branch(client, session, repo) -> None:
+    """Webhook-created tasks must target the repo's real default branch, not a
+    hardcoded `main` (Codex-confirmed: otherwise missing-origin failures or
+    PRs against the wrong branch)."""
+    from jalebi import tasks as tasks_service
+
+    row = session.get(repos.Repo, repo)
+    assert row is not None
+    row.default_branch = "trunk"
+    session.commit()
+    webhooks.create_rule(
+        session, repo_id=repo, event="issues.opened",
+        action="triage_issue", custom_instructions="Fix it.",
+    )
+    res = client.post(
+        "/webhook",
+        headers={"X-GitHub-Delivery": "d-branch-1", "X-GitHub-Event": "issues"},
+        json={"action": "opened", "repository": {"full_name": "owner/repo"},
+              "issue": {"number": 3, "title": "T", "body": "B",
+                        "user": {"login": "ann"}, "labels": []}},
+    )
+    assert res.status_code == 200
+    assert res.get_json()["matched"] is True
+    (task,) = tasks_service.list_tasks(session)
+    assert task.source_branch == "trunk"
+    assert task.target_branch == "trunk"
+
+
+def test_triggered_by_stamped_and_exposed(client, session, repo) -> None:
+    """Dispatched tasks carry their origin event; the task dict exposes it so
+    the UI can show which delivery started a task (PRD F14)."""
+    from jalebi import tasks as tasks_service
+
+    webhooks.create_rule(
+        session, repo_id=repo, event="push", action="create_task",
+        custom_instructions="Sync it.",
+    )
+    res = client.post(
+        "/webhook",
+        headers={"X-GitHub-Delivery": "d-origin-1", "X-GitHub-Event": "push"},
+        json={"ref": "refs/heads/main", "repository": {"full_name": "owner/repo"}},
+    )
+    assert res.status_code == 200
+    (task,) = tasks_service.list_tasks(session)
+    data = tasks_service.task_to_dict(task)
+    assert data["triggered_by"] == {
+        "delivery_id": "d-origin-1",
+        "event": "push",
+        "received_at": data["triggered_by"]["received_at"],
+    }
+    assert data["triggered_by"]["received_at"]
+
+
+def test_register_adopts_preexisting_hook(client, session, repo, monkeypatch) -> None:
+    """When the hook already lives on GitHub (422), registration adopts it
+    instead of stranding the repo on a Register button that 502s forever."""
+    import jalebi.routes.repos as repos_routes
+    from jalebi.github import GitHubError
+
+    settings.set_setting(session, "webhook_url", "https://tunnel.example")
+
+    class _ConflictClient:
+        def __init__(self, token):
+            pass
+
+        def create_hook(self, *args, **kwargs):
+            raise GitHubError("failed to create webhook: HTTP 422")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(repos_routes, "GitHubClient", _ConflictClient)
+    res = client.post(f"/api/repos/{repo}/webhook")
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body["registered"] is True
+    assert body["adopted"] is True
+    adopted = session.get(repos.Repo, repo)
+    assert adopted is not None and adopted.webhook_registered is True
+
+
+def test_unregister_refuses_without_url_and_clears_gone_hook(
+    client, session, repo, monkeypatch
+) -> None:
+    """Without webhook_url Jalebi can't tell its hook from foreign ones, so it
+    must refuse (never guess-delete). When listing succeeds and nothing of ours
+    remains, a stuck flag is cleared."""
+    import jalebi.routes.repos as repos_routes
+
+    row = session.get(repos.Repo, repo)
+    assert row is not None
+    row.webhook_registered = True
+    session.commit()
+
+    # Replace with a class whose construction explodes if reached.
+    class _NopeClient:
+        def __init__(self, token):
+            raise AssertionError("must not touch GitHub hooks without a URL")
+
+    monkeypatch.setattr(repos_routes, "GitHubClient", _NopeClient)
+    res = client.delete(f"/api/repos/{repo}/webhook")
+    assert res.status_code == 409
+    kept = session.get(repos.Repo, repo)
+    assert kept is not None and kept.webhook_registered is True
+
+    settings.set_setting(session, "webhook_url", "https://tunnel.example")
+
+    class _EmptyClient:
+        def __init__(self, token):
+            pass
+
+        def list_hooks(self, full_name):
+            return []
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(repos_routes, "GitHubClient", _EmptyClient)
+    res = client.delete(f"/api/repos/{repo}/webhook")
+    assert res.status_code == 200
+    assert res.get_json()["registered"] is False
+    session.expire_all()
+    cleared = session.get(repos.Repo, repo)
+    assert cleared is not None and cleared.webhook_registered is False
+
+
+def test_corrupt_delivery_result_does_not_500_deliveries(client, session, repo) -> None:
+    """A corrupt result blob degrades to null in the log instead of 500ing the
+    whole delivery list."""
+    from jalebi import db
+
+    client.post(
+        "/webhook",
+        headers={"X-GitHub-Delivery": "d-corrupt-1", "X-GitHub-Event": "push"},
+        json={"ref": "refs/heads/main", "repository": {"full_name": "owner/repo"}},
+    )
+    delivery = webhooks.list_deliveries(session)[0]
+    row = session.get(db.EventDelivery, delivery.id)
+    assert row is not None
+    row.result = "{not-json"
+    session.commit()
+
+    res = client.get("/api/webhooks/deliveries")
+    assert res.status_code == 200
+    assert res.get_json()[0]["result"] is None
+
+
+def test_unknown_api_post_returns_json_404(client) -> None:
+    """Unknown write paths answer JSON 404, not HTML 405 (the stale-server
+    symptom: the GET catch-all used to claim the path for another method)."""
+    res = client.post("/api/definitely-not-a-route", json={})
+    assert res.status_code == 404
+    assert "error" in res.get_json()
+
+
+def test_unknown_api_all_write_methods_return_json_404(client) -> None:
+    """The JSON 404 covers every write method, not just POST."""
+    assert client.put("/api/definitely-not-a-route", json={}).status_code == 404
+    assert client.patch("/api/definitely-not-a-route", json={}).status_code == 404
+    res = client.delete("/api/definitely-not-a-route")
+    assert res.status_code == 404
+    assert "error" in res.get_json()
+
+
+def test_oversized_webhook_body_rejected(client) -> None:
+    """The auth-exempt listener caps bodies instead of buffering unboundedly."""
+    big = b"x" * (10 * 1024 * 1024 + 1)
+    res = client.post(
+        "/webhook",
+        headers={"X-GitHub-Delivery": "d-big-1", "X-GitHub-Event": "push"},
+        data=big,
+        content_type="application/json",
+    )
+    assert res.status_code == 413
+    assert "error" in res.get_json()

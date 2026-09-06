@@ -275,6 +275,7 @@ def task_to_dict(
         "issues": json.loads(task.issues_json) if task.issues_json else [],
         "prs": json.loads(task.prs_json) if task.prs_json else [],
         "env_vars": json.loads(task.env_vars_json) if task.env_vars_json else [],
+        "triggered_by": _triggered_by(task),
         "created_at": clock.to_iso(task.created_at),
         "updated_at": clock.to_iso(task.updated_at),
         "run": run_dict,
@@ -295,6 +296,39 @@ def task_to_dict(
         "reviewers": reviewers or [],
     }
     return data
+
+
+def _triggered_by(task) -> dict | None:
+    """The webhook event that started this task, if any (PRD F14).
+
+    Trigger dispatches stamp ``{"delivery_id", "event", "received_at"}`` into
+    the task context; corrupt/non-dict context degrades to None, never a 500.
+    """
+    if not task.context_json:
+        return None
+    try:
+        ctx = json.loads(task.context_json)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(ctx, dict):
+        return None
+    origin = ctx.get("triggered_by")
+    return origin if isinstance(origin, dict) else None
+
+
+def stamp_triggered_by(session: Session, task, trigger: dict) -> None:
+    """Stamp a webhook origin onto a task's context (additive; keeps the rest)."""
+    ctx: dict = {}
+    if task.context_json:
+        try:
+            parsed = json.loads(task.context_json)
+            if isinstance(parsed, dict):
+                ctx = parsed
+        except (TypeError, ValueError):
+            ctx = {}
+    ctx["triggered_by"] = trigger
+    task.context_json = json.dumps(ctx)
+    session.commit()
 
 
 def delete_tasks_cascade(session: Session, task_ids: list[int]) -> list[int]:

@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import type {
   CatalogAgent,
+  DeliveryRuleResult,
   EventDelivery,
   Repo,
   TriggerRule,
@@ -18,6 +20,58 @@ const EVENTS = [
 ];
 
 const ACTIONS = ["start_review", "triage_issue", "create_task", "rerun_review"];
+
+const ACTION_HELP: Record<string, string> = {
+  start_review:
+    "Each selected reviewer starts its own review task immediately. Requires at least one reviewer agent.",
+  triage_issue:
+    "An issue_fix task is opened for the issue (your prompt, or a default fix prompt). The first selected agent runs it; none = default agent.",
+  create_task:
+    "A freeform task is created with your prompt. The first selected agent runs it; none = default agent.",
+  rerun_review:
+    "Re-enqueues the PR's existing reviewer tasks for a fresh pass (terminal ones only). Prompt and agents are ignored.",
+};
+
+function AgentChips({
+  agents,
+  selected,
+  onToggle,
+}: {
+  agents: CatalogAgent[];
+  selected: string[];
+  onToggle: (id: string) => void;
+}) {
+  if (agents.length === 0) {
+    return (
+      <span className="text-xs text-ink-500">No agents yet — create one on the Agents page.</span>
+    );
+  }
+  return (
+    <div className="flex flex-wrap gap-2">
+      {agents.map((a) => {
+        const checked = selected.includes(a.id);
+        return (
+          <label
+            key={a.id}
+            className={`inline-flex cursor-pointer items-center gap-1.5 rounded-full border px-3 py-1 font-mono text-xs transition-colors ${
+              checked
+                ? "border-syrup-500/60 bg-syrup-500/10 text-syrup-300"
+                : "border-ink-800 text-ink-400 hover:border-ink-600"
+            }`}
+          >
+            <input
+              type="checkbox"
+              checked={checked}
+              onChange={() => onToggle(a.id)}
+              className="hidden"
+            />
+            {a.name} ({a.id})
+          </label>
+        );
+      })}
+    </div>
+  );
+}
 
 function RuleForm({
   repos,
@@ -44,23 +98,43 @@ function RuleForm({
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const reviewers = agents.filter((a) => a.kind === "reviewer");
+  const reviewers = agents.filter((a) => a.kind === "reviewer" && a.enabled);
+  const actionable = agents.filter((a) => a.enabled);
+  const needsAgents = action === "start_review";
+  const needsPrompt = action === "triage_issue" || action === "create_task";
+  const noRepos = repos.length === 0;
+
+  function validationError(): string | null {
+    if (noRepos) return "Connect a repo first (Repos page) — a rule needs a repo to bind to.";
+    if (needsAgents && agentIds.length === 0)
+      return "start_review needs at least one reviewer agent.";
+    if (needsPrompt && !instructions.trim())
+      return "This action needs a prompt — it becomes the task the webhook creates.";
+    return null;
+  }
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
+    const problem = validationError();
+    if (problem) {
+      setMsg({ kind: "err", text: problem });
+      return;
+    }
     setBusy(true);
     setMsg(null);
+    // Explicit null clears an optional field on edit (omitted keys are left
+    // alone by the API); on create null behaves like unset.
     const body = {
       event,
       action,
-      branch_filter: branchFilter || undefined,
-      author_filter: authorFilter || undefined,
+      branch_filter: branchFilter.trim() || null,
+      author_filter: authorFilter.trim() || null,
       label_filter: labels
         .split(",")
         .map((s) => s.trim())
         .filter(Boolean),
       agent_ids: agentIds,
-      custom_instructions: instructions || undefined,
+      custom_instructions: instructions.trim() || null,
       enabled,
     };
     try {
@@ -88,17 +162,31 @@ function RuleForm({
       <div className="grid gap-4 sm:grid-cols-3">
         <label className="block">
           <span className="mb-1.5 block text-xs font-medium text-ink-400">Repo</span>
-          <select value={repoId} onChange={(e) => setRepoId(Number(e.target.value))} className="field" disabled={!!editing}>
+          <select
+            value={repoId}
+            onChange={(e) => setRepoId(Number(e.target.value))}
+            className="field"
+            disabled={!!editing || noRepos}
+          >
             {repos.map((r) => (
               <option key={r.id} value={r.id}>
                 {r.full_name}
               </option>
             ))}
           </select>
+          {noRepos && (
+            <span className="mt-1 block text-xs text-amber-400">
+              No connected repos — connect one on the Repos page first.
+            </span>
+          )}
         </label>
         <label className="block">
           <span className="mb-1.5 block text-xs font-medium text-ink-400">Event</span>
-          <select value={event} onChange={(e) => setEvent(e.target.value)} className="field font-mono">
+          <select
+            value={event}
+            onChange={(e) => setEvent(e.target.value)}
+            className="field font-mono"
+          >
             {EVENTS.map((e) => (
               <option key={e} value={e}>
                 {e}
@@ -108,7 +196,11 @@ function RuleForm({
         </label>
         <label className="block">
           <span className="mb-1.5 block text-xs font-medium text-ink-400">Action</span>
-          <select value={action} onChange={(e) => setAction(e.target.value)} className="field font-mono">
+          <select
+            value={action}
+            onChange={(e) => setAction(e.target.value)}
+            className="field font-mono"
+          >
             {ACTIONS.map((a) => (
               <option key={a} value={a}>
                 {a}
@@ -117,64 +209,94 @@ function RuleForm({
           </select>
         </label>
       </div>
+      <p className="text-xs leading-relaxed text-ink-500">{ACTION_HELP[action]}</p>
 
       <div className="grid gap-4 sm:grid-cols-2">
         <label className="block">
-          <span className="mb-1.5 block text-xs font-medium text-ink-400">Branch filter (optional)</span>
-          <input value={branchFilter} onChange={(e) => setBranchFilter(e.target.value)} placeholder="main" className="field font-mono" />
+          <span className="mb-1.5 block text-xs font-medium text-ink-400">
+            Branch filter (optional)
+          </span>
+          <input
+            value={branchFilter}
+            onChange={(e) => setBranchFilter(e.target.value)}
+            placeholder="main"
+            className="field font-mono"
+          />
+          <span className="mt-1 block text-[11px] text-ink-600">
+            Matches the head or base branch (for push: the pushed ref). Clearing a saved filter
+            removes it.
+          </span>
         </label>
         <label className="block">
-          <span className="mb-1.5 block text-xs font-medium text-ink-400">Author filter (optional)</span>
-          <input value={authorFilter} onChange={(e) => setAuthorFilter(e.target.value)} placeholder="octocat" className="field font-mono" />
+          <span className="mb-1.5 block text-xs font-medium text-ink-400">
+            Author filter (optional)
+          </span>
+          <input
+            value={authorFilter}
+            onChange={(e) => setAuthorFilter(e.target.value)}
+            placeholder="octocat"
+            className="field font-mono"
+          />
+          <span className="mt-1 block text-[11px] text-ink-600">
+            PR/issue author login. Needs a PR or issue payload — never matches push.
+          </span>
         </label>
       </div>
 
       <label className="block">
-        <span className="mb-1.5 block text-xs font-medium text-ink-400">Label filter (comma-separated, optional)</span>
-        <input value={labels} onChange={(e) => setLabels(e.target.value)} placeholder="bug, frontend" className="field" />
+        <span className="mb-1.5 block text-xs font-medium text-ink-400">
+          Label filter (comma-separated, optional)
+        </span>
+        <input
+          value={labels}
+          onChange={(e) => setLabels(e.target.value)}
+          placeholder="bug, frontend"
+          className="field"
+        />
+        <span className="mt-1 block text-[11px] text-ink-600">
+          All listed labels must be present. Needs a PR or issue payload — never matches push.
+        </span>
       </label>
 
-      {action === "start_review" && (
+      {needsAgents && (
         <fieldset>
           <legend className="mb-1.5 block text-xs font-medium text-ink-400">
-            Reviewers (catalog agents, kind reviewer)
+            Reviewers (catalog agents, kind reviewer) — required
           </legend>
-          <div className="flex flex-wrap gap-2">
-            {reviewers.map((a) => {
-              const checked = agentIds.includes(a.id);
-              return (
-                <label
-                  key={a.id}
-                  className={`inline-flex cursor-pointer items-center gap-1.5 rounded-full border px-3 py-1 font-mono text-xs transition-colors ${
-                    checked
-                      ? "border-syrup-500/60 bg-syrup-500/10 text-syrup-300"
-                      : "border-ink-800 text-ink-400 hover:border-ink-600"
-                  }`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={() =>
-                      setAgentIds((prev) => (checked ? prev.filter((n) => n !== a.id) : [...prev, a.id]))
-                    }
-                    className="hidden"
-                  />
-                  {a.name} ({a.id})
-                </label>
-              );
-            })}
-            {reviewers.length === 0 && (
-              <span className="text-xs text-ink-500">
-                No reviewer agents yet — create one on the Agents page.
-              </span>
-            )}
-          </div>
+          <AgentChips
+            agents={reviewers}
+            selected={agentIds}
+            onToggle={(id) =>
+              setAgentIds((prev) =>
+                prev.includes(id) ? prev.filter((n) => n !== id) : [...prev, id]
+              )
+            }
+          />
         </fieldset>
       )}
 
-      {action !== "start_review" && (
+      {(action === "triage_issue" || action === "create_task") && (
+        <fieldset>
+          <legend className="mb-1.5 block text-xs font-medium text-ink-400">
+            Agent (optional — first selected runs the task, none = default agent)
+          </legend>
+          <AgentChips
+            agents={actionable}
+            selected={agentIds}
+            onToggle={(id) =>
+              setAgentIds((prev) =>
+                prev.includes(id) ? prev.filter((n) => n !== id) : [...prev, id]
+              )
+            }
+          />
+        </fieldset>
+      )}
+
+      {needsPrompt && (
         <label className="block">
-          <span className="mb-1.5 block text-xs font-medium text-ink-400">Custom instructions (task prompt)</span>
+          <span className="mb-1.5 block text-xs font-medium text-ink-400">
+            Custom instructions (task prompt) — required
+          </span>
           <textarea
             value={instructions}
             onChange={(e) => setInstructions(e.target.value)}
@@ -185,11 +307,20 @@ function RuleForm({
       )}
 
       <label className="flex items-center gap-2 text-sm text-ink-300">
-        <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} className="h-4 w-4 rounded border-ink-700 bg-ink-900" />
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(e) => setEnabled(e.target.checked)}
+          className="h-4 w-4 rounded border-ink-700 bg-ink-900"
+        />
         Enabled
       </label>
 
-      {msg && <p className={`text-xs ${msg.kind === "ok" ? "text-green-400" : "text-red-400"}`}>{msg.text}</p>}
+      {msg && (
+        <p className={`text-xs ${msg.kind === "ok" ? "text-green-400" : "text-red-400"}`}>
+          {msg.text}
+        </p>
+      )}
 
       <div className="flex justify-end gap-2">
         <button type="button" onClick={onCancel} className="btn-ghost">
@@ -203,34 +334,132 @@ function RuleForm({
   );
 }
 
+function workSummary(rule: DeliveryRuleResult): string {
+  const real = rule.work.filter((w) => w.type !== "error");
+  const errs = rule.work.filter((w) => w.type === "error");
+  if (real.length > 0) {
+    const tasks = real.map((w) => w.task_id).filter((t) => t !== undefined);
+    return tasks.length > 0
+      ? `created task${tasks.length > 1 ? "s" : ""} ${tasks.join(", ")}`
+      : "dispatched";
+  }
+  if (errs.length > 0) return errs[0].error || "error";
+  return "no work";
+}
+
 function DeliveryRow({ d, onReplayed }: { d: EventDelivery; onReplayed: () => void }) {
-  const [replayed, setReplayed] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [outcome, setOutcome] = useState<string | null>(null);
+
+  const rules = d.result?.rules ?? [];
+  const failedError =
+    d.status === "failed" && rules.some((r) => r.work.some((w) => w.type === "error"));
+
   async function replay() {
+    if (busy) return;
+    setBusy(true);
+    setOutcome(null);
     try {
-      await api.replayDelivery(d.id);
-      setReplayed("replayed ✓");
+      const res = await api.replayDelivery(d.id);
+      const fired = res.results.filter((r) => !r.note);
+      const skipped = res.results.filter((r) => r.note);
+      const bits: string[] = [];
+      if (fired.length > 0)
+        bits.push(`dispatched ${fired.length} rule${fired.length > 1 ? "s" : ""}`);
+      if (skipped.length > 0) bits.push(`${skipped.length} already dispatched — skipped`);
+      setOutcome(bits.join("; ") || "replayed, nothing matched");
       onReplayed();
     } catch (err) {
-      setReplayed(err instanceof Error ? err.message : "replay failed");
+      setOutcome(err instanceof Error ? err.message : "replay failed");
+    } finally {
+      setBusy(false);
     }
   }
+
+  const when = new Date(d.received_at);
+  const whenLabel = Number.isNaN(when.getTime())
+    ? d.received_at
+    : `${when.toLocaleDateString()} ${when.toLocaleTimeString()}`;
+
   return (
-    <li className="flex flex-wrap items-center gap-2 py-2 text-xs">
-      <span className={`rounded-full border px-2 py-0.5 font-mono ${
-        d.status === "matched" ? "border-green-900 text-green-400"
-        : d.status === "failed" ? "border-red-900 text-red-400"
-        : "border-ink-800 text-ink-500"
-      }`}>
-        {d.status}
-      </span>
-      <span className="font-mono text-ink-300">{d.event}</span>
-      {d.action && <span className="text-ink-500">· {d.action}</span>}
-      <span className="text-ink-500">{d.repo_full_name ?? "—"}</span>
-      <span className="ml-auto font-mono text-ink-600">{d.received_at.slice(11, 19)}</span>
-      <button onClick={replay} className="btn-ghost !px-2 !py-0.5">
-        replay
-      </button>
-      {replayed && <span className="text-ink-500">{replayed}</span>}
+    <li className="py-2 text-xs">
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          onClick={() => setOpen((v) => !v)}
+          className="flex flex-wrap items-center gap-2 text-left"
+          aria-expanded={open}
+        >
+          <span
+            className={`rounded-full border px-2 py-0.5 font-mono ${
+              d.status === "matched"
+                ? "border-green-900 text-green-400"
+                : d.status === "failed"
+                  ? "border-red-900 text-red-400"
+                  : "border-ink-800 text-ink-500"
+            }`}
+          >
+            {d.status}
+          </span>
+          {d.status === "failed" && (
+            <span className="text-[11px] text-ink-500">
+              {failedError ? "· error" : "· no work"}
+            </span>
+          )}
+          <span className="font-mono text-ink-300">{d.event}</span>
+          {d.action && <span className="text-ink-500">· {d.action}</span>}
+          <span className="text-ink-500">{d.repo_full_name ?? "—"}</span>
+          <span className="font-mono text-ink-600" title={d.received_at}>
+            {whenLabel}
+          </span>
+          <span className="text-ink-600">{open ? "▾" : "▸"}</span>
+        </button>
+        <span className="ml-auto flex items-center gap-2">
+          {outcome && <span className="text-ink-500">{outcome}</span>}
+          <button
+            onClick={replay}
+            disabled={busy}
+            className="btn-ghost !px-2 !py-0.5 disabled:opacity-50"
+          >
+            {busy ? "replaying…" : "replay"}
+          </button>
+        </span>
+      </div>
+      {open && (
+        <div className="mt-2 space-y-2 rounded border border-ink-800 bg-ink-900/40 p-3">
+          <div className="font-mono text-[11px] text-ink-500" title="GitHub delivery id">
+            delivery {d.github_delivery_id}
+            {d.result?.reason && <span> · {d.result.reason}</span>}
+          </div>
+          {rules.length === 0 && (
+            <p className="text-[11px] text-ink-500">No rule outcomes recorded.</p>
+          )}
+          {rules.map((r) => (
+            <div key={r.rule_id} className="text-[11px]">
+              <span className="font-mono text-ink-300">
+                rule #{r.rule_id} · {r.action}
+              </span>
+              <span className="ml-2 text-ink-500">{workSummary(r)}</span>
+              {r.note && <span className="ml-2 text-ink-600">({r.note})</span>}
+              <ul className="ml-4 mt-1 space-y-0.5">
+                {r.work.map((w, i) => (
+                  <li key={i} className={w.type === "error" ? "text-red-400" : "text-ink-400"}>
+                    {w.type === "error" ? (
+                      <>error: {w.error}</>
+                    ) : w.task_id !== undefined ? (
+                      <Link to={`/tasks/${w.task_id}`} className="text-syrup-300 hover:underline">
+                        {w.type} → task #{w.task_id}
+                      </Link>
+                    ) : (
+                      <>{w.type}</>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      )}
     </li>
   );
 }
@@ -244,6 +473,9 @@ export default function Triggers() {
   const [editing, setEditing] = useState<TriggerRule | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loadErrors, setLoadErrors] = useState<string[]>([]);
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [logQuery, setLogQuery] = useState("");
 
   function load() {
     api
@@ -253,19 +485,35 @@ export default function Triggers() {
     api
       .getDeliveries()
       .then(setDeliveries)
-      .catch(() => {});
+      .catch((e) =>
+        setLoadErrors((p) =>
+          p.includes(`deliveries: ${e.message}`) ? p : [...p, `deliveries: ${e.message}`]
+        )
+      );
     api
       .getWebhookStatus()
       .then(setStatus)
-      .catch(() => {});
+      .catch((e) =>
+        setLoadErrors((p) =>
+          p.includes(`webhook status: ${e.message}`) ? p : [...p, `webhook status: ${e.message}`]
+        )
+      );
     api
       .getRepos()
       .then(setRepos)
-      .catch(() => {});
+      .catch((e) =>
+        setLoadErrors((p) =>
+          p.includes(`repos: ${e.message}`) ? p : [...p, `repos: ${e.message}`]
+        )
+      );
     api
       .getAgents(true)
       .then(setAgents)
-      .catch(() => {});
+      .catch((e) =>
+        setLoadErrors((p) =>
+          p.includes(`agents: ${e.message}`) ? p : [...p, `agents: ${e.message}`]
+        )
+      );
   }
 
   useEffect(load, []);
@@ -305,6 +553,17 @@ export default function Triggers() {
     }
   }
 
+  const visibleDeliveries = deliveries.filter((d) => {
+    if (statusFilter !== "all" && d.status !== statusFilter) return false;
+    const q = logQuery.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      d.event.toLowerCase().includes(q) ||
+      (d.repo_full_name ?? "").toLowerCase().includes(q) ||
+      (d.action ?? "").toLowerCase().includes(q)
+    );
+  });
+
   return (
     <div className="space-y-6">
       <header className="flex items-start justify-between animate-fade-up">
@@ -326,18 +585,28 @@ export default function Triggers() {
         </button>
       </header>
 
-      {status && (
+      {status ? (
         <section className="surface p-5 animate-fade-up">
           <h2 className="panel-title mb-2">Webhook status</h2>
           <div className="flex flex-wrap items-center gap-3 text-sm">
-            <span className={`rounded-full border px-2.5 py-0.5 text-xs ${
-              status.reachable ? "border-green-900 text-green-400" : "border-red-900 text-red-400"
-            }`}>
+            <span
+              className={`rounded-full border px-2.5 py-0.5 text-xs ${
+                status.reachable ? "border-green-900 text-green-400" : "border-red-900 text-red-400"
+              }`}
+            >
               {status.reachable ? "reachable" : "not exposed"}
             </span>
-            <span className="font-mono text-xs text-ink-400">{status.url || "no webhook_url set — set it in Settings to enable delivery"}</span>
+            <span className="font-mono text-xs text-ink-400">
+              {status.url || "no webhook_url set — set it in Settings to enable delivery"}
+            </span>
             {status.secret_set && <span className="text-xs text-ink-500">signature verified</span>}
           </div>
+          {status.url && !status.secret_set && (
+            <p className="mt-2 text-xs leading-relaxed text-amber-400">
+              No webhook secret set — deliveries are unsigned, so anyone who discovers the tunnel
+              URL can forge events and trigger tasks. Set one in Settings → Webhooks.
+            </p>
+          )}
           <ul className="mt-3 divide-y divide-ink-800/70">
             {status.repos.map((r) => (
               <li key={r.id} className="flex flex-wrap items-center gap-2 py-2 text-sm">
@@ -347,7 +616,9 @@ export default function Triggers() {
                 </span>
                 <button
                   onClick={() => toggleWebhook(r)}
-                  className="btn-ghost ml-auto !px-2.5 !py-1 text-xs"
+                  disabled={!status.url}
+                  title={!status.url ? "Set webhook_url in Settings first" : undefined}
+                  className="btn-ghost ml-auto !px-2.5 !py-1 text-xs disabled:opacity-50"
                 >
                   {r.webhook_registered ? "Unregister" : "Register"}
                 </button>
@@ -355,12 +626,26 @@ export default function Triggers() {
             ))}
           </ul>
         </section>
+      ) : (
+        loadErrors.some((e) => e.startsWith("webhook status")) && (
+          <p className="text-sm text-red-400">
+            Webhook status failed to load — registration controls unavailable.
+          </p>
+        )
       )}
 
       {error && <p className="text-sm text-red-400">{error}</p>}
+      {loadErrors
+        .filter((e) => !e.startsWith("webhook status"))
+        .map((e) => (
+          <p key={e} className="text-xs text-amber-400">
+            {e}
+          </p>
+        ))}
 
       {showForm && (
         <RuleForm
+          key={editing?.id ?? "new"}
           repos={repos}
           agents={agents}
           editing={editing}
@@ -385,7 +670,7 @@ export default function Triggers() {
             No rules yet — create one to auto-start work on a GitHub event.
           </p>
         ) : (
-          <ul className="divide-y divide-ink-800/70">
+          <ul className="max-h-96 divide-y divide-ink-800/70 overflow-y-auto">
             {rules.map((rule) => (
               <li key={rule.id} className="flex flex-wrap items-center gap-2 px-4 py-3 text-sm">
                 <span className="font-mono text-ink-300">{rule.event}</span>
@@ -393,15 +678,44 @@ export default function Triggers() {
                   {rule.action}
                 </span>
                 <span className="text-ink-500">{repoName(rule.repo_id)}</span>
-                {rule.branch_filter && <span className="font-mono text-[11px] text-ink-500">branch: {rule.branch_filter}</span>}
+                {rule.branch_filter && (
+                  <span className="rounded-full border border-ink-800 px-2 py-0.5 font-mono text-[11px] text-ink-400">
+                    branch: {rule.branch_filter}
+                  </span>
+                )}
+                {rule.author_filter && (
+                  <span className="rounded-full border border-ink-800 px-2 py-0.5 font-mono text-[11px] text-ink-400">
+                    by {rule.author_filter}
+                  </span>
+                )}
+                {rule.label_filter.length > 0 && (
+                  <span className="rounded-full border border-ink-800 px-2 py-0.5 font-mono text-[11px] text-ink-400">
+                    labels: {rule.label_filter.join(", ")}
+                  </span>
+                )}
                 {rule.agent_ids.length > 0 && (
-                  <span className="font-mono text-[11px] text-ink-500">agents: {rule.agent_ids.join(", ")}</span>
+                  <span className="font-mono text-[11px] text-ink-500">
+                    agents: {rule.agent_ids.join(", ")}
+                  </span>
+                )}
+                {rule.custom_instructions && (
+                  <span
+                    title={rule.custom_instructions}
+                    className="rounded-full border border-ink-800 px-2 py-0.5 text-[11px] text-ink-500"
+                  >
+                    has prompt
+                  </span>
                 )}
                 {!rule.enabled && (
-                  <span className="rounded-full border border-ink-800 px-2 py-0.5 text-[11px] text-ink-500">disabled</span>
+                  <span className="rounded-full border border-ink-800 px-2 py-0.5 text-[11px] text-ink-500">
+                    disabled
+                  </span>
                 )}
                 <span className="ml-auto flex gap-2">
-                  <button onClick={() => toggleRule(rule)} className="btn-ghost !px-2 !py-1 text-xs">
+                  <button
+                    onClick={() => toggleRule(rule)}
+                    className="btn-ghost !px-2 !py-1 text-xs"
+                  >
                     {rule.enabled ? "Disable" : "Enable"}
                   </button>
                   <button
@@ -413,7 +727,10 @@ export default function Triggers() {
                   >
                     Edit
                   </button>
-                  <button onClick={() => removeRule(rule)} className="btn-ghost !px-2 !py-1 !text-red-400 text-xs">
+                  <button
+                    onClick={() => removeRule(rule)}
+                    className="btn-ghost !px-2 !py-1 !text-red-400 text-xs"
+                  >
                     Delete
                   </button>
                 </span>
@@ -424,14 +741,36 @@ export default function Triggers() {
       </section>
 
       <section className="surface animate-fade-up">
-        <div className="border-b border-ink-800 px-4 py-3">
+        <div className="flex flex-wrap items-center gap-2 border-b border-ink-800 px-4 py-3">
           <h2 className="panel-title">Delivery log</h2>
+          <span className="ml-auto flex items-center gap-2">
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="field !w-auto !py-1 text-xs"
+              aria-label="Filter by status"
+            >
+              <option value="all">all statuses</option>
+              <option value="matched">matched</option>
+              <option value="failed">failed</option>
+              <option value="ignored">ignored</option>
+            </select>
+            <input
+              value={logQuery}
+              onChange={(e) => setLogQuery(e.target.value)}
+              placeholder="filter event / repo…"
+              className="field !w-44 !py-1 text-xs"
+              aria-label="Filter deliveries"
+            />
+          </span>
         </div>
         {deliveries.length === 0 ? (
           <p className="px-4 py-6 text-sm text-ink-500">No deliveries yet.</p>
+        ) : visibleDeliveries.length === 0 ? (
+          <p className="px-4 py-6 text-sm text-ink-500">No deliveries match the filter.</p>
         ) : (
-          <ul className="divide-y divide-ink-800/70">
-            {deliveries.map((d) => (
+          <ul className="max-h-96 divide-y divide-ink-800/70 overflow-y-auto px-4">
+            {visibleDeliveries.map((d) => (
               <DeliveryRow key={d.id} d={d} onReplayed={load} />
             ))}
           </ul>

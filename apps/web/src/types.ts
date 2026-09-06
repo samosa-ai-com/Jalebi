@@ -78,6 +78,7 @@ export interface Task {
   issues: number[];
   prs: number[];
   env_vars: string[];
+  triggered_by?: { delivery_id: string; event: string; received_at: string } | null;
   created_at: string;
   updated_at: string;
   run: Run | null;
@@ -328,6 +329,25 @@ export interface TriggerRule {
   created_at: string;
 }
 
+export interface DeliveryWorkItem {
+  type: string;
+  task_id?: number;
+  agent_id?: string;
+  error?: string;
+}
+
+export interface DeliveryRuleResult {
+  rule_id: number;
+  action: string;
+  work: DeliveryWorkItem[];
+  note?: string;
+}
+
+export interface ReplayResponse {
+  matched: number;
+  results: DeliveryRuleResult[];
+}
+
 export interface EventDelivery {
   id: number;
   github_delivery_id: string;
@@ -337,7 +357,7 @@ export interface EventDelivery {
   repo_full_name: string | null;
   received_at: string;
   status: string;
-  result: unknown;
+  result: { rules?: DeliveryRuleResult[]; reason?: string } | null;
 }
 
 export interface WebhookStatus {
