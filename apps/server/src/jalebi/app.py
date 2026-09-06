@@ -17,6 +17,7 @@ from jalebi.config import Config, load_config, repo_root
 from jalebi.poller import Poller
 from jalebi.queue import TaskQueue
 from jalebi.routes.catalog import bp as catalog_bp
+from jalebi.routes.data import bp as data_bp
 from jalebi.routes.envvars import bp as envvars_bp
 from jalebi.routes.github import bp as github_bp
 from jalebi.routes.repos import bp as repos_bp
@@ -48,11 +49,14 @@ def _valid_secret_patterns(value: object) -> bool:
 
 
 def _valid_retry_policy(v) -> bool:
-    """retry_policy: {auto_retry, continue_prompt?, timeout_multiplier?, max_timeout_minutes?}.
+    """retry_policy: {auto_retry, continue_prompt?, timeout_multiplier?,
+    max_timeout_minutes?, max_attempts?, non_retryable_patterns?}.
 
     Accepts the legacy ``{"auto_retry": bool}`` shape too; new keys are optional.
     ``timeout_multiplier`` may be fractional (matches the consumer, which accepts
-    int/float); ``max_timeout_minutes`` is an int (minutes).
+    int/float); ``max_timeout_minutes`` is an int (minutes); ``max_attempts``
+    caps total auto-recovery attempts per task (>= 1); ``non_retryable_patterns``
+    is a list of case-insensitive substrings that fail immediately.
     """
     if not isinstance(v, dict) or not isinstance(v.get("auto_retry"), bool):
         return False
@@ -65,6 +69,15 @@ def _valid_retry_policy(v) -> bool:
         return False
     if "max_timeout_minutes" in v and not (
         isinstance(v["max_timeout_minutes"], int) and v["max_timeout_minutes"] >= 1
+    ):
+        return False
+    if "max_attempts" in v and not (
+        isinstance(v["max_attempts"], int) and v["max_attempts"] >= 1
+    ):
+        return False
+    if "non_retryable_patterns" in v and not (
+        isinstance(v["non_retryable_patterns"], list)
+        and all(isinstance(p, str) for p in v["non_retryable_patterns"])
     ):
         return False
     return True
@@ -295,6 +308,7 @@ def create_app(config: Config | None = None) -> Flask:
     app.register_blueprint(tasks_bp)
     app.register_blueprint(envvars_bp)
     app.register_blueprint(catalog_bp)
+    app.register_blueprint(data_bp)
     app.register_blueprint(triggers_bp)
     app.register_blueprint(webhooks_bp)
     app.register_blueprint(screening_bp)

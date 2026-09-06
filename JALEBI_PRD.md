@@ -103,7 +103,7 @@ Everything is local, private to the owner, and driven from the dashboard.
 8. **Privacy & ownership.** Localhost-bound, PAT-authenticated, single-owner. The owner can register **multiple named PAT accounts** (a vault of equal accounts) and select which account runs a given repo/task.
 9. **Event-driven automation (essential).** Repo webhook events can auto-start tasks in real time — e.g. the moment a PR is opened, its assigned reviewers from the catalog begin reviewing automatically. Triggers are **webhook-pushed**, not polled (scheduling is not the mechanism; triggering is).
 10. **Simplicity above all.** The implementation must stay **logically simple**. Do not import whole subsystems or frameworks from reference projects just because they exist — borrow only the specific ideas/snippets that directly serve a feature, and prefer the simplest code that satisfies the PRD. Avoid over-engineering (no event-bus frameworks, no complex state machines, no distributed abstractions) unless a requirement literally demands it. If a feature starts feeling complex to implement, stop and revisit the design.
-11. **Reliability by default.** Runs survive restarts and are **auto-recovered** on failure/timeout/stall (unbounded, per-run escalating timeouts, notifications at each terminal state). A run that goes quiet (stall) is detected by a watchdog and restarted. See §7.5 and §F16.
+11. **Reliability by default.** Runs survive restarts and are **auto-recovered** on failure/timeout/stall (bounded by `retry_policy.max_attempts`, per-run escalating timeouts, first-failure + give-up notifications). A run that goes quiet (stall) is detected by a watchdog and restarted. See §7.5 and §F16.
 
 ## 4. Non-goals (v1)
 
@@ -187,14 +187,14 @@ Everything is local, private to the owner, and driven from the dashboard.
 ### 7.5 Recovery loop (auto-recovery)
 
 1. A run ends **terminal-failed** (including **stalled**) or **timed-out**.
-2. Auto-recovery (default ON, unbounded for all task types) dispatches a new run:
+2. Auto-recovery (default ON, bounded for all task types) dispatches a new run:
    - **timeout / other failure** → **resume the last session** with the `continue_prompt` (`retry_policy.continue_prompt`, default `"continue"`);
    - **stall** → **fresh re-run** (a wedged session re-hangs — a stalled session is never resumed);
    - no resumable session → fresh run.
 3. The per-run timeout **escalates**: `timeout_minutes × timeout_multiplier^attempts`, capped at `retry_policy.max_timeout_minutes` (default 180). `task.timeout_minutes` is never mutated.
 4. A `done` run **resets `retry_count`**; a manual rerun after success starts from the base timeout again.
-5. Recovery runs are tagged `auto` (queue + run) and are **never recorded as user follow-ups**; the owner still gets terminal/progress notifications (see §F19).
-6. The loop is unbounded **by design**: each run is bounded by its own escalating timeout, and notifications keep the owner informed.
+5. Recovery runs are tagged `auto` (queue + run) and are **never recorded as user follow-ups**; the owner gets a notification on the first failure and on the final give-up/success — intermediate attempts are timeline-only (see §F19).
+6. The loop is **bounded by `retry_policy.max_attempts`** (default 3): at the cap the task stays `failed` with a give-up note instead of requeueing. Failures matching a `retry_policy.non_retryable_patterns` phrase (wrong model, bad auth, missing token/session) fail immediately with no recovery — a deterministic failure must never loop until the owner cancels it.
 
 ---
 
@@ -426,11 +426,11 @@ Mirrors GitHub Actions' ability to gate merges on agent results. (Schema placeho
 
 - **Per-task timeout (enforced):** each task has a timeout (default **60 minutes**, configurable per task and per repo; the DB-level `server_default` stays 30 only because SQLite cannot alter it in place — the ORM Python default of 60 always applies). On expiry the child process is killed (SIGTERM → SIGKILL), the task marked `failed`/`timed_out`, and the commit status (if any) completed with `failure`.
 - **Stall detection:** a **watchdog** (per-run `stall_timeout_seconds`, live setting, default 600) declares a run **stalled** when it stops emitting output; the task is marked `failed` and auto-recovery restarts it **fresh** (a wedged session re-hangs).
-- **Auto-recovery (default ON, unbounded, all task types):** on terminal `failed` (incl. stalled) or `timed_out`, recovery dispatches a new run — **resume the last session** with `continue_prompt` for timeout/other failures, **fresh re-run** for stalls, fresh if no resumable session. See §7.5 for the full loop.
+- **Auto-recovery (default ON, bounded, all task types):** on terminal `failed` (incl. stalled) or `timed_out`, recovery dispatches a new run — **resume the last session** with `continue_prompt` for timeout/other failures, **fresh re-run** for stalls, fresh if no resumable session — up to `retry_policy.max_attempts` (default 3), then the task stays `failed` with a give-up note. Failures matching `retry_policy.non_retryable_patterns` fail immediately. Only the first failure and the final give-up/success notify. See §7.5 for the full loop.
 - **Derived timeout escalation:** the per-run timeout is computed from `task.retry_count` — `base × timeout_multiplier^attempts` (default multiplier 2), capped at `retry_policy.max_timeout_minutes` (180). `task.timeout_minutes` is never mutated; a `done` run **resets `retry_count`**, so a manual rerun after success starts from the base timeout again.
 - **Manual re-run:** a failed/timed-out task can be **re-run** (UI action) — a fresh `run` reusing the same worktree/session where sensible.
 - Interrupted runs remain resumable via follow-up (F11).
-- **Settings (`retry_policy`):** `{ auto_retry: true, continue_prompt: "continue", timeout_multiplier: 2, max_timeout_minutes: 180 }`.
+- **Settings (`retry_policy`):** `{ auto_retry: true, continue_prompt: "continue", timeout_multiplier: 2, max_timeout_minutes: 180, max_attempts: 3, non_retryable_patterns: [...] }`.
 
 ### F17. Secret masking in logs
 
@@ -677,7 +677,7 @@ screening_runs(id, screening_id, head_sha, status, started_at, finished_at, find
 4. **PAT scope limits** — fine-grained PATs must include both Contents and Pull requests scopes for the full flow; validation step in Settings enumerates exactly which scope is missing.
 5. **Concurrency vs. API rate limits** — 4 parallel agents can burn GitHub/LLM rate limits; consider a per-provider throttle later.
 6. **Screening false positives** — findings are LLM-generated; severity should be labeled and the "new task from finding" flow should let the user edit the prompt before starting. *(Phase 2.)*
-7. **Unbounded auto-recovery** — recovery is intentionally unbounded; each run is bounded only by its escalating timeout (capped at 180 min). Risk: a pathological task loops for a long time. Mitigations: escalating timeout, terminal + progress notifications. Revisit if the owner wants a cap field.
+7. **Bounded auto-recovery** — recovery stops after `retry_policy.max_attempts` (default 3) with a give-up note, and deterministic failures (wrong model, bad auth) fail immediately via `non_retryable_patterns`. Residual risk: a flaky task still burns 3 escalated runs. Mitigations: escalating timeout, first-failure + give-up notifications, manual cancel stays cancelled.
 8. **Should Jalebi use a GitHub App instead of PAT for higher rate limits & org-install reach?** — deferred, documented as future option.
 9. **Webhook reachability** — a localhost app can't receive GitHub webhooks without a tunnel/reverse proxy. Mitigate: detect unreachable webhook, warn in UI, offer per-repo polling fallback (currently inert); the tunnel is the owner's responsibility (documented in Settings).
 10. **Missed/reordered webhook events** — dedup handles re-delivery but not "never delivered"; polling fallback and a "replay delivery" log close the gap for critical triggers (e.g. PR opened).

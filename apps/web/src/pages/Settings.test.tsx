@@ -19,6 +19,8 @@ const SETTINGS = {
   artifact_ttl_days: 7,
   default_backend: "opencode",
   default_model: "",
+  adapter_model_lists: {},
+  auto_nudge: false,
   notify_on_done: true,
   notify_on_failed: true,
   notify_on_progress: true,
@@ -31,9 +33,41 @@ const SETTINGS = {
   ide_name: "",
 };
 
-function makeFetchMock(settingsOverrides: Partial<typeof SETTINGS> = {}) {
+function makeFetchMock(settingsOverrides: Partial<typeof SETTINGS> = {}, models: string[] = []) {
   const currentSettings = { ...SETTINGS, ...settingsOverrides };
   return vi.fn(async (url: string, init?: RequestInit) => {
+    if (String(url).includes("/api/models")) {
+      const cli = new URL(String(url), "http://localhost").searchParams.get("cli");
+      return { ok: true, json: async () => ({ cli: cli ?? "opencode", models }) };
+    }
+    if (String(url).includes("/api/data/usage")) {
+      return {
+        ok: true,
+        json: async () => ({ sizes: {}, counts: {}, tasks_by_status: {} }),
+      };
+    }
+    if (String(url).includes("/api/data/backups")) {
+      return { ok: true, json: async () => [] };
+    }
+    if (String(url).includes("/api/data/prune")) {
+      return {
+        ok: true,
+        json: async () => ({
+          dry_run: true,
+          preview: {
+            cutoff: "2026-01-01",
+            tasks: { task_ids: [], count: 0 },
+            runs: 0,
+            task_events: 0,
+            deliveries: 0,
+            screening_runs: 0,
+            orphan_worktrees: [],
+            orphan_artifacts: [],
+            old_logs: 0,
+          },
+        }),
+      };
+    }
     if (String(url).includes("/api/notify/test")) {
       return { ok: true, json: async () => ({ ok: true }) };
     }
@@ -84,6 +118,21 @@ function makeFetchMock(settingsOverrides: Partial<typeof SETTINGS> = {}) {
 describe("Settings", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    localStorage.clear();
+  });
+
+  async function expand(name: RegExp) {
+    await screen.findByLabelText("Filter settings");
+    await userEvent.click(screen.getByRole("button", { name }));
+  }
+
+  it("starts with every section collapsed", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Settings />);
+    expect(await screen.findByText("Settings")).toBeInTheDocument();
+    expect(screen.queryByText("Queue concurrency")).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("my-jalebi")).not.toBeInTheDocument();
   });
 
   it("loads settings and toggles auto_publish via POST", async () => {
@@ -91,6 +140,7 @@ describe("Settings", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     render(<Settings />);
+    await expand(/Queue & timeouts/);
     expect(await screen.findByText("Queue concurrency")).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("switch", { name: "Auto-publish PRs" }));
@@ -113,6 +163,7 @@ describe("Settings", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     render(<Settings />);
+    await expand(/Notifications/);
     expect(await screen.findByText("Notifications")).toBeInTheDocument();
     expect(screen.getByPlaceholderText("my-jalebi")).toBeInTheDocument();
 
@@ -130,6 +181,7 @@ describe("Settings", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     render(<Settings />);
+    await expand(/Queue & timeouts/);
     expect(await screen.findByText("Timeout")).toBeInTheDocument();
     expect(screen.queryByText("Default timeout")).not.toBeInTheDocument();
   });
@@ -139,6 +191,7 @@ describe("Settings", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     render(<Settings />);
+    await expand(/Recovery/);
     await screen.findByText("Auto-recovery");
 
     await userEvent.click(screen.getByRole("switch", { name: "Auto-recovery" }));
@@ -165,7 +218,9 @@ describe("Settings", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     render(<Settings />);
+    await expand(/Queue & timeouts/);
     expect(await screen.findByText("Stall timeout")).toBeInTheDocument();
+    await expand(/Recovery/);
     expect(screen.getByText("Continue prompt")).toBeInTheDocument();
     expect(screen.getByText("Timeout multiplier")).toBeInTheDocument();
     expect(screen.getByText("Max timeout")).toBeInTheDocument();
@@ -176,6 +231,7 @@ describe("Settings", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     render(<Settings />);
+    await expand(/Agent defaults/);
     await screen.findByText("Default backend");
 
     // The select is unlabeled — scope it by its section heading.
@@ -194,6 +250,7 @@ describe("Settings", () => {
 describe("Settings (Phase 4 T6 — IDE)", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    localStorage.clear();
   });
 
   it("renders the IDE section with detected IDEs", async () => {
@@ -201,6 +258,7 @@ describe("Settings (Phase 4 T6 — IDE)", () => {
     vi.stubGlobal("fetch", fetchMock);
     render(<Settings />);
     expect(await screen.findByText("IDE")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /IDE/ }));
     expect(await screen.findByText("Visual Studio Code")).toBeInTheDocument();
     expect(screen.getByText("Google Antigravity")).toBeInTheDocument();
     expect(screen.getByText("Custom command…")).toBeInTheDocument();
@@ -211,6 +269,7 @@ describe("Settings (Phase 4 T6 — IDE)", () => {
     vi.stubGlobal("fetch", fetchMock);
     render(<Settings />);
     await screen.findByText("IDE");
+    await userEvent.click(screen.getByRole("button", { name: /IDE/ }));
     const antBtn = await screen.findByText("Google Antigravity");
     await userEvent.click(antBtn);
     await waitFor(() => {
@@ -228,6 +287,7 @@ describe("Settings (Phase 4 T6 — IDE)", () => {
     vi.stubGlobal("fetch", fetchMock);
     render(<Settings />);
     await screen.findByText("IDE");
+    await userEvent.click(screen.getByRole("button", { name: /IDE/ }));
     const testBtn = await screen.findByText("Test open");
     expect(testBtn).not.toBeDisabled();
     await userEvent.click(testBtn);
@@ -238,5 +298,181 @@ describe("Settings (Phase 4 T6 — IDE)", () => {
         )
       ).toBe(true);
     });
+  });
+
+  it("offers Custom command when no IDEs are detected", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (String(url).includes("/api/ide/detect")) {
+          return { ok: true, json: async () => ({ command: "", name: "", detected: [] }) };
+        }
+        return (fetchMock as unknown as (u: string, i?: RequestInit) => Promise<unknown>)(
+          url,
+          init
+        );
+      })
+    );
+    render(<Settings />);
+    await screen.findByText("IDE");
+    await userEvent.click(screen.getByRole("button", { name: /IDE/ }));
+    expect(await screen.findByText("Custom command…")).toBeInTheDocument();
+  });
+
+  it("typing an IDE command does not POST until blur", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Settings />);
+    await screen.findByText("IDE");
+    await userEvent.click(screen.getByRole("button", { name: /IDE/ }));
+    await screen.findByText("Custom command…");
+    await userEvent.click(screen.getByText("Custom command…"));
+    const input = await screen.findByPlaceholderText("e.g. cursor, code, nvim, /usr/bin/zed");
+    await userEvent.type(input, "myide");
+    const posts = () =>
+      fetchMock.mock.calls.filter(
+        ([url, init]) => String(url).includes("/api/settings") && init?.method === "POST"
+      );
+    expect(posts().length).toBe(0);
+    await userEvent.tab();
+    await waitFor(() => expect(posts().length).toBeGreaterThan(0));
+  });
+});
+
+// ---- Settings overhaul: recovery + data -----------------------------------
+
+describe("Settings (recovery + data)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    localStorage.clear();
+  });
+
+  async function expand(name: RegExp) {
+    await screen.findByLabelText("Filter settings");
+    await userEvent.click(screen.getByRole("button", { name }));
+  }
+
+  it("shows Recovery attempts and saves max_attempts", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Settings />);
+    await expand(/Recovery/);
+    expect(await screen.findByText("Recovery attempts")).toBeInTheDocument();
+    expect(screen.getByText("Non-retryable errors")).toBeInTheDocument();
+
+    const input = screen.getByRole("spinbutton", { name: "Recovery attempts" });
+    await userEvent.clear(input);
+    await userEvent.type(input, "5");
+    await userEvent.tab();
+    await waitFor(() => {
+      const postCall = fetchMock.mock.calls.find(
+        ([url, init]) => String(url).includes("/api/settings") && init?.method === "POST"
+      );
+      expect(postCall).toBeTruthy();
+      const body = JSON.parse((postCall?.[1] as RequestInit).body as string) as {
+        key: string;
+        value: Record<string, unknown>;
+      };
+      expect(body.key).toBe("retry_policy");
+      expect(body.value.max_attempts).toBe(5);
+    });
+  });
+
+  it("warns when the default model is not in the backend list", async () => {
+    const fetchMock = makeFetchMock({ default_model: "gpt-wrong" }, ["gpt-a", "gpt-b"]);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Settings />);
+    await expand(/Agent defaults/);
+    expect(
+      await screen.findByText(/isn't in this backend's list/, { exact: false })
+    ).toBeInTheDocument();
+  });
+
+  it("renders the Data management section with storage and prune", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Settings />);
+    expect(await screen.findByText("Data management")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /Data management/ }));
+    expect(await screen.findByText("Back up now")).toBeInTheDocument();
+    expect(screen.getByText("Clean up old data")).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/data/usage"))).toBe(
+      true
+    );
+  });
+
+  it("search narrows to matching rows and auto-opens the section", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Settings />);
+    await screen.findByText("Settings");
+    await userEvent.type(screen.getByLabelText("Filter settings"), "concurrency");
+    expect(await screen.findByText("Queue concurrency")).toBeInTheDocument();
+    expect(screen.queryByText("Auto-publish PRs")).not.toBeInTheDocument();
+    expect(screen.queryByText("Recovery attempts")).not.toBeInTheDocument();
+  });
+
+  it("search with no matches shows an empty note; clear restores", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Settings />);
+    await screen.findByText("Settings");
+    await userEvent.type(screen.getByLabelText("Filter settings"), "zzz-no-such-setting");
+    expect(await screen.findByText(/No settings match/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Clear filter" }));
+    expect(screen.queryByText(/No settings match/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Queue concurrency")).not.toBeInTheDocument();
+  });
+
+  it("expand all opens every section at once", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Settings />);
+    await screen.findByLabelText("Filter settings");
+    await userEvent.click(screen.getByRole("button", { name: "Expand all" }));
+    expect(await screen.findByText("Queue concurrency")).toBeInTheDocument();
+    expect(screen.getByText("Recovery attempts")).toBeInTheDocument();
+  });
+
+  it("one click applies the backend's first model when stale", async () => {
+    const fetchMock = makeFetchMock({ default_model: "gpt-wrong" }, ["gpt-a", "gpt-b"]);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Settings />);
+    await expand(/Agent defaults/);
+    await userEvent.click(await screen.findByText(/Use gpt-a/));
+    await waitFor(() => {
+      const bodies = fetchMock.mock.calls
+        .filter(([url, init]) => String(url).includes("/api/settings") && init?.method === "POST")
+        .map(([, init]) => JSON.parse((init?.body as string) || "{}"));
+      expect(bodies.some((b) => b.key === "default_model" && b.value === "gpt-a")).toBe(true);
+    });
+  });
+
+  it("reverts the draft when a save fails", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (String(url).includes("/api/settings") && init?.method === "POST") {
+          const body = JSON.parse((init.body as string) || "{}") as Record<string, unknown>;
+          if (body.key === "concurrency") {
+            return { ok: false, status: 400, json: async () => ({ error: "bad value" }) };
+          }
+        }
+        return (fetchMock as unknown as (u: string, i?: RequestInit) => Promise<unknown>)(
+          url,
+          init
+        );
+      })
+    );
+    render(<Settings />);
+    await expand(/Queue & timeouts/);
+    const input = screen.getByRole("spinbutton", { name: "Queue concurrency" });
+    await userEvent.clear(input);
+    await userEvent.type(input, "9");
+    await userEvent.tab();
+    await waitFor(() => expect(input).toHaveValue(4));
+    expect(await screen.findAllByText("bad value")).toHaveLength(2);
   });
 });

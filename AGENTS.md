@@ -177,12 +177,13 @@ Jalebi/
 │   │   │   ├── events.py          # per-task SSE bus
 │   │   │   ├── masking.py         # PAT(s)/pattern redaction at ingest
 │   │   │   ├── queue.py           # TaskQueue: workers, run lifecycle, timeout/cancel, publish, review posting
+│   │   ├── data_mgmt.py       # usage/backup/prune/vacuum for Settings → Data management
 │   │   │   ├── checkruns.py       # check-run registry + lifecycle (PRD F15, merge gating)
 │   │   │   ├── repos.py           # connected-repo registry service
 │   │   │   ├── tasks.py           # task service (create/list/detail)
 │   │   │   ├── screening.py       # ScreeningEngine + ScreeningScheduler (cron, read-only audits)
 │   │   │   ├── cron.py            # minimal 5-field cron matcher for the scheduler
-│   │   │   └── routes/            # github.py, repos.py, tasks.py, screening.py (Flask blueprints)
+│   │   │   └── routes/            # github.py, repos.py, tasks.py, screening.py, data.py (Flask blueprints)
 │   │   └── tests/                 # pytest (+ conftest)
 │   └── web/                       # React + Vite + Tailwind (built → served by Flask)
 │       └── src/

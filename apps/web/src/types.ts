@@ -202,11 +202,14 @@ export interface RetryPolicy {
   continue_prompt?: string;
   timeout_multiplier?: number;
   max_timeout_minutes?: number;
+  max_attempts?: number;
+  non_retryable_patterns?: string[];
 }
 
 export interface SettingsMap {
   concurrency: number;
   auto_publish: boolean;
+  auto_nudge: boolean;
   ntfy_topic: string;
   default_timeout_minutes: number;
   retry_policy: RetryPolicy;
@@ -215,6 +218,7 @@ export interface SettingsMap {
   artifact_ttl_days: number;
   default_backend: string;
   default_model: string;
+  adapter_model_lists: Record<string, string[]>;
   notify_on_done: boolean;
   notify_on_failed: boolean;
   notify_on_progress: boolean;
@@ -225,6 +229,30 @@ export interface SettingsMap {
   timezone: string;
   ide_command: string;
   ide_name: string;
+}
+
+export interface DataUsage {
+  sizes: Record<string, number>;
+  counts: Record<string, number>;
+  tasks_by_status: Record<string, number>;
+}
+
+export interface BackupInfo {
+  name: string;
+  size: number;
+  created_at: string;
+}
+
+export interface PrunePreview {
+  cutoff: string;
+  tasks: { task_ids: number[]; count: number };
+  runs: number;
+  task_events: number;
+  deliveries: number;
+  screening_runs: number;
+  orphan_worktrees: number[];
+  orphan_artifacts: number[];
+  old_logs: number;
 }
 
 export interface DetectedIde {

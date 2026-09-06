@@ -17,6 +17,16 @@ def test_defaults_returned_when_unset(session: OrmSession) -> None:
         "continue_prompt": "continue",
         "timeout_multiplier": 2,
         "max_timeout_minutes": 180,
+        "max_attempts": 3,
+        "non_retryable_patterns": [
+            "model not found",
+            "invalid model",
+            "unknown model",
+            "authentication failed",
+            "unauthorized",
+            "no GitHub token",
+            "has no resumable session",
+        ],
     }
     assert get_setting(session, "stall_timeout_seconds") == 600
     assert get_setting(session, "unknown_key") is None

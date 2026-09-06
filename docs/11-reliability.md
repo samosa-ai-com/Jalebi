@@ -43,9 +43,11 @@ default only for a key added by a code update before the next restart.
 | `concurrency` | **live** (pool resizes immediately) |
 | `auto_publish` | live (checked per run) |
 | `default_backend` / `default_model` | live (resolved per run when an action doesn't pick its own) |
+| `adapter_model_lists` | live (read per `/api/models` call) |
+| `auto_nudge` | live (checked per poller/webhook fact change) |
 | `secret_patterns` | live (per run/prompt ingest) |
 | `default_timeout_minutes` | live (used for new tasks / watchdog fallback) |
-| `retry_policy` (`auto_retry`, `continue_prompt`, `timeout_multiplier`, `max_timeout_minutes`) | live (per run completion) |
+| `retry_policy` (`auto_retry`, `continue_prompt`, `timeout_multiplier`, `max_timeout_minutes`, `max_attempts`, `non_retryable_patterns`) | live (per run completion). **Recovery is bounded**: at most `max_attempts` (default 3) auto-recoveries per task, then the task stays `failed` with a give-up note; failures matching a `non_retryable_patterns` phrase fail immediately with no recovery. Only the first failure and the final give-up/success notify — intermediate attempts are timeline-only; the give-up push quotes the reason and respects `notify_on_failed`. A manual cancel while a recovery is queued stays cancelled (the follow-up path bails on `cancelled`). |
 | `stall_timeout_seconds` | live (per run start) |
 | `artifact_ttl_days` | **startup only** (artifact prune runs once at boot) |
 | `ntfy_topic` | live (per notification; merged endpoint — bare topic or full URL) |

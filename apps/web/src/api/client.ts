@@ -1,6 +1,8 @@
 import type {
+  BackupInfo,
   CatalogAgent,
   CatalogSkill,
+  DataUsage,
   EnvVar,
   EventDelivery,
   FileEntry,
@@ -8,6 +10,7 @@ import type {
   GithubRepo,
   Health,
   IdeDetectResponse,
+  PrunePreview,
   PublishCheck,
   Repo,
   Run,
@@ -312,6 +315,26 @@ export const api = {
   updateRepo: (id: number, input: { check_runs_enabled?: boolean }) =>
     request<Repo>(`/api/repos/${id}`, { method: "PATCH", body: JSON.stringify(input) }),
   pruneRepos: () => request<{ removed: string[] }>("/api/repos/prune", { method: "POST" }),
+  getDataUsage: () => request<DataUsage>("/api/data/usage"),
+  getBackups: () => request<BackupInfo[]>("/api/data/backups"),
+  createBackup: () => request<BackupInfo>("/api/data/backups", { method: "POST" }),
+  deleteBackup: (name: string) =>
+    request<{ deleted: string }>(`/api/data/backups/${encodeURIComponent(name)}`, {
+      method: "DELETE",
+    }),
+  backupDownloadUrl: (name: string) => `/api/data/backups/${encodeURIComponent(name)}/download`,
+  vacuumData: () =>
+    request<{ before: number; after: number }>("/api/data/vacuum", { method: "POST" }),
+  pruneData: (input: {
+    older_than_days: number;
+    scopes: string[];
+    dry_run: boolean;
+    confirm?: string;
+  }) =>
+    request<{ dry_run: boolean; removed?: Record<string, number>; preview: PrunePreview }>(
+      "/api/data/prune",
+      { method: "POST", body: JSON.stringify(input) }
+    ),
   artifactUrl: (taskId: number, artifactId: number) =>
     `/api/tasks/${taskId}/artifacts/${artifactId}/download`,
   artifactContentUrl: (taskId: number, artifactId: number) =>

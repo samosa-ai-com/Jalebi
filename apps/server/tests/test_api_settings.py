@@ -51,6 +51,44 @@ def test_ntfy_url_no_longer_valid(client: FlaskClient) -> None:
     assert resp.status_code == 400
 
 
+def test_retry_policy_accepts_attempt_cap_and_patterns(client: FlaskClient) -> None:
+    """retry_policy accepts max_attempts + non_retryable_patterns; rejects bad shapes."""
+    resp = client.post(
+        "/api/settings",
+        json={
+            "key": "retry_policy",
+            "value": {
+                "auto_retry": True,
+                "max_attempts": 5,
+                "non_retryable_patterns": ["model not found"],
+            },
+        },
+    )
+    assert resp.status_code == 200
+    body = client.get("/api/settings").get_json()
+    assert body["retry_policy"]["max_attempts"] == 5
+    assert body["retry_policy"]["non_retryable_patterns"] == ["model not found"]
+    # Legacy shape still valid.
+    resp = client.post("/api/settings", json={"key": "retry_policy", "value": {"auto_retry": True}})
+    assert resp.status_code == 200
+    # max_attempts must be an int >= 1; patterns must be a str list.
+    resp = client.post(
+        "/api/settings",
+        json={"key": "retry_policy", "value": {"auto_retry": True, "max_attempts": 0}},
+    )
+    assert resp.status_code == 400
+    resp = client.post(
+        "/api/settings",
+        json={"key": "retry_policy", "value": {"auto_retry": True, "max_attempts": "many"}},
+    )
+    assert resp.status_code == 400
+    resp = client.post(
+        "/api/settings",
+        json={"key": "retry_policy", "value": {"auto_retry": True, "non_retryable_patterns": "x"}},
+    )
+    assert resp.status_code == 400
+
+
 def test_timezone_setting_validated(client: FlaskClient) -> None:
     """The timezone setting accepts ``local``/IANA names and rejects unknowns."""
     assert client.get("/api/settings").get_json()["timezone"] == "local"

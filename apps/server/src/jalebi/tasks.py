@@ -12,6 +12,7 @@ from jalebi.catalog import agent_by_slug
 from jalebi.db import (
     TASK_TYPES,
     Artifact,
+    CheckRun,
     Followup,
     Repo,
     ReviewAssignment,
@@ -302,7 +303,13 @@ def delete_tasks_cascade(session: Session, task_ids: list[int]) -> list[int]:
     Order is FK-dependency order — children before parents:
 
     TaskDependency (Phase 4 T4.1) → Followup → ReviewAssignment →
-    Artifact → Run → Task
+    CheckRun → Artifact → Run → Task
+
+    CheckRun rows reference both ``tasks.id`` and ``runs.id`` with no
+    ``ON DELETE CASCADE`` (deliberate — the SQLite batch-rebuild hazard), so
+    they are deleted explicitly; otherwise deleting a task that ever reported
+    a commit status fails with an IntegrityError under ``PRAGMA
+    foreign_keys=ON``.
 
     TaskDependency edges are dropped first (FK ON DELETE CASCADE on both
     sides will normally do this automatically; the explicit delete is
@@ -333,6 +340,7 @@ def delete_tasks_cascade(session: Session, task_ids: list[int]) -> list[int]:
     )
     session.execute(delete(Followup).where(Followup.task_id.in_(task_ids)))
     session.execute(delete(ReviewAssignment).where(ReviewAssignment.task_id.in_(task_ids)))
+    session.execute(delete(CheckRun).where(CheckRun.task_id.in_(task_ids)))
     if run_ids:
         session.execute(delete(Artifact).where(Artifact.run_id.in_(run_ids)))
         session.execute(delete(Run).where(Run.id.in_(run_ids)))

@@ -641,7 +641,20 @@ class TaskQueue:
         # needs_approval publish failure), with the agent's final message. The
         # run-level masker already includes the env-var values + token, so a
         # value the agent echoed is redacted in the push too.
-        self._notify_terminal(session, task, repo, state, masker=masker)
+        #
+        # Smart-recovery coalescing: a failure that will be auto-recovered
+        # notifies only on the FIRST attempt (so the owner knows), while
+        # intermediate attempts stay on the timeline silently. A final give-up
+        # (attempt cap / non-retryable) notifies once from _maybe_recover with
+        # the give-up reason included — never twice.
+        decision, _reason = self._recovery_decision(session, task, run)
+        if decision == "recover":
+            if (task.retry_count or 0) == 0:
+                self._notify_terminal(session, task, repo, state, masker=masker)
+        elif decision in ("give_up_cap", "non_retryable"):
+            pass  # _maybe_recover sends the single give-up notification.
+        else:
+            self._notify_terminal(session, task, repo, state, masker=masker)
 
         # Capture agent-produced (untracked) files from the worktree (PRD F18).
         # Text files are masked at ingest; files containing a known secret value
@@ -850,7 +863,7 @@ class TaskQueue:
             if task.type == "pr_review":
                 run = self._run_review(session, task, repo, cli, timeout, token, masker, state)
                 session.commit()
-                self._maybe_recover(session, task, run)
+                self._maybe_recover(session, task, run, repo, state, masker)
                 return
 
             # Phase 4 T4.1 — a task with unmet deps is gated to `blocked`; a
@@ -909,7 +922,7 @@ class TaskQueue:
             session.commit()
             self._complete_status(session, task, repo, run, git, token)
             session.commit()
-            self._maybe_recover(session, task, run)
+            self._maybe_recover(session, task, run, repo, state, masker)
         except Exception:
             logger.exception("task %s run failed", task_id)
             run_id = run.id if run is not None else None
@@ -1331,6 +1344,8 @@ class TaskQueue:
             task = session.get(Task, task_id)
             if task is None:
                 return
+            if task.status == "cancelled":  # cancelled while queued (e.g. a pending recovery)
+                return
             repo = session.get(Repo, task.repo_id)
             if repo is None:
                 task.status = "failed"
@@ -1490,7 +1505,7 @@ class TaskQueue:
                     model=effective_model,
                 )
             session.commit()
-            self._maybe_recover(session, task, run)
+            self._maybe_recover(session, task, run, repo, state, masker)
         except Exception:
             logger.exception("follow-up for task %s failed", task_id)
             run_id = run.id if run is not None else None
@@ -1724,7 +1739,65 @@ class TaskQueue:
             for dep in deps_unblocked:
                 self.enqueue(dep.id)
 
-    def _maybe_recover(self, session, task: Task, run: Run) -> None:
+    @staticmethod
+    def _recovery_policy(session) -> dict:
+        """The retry_policy setting as a dict ({} when missing/malformed)."""
+        policy = settings.get_setting(session, "retry_policy") or {}
+        return policy if isinstance(policy, dict) else {}
+
+    @staticmethod
+    def _max_attempts(policy: dict) -> int:
+        """Max auto-recovery attempts per task (default 3, minimum 1)."""
+        raw = policy.get("max_attempts")
+        return raw if isinstance(raw, int) and raw >= 1 else 3
+
+    @staticmethod
+    def _non_retryable_match(policy: dict, run: Run) -> str | None:
+        """First configured non-retryable pattern matching the run's output.
+
+        Case-insensitive substring match over the run's step texts. A wrong
+        model name, revoked token, or missing session fails the same way on
+        every attempt — retrying only burns time and spams notifications.
+        """
+        patterns = policy.get("non_retryable_patterns")
+        if not isinstance(patterns, list) or not patterns:
+            return None
+        try:
+            steps = json.loads(run.steps_json or "[]")
+        except (ValueError, TypeError):
+            return None
+        haystack = " ".join(
+            str(s.get("text") or "") for s in steps if isinstance(s, dict)
+        ).lower()
+        if not haystack.strip():
+            return None
+        for pattern in patterns:
+            if isinstance(pattern, str) and pattern.strip() and pattern.lower() in haystack:
+                return pattern
+        return None
+
+    def _recovery_decision(self, session, task: Task, run: Run) -> tuple[str, str | None]:
+        """Decide what happens after a terminal run: ``(decision, reason)``.
+
+        Decisions: ``"terminal_ok"`` (nothing failed), ``"off"`` (auto_retry
+        disabled), ``"non_retryable"`` (failure matches a non-retryable
+        pattern), ``"give_up_cap"`` (attempt cap reached), ``"recover"``.
+        """
+        if run.status not in ("failed", "timed_out"):
+            return "terminal_ok", None
+        policy = self._recovery_policy(session)
+        if not policy.get("auto_retry"):
+            return "off", None
+        matched = self._non_retryable_match(policy, run)
+        if matched is not None:
+            return "non_retryable", matched
+        if (task.retry_count or 0) + 1 > self._max_attempts(policy):
+            return "give_up_cap", f"attempt cap ({self._max_attempts(policy)}) reached"
+        return "recover", None
+
+    def _maybe_recover(
+        self, session, task: Task, run: Run, repo=None, state=None, masker=None
+    ) -> None:
         """Auto-recover a failed/timed_out run that never delivered its output.
 
         Every task type has an expected deliverable; if the agent failed,
@@ -1737,18 +1810,59 @@ class TaskQueue:
 
         The per-run timeout is escalated on each attempt (``timeout_multiplier``,
         capped at ``max_timeout_minutes``) so sub-agent-heavy runs aren't cut
-        short again. Recovery is **unbounded by design**: each run is still
-        bounded by its own timeout, and terminal/progress notifications keep the
-        owner informed. ``task.retry_count`` is bumped for observability only.
+        short again. Recovery is **bounded by ``max_attempts``** (default 3):
+        a deterministically failing task (wrong model, revoked token) stops
+        after the cap instead of looping until the owner cancels it. Failures
+        matching ``non_retryable_patterns`` fail immediately with no recovery.
+        Only the first failure and the final give-up/success notify —
+        intermediate attempts are timeline-only. ``task.retry_count`` counts
+        recovery attempts for observability.
         """
         # Phase 4 T4.1 — when a task transitions to a satisfied terminal
         # state, unblock any dependents whose deps are now all met.
         if task.status in tasks.DEP_SATISFIED_STATUSES:
             self._cascade_unblock(session, task.id)
-        if run.status not in ("failed", "timed_out"):
+        decision, reason = self._recovery_decision(session, task, run)
+        if decision in ("terminal_ok", "off"):
             return
-        policy = settings.get_setting(session, "retry_policy") or {}
-        if not isinstance(policy, dict) or not policy.get("auto_retry"):
+        policy = self._recovery_policy(session)
+
+        if decision in ("give_up_cap", "non_retryable"):
+            # Final state: stay failed, explain why on the timeline, and send
+            # the ONE give-up notification (suppressed in _stream_and_finish).
+            if decision == "give_up_cap":
+                text = (
+                    f"Auto-recovery gave up after {task.retry_count} attempt(s) "
+                    f"({reason}). Fix the underlying issue and re-run manually."
+                )
+            else:
+                text = (
+                    f"Not auto-recovering: failure matches non-retryable "
+                    f"pattern {reason!r}. Fix the underlying issue and re-run "
+                    "manually."
+                )
+            steps = json.loads(run.steps_json or "[]")
+            steps.append(
+                {
+                    "type": "message",
+                    "phase": None,
+                    "text": text,
+                    "ts": clock.to_iso(now()),
+                }
+            )
+            run.steps_json = json.dumps(steps[-MAX_STEPS:])
+            session.commit()
+            if (
+                repo is not None
+                and state is not None
+                and self._notify_enabled(session, "notify_on_failed")
+            ):
+                if masker is None:
+                    masker = self._build_masker(session)
+                # The push quotes the give-up reason, not stale agent output.
+                state.last_step_text = text
+                self._notify(session, task, repo.full_name, state, masker=masker)
+                logger.info("auto-recovery gave up for task %s (%s)", task.id, decision)
             return
 
         task.retry_count = (task.retry_count or 0) + 1
