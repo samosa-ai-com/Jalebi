@@ -1308,6 +1308,10 @@ describe("TaskDetail (Phase 4 T6 — open worktree)", () => {
     const btn = screen.getByText("Open worktree") as HTMLButtonElement;
     expect(btn.disabled).toBe(true);
     expect(screen.getByText("configure IDE in Settings")).toBeInTheDocument();
+    expect(screen.getByText("configure IDE in Settings").closest("a")).toHaveAttribute(
+      "href",
+      "/settings?section=ide"
+    );
   });
 });
 

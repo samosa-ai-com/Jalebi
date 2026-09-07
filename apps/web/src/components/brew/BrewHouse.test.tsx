@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -162,20 +162,22 @@ describe("BrewHouse", () => {
     localStorage.clear();
   });
 
-  it("fries the active task on a kadhai station", async () => {
+  it("fries the active task on a karhai station", async () => {
     stubFetch({ ...HANDLERS });
     renderHouse();
-    expect(await screen.findByRole("button", { name: "Open task 1" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /Open task 1/ })).toBeInTheDocument();
     expect(screen.getByText("#1")).toBeInTheDocument();
     expect(screen.getAllByText("Fixer").length).toBeGreaterThanOrEqual(1);
-    // freeform fries a jalebi.
-    expect(screen.getByText("jalebi")).toBeInTheDocument();
+    // freeform fries a jalebi (stove card + menu row).
+    expect(screen.getAllByText("jalebi").length).toBeGreaterThanOrEqual(2);
+    // The floor names the pot for everyone.
+    expect(screen.getByRole("region", { name: "Karhais (cooking pots)" })).toBeInTheDocument();
   });
 
   it("shows simmering stoves beside the frying one", async () => {
     stubFetch({ ...HANDLERS });
     renderHouse();
-    await screen.findByRole("button", { name: "Open task 1" });
+    await screen.findByRole("button", { name: /Open task 1/ });
     // concurrency 4, one active → three simmering stoves.
     expect(screen.getByText("stove 2 · simmering")).toBeInTheDocument();
     expect(screen.getByText("stove 4 · simmering")).toBeInTheDocument();
@@ -196,38 +198,57 @@ describe("BrewHouse", () => {
         </Routes>
       </MemoryRouter>
     );
-    await userEvent.click(await screen.findByRole("button", { name: "Open task 1" }));
+    await userEvent.click(await screen.findByRole("button", { name: /Open task 1/ }));
     expect(await screen.findByText("detail page")).toBeInTheDocument();
   });
 
-  it("marks needs-you stations with a pulse ring", async () => {
+  it("badges the stove when its task needs you", async () => {
     stubFetch({ ...HANDLERS });
     const { container } = renderHouse([{ ...TASK, attention: "needs_you" }]);
-    await screen.findByRole("button", { name: "Open task 1" });
+    await screen.findByRole("button", { name: /Open task 1/ });
+    const stove = screen.getByRole("button", { name: /Open task 1/ });
+    expect(within(stove).getByText("needs you")).toBeInTheDocument();
     expect(container.querySelector(".brew-needs-you")).not.toBeNull();
   });
 
-  it("says when all kadhais are simmering with no orders", async () => {
-    stubFetch({ ...HANDLERS });
-    renderHouse([]);
-    expect(await screen.findByText(/all kadhais simmering/)).toBeInTheDocument();
-  });
-
-  it("bowls skills in the masala dabba and glows the ones seasoning now", async () => {
-    stubFetch({ ...HANDLERS });
-    const { container } = renderHouse();
-    await screen.findByText("Masala dabba");
-    expect(screen.getByText("sec")).toBeInTheDocument();
-    expect(screen.getByText("docs")).toBeInTheDocument();
-    // sec rides the Fixer agent frying task #1 → glowing bowl.
-    expect(container.querySelector(".brew-glow")).not.toBeNull();
-  });
-
-  it("shelves agents with live task counts", async () => {
+  it("pins the cook and ingredients to a frying stove", async () => {
     stubFetch({ ...HANDLERS });
     renderHouse();
-    expect(await screen.findAllByText("Fixer")).not.toHaveLength(0);
-    expect(screen.getByText("● 1")).toBeInTheDocument();
+    await screen.findByRole("button", { name: /Open task 1/ });
+    // sec rides the Fixer agent frying task #1 → pinned under the stove.
+    expect(screen.getByTitle("Security")).toBeInTheDocument();
+  });
+
+  it("says when all karhais are simmering with no orders", async () => {
+    stubFetch({ ...HANDLERS });
+    renderHouse([]);
+    expect(await screen.findByText(/all karhais simmering/)).toBeInTheDocument();
+  });
+
+  it("pantries skills as ingredients and marks the one in the karhai", async () => {
+    stubFetch({ ...HANDLERS });
+    const { container } = renderHouse();
+    await screen.findByRole("region", { name: "Ingredients" });
+    expect(screen.getByText("Security")).toBeInTheDocument();
+    expect(screen.getByText("Docs")).toBeInTheDocument();
+    // sec rides the Fixer agent frying task #1 → glowing ingredient.
+    expect(screen.getByText("in the karhai")).toBeInTheDocument();
+    expect(container.querySelector(".brew-ingredient-live")).not.toBeNull();
+  });
+
+  it("rails cooks with their karhai when frying and resting when idle", async () => {
+    stubFetch({ ...HANDLERS });
+    renderHouse();
+    const cooks = await screen.findByRole("region", { name: "Cooks" });
+    expect(within(cooks).getByText("Fixer")).toBeInTheDocument();
+    expect(within(cooks).getByText("karhai 1")).toBeInTheDocument();
+  });
+
+  it("rests cooks when nothing fries", async () => {
+    stubFetch({ ...HANDLERS });
+    renderHouse([]);
+    const cooks = await screen.findByRole("region", { name: "Cooks" });
+    expect(within(cooks).getByText("resting")).toBeInTheDocument();
   });
 
   it("lists enabled backends with the default badge", async () => {
@@ -279,9 +300,9 @@ describe("BrewHouse", () => {
       { ...TASK, id: 2, type: "issue_fix", status: "queued", prompt: "fix it" },
       { ...TASK, id: 3, type: "pr_review", status: "queued", prompt: "review it" },
     ]);
-    expect(await screen.findByRole("button", { name: "Open task 2" })).toBeInTheDocument();
-    expect(screen.getByText("samosa")).toBeInTheDocument();
-    expect(screen.getByText("pakora")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /Open task 2/ })).toBeInTheDocument();
+    expect(screen.getAllByText("samosa").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("pakora").length).toBeGreaterThanOrEqual(1);
   });
 
   it("strike-a-match calls back to start a new task", async () => {
@@ -296,25 +317,39 @@ describe("BrewHouse", () => {
     expect(onNewTask).toHaveBeenCalledTimes(1);
   });
 
-  it("menu board totals the day and offers orders when idle", async () => {
+  it("tickets queued orders above the karhais", async () => {
+    stubFetch({ ...HANDLERS });
+    renderHouse([{ ...TASK, id: 2, type: "issue_fix", status: "queued", prompt: "fix it" }]);
+    const tickets = await screen.findByRole("group", { name: "Order tickets" });
+    expect(within(tickets).getByText("fix it")).toBeInTheDocument();
+  });
+
+  it("serving counter links recent dones to their tasks", async () => {
+    stubFetch({ ...HANDLERS });
+    renderHouse([{ ...TASK, id: 9, status: "done", prompt: "fixed" }]);
+    const counter = await screen.findByRole("group", { name: "Serving counter" });
+    const link = within(counter).getByRole("link", { name: /#9/ });
+    expect(link).toHaveAttribute("href", "/tasks/9");
+  });
+
+  it("boards today stats and the 7-day chart", async () => {
     stubFetch({ ...HANDLERS });
     const doneToday = {
       ...TASK,
       id: 9,
       status: "done",
-      type: "issue_fix",
       prompt: "fixed",
+      attention: "working",
+      created_at: new Date(Date.now() - 600_000).toISOString(),
       updated_at: new Date().toISOString(),
     };
     renderHouse([TASK, doneToday]);
-    expect(await screen.findByText("Today's menu")).toBeInTheDocument();
-    // Engineering legend maps the snack to its task type with all-time counts.
-    expect(screen.getByText("issue_fix")).toBeInTheDocument();
-    expect(screen.getByText("freeform")).toBeInTheDocument();
-    expect(screen.getByText("1 served")).toBeInTheDocument();
+    const stats = await screen.findByRole("region", { name: "Shop stats" });
+    expect(within(stats).getByText("served")).toBeInTheDocument();
+    expect(within(stats).getByRole("img", { name: /Tasks served per day/ })).toBeInTheDocument();
   });
 
-  it("menu order buttons call back with their snack kind", async () => {
+  it("menu board offers orders with their snack kind", async () => {
     stubFetch({ ...HANDLERS });
     const onNewTask = vi.fn();
     render(
@@ -322,31 +357,59 @@ describe("BrewHouse", () => {
         <BrewHouse tasks={[]} repos={REPOS as never} onNewTask={onNewTask} />
       </MemoryRouter>
     );
+    expect(await screen.findByText("Today's menu")).toBeInTheDocument();
     await userEvent.click(await screen.findByRole("button", { name: "New pr_review →" }));
     expect(onNewTask).toHaveBeenCalledTimes(1);
     expect(onNewTask).toHaveBeenCalledWith("pakora");
   });
 
-  it("centers the kadhai strip while it fits", async () => {
+  it("burners deep-link to the queue concurrency setting", async () => {
     stubFetch({ ...HANDLERS });
-    const { container } = renderHouse();
-    await screen.findByRole("button", { name: "Open task 1" });
-    const strip = container.querySelector(".mx-auto.w-max");
-    expect(strip).not.toBeNull();
+    renderHouse();
+    await screen.findByRole("button", { name: /Open task 1/ });
+    const link = screen.getByRole("link", { name: /4 burners/ });
+    expect(link).toHaveAttribute("href", "/settings?section=queue");
   });
 
-  it("idle agents chatter on the resting shelf", async () => {
+  it("stoves open via keyboard Enter", async () => {
     stubFetch({ ...HANDLERS });
-    renderHouse([]);
-    await screen.findByText("Resting shelf");
-    expect(await screen.findByRole("status")).toBeInTheDocument();
+    render(
+      <MemoryRouter initialEntries={["/"]}>
+        <Routes>
+          <Route
+            path="/"
+            element={
+              <BrewHouse tasks={[TASK] as never} repos={REPOS as never} onNewTask={() => {}} />
+            }
+          />
+          <Route path="/tasks/:id" element={<div>detail page</div>} />
+        </Routes>
+      </MemoryRouter>
+    );
+    const stove = await screen.findByRole("button", { name: /Open task 1/ });
+    stove.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(await screen.findByText("detail page")).toBeInTheDocument();
   });
 
-  it("served ticker links recent dones to their tasks", async () => {
+  it("stoves seat running tasks before queued ones", async () => {
     stubFetch({ ...HANDLERS });
-    renderHouse([{ ...TASK, id: 9, status: "done", prompt: "fixed" }]);
-    const links = await screen.findAllByRole("link", { name: /#9/ });
-    expect(links.length).toBeGreaterThanOrEqual(1);
-    expect(links[0]).toHaveAttribute("href", "/tasks/9");
+    renderHouse([
+      { ...TASK, id: 2, type: "issue_fix", status: "queued", prompt: "fix it" },
+      { ...TASK, id: 1, status: "running", prompt: "brew the fix" },
+    ]);
+    const stoves = await screen.findAllByRole("button", { name: /Open task/ });
+    expect(stoves[0]).toHaveAccessibleName(/Open task 1/);
+    expect(stoves[1]).toHaveAccessibleName(/Open task 2/);
+  });
+
+  it("stats count spoiled tasks and dash the average with no dones", async () => {
+    stubFetch({ ...HANDLERS });
+    renderHouse([
+      { ...TASK, id: 4, status: "failed", prompt: "burnt", updated_at: new Date().toISOString() },
+    ]);
+    const stats = await screen.findByRole("region", { name: "Shop stats" });
+    expect(within(stats).getByText("spoiled")).toBeInTheDocument();
+    expect(within(stats).getByText("—")).toBeInTheDocument();
   });
 });

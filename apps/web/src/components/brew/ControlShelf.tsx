@@ -41,6 +41,7 @@ export function ControlShelf({
   findings,
   backends,
   concurrency,
+  compact = false,
 }: {
   tasks: Task[];
   repos: Repo[];
@@ -48,6 +49,8 @@ export function ControlShelf({
   findings: ScreeningFinding[];
   backends: BackendsResponse | null;
   concurrency: number;
+  /** Stacked rail mode for the mission-control side column. */
+  compact?: boolean;
 }) {
   const active = tasks.filter((t) => t.status === "queued" || t.status === "running").length;
   const done = tasks.filter((t) => t.status === "done").length;
@@ -61,7 +64,9 @@ export function ControlShelf({
   const webhookRepos = repos.filter((r) => r.webhook_registered).length;
 
   return (
-    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+    <div
+      className={compact ? "grid grid-cols-1 gap-3" : "grid gap-4 md:grid-cols-2 xl:grid-cols-4"}
+    >
       <section className="surface flex items-center gap-4 p-4" aria-label="Worker load">
         <Ring
           fraction={concurrency > 0 ? active / concurrency : 0}
@@ -86,7 +91,7 @@ export function ControlShelf({
       <section className="surface px-3 py-2.5" aria-label="Configured backends">
         <div className="flex items-baseline justify-between">
           <h3 className="panel-title">Backends</h3>
-          <Link to="/settings" className="link font-mono text-[11px]">
+          <Link to="/settings?section=agent" className="link font-mono text-[11px]">
             settings →
           </Link>
         </div>
@@ -191,19 +196,36 @@ export function ControlShelf({
           </p>
         )}
         {findings.length > 0 && (
-          <div className="brew-ticker mt-2 overflow-hidden" aria-label="Latest findings">
+          <div
+            className="brew-ticker mt-2 overflow-hidden"
+            role="group"
+            aria-label="Latest findings"
+          >
             <div className="brew-ticker-track flex w-max gap-4">
-              {[...findings.slice(0, 6), ...findings.slice(0, 6)].map((f, i) => (
-                <Link
-                  key={`${f.screen_id}-${f.title}-${i}`}
-                  to="/screenings"
-                  className="whitespace-nowrap font-mono text-[10px]"
-                  title={`${f.screen_name}: ${f.title}`}
-                >
-                  <span className={SEV_COLOR[f.severity] ?? "text-ink-400"}>[{f.severity}]</span>{" "}
-                  <span className="text-ink-400">{f.title}</span>
-                </Link>
-              ))}
+              {[...findings.slice(0, 6), ...findings.slice(0, 6)].map((f, i) =>
+                // The second copy only feeds the seamless marquee loop —
+                // hide it from keyboards and screen readers.
+                i < Math.min(6, findings.length) ? (
+                  <Link
+                    key={`${f.screen_id}-${f.title}-${i}`}
+                    to="/screenings"
+                    className="whitespace-nowrap font-mono text-[10px]"
+                    title={`${f.screen_name}: ${f.title}`}
+                  >
+                    <span className={SEV_COLOR[f.severity] ?? "text-ink-400"}>[{f.severity}]</span>{" "}
+                    <span className="text-ink-400">{f.title}</span>
+                  </Link>
+                ) : (
+                  <span
+                    key={`${f.screen_id}-${f.title}-${i}`}
+                    aria-hidden="true"
+                    className="whitespace-nowrap font-mono text-[10px]"
+                  >
+                    <span className={SEV_COLOR[f.severity] ?? "text-ink-400"}>[{f.severity}]</span>{" "}
+                    <span className="text-ink-400">{f.title}</span>
+                  </span>
+                )
+              )}
             </div>
           </div>
         )}

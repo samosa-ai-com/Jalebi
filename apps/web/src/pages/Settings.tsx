@@ -25,8 +25,16 @@ function formatBytes(n: number): string {
   return `${v.toFixed(v >= 100 ? 0 : 1)} ${units[u]}`;
 }
 
-// Collapsible section wrapper. A <div> (not <section>) so each inner row
-// keeps its own <section> landmark for headings/tests. Everything starts
+/** True when the URL deep-links straight at this settings section. */
+function isDeepLinked(id: string): boolean {
+  try {
+    return new URLSearchParams(window.location.search).get("section") === id;
+  } catch {
+    return false;
+  }
+}
+
+// Collapsible section wrapper. A <div> (not <section>) so each inner row// keeps its own <section> landmark for headings/tests. Everything starts
 // collapsed; a search query filters rows, hides empty sections, and forces
 // matches open (the toggle state is restored when the query clears).
 function Section({
@@ -48,11 +56,23 @@ function Section({
 }) {
   const [open, setOpen] = useState(() => {
     try {
-      return localStorage.getItem(`jalebi-settings-open-v2:${id}`) === "1";
+      return localStorage.getItem(`jalebi-settings-open-v2:${id}`) === "1" || isDeepLinked(id);
     } catch {
-      return false; // storage unavailable — stay collapsed
+      return isDeepLinked(id); // storage unavailable — deep link still opens
     }
   });
+  // Deep link (?section=<id>): force this section open, scroll it into
+  // view, and flash it so links like "2 burners →" land on the exact
+  // setting instead of a wall of collapsed sections.
+  const [deepLink] = useState(() => isDeepLinked(id));
+  const anchorRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!deepLink) return;
+    const el = anchorRef.current;
+    if (el && typeof el.scrollIntoView === "function") {
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [deepLink]);
   const toggle = () => {
     setOpen((v) => {
       try {
@@ -77,11 +97,16 @@ function Section({
   if (!visible) return null;
   const shown = q === "" ? open : true;
   return (
-    <div className="surface p-5 animate-fade-up">
+    <div
+      ref={anchorRef}
+      id={`settings-section-${id}`}
+      className={`surface p-5 animate-fade-up${deepLink ? " anchor-flash" : ""}`}
+    >
       <button
         type="button"
         onClick={toggle}
         aria-expanded={shown}
+        aria-controls={`settings-section-${id}-content`}
         className="flex w-full items-center justify-between gap-2 py-2.5 text-left"
       >
         <h2 className="panel-title">{title}</h2>
@@ -90,7 +115,11 @@ function Section({
         </span>
       </button>
       {desc && <p className="mt-1 text-xs leading-relaxed text-ink-500">{desc}</p>}
-      {shown && <div className="mt-4">{content}</div>}
+      {shown && (
+        <div className="mt-4" id={`settings-section-${id}-content`}>
+          {content}
+        </div>
+      )}
     </div>
   );
 }

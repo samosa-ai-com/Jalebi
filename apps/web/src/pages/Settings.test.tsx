@@ -194,6 +194,22 @@ describe("Settings", () => {
     expect(screen.queryByPlaceholderText("my-jalebi")).not.toBeInTheDocument();
   });
 
+  it("deep-links ?section=queue straight to Queue concurrency", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    window.history.pushState({}, "", "/settings?section=queue");
+    try {
+      render(<Settings />);
+      expect(await screen.findByText("Queue concurrency")).toBeInTheDocument();
+      expect(document.getElementById("settings-section-queue")).not.toBeNull();
+      // The deep-linked section stays user-collapsible.
+      await userEvent.click(screen.getByRole("button", { name: /Queue & timeouts/ }));
+      expect(screen.queryByText("Queue concurrency")).not.toBeInTheDocument();
+    } finally {
+      window.history.pushState({}, "", "/settings");
+    }
+  });
+
   it("loads settings and toggles auto_publish via POST", async () => {
     const fetchMock = makeFetchMock();
     vi.stubGlobal("fetch", fetchMock);

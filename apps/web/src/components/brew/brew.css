@@ -129,19 +129,19 @@
   }
 }
 
-/* Spice pinch falling from dabba bowl toward the kadhai. */
-@keyframes brew-pinch-fall {
-  0% {
-    transform: translateY(0);
-    opacity: 0;
+/* Ingredient chip glowing while its cook fries. */
+@keyframes brew-ingredient-live {
+  0%,
+  100% {
+    opacity: 0.75;
   }
-  25% {
+  50% {
     opacity: 1;
   }
-  100% {
-    transform: translateY(14px);
-    opacity: 0;
-  }
+}
+
+.brew-ingredient-live {
+  animation: brew-ingredient-live 2s ease-in-out infinite;
 }
 
 .brew-steam {
@@ -173,9 +173,6 @@
 .brew-serve-drop {
   animation: brew-serve-drop 0.7s cubic-bezier(0.34, 1.56, 0.64, 1) both;
 }
-.brew-pinch {
-  animation: brew-pinch-fall 1.4s ease-in infinite;
-}
 .brew-ticker-track {
   animation: brew-ticker-drift 40s linear infinite;
 }
@@ -188,6 +185,9 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .brew-coil-draw {
+    transition: none;
+  }
   .brew-steam,
   .brew-steam-late,
   .brew-bubble,
@@ -199,7 +199,7 @@
   .brew-snack,
   .brew-chatter,
   .brew-serve-drop,
-  .brew-pinch {
+  .brew-ingredient-live {
     animation: none;
   }
 }

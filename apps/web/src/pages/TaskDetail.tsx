@@ -1559,7 +1559,7 @@ export default function TaskDetail() {
             </button>
           ) : (
             <Link
-              to="/settings"
+              to="/settings?section=ide"
               className="inline-flex items-center gap-1.5 rounded-lg border border-dashed border-ink-800 px-3 py-1.5 text-xs text-ink-500 transition-colors hover:border-ink-700 hover:text-ink-400"
               title="Configure IDE in Settings to open worktrees directly"
             >

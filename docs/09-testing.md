@@ -419,3 +419,18 @@ After any code change, run the relevant tests and build before marking work done
   single-viewport layout; `BrewHouse.test.tsx` 19 + `Tasks.test.tsx` +1
   (mission order prefill).
 - **Suite totals now:** web **247 passed** (no backend changes).
+
+- **Halwai revamp round (owner: cooks + ingredients + real stats):**
+  `MasalaDabba`/`SweetShelf` deleted; new `ShopFloor` (karhai grid +
+  order tickets + serving counter), `CooksRail`, `Pantry`, `StatsBoard`;
+  `FryStation` gains per-stove status badges + cook/ingredient pins
+  (enriched SR labels), `ControlShelf` gains compact rail mode; Settings
+  sections deep-link (`?section=` force-open + scroll + flash, still
+  collapsible; burner/backend/IDE links point at queue/agent/ide);
+  AGY review (approve-with-nits) fixed before commit: deep-link
+  lock-open, flash CSS moved global, bar-key collisions, unguarded
+  `skill_ids`, ticker dup links hidden from AT, coil transition in
+  reduced-motion; `BrewHouse.test.tsx` 24 (keyboard, sorting, spoiled),
+  `Settings.test.tsx` +1 (deep-link + collapse), `TaskDetail.test.tsx`
+  +1 (IDE href). Classic view untouched.
+- **Suite totals now:** web **253 passed** (no backend changes).

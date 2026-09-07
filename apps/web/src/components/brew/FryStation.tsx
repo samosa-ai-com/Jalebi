@@ -1,6 +1,6 @@
 /**
- * Halwai Shop — one kadhai (wok) station on a gas stove (pure geometric
- * SVG, no assets).
+ * Halwai Shop — one karhai (cooking pot) station on a gas stove (pure
+ * geometric SVG, no assets).
  *
  * Heat levels: 0 = idle pilot (small blue flame + faint steam),
  * 1 = queued (medium blue + licks of orange), 2 = frying (full orange
@@ -16,6 +16,8 @@ export interface StationTask {
   task: Task;
   agentName: string | null;
   avatarUrl: string | null;
+  /** Ingredient (skill) names the frying cook is using. */
+  skillNames: string[];
   /** Run start as epoch ms (null when unknown); the station derives elapsed from `now`. */
   startedAtMs: number | null;
   timeoutMs: number | null;
@@ -163,18 +165,22 @@ export function FryStation({
       title={station ? `Open task #${station.task.id}` : `Stove ${slot}: pilot light on`}
       role={brewing ? "button" : undefined}
       tabIndex={brewing ? 0 : undefined}
-      aria-label={station ? `Open task ${station.task.id}` : `Stove ${slot} idle`}
+      aria-label={
+        station
+          ? `Open task ${station.task.id} — ${needsYou ? "needs you" : queued ? "warming up" : "frying"}`
+          : undefined
+      }
       onKeyDown={(e) => {
         if (brewing && (e.key === "Enter" || e.key === " ")) {
           e.preventDefault();
           onOpen(station!.task.id);
         }
       }}
-      className={`surface group w-40 shrink-0 px-2.5 pt-1.5 pb-1.5 text-left transition-colors ${
+      className={`surface group w-full px-2.5 pt-1.5 pb-1.5 text-left transition-colors ${
         brewing ? "cursor-pointer hover:border-syrup-500/50" : ""
       }`}
     >
-      <svg viewBox="0 0 120 138" role="img" aria-hidden="true" className="w-full">
+      <svg viewBox="0 0 120 138" aria-hidden="true" className="w-full">
         {brewing && (
           <ellipse
             cx="60"
@@ -296,7 +302,17 @@ export function FryStation({
             )}
             <span className="font-mono text-xs text-syrup-400">#{station.task.id}</span>
             <span className="font-mono text-[10px] text-ink-500">{snack}</span>
-            {needsYou && <span className="h-1.5 w-1.5 rounded-full bg-syrup-400 brew-needs-you" />}
+            <span
+              className={`ml-auto rounded-full px-1.5 py-px font-mono text-[10px] ${
+                needsYou
+                  ? "brew-needs-you bg-syrup-500/20 text-syrup-300"
+                  : queued
+                    ? "bg-ink-800 text-ink-400"
+                    : "bg-green-500/10 text-green-300"
+              }`}
+            >
+              {needsYou ? "needs you" : queued ? "warming up" : "frying"}
+            </span>
           </span>
           <span
             className="mt-0.5 block truncate text-[11px] text-ink-300"
@@ -304,6 +320,15 @@ export function FryStation({
           >
             {station.agentName ?? station.task.cli ?? station.task.status}
           </span>
+          {station.skillNames.length > 0 && (
+            <span
+              className="block truncate font-mono text-[10px] text-ink-500"
+              title={station.skillNames.join(", ")}
+            >
+              + {station.skillNames.slice(0, 2).join(", ")}
+              {station.skillNames.length > 2 ? ` +${station.skillNames.length - 2}` : ""}
+            </span>
+          )}
           <span className="font-mono text-[10px] tabular-nums text-ink-500">
             {formatElapsed(elapsedMs)}
             {station.steps > 0 ? ` · ${station.steps} steps` : ""}

@@ -1,14 +1,16 @@
 /**
- * Brew House — mission-control view for the Tasks page.
+ * Halwai Shop — mission-control view for the Tasks page.
  *
- * A chai-brewery take on the agent queue: worker slots are kettle stations,
- * skills are jars on a spice rack, agents rest on a shelf, and a control
- * shelf carries backends / repos / screenings / throughput. Everything
- * drills into the existing pages; all data comes from existing read-only
- * GET endpoints (tasks + repos ride the Tasks page poll via props).
+ * The shop floor sits center-stage: karhais (cooking pots) fry the active
+ * tasks, queued orders wait as tickets above, finished dishes land on the
+ * serving counter below. Cooks (agents) rest in the left rail with the
+ * pantry (skills as ingredients); stats and ops instruments fill the right
+ * rail. Everything drills into the existing pages; all data comes from
+ * existing read-only GET endpoints (tasks + repos ride the Tasks page poll
+ * via props).
  */
 import { useEffect, useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { api } from "../../api/client";
 import { avatarFor, avatarUrl } from "../../lib/agentAvatars";
 import type {
@@ -23,10 +25,12 @@ import type {
 } from "../../types";
 import "./brew.css";
 import { ControlShelf } from "./ControlShelf";
-import { FryStation, type StationTask } from "./FryStation";
-import { MasalaDabba, type AgentChord, type SkillChord } from "./MasalaDabba";
-import { SweetShelf } from "./SweetShelf";
-import type { SnackKind } from "./snacks";
+import { CooksRail, type CookSlot } from "./CooksRail";
+import { Pantry, type PantryIngredient } from "./Pantry";
+import { ShopFloor } from "./ShopFloor";
+import { StatsBoard } from "./StatsBoard";
+import type { StationTask } from "./FryStation";
+import { snackForType, type SnackKind } from "./snacks";
 
 function parseTime(iso: string | null): number | null {
   if (!iso) return null;
@@ -36,6 +40,8 @@ function parseTime(iso: string | null): number | null {
 }
 
 const SCREENS_POLL_MS = 15_000;
+
+const ORDER_TYPES = ["freeform", "issue_fix", "pr_review"] as const;
 
 export function BrewHouse({
   tasks,
@@ -122,6 +128,7 @@ export function BrewHouse({
   }, []);
 
   const agentById = useMemo(() => new Map(agents.map((a) => [a.id, a])), [agents]);
+  const skillById = useMemo(() => new Map(skills.map((s) => [s.id, s])), [skills]);
 
   const stations = useMemo<StationTask[]>(() => {
     const active = tasks
@@ -142,18 +149,21 @@ export function BrewHouse({
               })
             )
           : null,
+        skillNames: (agent?.skill_ids ?? [])
+          .map((id) => skillById.get(id)?.name)
+          .filter((n): n is string => typeof n === "string"),
         startedAtMs: parseTime(task.run?.started_at ?? null),
         timeoutMs: task.timeout_minutes > 0 ? task.timeout_minutes * 60_000 : null,
         steps: task.run?.steps?.length ?? 0,
       };
     });
-    // NOTE: no `now` dep — elapsed ticks live in KettleStation so the
+    // NOTE: no `now` dep — elapsed ticks live in FryStation so the
     // catalog derivations below stay state-driven.
-  }, [tasks, agentById]);
+  }, [tasks, agentById, skillById]);
 
   const slots = Math.max(concurrency, stations.length, 1);
 
-  const skillChords = useMemo<SkillChord[]>(() => {
+  const ingredients = useMemo<PantryIngredient[]>(() => {
     const inPlay = new Set<string>();
     for (const s of stations) {
       const agent = s.task.agent_id ? agentById.get(s.task.agent_id) : undefined;
@@ -162,19 +172,43 @@ export function BrewHouse({
     return skills
       .map((skill) => ({
         skill,
-        uses: agents.filter((a) => a.skill_ids.includes(skill.id)).length,
+        uses: agents.filter((a) => a.skill_ids?.includes(skill.id) ?? false).length,
         inPlay: inPlay.has(skill.id),
       }))
       .sort((a, b) => Number(b.inPlay) - Number(a.inPlay) || b.uses - a.uses);
   }, [skills, agents, stations, agentById]);
 
-  const agentChords = useMemo<AgentChord[]>(() => {
+  const cooks = useMemo<CookSlot[]>(() => {
+    const stoveByAgent = new Map<string, number>();
+    stations.forEach((s, i) => {
+      if (s.task.agent_id && !stoveByAgent.has(s.task.agent_id)) {
+        stoveByAgent.set(s.task.agent_id, i + 1);
+      }
+    });
     const counts = new Map<string, number>();
     for (const s of stations) {
       if (s.task.agent_id) counts.set(s.task.agent_id, (counts.get(s.task.agent_id) ?? 0) + 1);
     }
-    return agents.map((agent) => ({ agent, activeTasks: counts.get(agent.id) ?? 0 }));
+    return agents.map((agent) => ({
+      agent,
+      activeTasks: counts.get(agent.id) ?? 0,
+      stoveSlot: stoveByAgent.get(agent.id) ?? null,
+    }));
   }, [agents, stations]);
+
+  const served = useMemo(() => {
+    const done = tasks.filter((t) => t.status === "done");
+    done.sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""));
+    return done.slice(0, 3);
+  }, [tasks]);
+
+  const needsYou = tasks.filter((t) => t.attention === "needs_you").length;
+
+  const orderCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const t of tasks) counts.set(t.type, (counts.get(t.type) ?? 0) + 1);
+    return counts;
+  }, [tasks]);
 
   const clock = new Date(now).toLocaleTimeString([], {
     hour: "2-digit",
@@ -191,59 +225,84 @@ export function BrewHouse({
           {concurrency === 0
             ? "queue paused — burners banked"
             : stations.length === 0
-              ? "all kadhais simmering — no orders on the fire"
+              ? "all karhais simmering — no orders on the fire"
               : `${stations.length} order${stations.length === 1 ? "" : "s"} frying`}
+          {needsYou > 0 && (
+            <span className="text-syrup-300">
+              {" · "}
+              {needsYou} need{needsYou === 1 ? "s" : ""} you
+            </span>
+          )}
           {" · "}by Samosa AI
         </p>
         <span className="ml-auto font-mono text-xs tabular-nums text-ink-400">{clock}</span>
       </div>
 
-      <section className="surface px-4 py-3" aria-label="Kadhai stations">
-        <div className="flex items-baseline justify-between">
-          <h3 className="panel-title">Kadhais</h3>
-          <Link
-            to="/settings"
-            className="font-mono text-[11px] text-ink-500"
-            title="Worker slots come from the queue concurrency setting"
-          >
-            {slots} burner{slots === 1 ? "" : "s"} →
-          </Link>
-        </div>
-        {/* Centered while it fits; the inner w-max strip scrolls once
-            burners overflow the card. */}
-        <div className="mt-2 overflow-x-auto pb-1">
-          <div className="mx-auto flex w-max max-w-none gap-3 px-1">
-            {Array.from({ length: slots }, (_, i) => (
-              <FryStation
-                key={i}
-                slot={i + 1}
-                station={stations[i] ?? null}
-                now={now}
-                onOpen={(id) => navigate(`/tasks/${id}`)}
-                onOrder={() => onNewTask()}
-              />
-            ))}
+      {/* Single-viewport mission grid on wide screens: side rails scroll
+          internally, the page itself stays put. Stacks below xl. */}
+      <div className="grid gap-3 xl:grid-cols-[230px_minmax(0,1fr)_300px] xl:overflow-hidden">
+        <div className="flex min-h-0 flex-col gap-3 xl:max-h-[calc(100vh-16rem)] xl:min-h-[540px]">
+          <div className="flex min-h-0 flex-1 flex-col [&>section]:flex-1">
+            <CooksRail cooks={cooks} />
+          </div>
+          <div className="flex min-h-0 flex-1 flex-col [&>section]:flex-1">
+            <Pantry ingredients={ingredients} />
           </div>
         </div>
-      </section>
 
-      <MasalaDabba
-        skills={skillChords}
-        agents={agentChords}
-        idle={stations.length === 0}
-        tick={now}
-      />
+        <div className="flex min-h-0 flex-col xl:max-h-[calc(100vh-16rem)] xl:min-h-[540px]">
+          <ShopFloor
+            stations={stations}
+            slots={slots}
+            served={served}
+            now={now}
+            onOpen={(id) => navigate(`/tasks/${id}`)}
+            onOrder={() => onNewTask()}
+          />
+        </div>
 
-      <SweetShelf tasks={tasks} idle={stations.length === 0} onOrder={onNewTask} />
+        <div className="flex min-h-0 flex-col gap-3 xl:max-h-[calc(100vh-16rem)] xl:min-h-[540px] xl:overflow-y-auto xl:pr-0.5">
+          <section className="surface px-3 py-2.5" aria-label="Today's menu">
+            <h3 className="panel-title">Today&apos;s menu</h3>
+            <ul className="mt-2 space-y-1.5">
+              {ORDER_TYPES.map((type) => (
+                <li
+                  key={type}
+                  className="flex items-center gap-2 rounded-lg border border-ink-800/60 px-2 py-1.5"
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-mono text-xs text-ink-200">
+                      {snackForType(type)}
+                    </span>
+                    <span className="block truncate font-mono text-[10px] text-ink-500">
+                      {type} · {orderCounts.get(type) ?? 0} total
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => onNewTask(snackForType(type))}
+                    className="shrink-0 cursor-pointer rounded-full border border-ink-700 px-2 py-0.5 font-mono text-[10px] text-syrup-300 transition-colors hover:border-syrup-500/60 hover:bg-syrup-500/10"
+                  >
+                    New {type} →
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
 
-      <ControlShelf
-        tasks={tasks}
-        repos={repos}
-        screens={screens}
-        findings={findings}
-        backends={backends}
-        concurrency={concurrency}
-      />
+          <StatsBoard tasks={tasks} now={now} />
+
+          <ControlShelf
+            tasks={tasks}
+            repos={repos}
+            screens={screens}
+            findings={findings}
+            backends={backends}
+            concurrency={concurrency}
+            compact
+          />
+        </div>
+      </div>
     </div>
   );
 }
