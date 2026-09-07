@@ -176,9 +176,32 @@ export function BrewHouse({
     return agents.map((agent) => ({ agent, activeTasks: counts.get(agent.id) ?? 0 }));
   }, [agents, stations]);
 
+  const clock = new Date(now).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+
   return (
-    <div className="relative ml-[calc(50%-50vw+1.25rem)] -mt-4 w-[calc(100vw-2.5rem)] space-y-2.5 animate-fade-up">
-      <section className="surface px-4 py-2.5" aria-label="Kadhai stations">
+    <div className="space-y-3 animate-fade-up">
+      <div className="surface flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-2">
+        <svg viewBox="0 0 24 24" aria-hidden="true" className="h-6 w-6">
+          <polygon points="12,3 3,21 21,21" fill="#f7b955" stroke="#7c2d12" strokeWidth="1.5" />
+          <line x1="12" y1="3" x2="12" y2="21" stroke="#7c2d12" strokeWidth="1" opacity="0.6" />
+        </svg>
+        <h2 className="panel-title">Halwai shop</h2>
+        <p className="text-xs text-ink-500">
+          {concurrency === 0
+            ? "queue paused — burners banked"
+            : stations.length === 0
+              ? "all kadhais simmering — no orders on the fire"
+              : `${stations.length} order${stations.length === 1 ? "" : "s"} frying`}
+          {" · "}by Samosa AI
+        </p>
+        <span className="ml-auto font-mono text-xs tabular-nums text-ink-400">{clock}</span>
+      </div>
+
+      <section className="surface px-4 py-3" aria-label="Kadhai stations">
         <div className="flex items-baseline justify-between">
           <h3 className="panel-title">Kadhais</h3>
           <Link
