@@ -254,4 +254,34 @@ After any code change, run the relevant tests and build before marking work done
     confirm.
 - **Suite totals now:** server **900 passed**, web **168 passed.**
   Ruff, `npm run lint`, `tsc --noEmit`, Prettier, production build clean (the
-  Vite large-chunk warning remains).
+  Vite large-chunk warning remains; one pre-existing ruff I001 in
+  `tests/test_api_catalog.py` untouched).
+
+- **Skills/agents round (server +17, web +11):**
+  - `test_catalog_skills.py` (+9): library CRUD/validation, link validation,
+    resolve order/merge/unknown-skip, reference propagation, usage + delete
+    guard, description/avatar validation.
+  - `test_api_skills.py` (+4): skill routes, 409-with-agents, usage, agent
+    link/meta + unknown-link 400s.
+  - `test_seed_catalog.py` (+4): insert-noop, never-overwrites,
+    deletion-stays-deleted, version-bump.
+  - `Skills.test.tsx` (+8), `Agents.test.tsx` (+3): library page behaviors;
+    avatar rows/suggestion/attach/override.
+  - Migration `d4e5f6a7b8c9` verified end-to-end on a scratch DB (alembic to
+    prior head → legacy inline rows → upgrade head: dedupe, `-2` collision
+    suffix, links preserved, `skills_json` cleared).
+- **Suite totals now:** server **917 passed**, web **179 passed.**
+  `npm run lint`, `tsc --noEmit`, Prettier, production build clean (the Vite
+  large-chunk warning remains).
+
+- **Seed landing + review fixes (server +2):**
+  - `test_seed_content.py` (+2): all 31 seed skills pass the service
+    validator; all 16 agents link only seeded skills, valid avatars/kinds.
+  - `conftest.py`: the `app` fixture wipes both catalog tables + resets the
+    seed version per test (startup seeds would otherwise collide with test
+    slugs; done in `app` — not autouse — so pure-tmp_path git tests never
+    instantiate the app and its `data/` dir).
+- **Suite totals now:** server **919 passed**, web **179 passed.**
+  Ruff clean except one pre-existing I001 in `tests/test_api_catalog.py`
+  (verified on the clean tree, untouched); `npm run lint`, `tsc --noEmit`,
+  Prettier, production build clean.

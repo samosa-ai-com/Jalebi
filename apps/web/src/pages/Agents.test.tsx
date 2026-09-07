@@ -12,9 +12,24 @@ const AGENTS = [
     model: "openai/gpt-5.1",
     personality_md: "Be adversarial.",
     skills: [{ name: "secure-coding", content: "# Secure coding\n" }],
+    skill_ids: ["secure-coding"],
     custom_instructions: "Check auth.",
     enabled: true,
+    description: "Finds vulns and bad practices.",
+    avatar: "shield",
     created_at: "2026-08-08T00:00:00",
+  },
+];
+
+const LIBRARY = [
+  {
+    id: "secure-coding",
+    name: "Secure Coding",
+    description: "Security checklist for any codebase.",
+    content: "# Secure coding\n",
+    tags: ["security"],
+    created_at: "2026-08-08T00:00:00",
+    updated_at: "2026-08-08T00:00:00",
   },
 ];
 
@@ -57,6 +72,9 @@ function makeFetchMock(agents: unknown[] = AGENTS) {
     }
     if (String(url).includes("/usage")) {
       return { ok: true, json: async () => USAGE };
+    }
+    if (String(url) === "/api/skills" || String(url).endsWith("/api/skills")) {
+      return { ok: true, json: async () => LIBRARY };
     }
     if (String(url).includes("/api/agents") && init?.method === "POST") {
       const body = JSON.parse(init.body as string) as Record<string, unknown>;
@@ -149,7 +167,9 @@ describe("Agents", () => {
     await screen.findByText("security-auditor");
 
     await userEvent.click(screen.getByRole("button", { name: "Edit" }));
-    const toggle = screen.getByRole("checkbox") as HTMLInputElement;
+    const toggle = screen.getByRole("checkbox", {
+      name: /enabled/i,
+    }) as HTMLInputElement;
     await userEvent.click(toggle);
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
 
@@ -302,5 +322,67 @@ describe("Agents", () => {
     const message = String(confirm.mock.calls[0][0]);
     expect(message).toContain("WARNING");
     expect(message).toContain("#3 pull_request.opened");
+  });
+
+  it("rows show the avatar and description", async () => {
+    vi.stubGlobal("fetch", makeFetchMock());
+    render(<Agents />);
+    await screen.findByText("security-auditor");
+
+    expect(screen.getByText("Finds vulns and bad practices.")).toBeInTheDocument();
+    const img = screen.getByTitle("avatar: shield");
+    expect(img).toHaveAttribute("src", "/avatars/shield.svg");
+  });
+
+  it("suggests an avatar from the name and attaches library skills", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Agents />);
+    await screen.findByText("security-auditor");
+
+    await userEvent.click(screen.getByRole("button", { name: "+ New agent" }));
+    await userEvent.type(screen.getByPlaceholderText("security-auditor"), "test-guru");
+    await userEvent.type(screen.getByLabelText("Name"), "Test Guru");
+    // Keyword match on the name suggests the flask avatar for "Auto".
+    expect(await screen.findByText(/auto-suggested.*flask/)).toBeInTheDocument();
+
+    const box = await screen.findByRole("checkbox", { name: /secure-coding/ });
+    await userEvent.click(box);
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        ([url, init]) => String(url).includes("/api/agents") && init?.method === "POST"
+      );
+      expect(call).toBeDefined();
+      expect(JSON.parse((call?.[1] as RequestInit).body as string)).toMatchObject({
+        id: "test-guru",
+        skill_ids: ["secure-coding"],
+        avatar: null,
+      });
+    });
+  });
+
+  it("an explicit avatar pick is sent", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Agents />);
+    await screen.findByText("security-auditor");
+
+    await userEvent.click(screen.getByRole("button", { name: "+ New agent" }));
+    await userEvent.type(screen.getByPlaceholderText("security-auditor"), "doc-helper");
+    await userEvent.type(screen.getByLabelText("Name"), "Doc Helper");
+    await userEvent.click(screen.getByTitle("Rocket"));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        ([url, init]) => String(url).includes("/api/agents") && init?.method === "POST"
+      );
+      expect(call).toBeDefined();
+      expect(JSON.parse((call?.[1] as RequestInit).body as string)).toMatchObject({
+        avatar: "rocket",
+      });
+    });
   });
 });

@@ -12,6 +12,7 @@ import type {
   GithubRepo,
   Health,
   IdeDetectResponse,
+  LibrarySkill,
   PrunePreview,
   PublishCheck,
   Repo,
@@ -22,6 +23,7 @@ import type {
   ScreeningRun,
   ScreenTemplate,
   SettingsMap,
+  SkillUsage,
   SseEvent,
   Task,
   RestorePreview,
@@ -86,8 +88,11 @@ export const api = {
     model?: string | null;
     personality_md?: string;
     skills?: CatalogSkill[];
+    skill_ids?: string[];
     custom_instructions?: string;
     enabled?: boolean;
+    description?: string;
+    avatar?: string | null;
   }) => request<CatalogAgent>("/api/agents", { method: "POST", body: JSON.stringify(input) }),
   updateAgent: (
     slug: string,
@@ -98,8 +103,11 @@ export const api = {
       model?: string | null;
       personality_md?: string;
       skills?: CatalogSkill[];
+      skill_ids?: string[];
       custom_instructions?: string;
       enabled?: boolean;
+      description?: string;
+      avatar?: string | null;
     }
   ) =>
     request<CatalogAgent>(`/api/agents/${encodeURIComponent(slug)}`, {
@@ -112,6 +120,28 @@ export const api = {
     }),
   getAgentUsage: (slug: string) =>
     request<AgentUsage>(`/api/agents/${encodeURIComponent(slug)}/usage`),
+  getSkills: () => request<LibrarySkill[]>("/api/skills"),
+  createSkill: (input: {
+    id: string;
+    name: string;
+    description?: string;
+    content?: string;
+    tags?: string[];
+  }) => request<LibrarySkill>("/api/skills", { method: "POST", body: JSON.stringify(input) }),
+  updateSkill: (
+    slug: string,
+    input: { name?: string; description?: string; content?: string; tags?: string[] }
+  ) =>
+    request<LibrarySkill>(`/api/skills/${encodeURIComponent(slug)}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
+  deleteSkill: (slug: string) =>
+    request<{ deleted: string }>(`/api/skills/${encodeURIComponent(slug)}`, {
+      method: "DELETE",
+    }),
+  getSkillUsage: (slug: string) =>
+    request<SkillUsage>(`/api/skills/${encodeURIComponent(slug)}/usage`),
   getWebhookStatus: () => request<WebhookStatus>("/api/webhook/status"),
   getTriggerRules: (repoId?: number) =>
     request<TriggerRule[]>(`/api/triggers${repoId ? `?repo_id=${repoId}` : ""}`),

@@ -302,6 +302,20 @@ export interface CatalogSkill {
   content: string;
 }
 
+export interface LibrarySkill {
+  id: string;
+  name: string;
+  description: string;
+  content: string;
+  tags: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SkillUsage {
+  agents: { id: string; name: string }[];
+}
+
 export interface AgentUsage {
   task_count: number;
   trigger_rules: {
@@ -321,8 +335,11 @@ export interface CatalogAgent {
   model: string | null;
   personality_md: string;
   skills: CatalogSkill[];
+  skill_ids: string[];
   custom_instructions: string;
   enabled: boolean;
+  description: string;
+  avatar: string | null;
   created_at: string;
 }
 

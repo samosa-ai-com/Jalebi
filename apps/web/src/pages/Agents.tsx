@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import { useBackends } from "../hooks/useBackends";
-import type { AgentUsage, CatalogAgent, CatalogSkill } from "../types";
+import { AVATARS, avatarFor, avatarUrl, suggestAvatar } from "../lib/agentAvatars";
+import type { AgentUsage, CatalogAgent, CatalogSkill, LibrarySkill } from "../types";
 
 const EMPTY: CatalogAgent = {
   id: "",
@@ -11,8 +12,11 @@ const EMPTY: CatalogAgent = {
   model: null,
   personality_md: "",
   skills: [],
+  skill_ids: [],
   custom_instructions: "",
   enabled: true,
+  description: "",
+  avatar: null,
   created_at: "",
 };
 
@@ -75,12 +79,18 @@ function AgentForm({
   onCancel: () => void;
 }) {
   const isEdit = agent !== null;
-  const [form, setForm] = useState<CatalogAgent>(agent ?? { ...EMPTY });
+  // Normalize: older payloads (and tests) may omit the newer fields.
+  const [form, setForm] = useState<CatalogAgent>(() => ({ ...EMPTY, ...(agent ?? {}) }));
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [models, setModels] = useState<string[]>([]);
   const [modelsError, setModelsError] = useState<string | null>(null);
+  const [library, setLibrary] = useState<LibrarySkill[] | null>(null);
   const backendOptions = useBackends();
+
+  // Live avatar suggestion from name+description (the "Auto" choice).
+  const suggested = suggestAvatar(form.name, form.description ?? "");
+  const effectiveAvatar = form.avatar ?? suggested;
 
   useEffect(() => {
     // Follow the CLI override selected in THIS form (blank = global default).
@@ -101,6 +111,23 @@ function AgentForm({
       cancelled = true;
     };
   }, [form.cli]);
+
+  useEffect(() => {
+    // Library skills for the attach picker — best-effort; the section hides
+    // when the fetch fails rather than blocking the form.
+    let cancelled = false;
+    api
+      .getSkills()
+      .then((list) => {
+        if (!cancelled) setLibrary(list);
+      })
+      .catch(() => {
+        if (!cancelled) setLibrary(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   function set(patch: Partial<CatalogAgent>) {
     setForm((f) => ({ ...f, ...patch }));
@@ -195,6 +222,57 @@ function AgentForm({
         </label>
       </div>
 
+      <label className="block">
+        <span className="mb-1.5 block text-xs font-medium text-ink-400">
+          Description (one line, shown on cards and in pickers)
+        </span>
+        <input
+          value={form.description ?? ""}
+          onChange={(e) => set({ description: e.target.value })}
+          placeholder="Finds vulns and bad security practices."
+          className="field"
+        />
+      </label>
+
+      <div>
+        <span className="mb-1.5 block text-xs font-medium text-ink-400">
+          Profile picture{" "}
+          <span className="text-ink-600">
+            auto-suggested from name/description: {suggested} (override anytime)
+          </span>
+        </span>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => set({ avatar: null })}
+            title="Auto-assign from name and description"
+            className={`flex items-center gap-2 rounded-lg border px-2 py-1.5 text-xs transition-colors ${
+              form.avatar === null
+                ? "border-syrup-500 text-syrup-300"
+                : "border-ink-800 text-ink-400 hover:text-ink-100"
+            }`}
+          >
+            <img src={avatarUrl(suggested)} alt="" className="h-8 w-8" />
+            Auto
+          </button>
+          {AVATARS.map((a) => (
+            <button
+              key={a.id}
+              type="button"
+              onClick={() => set({ avatar: a.id })}
+              title={a.label}
+              className={`rounded-lg border p-1.5 transition-colors ${
+                effectiveAvatar === a.id && form.avatar !== null
+                  ? "border-syrup-500"
+                  : "border-ink-800 hover:border-ink-600"
+              }`}
+            >
+              <img src={avatarUrl(a.id)} alt={a.label} className="h-8 w-8" />
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div className="grid gap-4 sm:grid-cols-2">
         <label className="block">
           <span className="mb-1.5 block text-xs font-medium text-ink-400">
@@ -258,8 +336,51 @@ function AgentForm({
         />
       </label>
 
+      {library !== null && library.length > 0 && (
+        <div>
+          <span className="mb-1.5 block text-xs font-medium text-ink-400">
+            Library skills (linked by reference — library edits propagate to this agent)
+          </span>
+          <div className="max-h-44 space-y-1 overflow-y-auto rounded-lg border border-ink-800 p-2">
+            {library.map((s) => {
+              const linked = (form.skill_ids ?? []).includes(s.id);
+              return (
+                <label
+                  key={s.id}
+                  className="flex cursor-pointer items-start gap-2 rounded px-2 py-1.5 text-sm hover:bg-ink-850"
+                >
+                  <input
+                    type="checkbox"
+                    checked={linked}
+                    onChange={() =>
+                      set({
+                        skill_ids: linked
+                          ? (form.skill_ids ?? []).filter((id) => id !== s.id)
+                          : [...(form.skill_ids ?? []), s.id],
+                      })
+                    }
+                    className="mt-1 h-4 w-4 rounded border-ink-700 bg-ink-900"
+                  />
+                  <span className="min-w-0">
+                    <span className="font-mono text-xs text-syrup-300">{s.id}</span>
+                    <span className="ml-2 text-ink-200">{s.name}</span>
+                    {s.description && (
+                      <span className="block truncate text-[11px] text-ink-500">
+                        {s.description}
+                      </span>
+                    )}
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       <div>
-        <span className="mb-1.5 block text-xs font-medium text-ink-400">Skills</span>
+        <span className="mb-1.5 block text-xs font-medium text-ink-400">
+          One-off inline skills (stored on this agent only)
+        </span>
         <SkillEditor skills={form.skills} onChange={(skills) => set({ skills })} />
       </div>
 
@@ -322,6 +443,12 @@ function AgentRow({
 }) {
   return (
     <div className="surface flex flex-wrap items-start justify-between gap-4 p-5">
+      <img
+        src={avatarUrl(avatarFor(agent))}
+        alt=""
+        title={`avatar: ${avatarFor(agent)}${agent.avatar ? "" : " (auto)"}`}
+        className="h-11 w-11 shrink-0"
+      />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="font-mono text-sm font-semibold text-syrup-300">{agent.id}</span>
@@ -335,6 +462,9 @@ function AgentRow({
           )}
         </div>
         <p className="mt-1 text-sm font-medium text-ink-100">{agent.name}</p>
+        {agent.description && (
+          <p className="mt-0.5 line-clamp-2 text-xs text-ink-400">{agent.description}</p>
+        )}
         <div className="mt-1.5 flex flex-wrap gap-1.5 text-[11px] text-ink-500">
           {agent.cli && <span className="font-mono">cli: {agent.cli}</span>}
           {agent.model && <span className="font-mono">model: {agent.model}</span>}

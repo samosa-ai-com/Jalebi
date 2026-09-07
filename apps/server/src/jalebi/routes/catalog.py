@@ -22,18 +22,37 @@ def _skills_from_payload(payload: dict) -> list[dict[str, str]] | None:
     return cleaned
 
 
+def _skill_ids_from_payload(payload: dict) -> list[str] | None:
+    raw = payload.get("skill_ids")
+    if raw is None:
+        return None
+    if not isinstance(raw, list) or any(not isinstance(s, str) for s in raw):
+        raise catalog.CatalogError("skill_ids must be a list of skill slugs")
+    return raw
+
+
+def _agent_payload(session, agent) -> dict[str, object]:
+    """Serialize an agent with its resolved (library + inline) skills."""
+    return catalog.agent_to_dict(agent, catalog.resolve_skills(session, agent))
+
+
 @bp.get("")
 def list_agents() -> ResponseReturnValue:
     """List all catalog agents (optionally enabled-only for pickers)."""
     session = db.get_session()
     enabled_only = request.args.get("enabled") == "1"
-    return jsonify([catalog.agent_to_dict(a) for a in catalog.list_agents(session, enabled_only)])
+    return jsonify(
+        [
+            catalog.agent_to_dict(a, catalog.resolve_skills(session, a))
+            for a in catalog.list_agents(session, enabled_only)
+        ]
+    )
 
 
 @bp.post("")
 def create_agent() -> ResponseReturnValue:
     """Create a catalog agent: {id, name, kind, cli, model, personality_md, skills,
-    custom_instructions, enabled}."""
+    skill_ids, custom_instructions, enabled, description, avatar}."""
     payload = request.get_json(silent=True)
     if not isinstance(payload, dict):
         return jsonify({"error": "expected a JSON object"}), 400
@@ -50,12 +69,15 @@ def create_agent() -> ResponseReturnValue:
             model=payload.get("model"),
             personality_md=payload.get("personality_md", "") or "",
             skills=_skills_from_payload(payload) or [],
+            skill_ids=_skill_ids_from_payload(payload) or [],
             custom_instructions=payload.get("custom_instructions", "") or "",
             enabled=payload.get("enabled", True),
+            description=payload.get("description", "") or "",
+            avatar=payload.get("avatar"),
         )
     except catalog.CatalogError as exc:
         return jsonify({"error": str(exc)}), 400
-    return jsonify(catalog.agent_to_dict(agent)), 201
+    return jsonify(_agent_payload(session, agent)), 201
 
 
 @bp.get("/<slug>")
@@ -64,7 +86,7 @@ def get_agent(slug: str) -> ResponseReturnValue:
     agent = catalog.agent_by_slug(session, slug)
     if agent is None:
         return jsonify({"error": "agent not found"}), 404
-    return jsonify(catalog.agent_to_dict(agent))
+    return jsonify(_agent_payload(session, agent))
 
 
 @bp.put("/<slug>")
@@ -83,14 +105,17 @@ def update_agent(slug: str) -> ResponseReturnValue:
             model=payload.get("model"),
             personality_md=payload.get("personality_md"),
             skills=_skills_from_payload(payload),
+            skill_ids=_skill_ids_from_payload(payload),
             custom_instructions=payload.get("custom_instructions"),
             enabled=payload.get("enabled"),
+            description=payload.get("description"),
+            avatar=payload.get("avatar"),
         )
     except KeyError:
         return jsonify({"error": "agent not found"}), 404
     except catalog.CatalogError as exc:
         return jsonify({"error": str(exc)}), 400
-    return jsonify(catalog.agent_to_dict(agent))
+    return jsonify(_agent_payload(session, agent))
 
 
 @bp.delete("/<slug>")

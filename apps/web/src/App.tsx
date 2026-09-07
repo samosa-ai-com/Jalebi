@@ -6,6 +6,7 @@ import Github from "./pages/Github";
 import Repos from "./pages/Repos";
 import Screenings, { SCREENS_SEEN_KEY } from "./pages/Screenings";
 import Settings from "./pages/Settings";
+import Skills from "./pages/Skills";
 import TaskDetail from "./pages/TaskDetail";
 import Tasks from "./pages/Tasks";
 import Triggers from "./pages/Triggers";
@@ -29,6 +30,7 @@ const NAV_ITEMS = [
   { to: "/repos", label: "Repos", end: false },
   { to: "/github", label: "GitHub", end: false },
   { to: "/agents", label: "Agents", end: false },
+  { to: "/skills", label: "Skills", end: false },
   { to: "/screenings", label: "Screenings", end: false },
   { to: "/triggers", label: "Triggers", end: false },
   { to: "/settings", label: "Settings", end: false },
@@ -158,6 +160,7 @@ function App() {
           <Route path="/repos" element={<Repos />} />
           <Route path="/github" element={<Github />} />
           <Route path="/agents" element={<Agents />} />
+          <Route path="/skills" element={<Skills />} />
           <Route path="/screenings" element={<Screenings />} />
           <Route path="/triggers" element={<Triggers />} />
           <Route path="/settings" element={<Settings />} />

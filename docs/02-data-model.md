@@ -258,7 +258,10 @@ Settings keys (defaults in `jalebi/settings.py`): `concurrency` (4), `auto_publi
 | `cli` | text, null | backend override (opencode/codex/claude) |
 | `model` | text, null | pinned model |
 | `personality_md` | text | markdown merged into the worktree `AGENTS.md` |
-| `skills_json` | text, null | JSON list of `{name, content}` markdown files |
+| `skills_json` | text, null | legacy inline `[{name, content}]` extras (appended after library skills) |
+| `skill_ids_json` | text, null | ordered JSON list of linked `catalog_skills` slugs |
+| `description` | text | one-liner shown on cards and in pickers |
+| `avatar` | text, null | avatar id (`apps/web/public/avatars/*.svg`); NULL = auto-assign |
 | `custom_instructions` | text | appended to the task prompt |
 | `enabled` | bool | disabled agents aren't selectable on new tasks |
 | `created_at` | datetime | |
@@ -270,6 +273,22 @@ time. Skill content lives in the DB and is materialized directly into the task
 worktree (`.claude/skills/<name>/SKILL.md`) at run time (see
 `docs/15-catalog.md`).
 
+### `catalog_skills` (skills library)
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | text PK | slug, e.g. `secure-coding` |
+| `name` | text | display name |
+| `description` | text | one-liner for pickers/cards |
+| `content` | text | markdown body (≤100 KB) |
+| `tags_json` | text, null | JSON list of tag strings (≤12) |
+| `created_at` / `updated_at` | datetime | |
+
+Agents link library skills via `catalog_agents.skill_ids_json` (ordered JSON
+list, FK-less by design — unknown slugs refused at write time, skipped at run
+time). Deleting a linked skill is refused (409 + linking agents). Seed content
+is versioned (`catalog_seed_version` setting) — see `docs/15-catalog.md` §8.
+
 ## 3. Relationships (Phase 0 + Phase 1 catalog + reviewers)
 
 ```
@@ -280,6 +299,7 @@ runs  1───* followups  (run_id nullable)
 runs  1───* artifacts
 repos 0───* env_vars   (repo_id nullable = global)
 tasks 0───1 catalog_agents  (agent_id slug, FK-less by design)
+catalog_agents *───* catalog_skills  (skill_ids_json ordered slug list, FK-less)
 repos 1───* review_assignments
 tasks 1───* review_assignments  (task_id = the reviewer's own pr_review task)
 runs  0───1 review_assignments  (run_id, set when the reviewer run starts)

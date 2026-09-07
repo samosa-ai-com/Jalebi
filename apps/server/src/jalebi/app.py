@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from flask import Flask, Response, current_app, g, jsonify, request, send_from_directory
 from flask.typing import ResponseReturnValue
 
-from jalebi import artifacts, clock, db, ide, masking, notify, secrets, settings
+from jalebi import artifacts, clock, db, ide, masking, notify, secrets, seed_catalog, settings
 from jalebi.adapters import ADAPTERS, available_adapters, get_adapter
 from jalebi.config import Config, load_config, repo_root
 from jalebi.poller import Poller
@@ -22,6 +22,7 @@ from jalebi.routes.envvars import bp as envvars_bp
 from jalebi.routes.github import bp as github_bp
 from jalebi.routes.repos import bp as repos_bp
 from jalebi.routes.screening import bp as screening_bp
+from jalebi.routes.skills import bp as skills_bp
 from jalebi.routes.tasks import bp as tasks_bp
 from jalebi.routes.triggers import bp as triggers_bp
 from jalebi.routes.webhooks import bp as webhooks_bp
@@ -331,6 +332,9 @@ def create_app(config: Config | None = None) -> Flask:
         session = db.get_session()
         try:
             settings.seed_defaults(session)
+            # Preloaded skill/agent library (version-gated, insert-missing
+            # only — owner edits and deletions are never overwritten).
+            seed_catalog.seed_catalog(session)
             # Sync the app wall clock to the configured timezone (default: the
             # machine's local zone) so the screening scheduler's cron matching
             # and every timestamp follow it.
@@ -351,6 +355,7 @@ def create_app(config: Config | None = None) -> Flask:
     app.register_blueprint(tasks_bp)
     app.register_blueprint(envvars_bp)
     app.register_blueprint(catalog_bp)
+    app.register_blueprint(skills_bp)
     app.register_blueprint(data_bp)
     app.register_blueprint(triggers_bp)
     app.register_blueprint(webhooks_bp)

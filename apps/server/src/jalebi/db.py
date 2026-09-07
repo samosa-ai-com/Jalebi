@@ -196,16 +196,43 @@ class Artifact(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now)
 
 
+class CatalogSkill(Base):
+    """A standalone, reusable skill in the catalog library.
+
+    ``id`` is a user-chosen slug. ``content`` is the markdown body materialized
+    into task worktrees. Agents link skills via
+    ``CatalogAgent.skill_ids_json`` (ordered, FK-less by design — same
+    rationale as ``tasks.agent_id``); validity is enforced in the service
+    layer. Deleting a linked skill is refused (409 with the linking agents).
+    """
+
+    __tablename__ = "catalog_skills"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=sa.text("''")
+    )
+    content: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=sa.text("''")
+    )
+    tags_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now)
+
+
 class CatalogAgent(Base):
     """A named, user-configured agent = personality + skills + optional overrides.
 
     ``kind`` is ``general`` or ``reviewer`` (reviewers get the reviewer workflow).
     The ``id`` is a user-chosen slug. ``personality_md`` is merged into the task
-    worktree's ``AGENTS.md``; ``skills_json`` holds ``[{name, content}]`` markdown
-    files materialized to ``.claude/skills/<name>/SKILL.md`` in the worktree so
-    the CLI auto-discovers them; ``custom_instructions`` is appended to the task
-    prompt when this agent is selected. ``cli``/``model`` override the task
-    defaults. ``tasks.agent_id`` references this table by slug but is deliberately
+    worktree's ``AGENTS.md``; ``skill_ids_json`` holds the ordered list of linked
+    library skill slugs (resolved from ``catalog_skills`` at run time);
+    ``skills_json`` holds legacy inline ``[{name, content}]`` extras, appended
+    after library skills (kept so pre-library agents keep working).
+    ``custom_instructions`` is appended to the task prompt when this agent is
+    selected. ``cli``/``model`` override the task defaults.
+    ``tasks.agent_id`` references this table by slug but is deliberately
     FK-less (a SQLite batch rebuild of the FK-referenced ``tasks`` parent is the
     Step-37 migration hazard) — validity is enforced in the service layer.
     """
@@ -223,6 +250,11 @@ class CatalogAgent(Base):
         Text, nullable=False, default="", server_default=sa.text("''")
     )
     skills_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    skill_ids_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    description: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=sa.text("''")
+    )
+    avatar: Mapped[str | None] = mapped_column(Text, nullable=True)
     custom_instructions: Mapped[str] = mapped_column(
         Text, nullable=False, default="", server_default=sa.text("''")
     )

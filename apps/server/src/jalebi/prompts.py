@@ -89,7 +89,11 @@ def _review_md_note() -> str:
 
 
 def build_agent_md(
-    task: Task, repo: Repo, agent: CatalogAgent | None = None, cli: str | None = None
+    task: Task,
+    repo: Repo,
+    agent: CatalogAgent | None = None,
+    cli: str | None = None,
+    session=None,
 ) -> str:
     """Build the worktree ``AGENTS.md`` from the task's stored context.
 
@@ -98,6 +102,10 @@ def build_agent_md(
     get the ``@.claude/skills/...`` path (opencode resolves ``@path`` imports,
     claude auto-discovers the dir); codex gets the ``$name`` trigger + the
     ``.codex/skills/...`` path (codex does NOT resolve ``@path`` in AGENTS.md).
+
+    Pass the DB ``session`` so library skill links resolve (reference
+    semantics); without it only the agent's legacy inline extras render
+    (tests + callers without a session).
     """
     parts = [
         "# Jalebi task environment",
@@ -133,7 +141,11 @@ def build_agent_md(
         personality = (agent.personality_md or "").strip()
         if personality:
             parts += ["", "## Agent personality", personality]
-        agent_skills = catalog.skills(agent)
+        agent_skills = (
+            catalog.resolve_skills(session, agent)
+            if session is not None
+            else catalog.skills(agent)
+        )
         if agent_skills:
             parts += ["", "## Skills"]
             for skill in agent_skills:

@@ -455,7 +455,7 @@ class TaskQueue:
         if agent is None:
             return cli, None
         effective_cli = task.cli or agent.cli or cli
-        return effective_cli, catalog.skills(agent)
+        return effective_cli, catalog.resolve_skills(session, agent)
 
     def _prepare_run(self, session, task: Task, cli: str) -> Run:
         """Open a fresh run row and flip the task to ``running``."""
@@ -878,7 +878,7 @@ class TaskQueue:
                 self._reset_task_branch(git, task, repo, token)
             worktree_bootstrap.bootstrap_worktree(
                 wt,
-                prompts.build_agent_md(task, repo, agent=agent, cli=cli),
+                prompts.build_agent_md(task, repo, agent=agent, cli=cli, session=session),
                 cli=cli,
                 skills=agent_skills,
             )
@@ -984,7 +984,7 @@ class TaskQueue:
             wt = git.create_review_worktree(task.id, repo.full_name, pr_number, token)
             worktree_bootstrap.bootstrap_worktree(
                 wt,
-                prompts.build_agent_md(task, repo, agent=agent, cli=cli),
+                prompts.build_agent_md(task, repo, agent=agent, cli=cli, session=session),
                 cli=cli,
                 skills=agent_skills,
             )
@@ -1417,7 +1417,7 @@ class TaskQueue:
                 wt = self._ensure_task_worktree(git, task, repo, token)
             worktree_bootstrap.bootstrap_worktree(
                 wt,
-                prompts.build_agent_md(task, repo, agent=agent, cli=cli),
+                prompts.build_agent_md(task, repo, agent=agent, cli=cli, session=session),
                 cli=cli,
                 skills=agent_skills,
             )
