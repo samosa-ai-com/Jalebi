@@ -273,7 +273,7 @@ describe("BrewHouse", () => {
     expect(await screen.findAllByText(/queue paused/)).not.toHaveLength(0);
   });
 
-  it("fries a samosa for issue_fix and a chakli for pr_review", async () => {
+  it("fries a samosa for issue_fix and pakoras for pr_review", async () => {
     stubFetch({ ...HANDLERS });
     renderHouse([
       { ...TASK, id: 2, type: "issue_fix", status: "queued", prompt: "fix it" },
@@ -281,7 +281,7 @@ describe("BrewHouse", () => {
     ]);
     expect(await screen.findByRole("button", { name: "Open task 2" })).toBeInTheDocument();
     expect(screen.getByText("samosa")).toBeInTheDocument();
-    expect(screen.getByText("chakli")).toBeInTheDocument();
+    expect(screen.getByText("pakora")).toBeInTheDocument();
   });
 
   it("strike-a-match calls back to start a new task", async () => {
@@ -307,10 +307,30 @@ describe("BrewHouse", () => {
       updated_at: new Date().toISOString(),
     };
     renderHouse([TASK, doneToday]);
-    expect(await screen.findByText("Aaj ka menu")).toBeInTheDocument();
+    expect(await screen.findByText("Today's menu")).toBeInTheDocument();
     // One samosa served all-time; the thali shows today's count.
     expect(screen.getByText(/1 samosas/)).toBeInTheDocument();
     expect(screen.getByText("1 served")).toBeInTheDocument();
+  });
+
+  it("menu order buttons call back to start a new task", async () => {
+    stubFetch({ ...HANDLERS });
+    const onNewTask = vi.fn();
+    render(
+      <MemoryRouter>
+        <BrewHouse tasks={[]} repos={REPOS as never} onNewTask={onNewTask} />
+      </MemoryRouter>
+    );
+    await userEvent.click(await screen.findByRole("button", { name: "Fry a pakora →" }));
+    expect(onNewTask).toHaveBeenCalledTimes(1);
+  });
+
+  it("centers the kadhai strip while it fits", async () => {
+    stubFetch({ ...HANDLERS });
+    const { container } = renderHouse();
+    await screen.findByRole("button", { name: "Open task 1" });
+    const strip = container.querySelector(".mx-auto.w-max");
+    expect(strip).not.toBeNull();
   });
 
   it("idle agents chatter on the resting shelf", async () => {

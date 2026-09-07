@@ -8,6 +8,7 @@
  * live tasks) take turns showing a speech bubble from the chatter pool
  * while the shop is idle — the shelf is never still.
  */
+import { useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import { avatarFor, avatarUrl } from "../../lib/agentAvatars";
 import type { CatalogAgent, LibrarySkill } from "../../types";
@@ -23,15 +24,22 @@ export interface AgentChord {
   activeTasks: number;
 }
 
-const CHATTER = [
+const CHATTER_GENERAL = [
   "Use me — I'm getting cold",
   "I fry jalebis fast",
   "Got a bug? I'll squash it",
   "My kadhai is empty…",
-  "Reviewer, reporting for duty",
-  "Bored. Feed me an issue",
   "Ghee is hot. I'm ready",
+  "Bored. Feed me an issue",
   "Pick me, pick me!",
+  "Fresh oil, steady flame",
+];
+
+const CHATTER_REVIEWER = [
+  "Reviewer, reporting for duty",
+  "Show me a PR to tear apart",
+  "I read diffs for breakfast",
+  "Line-by-line, no mercy",
 ];
 
 const BOWL_COLORS = ["#f7b955", "#ef9b2f", "#d9b78c", "#c69b6b", "#ffd97a", "#b08050"];
@@ -45,20 +53,22 @@ function Dabba({ skills }: { skills: SkillChord[] }) {
       <svg
         viewBox="0 0 120 120"
         role="img"
-        aria-label="Masala dabba"
+        aria-label="Masala dabba, spice box"
         className="h-28 w-28 shrink-0"
       >
-        <circle cx="60" cy="60" r="56" fill="#221a14" stroke="#b08050" strokeWidth="3" />
-        <circle
-          cx="60"
-          cy="60"
-          r="56"
+        <circle cx="60" cy="60" r="56" fill="#2a2018" stroke="#b08050" strokeWidth="3" />
+        <circle cx="60" cy="60" r="50" fill="none" stroke="#4a3a2d" strokeWidth="1" />
+        <circle cx="60" cy="60" r="44" fill="none" stroke="#33271e" strokeWidth="1" />
+        <path
+          d="M18 44 A 48 48 0 0 1 60 12"
           fill="none"
           stroke="#f7b955"
-          strokeWidth="1"
-          opacity="0.35"
+          strokeWidth="2"
+          opacity="0.5"
+          strokeLinecap="round"
         />
-        <circle cx="60" cy="60" r="13" fill="#1a1410" stroke="#4a3a2d" strokeWidth="1.5" />
+        <circle cx="60" cy="60" r="13" fill="#1a1410" stroke="#b08050" strokeWidth="1.5" />
+        <circle cx="60" cy="60" r="4" fill="none" stroke="#4a3a2d" />
         {shown.map((c, i) => {
           const a = (i / shown.length) * Math.PI * 2 - Math.PI / 2;
           const x = 60 + R * Math.cos(a);
@@ -66,16 +76,18 @@ function Dabba({ skills }: { skills: SkillChord[] }) {
           const color = BOWL_COLORS[i % BOWL_COLORS.length];
           return (
             <g key={c.skill.id}>
+              <circle cx={x} cy={y} r="14" fill="#4a3a2d" />
               <circle
                 cx={x}
                 cy={y}
-                r="13"
+                r="12.5"
                 fill="#1a1410"
-                stroke={c.inPlay ? "#ef9b2f" : "#4a3a2d"}
+                stroke={c.inPlay ? "#ef9b2f" : "#221a14"}
                 strokeWidth={c.inPlay ? 2.5 : 1.5}
                 className={c.inPlay ? "brew-glow" : undefined}
               />
               <circle cx={x} cy={y + 2} r="8" fill={color} opacity={c.inPlay ? 0.95 : 0.45} />
+              <ellipse cx={x - 2.5} cy={y - 1} rx="3" ry="1.8" fill="#f6efe5" opacity="0.35" />
               {c.inPlay && (
                 <g fill={color}>
                   <circle cx={x - 3} cy={y - 8} r="1.4" className="brew-pinch" />
@@ -147,13 +159,29 @@ export function MasalaDabba({
   tick: number;
 }) {
   // One resting agent talks at a time, rotating every ~5 s while idle.
+  // Lines match the agent's personality (reviewers get review lines).
+  // The shelf auto-scrolls to the talker unless the mouse is over it.
   const resting = agents.filter((a) => a.activeTasks === 0);
   const chatterIdx = resting.length > 0 ? Math.floor(tick / 5000) % resting.length : -1;
+  const talkerId = idle && chatterIdx >= 0 ? resting[chatterIdx].agent.id : null;
+  const shelfRef = useRef<HTMLUListElement>(null);
+  const shelfHovered = useRef(false);
+  useEffect(() => {
+    if (!talkerId || shelfHovered.current) return;
+    const row = shelfRef.current?.querySelector(
+      `[data-agent-row="${CSS.escape(talkerId)}"]`
+    );
+    if (row && typeof (row as HTMLElement).scrollIntoView === "function") {
+      (row as HTMLElement).scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }, [talkerId]);
   return (
     <div className="grid gap-4 lg:grid-cols-5">
-      <section className="surface p-4 lg:col-span-3" aria-label="Masala dabba">
+      <section className="surface p-4 lg:col-span-3" aria-label="Masala dabba, spice box">
         <div className="flex items-baseline justify-between">
-          <h3 className="panel-title">Masala dabba</h3>
+          <h3 className="panel-title">
+            Masala dabba <span className="font-normal text-ink-500">(spice box)</span>
+          </h3>
           <Link to="/skills" className="link font-mono text-[11px]">
             {skills.length} ingredients →
           </Link>
@@ -176,11 +204,18 @@ export function MasalaDabba({
         {agents.length === 0 ? (
           <p className="mt-3 text-xs text-ink-600">No agents in the catalog yet.</p>
         ) : (
-          <ul className="mt-2 max-h-44 space-y-1.5 overflow-y-auto">
-            {agents.map(({ agent, activeTasks }, i) => {
-              const talks = idle && resting[chatterIdx]?.agent.id === agent.id;
+          <ul
+            ref={shelfRef}
+            onMouseEnter={() => (shelfHovered.current = true)}
+            onMouseLeave={() => (shelfHovered.current = false)}
+            className="mt-2 max-h-44 space-y-1.5 overflow-y-auto"
+          >
+            {agents.map(({ agent, activeTasks }) => {
+              const talks = talkerId === agent.id;
+              const pool = agent.kind === "reviewer" ? CHATTER_REVIEWER : CHATTER_GENERAL;
+              const line = pool[Math.floor(tick / 5000) % pool.length];
               return (
-                <li key={agent.id} className="relative">
+                <li key={agent.id} data-agent-row={agent.id} className="relative">
                   <Link
                     to="/agents"
                     className="flex items-center gap-2 rounded-lg px-2 py-1 transition-colors hover:bg-ink-875/60"
@@ -214,7 +249,7 @@ export function MasalaDabba({
                       role="status"
                       className="brew-chatter pointer-events-none absolute -top-7 left-8 z-10 max-w-44 truncate rounded-lg rounded-bl-none border border-syrup-500/40 bg-ink-900 px-2 py-1 font-mono text-[10px] text-syrup-300 shadow-lg"
                     >
-                      “{CHATTER[(Math.floor(tick / 5000) + i) % CHATTER.length]}”
+                      “{line}”
                     </span>
                   )}
                 </li>

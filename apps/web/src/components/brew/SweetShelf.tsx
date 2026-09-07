@@ -21,19 +21,12 @@ function SnackGlyph({ kind }: { kind: SnackKind }) {
       </svg>
     );
   }
-  if (kind === "chakli") {
+  if (kind === "pakora") {
     return (
       <svg viewBox="0 0 24 24" aria-hidden="true" className="h-5 w-5">
-        <circle
-          cx="12"
-          cy="12"
-          r="8"
-          fill="none"
-          stroke="#f7b955"
-          strokeWidth="3.5"
-          strokeDasharray="3 2"
-          strokeLinecap="round"
-        />
+        <circle cx="9" cy="14" r="5.5" fill="#f7b955" stroke="#7c2d12" />
+        <circle cx="15.5" cy="13" r="6" fill="#f7b955" stroke="#7c2d12" />
+        <circle cx="12.5" cy="9" r="4.5" fill="#f7b955" stroke="#7c2d12" />
       </svg>
     );
   }
@@ -53,13 +46,13 @@ function SnackGlyph({ kind }: { kind: SnackKind }) {
 const SNACK_SINGULAR: Record<SnackKind, string> = {
   jalebi: "jalebi",
   samosa: "samosa",
-  chakli: "chakli",
+  pakora: "pakora",
 };
 
 const SNACK_NAME: Record<SnackKind, string> = {
   jalebi: "jalebis",
   samosa: "samosas",
-  chakli: "chaklis",
+  pakora: "pakoras",
 };
 
 function dayKey(d: Date): string {
@@ -106,12 +99,11 @@ export function SweetShelf({
     const served = [...done]
       .sort((a, b) => (parseTime(b.updated_at) ?? 0) - (parseTime(a.updated_at) ?? 0))
       .slice(0, 8);
-    const allTime = (["jalebi", "samosa", "chakli"] as SnackKind[]).map(
+    const allTime = (["jalebi", "samosa", "pakora"] as SnackKind[]).map(
       (k) => `${done.filter((t) => snackForType(t.type) === k).length} ${SNACK_NAME[k]}`
     );
     return { days, todayDone, perDay, served, allTime };
   }, [tasks]);
-  const maxDay = Math.max(1, ...perDay);
 
   return (
     <div className="grid gap-4 lg:grid-cols-5">
@@ -122,46 +114,61 @@ export function SweetShelf({
             {todayDone.length} served
           </span>
         </div>
-        <svg viewBox="0 0 200 64" role="img" aria-hidden="true" className="mt-1 w-full">
+        <svg viewBox="0 0 200 72" role="img" aria-label="Steel thali" className="mt-1 w-full">
           <ellipse
             cx="100"
-            cy="38"
+            cy="42"
             rx="92"
-            ry="24"
-            fill="#221a14"
+            ry="26"
+            fill="#241a10"
             stroke="#b08050"
             strokeWidth="2.5"
           />
-          <ellipse
-            cx="100"
-            cy="36"
-            rx="92"
-            ry="24"
+          {/* hammered ring */}
+          {Array.from({ length: 24 }, (_, i) => {
+            const a = (i / 24) * Math.PI * 2;
+            return (
+              <circle
+                key={i}
+                cx={100 + 80 * Math.cos(a)}
+                cy={42 + 20 * Math.sin(a)}
+                r="1.3"
+                fill="#4a3a2d"
+              />
+            );
+          })}
+          {/* specular arc */}
+          <path
+            d="M30 34 A 78 22 0 0 1 95 18"
             fill="none"
             stroke="#f7b955"
-            strokeWidth="1"
-            opacity="0.4"
+            strokeWidth="2"
+            opacity="0.55"
+            strokeLinecap="round"
           />
           <ellipse
             cx="100"
-            cy="38"
-            rx="62"
+            cy="44"
+            rx="58"
             ry="15"
-            fill="none"
+            fill="#1a1410"
             stroke="#4a3a2d"
             strokeWidth="1.5"
           />
+          {/* center motif */}
+          <circle cx="100" cy="44" r="3" fill="none" stroke="#b08050" strokeWidth="1" />
+          <circle cx="100" cy="44" r="1" fill="#b08050" />
         </svg>
         {todayDone.length === 0 ? (
           <p className="mt-1 text-center text-xs text-ink-600">
             Thali empty — the day&apos;s first fry lands here.
           </p>
         ) : (
-          <div className="mt-1 flex flex-wrap items-center justify-center gap-1.5">
+          <div className="-mt-10 mb-1 flex min-h-9 flex-wrap items-end justify-center gap-1 px-10">
             {todayDone.slice(0, 14).map((t, i) => (
               <span
                 key={t.id}
-                className="brew-serve-drop"
+                className="brew-serve-drop drop-shadow-[0_2px_3px_rgba(0,0,0,0.6)]"
                 style={{ animationDelay: `${Math.min(i, 8) * 0.06}s` }}
               >
                 <SnackGlyph kind={snackForType(t.type)} />
@@ -195,40 +202,58 @@ export function SweetShelf({
 
       <section className="surface p-4 lg:col-span-1" aria-label="Seven day shelf">
         <h3 className="panel-title">7-day shelf</h3>
-        <div className="mt-2 flex h-24 items-end justify-around gap-1">
-          {days.map((d, i) => (
-            <div
-              key={dayKey(d)}
-              className="flex h-full flex-col items-center justify-end gap-1"
-              title={`${perDay[i]} done`}
-            >
-              <span className="font-mono text-[10px] tabular-nums text-ink-400">
-                {perDay[i] > 0 ? perDay[i] : ""}
-              </span>
+        <div className="mt-2 flex h-28 items-end justify-around gap-1">
+          {days.map((d, i) => {
+            const shown = Math.min(5, perDay[i]);
+            return (
               <div
-                className="w-5 rounded-t"
-                style={{
-                  height: `${Math.max(4, (perDay[i] / maxDay) * 64)}px`,
-                  background:
-                    perDay[i] > 0 ? "linear-gradient(to top, #7c2d12, #ef9b2f)" : "#221a14",
-                  border: perDay[i] > 0 ? "1px solid rgba(247,185,85,0.5)" : "1px solid #33271e",
-                }}
-              />
-              <span className="font-mono text-[9px] uppercase text-ink-600">
-                {d.toLocaleDateString([], { weekday: "narrow" })}
-              </span>
-            </div>
-          ))}
+                key={dayKey(d)}
+                className="flex h-full flex-col items-center justify-end"
+                title={`${perDay[i]} done`}
+              >
+                <span className="font-mono text-[10px] tabular-nums text-ink-400">
+                  {perDay[i] > 0 ? perDay[i] : ""}
+                </span>
+                {perDay[i] === 0 ? (
+                  <svg viewBox="0 0 24 8" aria-hidden="true" className="w-6">
+                    <ellipse cx="12" cy="4" rx="11" ry="3" fill="none" stroke="#33271e" />
+                  </svg>
+                ) : (
+                  <div className="flex flex-col-reverse items-center">
+                    {Array.from({ length: shown }, (_, j) => (
+                      <svg
+                        key={j}
+                        viewBox="0 0 24 12"
+                        aria-hidden="true"
+                        className="-mb-1.5 h-3.5 w-6"
+                      >
+                        <path
+                          d="M4 8 c 2 -4 6 -5 8 -3 c 2 2 1 5 -2 5.5 c -3 0.5 -6 -1 -6 -3.5"
+                          fill="none"
+                          stroke={j >= 3 ? "#c2571b" : "#f7b955"}
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                        />
+                      </svg>
+                    ))}
+                  </div>
+                )}
+                <span className="mt-0.5 font-mono text-[9px] uppercase text-ink-600">
+                  {d.toLocaleDateString([], { weekday: "narrow" })}
+                </span>
+              </div>
+            );
+          })}
         </div>
       </section>
 
       <section className="surface p-4 lg:col-span-2" aria-label="Menu board">
-        <h3 className="panel-title">Aaj ka menu</h3>
+        <h3 className="panel-title">Today&apos;s menu</h3>
         <p className="mt-2 font-mono text-xs tabular-nums text-ink-300">{allTime.join(" · ")}</p>
         <p className="text-[11px] text-ink-500">served all-time, all halls</p>
         {idle ? (
           <div className="mt-3 flex flex-wrap gap-2">
-            {(["jalebi", "samosa", "chakli"] as SnackKind[]).map((k) => (
+            {(["jalebi", "samosa", "pakora"] as SnackKind[]).map((k) => (
               <button
                 key={k}
                 type="button"

@@ -94,27 +94,6 @@
   }
 }
 
-/* Chakli inspection wheel. */
-@keyframes brew-spin-slow {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-/* Inspection ticks blinking around the chakli. */
-@keyframes brew-tick-blink {
-  0%,
-  100% {
-    opacity: 0.15;
-  }
-  50% {
-    opacity: 1;
-  }
-}
-
 /* Jalebi coil draws itself as the fry progresses (dashoffset is set
    inline from progress; the transition smooths poll jumps). */
 .brew-coil-draw {
@@ -188,14 +167,6 @@
 .brew-snack {
   animation: brew-snack-bob 2.2s ease-in-out infinite;
 }
-.brew-spin {
-  animation: brew-spin-slow 9s linear infinite;
-  transform-origin: center;
-  transform-box: fill-box;
-}
-.brew-tick {
-  animation: brew-tick-blink 1.6s ease-in-out infinite;
-}
 .brew-chatter {
   animation: brew-chatter 3s ease-in-out infinite;
 }
@@ -226,8 +197,6 @@
   .brew-ticker-fast-track,
   .brew-flame,
   .brew-snack,
-  .brew-spin,
-  .brew-tick,
   .brew-chatter,
   .brew-serve-drop,
   .brew-pinch {

@@ -402,3 +402,9 @@ After any code change, run the relevant tests and build before marking work done
   7-day shelf rendering. Shared `snackForType` moved to `snacks.ts`
   (react-refresh zero-warning rule). Classic view untouched.
 - **Suite totals now:** web **244 passed** (no backend changes).
+
+- **Halwai polish round (web +2):** chakli → pakora snack swap, centered
+  kadhai strip, brushed-steel dabba + hammered thali + stacked-jalebi
+  7-day shelf, "Today's menu" + "(spice box)" wording, personality chatter
+  with hover-aware auto-scroll; `BrewHouse.test.tsx` 19 tests.
+- **Suite totals now:** web **246 passed** (no backend changes).

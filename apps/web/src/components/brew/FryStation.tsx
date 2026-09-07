@@ -6,9 +6,8 @@
  * 1 = queued (medium blue + licks of orange), 2 = frying (full orange
  * flames), 3 = needs-you flare (taller, faster flames + pulse ring).
  * The snack matches the task type: freeform → jalebi coil (self-drawing),
- * issue_fix → samosa triangle (bobbing + browning), pr_review → chakli
- * wheel (rotating + blinking inspection ticks). Fry color deepens with
- * progress. Idle stations offer a "strike a match" order button.
+ * issue_fix → samosa triangle (bobbing + browning), pr_review → pakora
+ * fritters. Fry color deepens with progress. Idle stations offer a "strike a match" order button.
  */
 import type { Task } from "../../types";
 import { snackForType, type SnackKind } from "./snacks";
@@ -91,42 +90,18 @@ function Snack({ kind, progress }: { kind: SnackKind; progress: number }) {
       </g>
     );
   }
-  if (kind === "chakli") {
+  if (kind === "pakora") {
+    // A cluster of golden fritters, bobbing in the oil.
     return (
-      <g>
-        {[0, 60, 120, 180, 240, 300].map((a, i) => (
-          <line
-            key={a}
-            x1={60 + 19 * Math.cos((a * Math.PI) / 180)}
-            y1={66 + 19 * Math.sin((a * Math.PI) / 180)}
-            x2={60 + 26 * Math.cos((a * Math.PI) / 180)}
-            y2={66 + 26 * Math.sin((a * Math.PI) / 180)}
-            stroke={color}
-            strokeWidth="2"
-            className="brew-tick"
-            style={{ animationDelay: `${i * 0.25}s` }}
-          />
-        ))}
-        <g className="brew-spin">
-          <circle
-            cx="60"
-            cy="66"
-            r="14"
-            fill="none"
-            stroke={color}
-            strokeWidth="5"
-            strokeDasharray="4 2.5"
-            strokeLinecap="round"
-          />
-          <circle
-            cx="60"
-            cy="66"
-            r="6"
-            fill="none"
-            stroke={color}
-            strokeWidth="2.5"
-            strokeDasharray="2.5 2"
-          />
+      <g className="brew-snack">
+        <circle cx="52" cy="68" r="8" fill={color} stroke="#7c2d12" strokeWidth="1.5" />
+        <circle cx="66" cy="66" r="9" fill={color} stroke="#7c2d12" strokeWidth="1.5" />
+        <circle cx="59" cy="58" r="7" fill={color} stroke="#7c2d12" strokeWidth="1.5" />
+        <g fill="#7c2d12" opacity="0.55">
+          <circle cx="50" cy="66" r="1.2" />
+          <circle cx="64" cy="63" r="1.2" />
+          <circle cx="69" cy="70" r="1" />
+          <circle cx="58" cy="56" r="1" />
         </g>
       </g>
     );
@@ -322,9 +297,7 @@ export function FryStation({
               <img src={station.avatarUrl} alt="" className="h-4 w-4 rounded-full" />
             )}
             <span className="font-mono text-xs text-syrup-400">#{station.task.id}</span>
-            <span className="font-mono text-[10px] text-ink-500">
-              {snack === "jalebi" ? "jalebi" : snack === "samosa" ? "samosa" : "chakli"}
-            </span>
+            <span className="font-mono text-[10px] text-ink-500">{snack}</span>
             {needsYou && <span className="h-1.5 w-1.5 rounded-full bg-syrup-400 brew-needs-you" />}
           </span>
           <span

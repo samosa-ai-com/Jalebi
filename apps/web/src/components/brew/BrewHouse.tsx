@@ -211,17 +211,21 @@ export function BrewHouse({
             {slots} burner{slots === 1 ? "" : "s"} →
           </Link>
         </div>
-        <div className="mt-2 flex gap-3 overflow-x-auto pb-1">
-          {Array.from({ length: slots }, (_, i) => (
-            <FryStation
-              key={i}
-              slot={i + 1}
-              station={stations[i] ?? null}
-              now={now}
-              onOpen={(id) => navigate(`/tasks/${id}`)}
-              onOrder={onNewTask}
-            />
-          ))}
+        {/* Centered while it fits; the inner w-max strip scrolls once
+            burners overflow the card. */}
+        <div className="mt-2 overflow-x-auto pb-1">
+          <div className="mx-auto flex w-max max-w-none gap-3 px-1">
+            {Array.from({ length: slots }, (_, i) => (
+              <FryStation
+                key={i}
+                slot={i + 1}
+                station={stations[i] ?? null}
+                now={now}
+                onOpen={(id) => navigate(`/tasks/${id}`)}
+                onOrder={onNewTask}
+              />
+            ))}
+          </div>
         </div>
       </section>
 
