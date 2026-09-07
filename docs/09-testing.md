@@ -312,3 +312,10 @@ After any code change, run the relevant tests and build before marking work done
     verified clean. Pre-existing `test_api_catalog.py` I001 left untouched.
 - **Suite totals now:** server **923 passed**, web **198 passed** (no frontend
   changes this round).
+
+- **TaskDetail round (web +8):** `TaskDetail.test.tsx` 43 tests — queued
+  polling + refresh, agent chip + vitality, single-run strip, timeline
+  search/filter, follow-up hint, prompt + waiting-message copy, tab-visible
+  resync (one pre-existing assertion widened: duplicate status pills).
+- **Suite totals now:** server **923 passed**, web **206 passed.**
+  No backend changes; daemon NOT restarted (owner constraint pending task 63).

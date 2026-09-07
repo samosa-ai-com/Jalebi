@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import type { Run } from "../types";
 import Markdown from "./Markdown";
@@ -23,6 +24,13 @@ export default function WaitingCard({
   onReject?: () => void;
 }) {
   const finished = run.finished_at ? new Date(run.finished_at).toLocaleString() : "—";
+  const [copiedMsg, setCopiedMsg] = useState(false);
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (copiedTimer.current) clearTimeout(copiedTimer.current);
+    };
+  }, []);
   return (
     <section className="rounded-xl border border-syrup-500/40 bg-syrup-500/[0.07] p-5">
       <div className="flex flex-wrap items-center gap-3">
@@ -37,6 +45,19 @@ export default function WaitingCard({
       <div className="mt-4 flex flex-wrap items-center gap-2">
         <button type="button" onClick={onReply} disabled={!canReply} className="btn-primary">
           Reply in follow-up
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            navigator.clipboard.writeText(message).catch(() => {});
+            setCopiedMsg(true);
+            if (copiedTimer.current) clearTimeout(copiedTimer.current);
+            copiedTimer.current = setTimeout(() => setCopiedMsg(false), 2000);
+          }}
+          className="btn-ghost"
+          title="Copy the waiting message"
+        >
+          {copiedMsg ? "copied ✓" : "Copy message"}
         </button>
         <button
           type="button"

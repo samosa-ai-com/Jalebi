@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -135,7 +135,8 @@ describe("TaskDetail", () => {
     renderDetail();
     expect(await screen.findByText("fix the bug")).toBeInTheDocument();
     expect(screen.getAllByText("scanning repo").length).toBeGreaterThan(0);
-    expect(screen.getByText("running")).toBeInTheDocument();
+    // Task header + single-run strip each carry a status pill.
+    expect(screen.getAllByText("running").length).toBeGreaterThanOrEqual(2);
   });
 
   it("shows which webhook event started a triggered task", async () => {
@@ -1352,5 +1353,194 @@ describe("TaskDetail (Phase 4 T7 — file browser)", () => {
     renderNoFilesTask(noRun);
     await screen.findByText("fix the bug");
     expect(screen.queryByText("Files")).toBeNull();
+  });
+});
+
+describe("TaskDetail improvements", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    FakeEventSource.instances = [];
+  });
+
+  function stubFetchPlus(task: Record<string, unknown>, extra: Record<string, unknown> = {}) {
+    const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
+      if (url.includes("/api/agents/")) {
+        return {
+          ok: true,
+          json: async () => ({
+            id: "auditor",
+            name: "Security Auditor",
+            avatar: "shield",
+          }),
+        };
+      }
+      const match = Object.entries(extra).find(([needle]) => url.includes(needle));
+      if (match) return { ok: true, json: async () => match[1] };
+      if (url.endsWith("/runs")) {
+        return { ok: true, json: async () => [task.run ?? RUN] };
+      }
+      if (url.includes("/files")) {
+        return { ok: true, json: async () => ({ path: "", entries: [] }) };
+      }
+      if (url.includes("/api/tasks")) {
+        return { ok: true, json: async () => task };
+      }
+      if (url.includes("/api/settings")) {
+        return {
+          ok: true,
+          json: async () => ({ default_backend: "opencode", default_model: "m1" }),
+        };
+      }
+      if (url.includes("/api/github/tokens")) {
+        return { ok: true, json: async () => ({ accounts: [] }) };
+      }
+      if (url.includes("/api/models")) {
+        return { ok: true, json: async () => ({ cli: "opencode", models: ["m1"] }) };
+      }
+      return { ok: true, json: async () => REPOS };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  function renderDetail() {
+    return render(
+      <MemoryRouter initialEntries={["/tasks/7"]}>
+        <Routes>
+          <Route path="/tasks/:id" element={<TaskDetail />} />
+        </Routes>
+      </MemoryRouter>
+    );
+  }
+
+  function taskFetches(fetchMock: ReturnType<typeof vi.fn>) {
+    return fetchMock.mock.calls.filter(([u]) => String(u).includes("/api/tasks/7")).length;
+  }
+
+  function stubClipboard() {
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    return writeText;
+  }
+
+  it("polls while queued and offers refresh", async () => {
+    const fetchMock = stubFetchPlus({ ...TASK, status: "queued", run: null });
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const setIntervalSpy = vi.spyOn(window, "setInterval");
+    renderDetail();
+    await screen.findByText("fix the bug");
+    expect(taskFetches(fetchMock)).toBeGreaterThanOrEqual(1);
+
+    // Queued polling ticks every 5s — fire the captured callback manually.
+    const poll = setIntervalSpy.mock.calls.find((c) => c[1] === 5000)?.[0] as
+      (() => void) | undefined;
+    expect(poll).toBeDefined();
+    await act(async () => {
+      poll!();
+    });
+    expect(taskFetches(fetchMock)).toBeGreaterThanOrEqual(2);
+
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(taskFetches(fetchMock)).toBeGreaterThanOrEqual(3);
+  });
+
+  it("shows the agent chip with avatar and live elapsed/timeout", async () => {
+    stubFetchPlus({ ...TASK, agent_id: "auditor" });
+    vi.stubGlobal("EventSource", FakeEventSource);
+    renderDetail();
+
+    expect(await screen.findByText("Security Auditor")).toBeInTheDocument();
+    expect(screen.getByTitle("Agent: Security Auditor")).toBeInTheDocument();
+    const img = screen.getByTitle("Agent: Security Auditor").querySelector("img");
+    expect(img).toHaveAttribute("src", "/avatars/shield.svg");
+    // Vitality: elapsed / timeout while running.
+    expect(screen.getByText(/\/ 30m/)).toBeInTheDocument();
+  });
+
+  it("renders the run strip for a single run", async () => {
+    stubFetchPlus(TASK);
+    vi.stubGlobal("EventSource", FakeEventSource);
+    renderDetail();
+    await screen.findByText("fix the bug");
+
+    expect(screen.getByRole("heading", { name: "Run" })).toBeInTheDocument();
+    expect(screen.getByText("#1")).toBeInTheDocument();
+  });
+
+  it("filters timeline steps by text and type", async () => {
+    stubFetchPlus(TASK);
+    vi.stubGlobal("EventSource", FakeEventSource);
+    renderDetail();
+    // The step renders in both Timeline and Console — wait for both.
+    await screen.findAllByText("scanning repo");
+
+    await userEvent.type(screen.getByPlaceholderText("Filter steps…"), "nothing-matches");
+    expect(await screen.findByText("No steps match the current filter.")).toBeInTheDocument();
+
+    await userEvent.clear(screen.getByPlaceholderText("Filter steps…"));
+    await userEvent.click(screen.getByRole("button", { name: "error" }));
+    // The message step leaves the Timeline (it stays in the Console pane).
+    const timeline = document.querySelector("ol.space-y-3");
+    expect(timeline?.textContent ?? "").not.toContain("scanning repo");
+    expect(screen.getByText(/0\/1/)).toBeInTheDocument();
+  });
+
+  it("hints that follow-ups open when the run finishes", async () => {
+    stubFetchPlus(TASK);
+    vi.stubGlobal("EventSource", FakeEventSource);
+    renderDetail();
+    await screen.findByText("fix the bug");
+
+    expect(screen.queryByText("Follow-up")).not.toBeInTheDocument();
+    expect(screen.getByText("Follow-ups open when this run finishes.")).toBeInTheDocument();
+  });
+
+  it("copies the prompt to the clipboard", async () => {
+    const writeText = stubClipboard();
+    stubFetchPlus(TASK);
+    vi.stubGlobal("EventSource", FakeEventSource);
+    renderDetail();
+    await screen.findByText("fix the bug");
+
+    await userEvent.click(screen.getByLabelText("Copy prompt"));
+    expect(writeText).toHaveBeenCalledWith("fix the bug");
+    expect(await screen.findByLabelText("Copy prompt")).toHaveTextContent("copied ✓");
+  });
+
+  it("copies the waiting message from the WaitingCard", async () => {
+    const writeText = stubClipboard();
+    stubFetchPlus({
+      ...TASK,
+      status: "needs_approval",
+      run: { ...RUN, status: "needs_approval", waiting_input: true },
+    });
+    vi.stubGlobal("EventSource", FakeEventSource);
+    renderDetail();
+
+    expect(await screen.findByText("Agent is waiting for your input")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Copy message" }));
+    expect(writeText).toHaveBeenCalledWith("scanning repo");
+  });
+
+  it("resubscribes and reloads when the tab becomes visible again", async () => {
+    const fetchMock = stubFetchPlus(TASK);
+    vi.stubGlobal("EventSource", FakeEventSource);
+    renderDetail();
+    await screen.findByText("fix the bug");
+    await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));
+    const before = taskFetches(fetchMock);
+
+    Object.defineProperty(document, "visibilityState", {
+      value: "visible",
+      configurable: true,
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+
+    await waitFor(() => expect(taskFetches(fetchMock)).toBeGreaterThan(before));
+    await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(1));
   });
 });

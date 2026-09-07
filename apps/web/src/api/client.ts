@@ -80,6 +80,7 @@ export const api = {
     ),
   getAgents: (enabledOnly = false) =>
     request<CatalogAgent[]>(`/api/agents${enabledOnly ? "?enabled=1" : ""}`),
+  getAgent: (slug: string) => request<CatalogAgent>(`/api/agents/${encodeURIComponent(slug)}`),
   createAgent: (input: {
     id: string;
     name: string;
