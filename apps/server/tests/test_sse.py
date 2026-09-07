@@ -367,3 +367,64 @@ def test_sse_live_no_duplicate_memory_and_db_replay(
     ]
     seqs = [s for s in seqs if isinstance(s, int)]
     assert seqs == [1, 2]
+
+
+def test_sse_emits_ids_and_honors_last_event_id(q: TaskQueue, app, session) -> None:
+    """Frames carry `id: <seq>` and a reconnect via `Last-Event-ID` (native
+    EventSource auto-reconnect, no `after_seq` param) backfills from the
+    durable table without duplicates."""
+    from jalebi.db import Run
+
+    settings.set_setting(session, "auto_publish", False)
+    row, _ = repos.upsert_repo(
+        session,
+        full_name=FULL_NAME,
+        default_branch="main",
+        clone_url="https://example.invalid/owner/repo.git",
+        pat_name="test",
+    )
+    task = tasks.create_task(session, type_="freeform", repo_id=row.id, prompt="do it")
+    run = Run(task_id=task.id, seq=1, status="running", session_id="ses_ids")
+    session.add(run)
+    session.commit()
+    task_id = task.id
+
+    for text in ("a", "b"):
+        q.events.publish(
+            task_id, {"type": "message", "text": text}, run_id=run.id, session=session
+        )
+    session.commit()
+
+    client = app.test_client()
+    stream_resp = client.get(
+        f"/api/tasks/{task_id}/events", headers={"Last-Event-ID": "1"}, buffered=False
+    )
+    lines: list[str] = []
+
+    def read_stream():
+        for chunk in stream_resp.response:
+            lines.append(chunk.decode())
+
+    reader = threading.Thread(target=read_stream)
+    reader.start()
+
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if any('"seq": 2' in line for line in lines):
+            break
+        time.sleep(0.01)
+    q.events.close(task_id)
+    reader.join(timeout=10)
+    assert not reader.is_alive()
+
+    body = "".join(lines)
+    # Only seq 2 was replayed (seq 1 was already seen per Last-Event-ID).
+    seqs = [
+        json.loads(line[6:]).get("seq")
+        for line in body.splitlines()
+        if line.startswith("data: ")
+    ]
+    seqs = [s for s in seqs if isinstance(s, int)]
+    assert seqs == [2]
+    # The data frame for seq 2 was preceded by a standard SSE id line.
+    assert "id: 2" in body.splitlines()

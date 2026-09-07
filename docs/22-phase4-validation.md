@@ -76,6 +76,14 @@
       per task** (scroll-bounded), each with elapsed timer, step count,
       last-message preview, backend tag, activity sparkline, and a working
       **PR link**.
+- [ ] On a long task page (tall Timeline/Console), Publish / Push-to-PR opens
+      the confirm dialog **centered in the viewport** (visible without
+      scrolling), not at the page center; artifact preview likewise. Escape
+      and backdrop-click close both.
+- [ ] Background the tab (or sleep/disconnect) mid-run for 2+ min, return:
+      the timeline resumes on its own (ping heartbeat + watchdog resubscribe,
+      no duplicates) with no manual refresh; if the run finished while away,
+      the page shows the terminal state.
 
 ## 5. T5 — presentation
 

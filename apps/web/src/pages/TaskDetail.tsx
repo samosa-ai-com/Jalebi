@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Link, useParams } from "react-router-dom";
 import { api, taskEvents } from "../api/client";
 import { StatusBadge } from "../components/StatusBadge";
@@ -817,7 +818,7 @@ function ArtifactPreview({
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
 
-  return (
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-ink-950/80 p-4"
       onClick={onClose}
@@ -862,7 +863,8 @@ function ArtifactPreview({
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
@@ -1179,8 +1181,33 @@ export default function TaskDetail() {
   const isLatest = selectedRunId === null || selectedRunId === task?.run?.id;
 
   const runId = task?.run?.id ?? null;
+  // Last time any SSE frame (event, `connected`, or `ping` heartbeat) arrived.
+  // The stall watchdog below resubscribes when this goes stale while running.
+  // Initialized to 0 and stamped on subscribe: `Date.now()` can't be called
+  // inline here (react-hooks/purity), and the subscribe effect always runs
+  // before any watchdog tick can read it.
+  const lastActivityRef = useRef<number>(0);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+    };
+  }, []);
+
+  function scheduleReconnect(delayMs: number) {
+    if (reconnectTimerRef.current) return; // one pending reconnect at a time
+    reconnectTimerRef.current = setTimeout(() => {
+      reconnectTimerRef.current = null;
+      lastActivityRef.current = Date.now();
+      load();
+      setStreamEpoch((e) => e + 1);
+    }, delayMs);
+  }
+
   useEffect(() => {
     if (!task || !running || !isLatest) return;
+    lastActivityRef.current = Date.now();
     const unsubscribe = taskEvents(
       taskId,
       (event) => {
@@ -1199,11 +1226,52 @@ export default function TaskDetail() {
         setLive([]);
         load();
       },
-      lastSeqRef.current
+      lastSeqRef.current,
+      {
+        onActivity: () => {
+          lastActivityRef.current = Date.now();
+        },
+        // Fatal socket error (browser gave up retrying): resubscribe with a
+        // fresh watermark after a short backoff.
+        onConnectionLost: () => scheduleReconnect(2000),
+      }
     );
     return unsubscribe;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [taskId, runId, running, isLatest, streamEpoch]);
+
+  // Stall watchdog: the server sends a `ping` data frame every 15 s on an
+  // idle-but-alive stream, so 45 s of silence while running means the socket
+  // is a zombie (throttled tab, slept laptop, dead TCP). Resubscribe at the
+  // current watermark — dedupe keeps the replay loss-free.
+  useEffect(() => {
+    if (!running || !isLatest) return;
+    const timer = setInterval(() => {
+      if (Date.now() - lastActivityRef.current > 45000) {
+        scheduleReconnect(0);
+      }
+    }, 10000);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [running, isLatest, streamEpoch, taskId]);
+
+  // Terminal-transition safety poll: `run.steps_json` is only committed when
+  // the run ends, so there are no live steps to merge — but if `stream_end`
+  // was missed on a dead socket, this catches the status flip and closes SSE.
+  useEffect(() => {
+    if (!running) return;
+    const timer = setInterval(() => {
+      api
+        .getTask(taskId)
+        .then((t) => {
+          if ((t.run?.id ?? null) !== lastRunIdRef.current || t.status !== task?.status) {
+            load();
+          }
+        })
+        .catch(() => {}); // poll failures just retry on the next tick
+    }, 20000);
+    return () => clearInterval(timer);
+  }, [running, taskId, task?.status, load]);
 
   // After sending a follow-up, poll until a new run appears, then refresh.
   useEffect(() => {

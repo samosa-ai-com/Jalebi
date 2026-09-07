@@ -1543,4 +1543,65 @@ describe("TaskDetail improvements", () => {
     await waitFor(() => expect(taskFetches(fetchMock)).toBeGreaterThan(before));
     await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(1));
   });
+
+  it("renders the publish dialog into document.body (viewport-centered)", async () => {
+    stubFetchPlus({
+      ...TASK,
+      status: "needs_approval",
+      run: { ...RUN, status: "needs_approval" },
+    });
+    vi.stubGlobal("EventSource", FakeEventSource);
+    renderDetail();
+    await screen.findByText("fix the bug");
+
+    await userEvent.click(screen.getByRole("button", { name: "Publish" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(document.body.contains(dialog)).toBe(true);
+    // Portaled out of the transformed TaskDetail tree (and <main>), so
+    // `fixed inset-0` centers in the viewport instead of the tall page.
+    expect(document.querySelector("main [role='dialog']")).toBeNull();
+  });
+
+  it("ignores ping heartbeats without touching the timeline", async () => {
+    stubFetchPlus(TASK);
+    vi.stubGlobal("EventSource", FakeEventSource);
+    renderDetail();
+    await screen.findByText("fix the bug");
+    await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));
+
+    const source = FakeEventSource.instances[FakeEventSource.instances.length - 1];
+    const before = document.querySelector("ol.space-y-3")?.textContent;
+    source.emit({ type: "connected" });
+    source.emit({ type: "ping" });
+    expect(document.querySelector("ol.space-y-3")?.textContent).toBe(before);
+  });
+
+  it("resubscribes with a fresh watermark after a fatal SSE error", async () => {
+    stubFetchPlus(TASK);
+    (FakeEventSource as unknown as { CLOSED?: number }).CLOSED = 2;
+    vi.stubGlobal("EventSource", FakeEventSource);
+    renderDetail();
+    await screen.findByText("fix the bug");
+    await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));
+    expect(FakeEventSource.instances.length).toBe(1);
+
+    const source = FakeEventSource.instances[0] as unknown as {
+      readyState: number;
+      onerror: (() => void) | null;
+    };
+    source.readyState = 2; // EventSource.CLOSED — the browser gave up retrying
+    vi.useFakeTimers();
+    try {
+      act(() => {
+        source.onerror?.();
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(2000);
+      });
+      expect(FakeEventSource.instances.length).toBe(2);
+      expect(FakeEventSource.instances[1].url).toContain("after_seq=0");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

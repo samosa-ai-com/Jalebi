@@ -402,12 +402,23 @@ export const api = {
     `/api/tasks/${taskId}/artifacts/${artifactId}/content`,
 };
 
+/** Optional hooks for an SSE subscription (all no-ops by default). */
+export interface TaskEventsOptions {
+  /** Fired on every received frame (events, `connected`, and `ping`
+   * heartbeats) — use it to feed a stall watchdog. */
+  onActivity?: () => void;
+  /** Fired when the EventSource reports a fatal error (`readyState ===
+   * CLOSED`), where the browser will NOT auto-reconnect on its own. */
+  onConnectionLost?: () => void;
+}
+
 /** Subscribe to a task's live SSE stream. Returns an unsubscribe function. */
 export function taskEvents(
   taskId: number,
   onEvent: (event: SseEvent) => void,
   onEnd: () => void,
-  afterSeq?: number
+  afterSeq?: number,
+  opts?: TaskEventsOptions
 ): () => void {
   // Native EventSource cannot send custom headers: when JALEBI_PASSWORD is set,
   // this relies on the browser's cached Basic credentials (from the initial
@@ -422,15 +433,29 @@ export function taskEvents(
     try {
       event = JSON.parse(message.data) as SseEvent;
     } catch {
-      return; // ignore malformed/keepalive lines
+      return; // ignore malformed lines
     }
-    if (event.type === "connected") return;
+    // `connected` and `ping` (idle heartbeat) carry no timeline payload but
+    // prove the socket is alive — report them to the watchdog, not the UI.
+    if (event.type === "connected" || event.type === "ping") {
+      opts?.onActivity?.();
+      return;
+    }
     if (event.type === "stream_end") {
       source.close();
       onEnd();
       return;
     }
+    opts?.onActivity?.();
     onEvent(event);
+  };
+  source.onerror = () => {
+    // CONNECTING (0) = the browser is already retrying on its own (with
+    // Last-Event-ID, which the server honors). CLOSED (2) = it gave up
+    // (e.g. HTTP 4xx/5xx) and will never recover without a fresh subscribe.
+    if (source.readyState === EventSource.CLOSED) {
+      opts?.onConnectionLost?.();
+    }
   };
   // Transient errors: leave the EventSource open so the browser auto-reconnects
   // instead of killing the stream and losing buffered events.
