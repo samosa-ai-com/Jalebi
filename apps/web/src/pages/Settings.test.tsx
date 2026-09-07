@@ -79,6 +79,7 @@ function makeFetchMock(settingsOverrides: Partial<typeof SETTINGS> = {}, models:
               integrity_ok: true,
               integrity_detail: null,
               busy_tasks: 0,
+              busy_screenings: 0,
             },
             restored: "data-20260101-000000.db",
             safety_backup: "data-20260102-000000.db",
@@ -94,6 +95,7 @@ function makeFetchMock(settingsOverrides: Partial<typeof SETTINGS> = {}, models:
             integrity_ok: true,
             integrity_detail: null,
             busy_tasks: 0,
+            busy_screenings: 0,
           },
         }),
       };
@@ -554,6 +556,34 @@ describe("Settings (recovery + data)", () => {
       ).toBe(true);
     });
     expect(await screen.findByText(/restored .* safety snapshot/)).toBeInTheDocument();
+  });
+
+  it("restore stays disabled while screening runs are busy", async () => {
+    const base = makeFetchMock();
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url).includes("/restore")) {
+        return {
+          ok: true,
+          json: async () => ({
+            dry_run: true,
+            preview: {
+              backup: "data-20260101-000000.db",
+              integrity_ok: true,
+              integrity_detail: null,
+              busy_tasks: 0,
+              busy_screenings: 2,
+            },
+          }),
+        };
+      }
+      return base(url, init);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Settings />);
+    await expand(/Data management/);
+    await userEvent.click(await screen.findByText("restore"));
+    expect(await screen.findByText(/2 screening run\(s\).*wait/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Restore now" })).toBeDisabled();
   });
 
   it("unchecking a backend saves the reduced enabled list", async () => {

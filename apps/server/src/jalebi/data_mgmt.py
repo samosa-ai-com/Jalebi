@@ -35,6 +35,17 @@ PRUNABLE_STATUSES = ("done", "failed", "timed_out", "cancelled", "interrupted")
 
 VALID_PRUNE_SCOPES = ("tasks", "orphans", "deliveries", "logs")
 
+# SQLite caps bound variables per statement (default 999): never pass an
+# unbounded Python id list into a single ``IN`` clause — chunk instead so
+# pruning thousands of rows can't 500 on the variable limit.
+_IN_CHUNK = 500
+
+
+def _chunked(ids: list[int], size: int = _IN_CHUNK):
+    """Yield successive slices of ``ids`` (empty input yields nothing)."""
+    for i in range(0, len(ids), size):
+        yield ids[i : i + size]
+
 
 def _dir_size(path: Path) -> int:
     """Recursive byte size of ``path`` (0 when missing; unreadable files skipped)."""
@@ -187,7 +198,7 @@ class RestoreError(Exception):
 
 
 class RestoreBusy(Exception):
-    """Tasks are queued/running — restore refused to protect live work."""
+    """Tasks or screening runs are active — restore refused to protect live work."""
 
 
 def backup_integrity(data_dir: Path, name: str) -> tuple[bool, str | None]:
@@ -221,6 +232,22 @@ def busy_task_count(session: Session) -> int:
     )
 
 
+def busy_screening_count(session: Session) -> int:
+    """Screening runs that would be endangered by a restore (queued/running).
+
+    Screening runs live in ``ScreeningRun``, not ``Task`` — without this gate
+    a restore could swap the DB out from under the scheduler/engine mid-audit.
+    """
+    return (
+        session.execute(
+            select(func.count())
+            .select_from(ScreeningRun)
+            .where(ScreeningRun.status.in_(("queued", "running")))
+        ).scalar()
+        or 0
+    )
+
+
 def restore_backup(config, session: Session, name: str, queue=None) -> dict:
     """Restore the live DB from a backup (execute path — preview first).
 
@@ -239,6 +266,8 @@ def restore_backup(config, session: Session, name: str, queue=None) -> dict:
         raise RestoreError("unknown backup")
     if busy_task_count(session) > 0:
         raise RestoreBusy("tasks are queued or running — finish or cancel them first")
+    if busy_screening_count(session) > 0:
+        raise RestoreBusy("screening runs are queued or running — wait for them first")
     ok, detail = backup_integrity(data_dir, name)
     if not ok:
         raise RestoreError(detail or "backup failed integrity check")
@@ -310,17 +339,31 @@ def restore_backup(config, session: Session, name: str, queue=None) -> dict:
     return {"restored": name, "safety_backup": safety["name"]}
 
 
+class VacuumBusy(Exception):
+    """The DB is busy with a live writer — vacuum refused, retry when idle."""
+
+
 def vacuum(data_dir: Path) -> dict:
-    """Checkpoint the WAL and rebuild the DB file; returns size before/after."""
+    """Checkpoint the WAL and rebuild the DB file; returns size before/after.
+
+    Raises ``VacuumBusy`` (mapped to 409 by the route) when another writer
+    holds the DB — the caller should retry when idle instead of 500ing.
+    """
     db_path = Path(data_dir) / "data.db"
     if not db_path.is_file():
         raise FileNotFoundError("no database yet")
     before = db_path.stat().st_size
-    conn = sqlite3.connect(str(db_path), timeout=30)
     try:
-        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        conn.execute("VACUUM")
-        conn.commit()
+        conn = sqlite3.connect(str(db_path), timeout=30)
+    except sqlite3.OperationalError as exc:
+        raise VacuumBusy(f"database is busy — retry when idle: {exc}")
+    try:
+        try:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            conn.execute("VACUUM")
+            conn.commit()
+        except sqlite3.OperationalError as exc:
+            raise VacuumBusy(f"database is busy — retry when idle: {exc}")
     finally:
         conn.close()
     return {"before": before, "after": db_path.stat().st_size}
@@ -443,19 +486,29 @@ def prune_preview(session: Session, data_dir: Path, older_than_days: int) -> dic
     """Counts of what a prune would remove (no writes)."""
     cutoff = now() - timedelta(days=max(1, older_than_days))
     task_ids = _prunable_task_ids(session, cutoff)
-    run_ids = (
-        list(session.execute(select(Run.id).where(Run.task_id.in_(task_ids))).scalars())
-        if task_ids
-        else []
-    )
-    event_rows = (
-        session.execute(
-            select(func.count()).select_from(TaskEvent).where(TaskEvent.run_id.in_(run_ids))
-        ).scalar()
-        or 0
-        if run_ids
-        else 0
-    )
+    run_count = 0
+    for chunk in _chunked(task_ids):
+        run_count += (
+            session.execute(
+                select(func.count())
+                .select_from(Run)
+                .where(Run.task_id.in_(chunk))
+            ).scalar()
+            or 0
+        )
+    # Count by task_id (not run_id) to match execute, which deletes
+    # ``TaskEvent.task_id IN (task_ids)`` — rows with ``run_id IS NULL``
+    # from older code paths are removed too, so preview must count them.
+    event_rows = 0
+    for chunk in _chunked(task_ids):
+        event_rows += (
+            session.execute(
+                select(func.count())
+                .select_from(TaskEvent)
+                .where(TaskEvent.task_id.in_(chunk))
+            ).scalar()
+            or 0
+        )
     old_deliveries = (
         session.execute(
             select(func.count())
@@ -482,7 +535,7 @@ def prune_preview(session: Session, data_dir: Path, older_than_days: int) -> dic
     return {
         "cutoff": cutoff.isoformat(),
         "tasks": {"task_ids": sorted(task_ids), "count": len(task_ids)},
-        "runs": len(run_ids),
+        "runs": run_count,
         "task_events": event_rows,
         "deliveries": old_deliveries,
         "screening_runs": len(old_screening_ids),
@@ -517,18 +570,19 @@ def prune_execute(
     if "tasks" in scopes:
         task_ids = _prunable_task_ids(session, cutoff)
         if task_ids:
-            repo_names = {
-                row[0]: row[1]
+            repo_names: dict[int, str] = {}
+            for chunk in _chunked(task_ids):
                 for row in session.execute(
                     select(Task.id, Repo.full_name)
                     .join(Repo, Repo.id == Task.repo_id)
-                    .where(Task.id.in_(task_ids))
-                ).all()
-            }
+                    .where(Task.id.in_(chunk))
+                ).all():
+                    repo_names[row[0]] = row[1]
             run_ids = tasks.delete_tasks_cascade(session, task_ids)
-            session.execute(
-                delete(TaskEvent).where(TaskEvent.task_id.in_(task_ids))
-            )
+            for chunk in _chunked(task_ids):
+                session.execute(
+                    delete(TaskEvent).where(TaskEvent.task_id.in_(chunk))
+                )
             session.commit()
             for run_id in run_ids:
                 shutil.rmtree(
@@ -590,9 +644,10 @@ def prune_execute(
         )
         old_run_ids = _old_screening_run_ids(session, cutoff)
         if old_run_ids:
-            session.execute(
-                delete(ScreeningRun).where(ScreeningRun.id.in_(old_run_ids))
-            )
+            for chunk in _chunked(old_run_ids):
+                session.execute(
+                    delete(ScreeningRun).where(ScreeningRun.id.in_(chunk))
+                )
         session.commit()
         for run_id in old_run_ids:
             shutil.rmtree(

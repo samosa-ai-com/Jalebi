@@ -1021,6 +1021,9 @@ function DataSection({
       if (res.preview.busy_tasks > 0) {
         return `dry run OK, but ${res.preview.busy_tasks} task(s) are queued or running`;
       }
+      if ((res.preview.busy_screenings ?? 0) > 0) {
+        return `dry run OK, but ${res.preview.busy_screenings} screening run(s) are queued or running`;
+      }
       return "dry run OK — type RESTORE below to swap the live database";
     });
   }
@@ -1217,6 +1220,16 @@ function DataSection({
                     </span>
                   )}
                 </li>
+                <li>
+                  {(restorePreview.busy_screenings ?? 0) === 0 ? (
+                    "No screening runs queued or running."
+                  ) : (
+                    <span className="text-amber-300">
+                      {restorePreview.busy_screenings} screening run(s) queued or running — wait for
+                      them first.
+                    </span>
+                  )}
+                </li>
               </ul>
               <p className="mt-1 text-[11px] text-ink-600">
                 Restoring takes effect immediately. A safety snapshot of the current database is
@@ -1237,7 +1250,8 @@ function DataSection({
                     busy !== null ||
                     restoreConfirm !== "RESTORE" ||
                     !restorePreview.integrity_ok ||
-                    restorePreview.busy_tasks > 0
+                    restorePreview.busy_tasks > 0 ||
+                    (restorePreview.busy_screenings ?? 0) > 0
                   }
                   className="btn-ghost text-xs text-red-300 disabled:opacity-40"
                 >

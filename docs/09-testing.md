@@ -335,3 +335,25 @@ After any code change, run the relevant tests and build before marking work done
   clone pats/env, action coverage), all fixed.
 - **Suite totals now:** server **923 passed**, web **223 passed.**
   No backend changes.
+
+- **PR #5 review fixes (server +7, web +1):** triaged the Jalebi review —
+  fixed M2/M3/M4/L1/L4/L6/L8 + C2, deliberately left M1 (product-level
+  capacity call; per-(task,run) 2000-row cap already bounds a single run),
+  L2 (bare-event semantics already in `docs/16-triggers.md`), L3 (replay
+  idempotency semantics), L5 (safe fallback beats a stale pin), L7 (review
+  premise wrong — `Run` has no `error` column; `steps_json` is the only
+  output store), C1/C3/C4 (churn/no-action).
+  - `test_api_data.py` (+4): restore 409 while a screening run is active
+    (dry-run `busy_screenings`), vacuum lock → 409, preview counts
+    legacy `run_id`-NULL events by `task_id`, `_chunked` unit test.
+  - `test_api_screening.py` (+1): rare-severity inbox fills `limit` from
+    deeper history (paged scan, 2000-run cap).
+  - `test_catalog_skills.py` (+1): unknown skill link logs a warning.
+  - `test_reliability.py` (+1): give-up note reports total attempts
+    (initial + recoveries).
+  - `Settings.test.tsx` (+1): restore button disabled + row shown while
+    screening runs are busy.
+- **Suite totals now:** server **930 passed**, web **224 passed.**
+  Ruff `src/` clean (one pre-existing I001 in `tests/test_api_catalog.py`
+  untouched); `tsc --noEmit`, production build clean (the Vite
+  large-chunk warning remains).

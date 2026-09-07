@@ -49,6 +49,11 @@ MAX_STEP_TEXT = 2000
 FINDING_KEYS = ("severity", "title", "file", "line", "detail", "recommendation")
 SEVERITIES = ("critical", "high", "medium", "low")
 
+# Upper bound on runs scanned per inbox call: severity filtering happens in
+# Python (severity lives inside the findings JSON blob), so a rare severity
+# may need several pages — this cap keeps the worst case bounded.
+_FINDINGS_SCAN_CAP = 2000
+
 # How long to wait before re-running a screen whose last run *failed* at the same
 # HEAD. ``done`` is the baseline-dedup watermark; a failed run is retried (a
 # transient flake must not permanently silence a screen), but never hot-looped.
@@ -508,6 +513,63 @@ def latest_run(session: Session, screening_id: int) -> ScreeningRun | None:
     )
 
 
+def _finding_items(
+    run: ScreeningRun,
+    screen: Screening,
+    repo_full_name: str | None,
+    severity: str | None,
+) -> list[dict[str, object]]:
+    """One run's findings as inbox rows (severity pre-filtered, fields coerced).
+
+    Stored rows predate validation (or were hand-inserted): coerce so a
+    non-string field can never crash the UI render.
+    """
+    if not run.findings_json:
+        return []
+    try:
+        parsed = json.loads(run.findings_json)
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    items: list[dict[str, object]] = []
+    for finding in parsed:
+        if not isinstance(finding, dict):
+            continue
+        if severity is not None and finding.get("severity") != severity:
+            continue
+        sev = finding.get("severity")
+        title = finding.get("title")
+        file = finding.get("file")
+        line = finding.get("line")
+        detail = finding.get("detail")
+        recommendation = finding.get("recommendation")
+        items.append(
+            {
+                "screen_id": screen.id,
+                "screen_name": screen.name,
+                "repo_id": screen.repo_id,
+                "repo_full_name": repo_full_name,
+                "run_id": run.id,
+                "head_sha": run.head_sha,
+                "finished_at": clock.to_iso(run.finished_at)
+                if run.finished_at
+                else None,
+                "severity": sev if sev in SEVERITIES else "medium",
+                "title": title if isinstance(title, str) and title else "(untitled)",
+                "file": file if isinstance(file, str) else None,
+                "line": line
+                if isinstance(line, int) and not isinstance(line, bool)
+                else None,
+                "detail": detail if isinstance(detail, str) else None,
+                "recommendation": recommendation
+                if isinstance(recommendation, str)
+                else None,
+            }
+        )
+    return items
+
+
 def list_recent_findings(
     session: Session,
     *,
@@ -519,70 +581,39 @@ def list_recent_findings(
 
     Read-only fan-out over stored runs (no new tables): newest runs first,
     each finding annotated with its screen/run context. Findings blobs are
-    already capped at store time; ``limit`` is clamped to 200 rows. The scan
-    itself is SQL-bounded (only runs with stored findings, newest N) so the
-    inbox never loads the whole runs table into memory.
+    already capped at store time; ``limit`` is clamped to 200 rows. Runs are
+    scanned newest-first in SQL-bounded pages until ``limit`` findings are
+    collected (so a rare ``severity`` still fills the page instead of being
+    cut off by the first window) or ``_FINDINGS_SCAN_CAP`` runs are scanned —
+    the inbox never loads the whole runs table into memory.
     """
     limit = max(1, min(limit, 200))
-    query = (
-        select(ScreeningRun, Screening, Repo.full_name)
-        .join(Screening, Screening.id == ScreeningRun.screening_id)
-        .join(Repo, Repo.id == Screening.repo_id)
-        .where(ScreeningRun.findings_json.is_not(None))
-        .order_by(ScreeningRun.id.desc())
-        .limit(max(limit * 5, 100))
-    )
-    if screening_id is not None:
-        query = query.where(ScreeningRun.screening_id == screening_id)
-    pairs = list(session.execute(query).all())
+    page_size = max(limit * 5, 100)
     items: list[dict[str, object]] = []
-    for run, screen, repo_full_name in pairs:
-        if len(items) >= limit:
+    offset = 0
+    while len(items) < limit and offset < _FINDINGS_SCAN_CAP:
+        query = (
+            select(ScreeningRun, Screening, Repo.full_name)
+            .join(Screening, Screening.id == ScreeningRun.screening_id)
+            .join(Repo, Repo.id == Screening.repo_id)
+            .where(ScreeningRun.findings_json.is_not(None))
+            .order_by(ScreeningRun.id.desc())
+            .limit(page_size)
+            .offset(offset)
+        )
+        if screening_id is not None:
+            query = query.where(ScreeningRun.screening_id == screening_id)
+        pairs = list(session.execute(query).all())
+        if not pairs:
             break
-        try:
-            parsed = json.loads(run.findings_json)
-        except (json.JSONDecodeError, ValueError, TypeError):
-            continue
-        if not isinstance(parsed, list):
-            continue
-        for finding in parsed:
+        offset += len(pairs)
+        for run, screen, repo_full_name in pairs:
             if len(items) >= limit:
                 break
-            if not isinstance(finding, dict):
-                continue
-            if severity is not None and finding.get("severity") != severity:
-                continue
-            # Stored rows predate validation (or were hand-inserted): coerce so
-            # a non-string field can never crash the UI render.
-            sev = finding.get("severity")
-            title = finding.get("title")
-            file = finding.get("file")
-            line = finding.get("line")
-            detail = finding.get("detail")
-            recommendation = finding.get("recommendation")
-            items.append(
-                {
-                    "screen_id": screen.id,
-                    "screen_name": screen.name,
-                    "repo_id": screen.repo_id,
-                    "repo_full_name": repo_full_name,
-                    "run_id": run.id,
-                    "head_sha": run.head_sha,
-                    "finished_at": clock.to_iso(run.finished_at)
-                    if run.finished_at
-                    else None,
-                    "severity": sev if sev in SEVERITIES else "medium",
-                    "title": title if isinstance(title, str) and title else "(untitled)",
-                    "file": file if isinstance(file, str) else None,
-                    "line": line
-                    if isinstance(line, int) and not isinstance(line, bool)
-                    else None,
-                    "detail": detail if isinstance(detail, str) else None,
-                    "recommendation": recommendation
-                    if isinstance(recommendation, str)
-                    else None,
-                }
-            )
+            for entry in _finding_items(run, screen, repo_full_name, severity):
+                if len(items) >= limit:
+                    break
+                items.append(entry)
     return items
 
 

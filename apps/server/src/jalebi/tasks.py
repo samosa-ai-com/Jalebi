@@ -357,28 +357,39 @@ def delete_tasks_cascade(session: Session, task_ids: list[int]) -> list[int]:
     wrap the cascade in its own transaction boundaries. ``_cleanup_partial``
     is the one caller that commits itself (to survive a rollbacked parent
     transaction on IntegrityError).
+
+    ``IN`` lists are chunked (SQLite caps bound variables per statement) so
+    pruning thousands of tasks can't 500 on the variable limit.
     """
 
     task_ids = list(task_ids)
     if not task_ids:
         return []
-    run_ids = list(
-        session.execute(select(Run.id).where(Run.task_id.in_(task_ids))).scalars()
-    )
-    # Phase 4 T4.1 — drop dep edges in both directions.
-    session.execute(
-        delete(TaskDependency).where(
-            TaskDependency.task_id.in_(task_ids)
-            | TaskDependency.depends_on_id.in_(task_ids)
+    # Local chunking (not importing data_mgmt — tasks is the lower layer).
+    chunks = [task_ids[i : i + 500] for i in range(0, len(task_ids), 500)]
+    run_ids: list[int] = []
+    for chunk in chunks:
+        run_ids.extend(
+            session.execute(select(Run.id).where(Run.task_id.in_(chunk))).scalars()
         )
-    )
-    session.execute(delete(Followup).where(Followup.task_id.in_(task_ids)))
-    session.execute(delete(ReviewAssignment).where(ReviewAssignment.task_id.in_(task_ids)))
-    session.execute(delete(CheckRun).where(CheckRun.task_id.in_(task_ids)))
+    # Phase 4 T4.1 — drop dep edges in both directions.
+    for chunk in chunks:
+        session.execute(
+            delete(TaskDependency).where(
+                TaskDependency.task_id.in_(chunk)
+                | TaskDependency.depends_on_id.in_(chunk)
+            )
+        )
+        session.execute(delete(Followup).where(Followup.task_id.in_(chunk)))
+        session.execute(delete(ReviewAssignment).where(ReviewAssignment.task_id.in_(chunk)))
+        session.execute(delete(CheckRun).where(CheckRun.task_id.in_(chunk)))
     if run_ids:
-        session.execute(delete(Artifact).where(Artifact.run_id.in_(run_ids)))
-        session.execute(delete(Run).where(Run.id.in_(run_ids)))
-    session.execute(delete(Task).where(Task.id.in_(task_ids)))
+        run_chunks = [run_ids[i : i + 500] for i in range(0, len(run_ids), 500)]
+        for chunk in run_chunks:
+            session.execute(delete(Artifact).where(Artifact.run_id.in_(chunk)))
+            session.execute(delete(Run).where(Run.id.in_(chunk)))
+    for chunk in chunks:
+        session.execute(delete(Task).where(Task.id.in_(chunk)))
     return run_ids
 
 

@@ -9,7 +9,7 @@ from datetime import timedelta
 from flask.testing import FlaskClient
 from sqlalchemy import select, update
 
-from jalebi import db, repos, tasks
+from jalebi import data_mgmt, db, repos, tasks
 from jalebi.config import Config
 
 
@@ -337,3 +337,77 @@ def test_restore_refuses_when_busy_and_unknown(client: FlaskClient, session) -> 
     assert client.get("/api/data/backups/nope.db/restore").status_code == 404
     resp = client.post("/api/data/backups/nope.db/restore", json={"dry_run": False})
     assert resp.status_code == 404
+
+
+def test_restore_refuses_when_screening_running(
+    client: FlaskClient, session
+) -> None:
+    """Restore is refused (409) while a screening run is queued/running (M3)."""
+    repo_id = _repo(session)
+    screen = db.Screening(repo_id=repo_id, name="s", system_prompt="p")
+    session.add(screen)
+    session.flush()
+    session.add(
+        db.ScreeningRun(screening_id=screen.id, head_sha="abc", status="running")
+    )
+    session.commit()
+    backup = client.post("/api/data/backups").get_json()
+
+    dry = client.post(
+        f"/api/data/backups/{backup['name']}/restore", json={"dry_run": True}
+    ).get_json()
+    assert dry["dry_run"] is True
+    assert dry["preview"]["busy_screenings"] == 1
+
+    resp = client.post(
+        f"/api/data/backups/{backup['name']}/restore",
+        json={"dry_run": False, "confirm": "RESTORE"},
+    )
+    assert resp.status_code == 409
+
+
+def test_vacuum_busy_returns_409(client: FlaskClient, monkeypatch) -> None:
+    """A locked DB maps vacuum to 409 (retry when idle), not 500 (M4)."""
+
+    def _locked(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(sqlite3, "connect", _locked)
+    resp = client.post("/api/data/vacuum")
+    assert resp.status_code == 409
+    assert "idle" in resp.get_json()["error"]
+
+
+def test_prune_preview_counts_legacy_null_run_events(
+    client: FlaskClient, session
+) -> None:
+    """Preview counts TaskEvent by task_id so legacy run_id-NULL rows agree
+    with what execute deletes (L8)."""
+    repo_id = _repo(session)
+    old = tasks.create_task(session, type_="freeform", repo_id=repo_id, prompt="old")
+    run = db.Run(
+        task_id=old.id, seq=1, status="done",
+        started_at=db.now(), finished_at=db.now(),
+    )
+    session.add(run)
+    session.flush()
+    session.add(db.TaskEvent(task_id=old.id, run_id=run.id, seq=1, payload_json="{}"))
+    session.add(db.TaskEvent(task_id=old.id, run_id=None, seq=2, payload_json="{}"))
+    session.commit()
+    _age_task(session, old.id)
+    preview = client.post(
+        "/api/data/prune", json={"older_than_days": 30, "scopes": ["tasks"]}
+    ).get_json()["preview"]
+    assert preview["task_events"] == 2
+
+
+def test_chunked_slices_lists() -> None:
+    """The prune IN-chunk helper keeps every statement under the variable
+    limit while preserving order and membership (M2)."""
+    assert list(data_mgmt._chunked([])) == []
+    assert list(data_mgmt._chunked([1, 2, 3], size=2)) == [[1, 2], [3]]
+    ids = list(range(1200))
+    chunks = list(data_mgmt._chunked(ids))
+    assert len(chunks) == 3
+    assert all(len(c) <= 500 for c in chunks)
+    assert [i for c in chunks for i in c] == ids

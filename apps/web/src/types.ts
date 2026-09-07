@@ -274,6 +274,7 @@ export interface RestorePreview {
   integrity_ok: boolean;
   integrity_detail: string | null;
   busy_tasks: number;
+  busy_screenings: number;
 }
 
 export interface DetectedIde {

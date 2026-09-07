@@ -155,3 +155,22 @@ def test_agent_description_avatar_validation(session) -> None:
     assert data["description"] == "Finds vulns."
     assert data["avatar"] is None
     assert data["skill_ids"] == []
+
+
+def test_resolve_skipped_slug_warns(session, caplog) -> None:
+    """A link outliving its skill logs a warning — a deleted-then-recreated
+    skill must not silently change agent behavior (L4)."""
+    import json
+    import logging
+
+    _skill(session)
+    agent = catalog.create_agent(
+        session, id="a", name="A", skill_ids=["secure-coding"]
+    )
+    # Simulate a skill deleted out-of-band (the API refuses this at write).
+    agent.skill_ids_json = json.dumps(["secure-coding", "gone-skill"])
+    session.commit()
+    with caplog.at_level(logging.WARNING, logger="jalebi.catalog"):
+        resolved = catalog.resolve_skills(session, agent)
+    assert [s["name"] for s in resolved] == ["Secure Coding"]
+    assert any("gone-skill" in (r.message or "") for r in caplog.records)

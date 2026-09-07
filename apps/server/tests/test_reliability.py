@@ -797,6 +797,44 @@ def test_maybe_recover_gives_up_at_cap(q, session, repo_row, monkeypatch) -> Non
     assert notified == [1]  # exactly one give-up notification
 
 
+def test_give_up_message_reports_total_attempts(q, session, repo_row, monkeypatch) -> None:
+    """The give-up note counts the initial run plus recoveries (L6).
+
+    With max_attempts=3 and retry_count=3 the task ran 4 times total
+    (1 initial + 3 recoveries), so the message must say "4 attempt(s)".
+    """
+    _no_publish(session)
+    settings.set_setting(
+        session,
+        "retry_policy",
+        {"auto_retry": True, "max_attempts": 3, "non_retryable_patterns": []},
+    )
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
+    task.retry_count = 3  # cap already reached
+    run = Run(
+        task_id=task.id,
+        seq=4,
+        session_id="ses_x",
+        status="failed",
+        started_at=now(),
+        finished_at=now(),
+        steps_json=json.dumps([{"type": "error", "text": "boom", "ts": now().isoformat()}]),
+    )
+    session.add(run)
+    task.status = "failed"
+    session.commit()
+
+    import types as _types
+
+    state = _types.SimpleNamespace(last_step_text=None, last_phase=None)
+    q._maybe_recover(session, task, run, repo_row, state)
+
+    latest = tasks.latest_run(session, task.id)
+    assert latest is not None
+    steps = json.loads(latest.steps_json or "[]")
+    assert any("after 4 attempt(s)" in str(s.get("text") or "") for s in steps)
+
+
 def test_maybe_recover_non_retryable_fails_fast(q, session, repo_row, monkeypatch) -> None:
     """A wrong-model failure never recovers, even on the first attempt."""
     _no_publish(session)

@@ -55,7 +55,7 @@ Each screening run:
 | `DELETE /api/screenings/<id>` | Delete (cascades runs; refused while a run is in flight). |
 | `POST /api/screenings/<id>/run` | **Run now** — 409 if a run is already in flight; otherwise asynchronous (returns 200 immediately), forces past baseline dedup; preflight failures are recorded as failed runs (masked). The card waits for the new run row before refreshing. |
 | `GET /api/screenings/<id>/runs` | Run history (findings included). |
-| `GET /api/screenings/findings` | Unified newest-first findings inbox across screens (`limit` ≤ 200, `severity`, `screen_id` filters) — read-only fan-out with screen/repo/run context; SQL-bounded scan, coerced fields. |
+| `GET /api/screenings/findings` | Unified newest-first findings inbox across screens (`limit` ≤ 200, `severity`, `screen_id` filters) — read-only fan-out with screen/repo/run context; paged SQL-bounded scan (pages until `limit` fills under a severity filter, 2000-run cap), coerced fields. |
 | `GET /api/screenings/runs/<id>/events` | SSE stream of a run's live events (unknown ids 404). |
 
 ## 6. UI

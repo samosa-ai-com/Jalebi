@@ -14,6 +14,7 @@ but is FK-less — every write path validates the slug here.
 """
 
 import json
+import logging
 import re
 
 from sqlalchemy import func, select
@@ -22,6 +23,8 @@ from sqlalchemy.orm import Session
 from jalebi import clock
 from jalebi.adapters import available_adapters
 from jalebi.db import CatalogAgent, now
+
+logger = logging.getLogger(__name__)
 
 AGENT_KINDS = ("general", "reviewer")
 ALLOWED_CLIS = tuple(available_adapters())
@@ -367,13 +370,18 @@ def resolve_skills(
     """The agent's effective skill list for a run: library skills in link
     order, then legacy inline extras (deduplicated by name, library wins).
     Unknown link slugs are skipped — a deleted-then-recreated skill never
-    breaks a run.
+    breaks a run (the skip is logged so a silently changed agent is visible).
     """
     resolved: list[dict[str, str]] = []
     seen: set[str] = set()
     for slug in _load_skill_ids(agent.skill_ids_json):
         skill = skill_by_id(session, slug)
         if skill is None:
+            logger.warning(
+                "catalog agent %r links unknown skill %r — skipping",
+                agent.id,
+                slug,
+            )
             continue
         resolved.append({"name": skill.name, "content": skill.content})
         seen.add(skill.name)

@@ -60,9 +60,10 @@ def restore_backup(name: str) -> ResponseReturnValue:
 
     Body: ``{"dry_run": true}`` (default) returns integrity + idle checks
     without writing anything. Execute with ``{"dry_run": false, "confirm":
-    "RESTORE"}``: refuses while tasks are queued/running (409) or the backup
-    fails integrity (400); otherwise swaps the live DB (safety snapshot first,
-    rollback on failure) and re-syncs clock + queue.
+    "RESTORE"}``: refuses while tasks are queued/running or screening runs
+    are queued/running (409) or the backup fails integrity (400); otherwise
+    swaps the live DB (safety snapshot first, rollback on failure) and
+    re-syncs clock + queue.
     """
     payload = request.get_json(silent=True) or {}
     if not isinstance(payload, dict):
@@ -77,6 +78,7 @@ def restore_backup(name: str) -> ResponseReturnValue:
         "integrity_ok": ok,
         "integrity_detail": detail,
         "busy_tasks": data_mgmt.busy_task_count(session),
+        "busy_screenings": data_mgmt.busy_screening_count(session),
     }
     if payload.get("dry_run", True) or payload.get("confirm") != "RESTORE":
         return jsonify({"dry_run": True, "preview": preview})
@@ -95,12 +97,18 @@ def restore_backup(name: str) -> ResponseReturnValue:
 
 @bp.post("/vacuum")
 def vacuum() -> ResponseReturnValue:
-    """Checkpoint the WAL + rebuild the DB file; returns size before/after."""
+    """Checkpoint the WAL + rebuild the DB file; returns size before/after.
+
+    409 when a live writer holds the DB (retry when idle); 404 when there is
+    no database yet.
+    """
     config: Config = current_app.config["JALEBI_CONFIG"]
     try:
         return jsonify(data_mgmt.vacuum(config.data_dir))
     except FileNotFoundError as exc:
         return jsonify({"error": str(exc)}), 404
+    except data_mgmt.VacuumBusy as exc:
+        return jsonify({"error": str(exc)}), 409
     except Exception as exc:
         return jsonify({"error": f"vacuum failed: {exc}"}), 500
 

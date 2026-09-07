@@ -1851,8 +1851,9 @@ class TaskQueue:
             # Final state: stay failed, explain why on the timeline, and send
             # the ONE give-up notification (suppressed in _stream_and_finish).
             if decision == "give_up_cap":
+                total_attempts = (task.retry_count or 0) + 1
                 text = (
-                    f"Auto-recovery gave up after {task.retry_count} attempt(s) "
+                    f"Auto-recovery gave up after {total_attempts} attempt(s) "
                     f"({reason}). Fix the underlying issue and re-run manually."
                 )
             else:

@@ -407,3 +407,33 @@ def test_findings_inbox_coerces_malformed_rows(client, repo_row, session):
     assert isinstance(items[0]["title"], str)
     assert items[0]["file"] is None
     assert items[0]["line"] is None
+
+
+def test_findings_inbox_severity_fills_limit_from_deeper_history(
+    client, repo_row, session
+):
+    """A rare severity pages past the first window until `limit` fills (L1).
+
+    5 older critical runs sit underneath 105 newer low runs: the old
+    single-window scan returned nothing for severity=critical; the paged scan
+    returns all 5.
+    """
+    res = client.post("/api/screenings", json=_payload(repo_row))
+    screen_id = res.get_json()["id"]
+    for i in range(5):
+        _make_run(
+            session, screen_id,
+            [{"severity": "critical", "title": f"crit-{i}"}],
+            head=f"crit{i}",
+        )
+    for i in range(105):
+        _make_run(
+            session, screen_id,
+            [{"severity": "low", "title": f"low-{i}"}],
+            head=f"low{i}",
+        )
+    res = client.get("/api/screenings/findings?severity=critical&limit=5")
+    assert res.status_code == 200
+    items = res.get_json()
+    assert len(items) == 5
+    assert {i["title"] for i in items} == {f"crit-{i}" for i in range(5)}
