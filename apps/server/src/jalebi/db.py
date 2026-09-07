@@ -599,6 +599,11 @@ def _set_sqlite_pragmas(dbapi_connection, _connection_record) -> None:
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA foreign_keys=ON")
     cursor.execute("PRAGMA journal_mode=WAL")
+    # WAL serializes writers: concurrent reviewer runs otherwise hit
+    # "database is locked" on the 5s driver default and poison their session
+    # (task 63). Wait up to 30s instead of failing fast — well under the
+    # 60-minute task timeout, and readers never block under WAL.
+    cursor.execute("PRAGMA busy_timeout=30000")
     cursor.close()
 
 

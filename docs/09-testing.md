@@ -301,3 +301,14 @@ After any code change, run the relevant tests and build before marking work done
     form, search/account filter, statuses toggle, disconnected + reconnect,
     refresh, GitHub-page empty state.
 - **Suite totals now:** server **920 passed**, web **198 passed.**
+
+- **Task-63 lock-crash fix (server +3):**
+  - `test_events_concurrency.py` (+3, new file): threaded publishers lose
+    nothing; lock-failure isolation (caller session untouched); memory-only
+    without run_id.
+  - Independently validated by AGY (approve): caught a real showstopper
+    (`db.get_session` factory unusable on worker threads → `db.Session`),
+    snapshot-before-try for all three handlers, `_run_followup` repair
+    verified clean. Pre-existing `test_api_catalog.py` I001 left untouched.
+- **Suite totals now:** server **923 passed**, web **198 passed** (no frontend
+  changes this round).

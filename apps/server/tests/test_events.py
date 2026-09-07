@@ -219,7 +219,7 @@ def test_no_automatic_event_prune(session, config) -> None:
     session.add(run)
     session.commit()
 
-    q = TaskQueue(config, db_session_factory=db_mod.get_session)
+    q = TaskQueue(config, db_session_factory=db_mod.Session)
     assert q.events._prune_callback is None
     for i in range(5):
         q.events.publish(

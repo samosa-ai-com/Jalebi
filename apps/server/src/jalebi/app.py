@@ -342,8 +342,12 @@ def create_app(config: Config | None = None) -> Flask:
         finally:
             session.close()
 
+    # NOTE: the factory must be the plain sessionmaker, NOT db.get_session:
+    # event persistence runs on worker threads with no Flask app context, and
+    # get_session() is request-scoped (Flask `g`) — it raises RuntimeError
+    # outside a request. db.Session() is context-free.
     app.config["JALEBI_QUEUE"] = TaskQueue(
-        config, db_session_factory=db.get_session
+        config, db_session_factory=db.Session
     )
     app.config["JALEBI_SCREENING"] = ScreeningScheduler(config)
     app.config["JALEBI_POLLER"] = Poller(

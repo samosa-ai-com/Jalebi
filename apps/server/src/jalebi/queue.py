@@ -513,10 +513,10 @@ class TaskQueue:
                 event = AgentEvent(type="message", text="Run cancelled by user.")
             if event.type in ("step", "message", "tool_call", "done", "error"):
                 entry = self._step_from_event(event, masker)
-                # Phase 4 T4.3 — durable SSE timeline. ``session`` is the
-                # already-open ``_stream_and_finish`` session; events.publish
-                # inserts a task_events row in the same transaction.
-                self.events.publish(task.id, entry, run_id=run.id, session=session)
+                # Phase 4 T4.3 — durable SSE timeline. events.publish persists
+                # each event on its own short-lived session (never this worker
+                # session — sharing it poisoned workers on lock contention).
+                self.events.publish(task.id, entry, run_id=run.id)
                 # Persist tool_call too so a reload doesn't lose console lines.
                 steps.append(entry)
                 if event.type in ("step", "message", "done", "error"):
@@ -762,6 +762,10 @@ class TaskQueue:
     def _run_task(self, task_id: int) -> None:
         session = Session()
         run: Run | None = None
+        # Plain-int snapshot for the except handler (see _run_review): reading
+        # run.id on a poisoned/expired session can raise, which would skip the
+        # run-failed marking and freeze the run at `running`.
+        run_id: int | None = None
         state: _RunState | None = None
         # Initialized here so the exception path can (best-effort) close out the
         # commit status even if the failure happened mid-setup.
@@ -862,6 +866,7 @@ class TaskQueue:
             run = self._prepare_run(session, task, cli)
             run.pat_name = task.pat_name
             session.commit()
+            run_id = run.id
 
             git = GitWorkspace(self.config)
             git.ensure_mirror(repo.full_name, repo.clone_url, token)
@@ -908,9 +913,14 @@ class TaskQueue:
             session.commit()
             self._maybe_recover(session, task, run, repo, state, masker)
         except Exception:
+            # Roll back FIRST (see _run_review): the session may be poisoned by
+            # a failed flush, and even reading run.id can raise on it. The
+            # logger uses the plain-int task_id arg, never the ORM object.
+            try:
+                session.rollback()
+            except Exception:
+                pass
             logger.exception("task %s run failed", task_id)
-            run_id = run.id if run is not None else None
-            session.rollback()
             if state is not None and state.handle is not None:
                 _kill_proc(state.handle.proc)
             with self._running_lock:
@@ -968,6 +978,12 @@ class TaskQueue:
         run = self._prepare_run(session, task, cli)
         run.pat_name = task.pat_name
         session.commit()
+        # Plain-int snapshots for the except handler below: after a session
+        # failure (e.g. a locked flush), attribute access on ORM objects can
+        # raise while lazy-loading expired state — the handler must never touch
+        # the objects themselves (task 63: even the logger call crashed).
+        task_id = task.id
+        run_id = run.id
 
         git: GitWorkspace | None = None
         try:
@@ -1028,29 +1044,38 @@ class TaskQueue:
             self._complete_status(session, task, repo, run, git, token)
             session.commit()
         except Exception:
-            logger.exception("pr_review task %s failed", task.id)
-            run_id = run.id
-            session.rollback()
+            # Roll back FIRST: the session may be poisoned by a failed flush
+            # (PendingRollbackError). Everything below uses only plain-int ids
+            # and freshly re-fetched rows — never the possibly-stale objects.
+            try:
+                session.rollback()
+            except Exception:
+                pass
+            logger.exception("pr_review task %s failed", task_id)
             if state.handle is not None:
                 _kill_proc(state.handle.proc)
             with self._running_lock:
-                self._running.pop(task.id, None)
+                self._running.pop(task_id, None)
             run = session.get(Run, run_id)
+            task = session.get(Task, task_id)
             if run is not None:
                 run.status = "failed"
                 run.finished_at = now()
-            if task.status not in ("cancelled",):
+            if task is not None and task.status not in ("cancelled",):
                 task.status = "failed"
                 task.updated_at = now()
             session.commit()
             # Best-effort: a crashed review must not leave a forever-`pending`
             # status on the PR head (never raise out of the handler).
-            if git is not None:
+            if git is not None and task is not None and run is not None:
                 try:
                     self._complete_status(session, task, repo, run, git, token)
                 except Exception:
                     logger.exception("could not set terminal status after review failure")
-            reviews.set_assignment_status(session, task.id, "failed", run_id=run_id)
+            try:
+                reviews.set_assignment_status(session, task_id, "failed", run_id=run_id)
+            except Exception:
+                logger.exception("could not mark review assignment failed")
         return run
 
     def _post_review(
@@ -1320,6 +1345,10 @@ class TaskQueue:
         """
         session = Session()
         run: Run | None = None
+        # Plain-int snapshot for the except handler (see _run_review): reading
+        # run.id on a poisoned/expired session can raise, which would skip the
+        # run-failed marking and freeze the run at `running`.
+        run_id: int | None = None
         state: _RunState | None = None
         repo: Repo | None = None
         token: str | None = None
@@ -1401,6 +1430,7 @@ class TaskQueue:
             run.pat_name = pat_name or task.pat_name
             run.model = effective_model
             session.commit()
+            run_id = run.id
 
             git = GitWorkspace(self.config)
             git.ensure_mirror(repo.full_name, repo.clone_url, token)
@@ -1492,9 +1522,14 @@ class TaskQueue:
             session.commit()
             self._maybe_recover(session, task, run, repo, state, masker)
         except Exception:
+            # Roll back FIRST (see _run_review): the session may be poisoned by
+            # a failed flush, and even reading run.id can raise on it. The
+            # logger uses the plain-int task_id arg, never the ORM object.
+            try:
+                session.rollback()
+            except Exception:
+                pass
             logger.exception("follow-up for task %s failed", task_id)
-            run_id = run.id if run is not None else None
-            session.rollback()
             if state is not None and state.handle is not None:
                 _kill_proc(state.handle.proc)
             with self._running_lock:

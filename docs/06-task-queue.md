@@ -165,7 +165,12 @@ never fail the caller.
 
 `events.py` publishes every event to the in-memory ring buffer **and**
 to the durable `task_events` table (via `replay_from_db` on the SSE route
-after a restart). Timeline data is **never auto-deleted** (owner decision):
+after a restart). Persistence runs on a **dedicated short-lived session per
+event**, never the worker's long-lived session: sharing it meant one locked
+flush (`database is locked` under concurrent reviewers) poisoned the worker
+into a `PendingRollbackError` cascade that froze the run at `running` (task
+63). A persistence failure now affects only that event. Timeline data is
+**never auto-deleted** (owner decision):
 no startup sweep, no publish-path trim — the table grows until pruned
 manually via Settings → Data management. `prune_task_events` remains only
 as a utility (covered by its unit test). The

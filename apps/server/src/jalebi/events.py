@@ -112,10 +112,13 @@ class TaskEvents:
     ) -> None:
         """Publish an event: bump seq, append to buffer, fan out to subscribers.
 
-        When ``self._db_session_factory`` is wired and ``session`` is provided,
-        also insert a ``task_events`` row. Persistence happens under the same
-        transaction as the caller (no implicit commit). Per-(task,run) cap is
-        trimmed via ``_prune_callback`` if available.
+        Persistence (a ``task_events`` row) runs on a **dedicated short-lived
+        session**, never the caller's worker session: sharing one long-lived
+        transaction across a whole run meant a single locked flush poisoned the
+        worker and crashed it (task 63 — ``database is locked`` → cascade of
+        ``PendingRollbackError``). A persistence failure now affects only that
+        one event (still live in memory); the run is untouched. The ``session``
+        parameter is retained for back-compat but ignored.
         """
         with self._lock:
             key = (task_id, run_id)
@@ -130,26 +133,40 @@ class TaskEvents:
             for q in list(self._subs.get(task_id, [])):
                 q.put(payload)
 
-        # Persistence (Phase 4 T4.3) — outside the lock; uses the caller's session.
-        if self._db_session_factory is not None and session is not None:
+        # Persistence (Phase 4 T4.3) — outside the lock, on its own session.
+        if self._db_session_factory is not None and run_id is not None:
+            own_session = None
             try:
                 from jalebi.db import TaskEvent  # local import keeps memory-only
                 # = tests free of the db dependency
 
-                event = TaskEvent(
-                    task_id=task_id,
-                    run_id=run_id,
-                    seq=payload["seq"],
-                    payload_json=json.dumps(payload, default=str),
+                own_session = self._db_session_factory()
+                own_session.add(
+                    TaskEvent(
+                        task_id=task_id,
+                        run_id=run_id,
+                        seq=payload["seq"],
+                        payload_json=json.dumps(payload, default=str),
+                    )
                 )
-                session.add(event)
-                session.flush()  # surface FK errors early without committing
+                own_session.commit()
             except Exception:
+                if own_session is not None:
+                    try:
+                        own_session.rollback()
+                    except Exception:
+                        pass
                 logger.exception(
                     "task_events persistence failed for task %s (event still live)",
                     task_id,
                 )
-            if self._prune_callback is not None and run_id is not None:
+            finally:
+                if own_session is not None:
+                    try:
+                        own_session.close()
+                    except Exception:
+                        pass
+            if self._prune_callback is not None:
                 try:
                     self._prune_callback(run_id)
                 except Exception:

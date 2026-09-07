@@ -20,6 +20,23 @@ At startup `main()` calls `TaskQueue.recover()`, which:
 
 `interrupted` tasks are resumable via **Re-run** (fresh session) or **Follow-up** (if a session id survived).
 
+## 1b. Concurrent-writer hardening (task 63)
+
+Two reviewer runs writing `task_events` concurrently once collided past the
+driver's lock timeout; the failed flush poisoned the worker session and every
+later DB touch (failure marking, retries, even the logger call) raised
+`PendingRollbackError`, freezing the run at `running` with a dead PID. Three
+defenses, all in place:
+
+- `PRAGMA busy_timeout=30000` (in `db.py`'s connect pragmas): WAL serializes
+  writers, so wait instead of failing fast.
+- Event persistence runs on a dedicated short-lived session per event
+  (`events.publish`), never the worker's transaction — a locked event affects
+  only itself (see `docs/06`).
+- The `_run_task` / `_run_review` / `_run_followup` failure handlers roll back
+  first and use only plain-int ids plus freshly re-fetched rows — they can no
+  longer crash on a poisoned session.
+
 ## 2. Live concurrency control (PRD §F3)
 
 - `TaskQueue.set_concurrency(n)` resizes the worker pool at runtime:
