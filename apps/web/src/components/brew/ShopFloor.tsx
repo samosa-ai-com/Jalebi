@@ -7,23 +7,32 @@
 import { Link } from "react-router-dom";
 import type { Task } from "../../types";
 import { FryStation, type StationTask } from "./FryStation";
-import { snackForType } from "./snacks";
+import { snackForType, type SnackKind } from "./snacks";
+
+export interface MenuRow {
+  type: string;
+  total: number;
+}
 
 export function ShopFloor({
   stations,
   slots,
   served,
+  menu,
   now,
   onOpen,
   onOrder,
+  onNewTaskKind,
 }: {
   stations: StationTask[];
   slots: number;
   /** Most recent done tasks (max 3) for the serving counter. */
   served: Task[];
+  menu: MenuRow[];
   now: number;
   onOpen: (id: number) => void;
   onOrder: () => void;
+  onNewTaskKind: (kind: SnackKind) => void;
 }) {
   const queued = stations.filter((s) => s.task.status === "queued");
   return (
@@ -31,6 +40,31 @@ export function ShopFloor({
       className="surface flex min-h-0 flex-col px-4 py-3"
       aria-label="Karhais (cooking pots)"
     >
+      <div
+        className="mb-2 flex items-center gap-1.5 overflow-x-auto"
+        role="group"
+        aria-label="Today's menu"
+      >
+        <span className="shrink-0 font-mono text-[10px] uppercase tracking-wide text-ink-500">
+          Today&apos;s menu
+        </span>
+        {menu.map((m) => (
+          <button
+            key={m.type}
+            type="button"
+            onClick={() => onNewTaskKind(snackForType(m.type))}
+            title={`Order a ${snackForType(m.type)} (${m.type})`}
+            className="flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full border border-ink-800 px-2 py-0.5 transition-colors hover:border-syrup-500/60 hover:bg-syrup-500/10"
+          >
+            <span className="font-mono text-[11px] text-ink-200">{snackForType(m.type)}</span>
+            <span className="font-mono text-[10px] text-ink-500">
+              {m.type} · {m.total}
+            </span>
+            <span className="font-mono text-[10px] text-syrup-300">New →</span>
+          </button>
+        ))}
+      </div>
+
       <div className="flex items-baseline justify-between gap-2">
         <h3 className="panel-title">Karhais (cooking pots)</h3>
         <Link

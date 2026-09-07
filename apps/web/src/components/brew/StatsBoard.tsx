@@ -71,39 +71,37 @@ export function StatsBoard({ tasks, now }: { tasks: Task[]; now: number }) {
   }, [tasks, now]);
 
   return (
-    <section className="surface px-3 py-2.5" aria-label="Shop stats">
+    <section className="surface px-3 py-2" aria-label="Shop stats">
       <h3 className="panel-title">Today</h3>
-      <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-2">
+      <dl className="mt-1.5 grid grid-cols-4 gap-2">
         <div>
           <dt className="font-mono text-[10px] uppercase tracking-wide text-ink-500">served</dt>
-          <dd className="font-mono text-xl tabular-nums text-ink-100">{stats.doneToday}</dd>
+          <dd className="font-mono text-lg tabular-nums text-ink-100">{stats.doneToday}</dd>
         </div>
         <div>
           <dt className="font-mono text-[10px] uppercase tracking-wide text-ink-500">needs you</dt>
           <dd
-            className={`font-mono text-xl tabular-nums ${stats.needsYou > 0 ? "text-syrup-300" : "text-ink-100"}`}
+            className={`font-mono text-lg tabular-nums ${stats.needsYou > 0 ? "text-syrup-300" : "text-ink-100"}`}
           >
             {stats.needsYou}
           </dd>
         </div>
         <div>
           <dt className="font-mono text-[10px] uppercase tracking-wide text-ink-500">spoiled</dt>
-          <dd className="font-mono text-xl tabular-nums text-ink-100">{stats.failedToday}</dd>
+          <dd className="font-mono text-lg tabular-nums text-ink-100">{stats.failedToday}</dd>
         </div>
         <div>
-          <dt className="font-mono text-[10px] uppercase tracking-wide text-ink-500">
-            avg fry time
-          </dt>
-          <dd className="font-mono text-xl tabular-nums text-ink-100">
+          <dt className="font-mono text-[10px] uppercase tracking-wide text-ink-500">avg fry</dt>
+          <dd className="font-mono text-lg tabular-nums text-ink-100">
             {stats.avg === null ? "—" : formatMinutes(stats.avg)}
           </dd>
         </div>
       </dl>
-      <h4 className="mt-3 font-mono text-[10px] uppercase tracking-wide text-ink-500">
+      <h4 className="mt-2 font-mono text-[10px] uppercase tracking-wide text-ink-500">
         Served · last 7 days
       </h4>
       <div
-        className="mt-1.5 flex h-16 items-end gap-1.5"
+        className="mt-1 flex h-10 items-end gap-1.5"
         role="img"
         aria-label={`Tasks served per day: ${stats.bars.map((b) => `${b.label} ${b.count}`).join(", ")}`}
       >

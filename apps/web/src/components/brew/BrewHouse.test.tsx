@@ -357,10 +357,26 @@ describe("BrewHouse", () => {
         <BrewHouse tasks={[]} repos={REPOS as never} onNewTask={onNewTask} />
       </MemoryRouter>
     );
-    expect(await screen.findByText("Today's menu")).toBeInTheDocument();
-    await userEvent.click(await screen.findByRole("button", { name: "New pr_review →" }));
+    const menu = await screen.findByRole("group", { name: "Today's menu" });
+    expect(within(menu).getByText("Today's menu")).toBeInTheDocument();
+    await userEvent.click(within(menu).getByRole("button", { name: /pakora.*pr_review.*New/ }));
     expect(onNewTask).toHaveBeenCalledTimes(1);
     expect(onNewTask).toHaveBeenCalledWith("pakora");
+  });
+
+  it("menu strip sits above the karhais in one row", async () => {
+    stubFetch({ ...HANDLERS });
+    const { container } = renderHouse([]);
+    await screen.findByRole("group", { name: "Today's menu" });
+    const floor = container.querySelector('section[aria-label="Karhais (cooking pots)"]');
+    const menu = container.querySelector('[aria-label="Today\'s menu"]');
+    const grid = floor?.querySelector(".grid");
+    expect(floor).not.toBeNull();
+    expect(menu).not.toBeNull();
+    expect(grid).not.toBeNull();
+    // The strip lives inside the floor section and precedes the stove grid.
+    expect(floor!.contains(menu!)).toBe(true);
+    expect(menu!.compareDocumentPosition(grid!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   });
 
   it("burners deep-link to the queue concurrency setting", async () => {

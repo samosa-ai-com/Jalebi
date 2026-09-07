@@ -434,3 +434,12 @@ After any code change, run the relevant tests and build before marking work done
   `Settings.test.tsx` +1 (deep-link + collapse), `TaskDetail.test.tsx`
   +1 (IDE href). Classic view untouched.
 - **Suite totals now:** web **253 passed** (no backend changes).
+
+- **Mission no-scroll round (owner: everything visible, no scrolling):**
+  Today's menu moved out of the right rail into a single-row strip above
+  the karhais (`ShopFloor` owns it via `menu` + `onNewTaskKind`);
+  `StatsBoard` compressed to one 4-number row + short bars;
+  `ControlShelf` compact renders 2×2 minis (smaller ring text, 2 live
+  screens); `BrewHouse.test.tsx` +1 (menu-above-floor order),
+  `Tasks.test.tsx` mission prefill updated to the chip name.
+- **Suite totals now:** web **254 passed** (no backend changes).

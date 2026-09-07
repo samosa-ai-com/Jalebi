@@ -65,16 +65,21 @@ export function ControlShelf({
 
   return (
     <div
-      className={compact ? "grid grid-cols-1 gap-3" : "grid gap-4 md:grid-cols-2 xl:grid-cols-4"}
+      className={compact ? "grid grid-cols-2 gap-3" : "grid gap-4 md:grid-cols-2 xl:grid-cols-4"}
     >
-      <section className="surface flex items-center gap-4 p-4" aria-label="Worker load">
+      <section
+        className={`surface flex items-center ${compact ? "gap-2 px-2.5 py-2" : "gap-4 p-4"}`}
+        aria-label="Worker load"
+      >
         <Ring
           fraction={concurrency > 0 ? active / concurrency : 0}
           label={`worker load ${active} of ${concurrency}`}
         />
         <div>
           <h3 className="panel-title">Worker load</h3>
-          <p className="mt-1 font-mono text-2xl tabular-nums text-ink-100">
+          <p
+            className={`mt-1 font-mono tabular-nums text-ink-100 ${compact ? "text-xl" : "text-2xl"}`}
+          >
             {active}
             <span className="text-sm text-ink-500"> / {concurrency} slots</span>
           </p>
@@ -88,7 +93,10 @@ export function ControlShelf({
         </div>
       </section>
 
-      <section className="surface px-3 py-2.5" aria-label="Configured backends">
+      <section
+        className={`surface ${compact ? "px-2.5 py-2" : "px-3 py-2.5"}`}
+        aria-label="Configured backends"
+      >
         <div className="flex items-baseline justify-between">
           <h3 className="panel-title">Backends</h3>
           <Link to="/settings?section=agent" className="link font-mono text-[11px]">
@@ -131,7 +139,10 @@ export function ControlShelf({
         )}
       </section>
 
-      <section className="surface px-3 py-2.5" aria-label="Repositories">
+      <section
+        className={`surface ${compact ? "px-2.5 py-2" : "px-3 py-2.5"}`}
+        aria-label="Repositories"
+      >
         <div className="flex items-baseline justify-between">
           <h3 className="panel-title">Repos</h3>
           <Link to="/repos" className="link font-mono text-[11px]">
@@ -168,7 +179,10 @@ export function ControlShelf({
         )}
       </section>
 
-      <section className="surface px-3 py-2.5" aria-label="Screenings">
+      <section
+        className={`surface ${compact ? "px-2.5 py-2" : "px-3 py-2.5"}`}
+        aria-label="Screenings"
+      >
         <div className="flex items-baseline justify-between">
           <h3 className="panel-title">Screenings</h3>
           <Link to="/screenings" className="link font-mono text-[11px]">
@@ -177,7 +191,7 @@ export function ControlShelf({
         </div>
         {liveScreens.length > 0 ? (
           <ul className="mt-2 space-y-1.5">
-            {liveScreens.slice(0, 3).map((s) => (
+            {liveScreens.slice(0, compact ? 2 : 3).map((s) => (
               <li key={s.id} className="flex items-center gap-2 text-xs">
                 <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-syrup-400 brew-needs-you" />
                 <Link

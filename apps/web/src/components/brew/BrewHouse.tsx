@@ -30,7 +30,7 @@ import { Pantry, type PantryIngredient } from "./Pantry";
 import { ShopFloor } from "./ShopFloor";
 import { StatsBoard } from "./StatsBoard";
 import type { StationTask } from "./FryStation";
-import { snackForType, type SnackKind } from "./snacks";
+import type { SnackKind } from "./snacks";
 
 function parseTime(iso: string | null): number | null {
   if (!iso) return null;
@@ -207,7 +207,7 @@ export function BrewHouse({
   const orderCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const t of tasks) counts.set(t.type, (counts.get(t.type) ?? 0) + 1);
-    return counts;
+    return ORDER_TYPES.map((type) => ({ type, total: counts.get(type) ?? 0 }));
   }, [tasks]);
 
   const clock = new Date(now).toLocaleTimeString([], {
@@ -255,41 +255,15 @@ export function BrewHouse({
             stations={stations}
             slots={slots}
             served={served}
+            menu={orderCounts}
             now={now}
             onOpen={(id) => navigate(`/tasks/${id}`)}
             onOrder={() => onNewTask()}
+            onNewTaskKind={(kind) => onNewTask(kind)}
           />
         </div>
 
         <div className="flex min-h-0 flex-col gap-3 xl:max-h-[calc(100vh-16rem)] xl:min-h-[540px] xl:overflow-y-auto xl:pr-0.5">
-          <section className="surface px-3 py-2.5" aria-label="Today's menu">
-            <h3 className="panel-title">Today&apos;s menu</h3>
-            <ul className="mt-2 space-y-1.5">
-              {ORDER_TYPES.map((type) => (
-                <li
-                  key={type}
-                  className="flex items-center gap-2 rounded-lg border border-ink-800/60 px-2 py-1.5"
-                >
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate font-mono text-xs text-ink-200">
-                      {snackForType(type)}
-                    </span>
-                    <span className="block truncate font-mono text-[10px] text-ink-500">
-                      {type} · {orderCounts.get(type) ?? 0} total
-                    </span>
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => onNewTask(snackForType(type))}
-                    className="shrink-0 cursor-pointer rounded-full border border-ink-700 px-2 py-0.5 font-mono text-[10px] text-syrup-300 transition-colors hover:border-syrup-500/60 hover:bg-syrup-500/10"
-                  >
-                    New {type} →
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </section>
-
           <StatsBoard tasks={tasks} now={now} />
 
           <ControlShelf
