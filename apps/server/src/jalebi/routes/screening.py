@@ -237,6 +237,31 @@ def list_runs_route(screen_id: int) -> ResponseReturnValue:
     return jsonify([run_to_dict(r) for r in runs])
 
 
+@bp.get("/findings")
+def recent_findings_route() -> ResponseReturnValue:
+    """Unified newest-first findings inbox across screens (read-only fan-out)."""
+    session = db.get_session()
+    try:
+        limit = int(request.args.get("limit", 50))
+    except (TypeError, ValueError):
+        return jsonify({"error": "limit must be an integer"}), 400
+    severity = request.args.get("severity")
+    if severity is not None and severity not in ("critical", "high", "medium", "low"):
+        return jsonify({"error": "invalid severity"}), 400
+    screen_id = request.args.get("screen_id", type=int)
+    # type=int swallows garbage into None — an explicitly passed but
+    # non-integer screen_id must 400, not silently list everything.
+    if "screen_id" in request.args and screen_id is None:
+        return jsonify({"error": "screen_id must be an integer"}), 400
+    if screen_id is not None and screening.get_screen(session, screen_id) is None:
+        return jsonify({"error": "screen not found"}), 404
+    return jsonify(
+        screening.list_recent_findings(
+            session, limit=limit, severity=severity, screening_id=screen_id
+        )
+    )
+
+
 @bp.post("/<int:screen_id>/run")
 def run_screen_route(screen_id: int) -> ResponseReturnValue:
     """Manually run a screen now (ignores baseline dedup), asynchronously."""

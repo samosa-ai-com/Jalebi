@@ -17,6 +17,7 @@ import type {
   ReplayResponse,
   Run,
   Screen,
+  ScreeningFinding,
   ScreeningRun,
   ScreenTemplate,
   SettingsMap,
@@ -183,6 +184,14 @@ export const api = {
       method: "POST",
     }),
   getScreenRuns: (id: number) => request<ScreeningRun[]>(`/api/screenings/${id}/runs`),
+  getRecentFindings: (params?: { limit?: number; severity?: string; screen_id?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.limit !== undefined) q.set("limit", String(params.limit));
+    if (params?.severity) q.set("severity", params.severity);
+    if (params?.screen_id !== undefined) q.set("screen_id", String(params.screen_id));
+    const qs = q.toString();
+    return request<ScreeningFinding[]>(`/api/screenings/findings${qs ? `?${qs}` : ""}`);
+  },
   getRepoBranches: (repoId: number) =>
     request<{ full_name: string; branches: string[] }>(`/api/repos/${repoId}/branches`),
   registerWebhook: (repoId: number) =>

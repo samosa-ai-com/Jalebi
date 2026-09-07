@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, NavLink, Route, Routes, useLocation } from "react-router-dom";
 import { api } from "./api/client";
 import Agents from "./pages/Agents";
@@ -39,37 +39,32 @@ const SOON_ITEMS: { to: string; label: string }[] = [];
 function useScreeningsUnread(): number {
   const [unread, setUnread] = useState(0);
   const location = useLocation();
-  const check = useCallback(async () => {
-    try {
-      const screens = await api.getScreens();
-      const seen = Number(localStorage.getItem(SCREENS_SEEN_KEY) || 0);
-      const n = screens.filter((s) => {
-        const lr = s.latest_run;
-        if (!lr || lr.status !== "done" || !lr.finding_total) return false;
-        const t = Date.parse(lr.finished_at || lr.started_at || "");
-        return !Number.isNaN(t) && t > seen;
-      }).length;
-      setUnread(n);
-    } catch {
-      // Badge is best-effort; a failed check keeps the previous count.
-    }
-  }, []);
   useEffect(() => {
     let cancelled = false;
+    const check = async () => {
+      try {
+        const screens = await api.getScreens();
+        const seen = Number(localStorage.getItem(SCREENS_SEEN_KEY) || 0);
+        const n = screens.filter((s) => {
+          const lr = s.latest_run;
+          if (!lr || lr.status !== "done" || !lr.finding_total) return false;
+          const t = Date.parse(lr.finished_at || lr.started_at || "");
+          return !Number.isNaN(t) && t > seen;
+        }).length;
+        if (!cancelled) setUnread(n);
+      } catch {
+        // Badge is best-effort; a failed check keeps the previous count.
+      }
+    };
     check();
-    const timer = setInterval(() => {
-      if (!cancelled) check();
-    }, 60000);
+    const timer = setInterval(check, 60000);
+    // location.pathname in deps: visiting the tab sets the seen timestamp,
+    // and the badge must clear immediately rather than at the next poll.
     return () => {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [check]);
-  // Recheck on navigation: visiting the tab sets the seen timestamp, and the
-  // badge must clear immediately rather than at the next 60s poll.
-  useEffect(() => {
-    check();
-  }, [check, location.pathname]);
+  }, [location.pathname]);
   return unread;
 }
 

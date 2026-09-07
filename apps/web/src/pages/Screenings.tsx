@@ -2,9 +2,53 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import { useBackends } from "../hooks/useBackends";
-import type { Finding, Repo, Screen, ScreenTemplate, ScreeningRun } from "../types";
+import type {
+  Finding,
+  Repo,
+  Screen,
+  ScreenTemplate,
+  ScreeningFinding,
+  ScreeningRun,
+} from "../types";
 
 export const SCREENS_SEEN_KEY = "jalebi-screens-seen-at";
+const FINDINGS_DEALT_KEY = "jalebi-findings-dealt";
+
+function findingFp(
+  screenId: number,
+  f: {
+    title: string | null;
+    file: string | null;
+    line: number | null;
+  }
+): string {
+  return JSON.stringify([screenId, f.title ?? "", f.file ?? "", f.line ?? null]);
+}
+
+function loadDealt(): Set<string> {
+  try {
+    const raw = localStorage.getItem(FINDINGS_DEALT_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    if (Array.isArray(parsed)) return new Set(parsed.filter((x) => typeof x === "string"));
+  } catch {
+    // Corrupt or unavailable storage — start empty.
+  }
+  return new Set();
+}
+
+function storeDealt(dealt: Set<string>): void {
+  try {
+    localStorage.setItem(FINDINGS_DEALT_KEY, JSON.stringify([...dealt]));
+  } catch {
+    // Private mode etc. — dealt state simply doesn't persist.
+  }
+}
+
+function markFindingDealt(fp: string): void {
+  const dealt = loadDealt();
+  dealt.add(fp);
+  storeDealt(dealt);
+}
 
 const DEFAULT_CRON = "0 6 * * 1";
 
@@ -79,11 +123,12 @@ function ScreenForm({
   // changes again mid-fetch.
   useEffect(() => {
     let cancelled = false;
-    setModelsError(null);
     api
       .getModels(cli || undefined)
       .then((m) => {
-        if (!cancelled) setModels(m.models ?? []);
+        if (cancelled) return;
+        setModels(m.models ?? []);
+        setModelsError(null);
       })
       .catch((e) => {
         if (!cancelled) setModelsError(e instanceof Error ? e.message : "failed to load models");
@@ -98,10 +143,13 @@ function ScreenForm({
   useEffect(() => {
     if (repoIdNum == null) return;
     let cancelled = false;
-    setBranchesError(null);
     api
       .getRepoBranches(repoIdNum)
-      .then((r) => !cancelled && setBranches(r.branches ?? []))
+      .then((r) => {
+        if (cancelled) return;
+        setBranches(r.branches ?? []);
+        setBranchesError(null);
+      })
       .catch((e) => {
         if (!cancelled)
           setBranchesError(e instanceof Error ? e.message : "failed to load branches");
@@ -351,10 +399,12 @@ function FindingTaskComposer({
   screen,
   finding,
   onDone,
+  onTaskCreated,
 }: {
   screen: Screen;
   finding: Finding;
   onDone: () => void;
+  onTaskCreated?: (fp: string) => void;
 }) {
   const [prompt, setPrompt] = useState(() => buildFindingPrompt(screen, finding));
   const [busy, setBusy] = useState(false);
@@ -375,6 +425,7 @@ function FindingTaskComposer({
         publish_mode: "manual",
       });
       setResult({ taskId: task.id });
+      onTaskCreated?.(findingFp(screen.id, finding));
     } catch (err) {
       setResult({ error: err instanceof Error ? err.message : "failed to create task" });
     } finally {
@@ -517,6 +568,7 @@ function RunHistory({ screen, onChanged }: { screen: Screen; onChanged: () => vo
                           screen={screen}
                           finding={f}
                           onDone={() => setComposingIdx(null)}
+                          onTaskCreated={markFindingDealt}
                         />
                       ) : (
                         <button
@@ -549,6 +601,236 @@ function RunHistory({ screen, onChanged }: { screen: Screen; onChanged: () => vo
         </button>
       )}
       {error && <p className="text-sm text-red-400">{error}</p>}
+    </div>
+  );
+}
+
+function FindingsInbox({ screens }: { screens: Screen[] }) {
+  const [items, setItems] = useState<ScreeningFinding[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [severity, setSeverity] = useState("all");
+  const [screenFilter, setScreenFilter] = useState<number | "all">("all");
+  const [query, setQuery] = useState("");
+  const [openKey, setOpenKey] = useState<string | null>(null);
+  const [composingKey, setComposingKey] = useState<string | null>(null);
+  const [hideDealt, setHideDealt] = useState(true);
+  const [dealt, setDealt] = useState<Set<string>>(() => loadDealt());
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getRecentFindings({
+        limit: 100,
+        severity: severity === "all" ? undefined : severity,
+        screen_id: screenFilter === "all" ? undefined : screenFilter,
+      })
+      .then((r) => {
+        if (!cancelled) {
+          setItems(r);
+          setLoading(false);
+        }
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : "failed to load findings");
+          setLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [severity, screenFilter]);
+
+  const screenById = (id: number) => screens.find((s) => s.id === id) ?? null;
+
+  const fpOf = (f: ScreeningFinding) =>
+    findingFp(f.screen_id, { title: f.title, file: f.file, line: f.line });
+
+  function toggleDealt(fp: string) {
+    setDealt((prev) => {
+      const next = new Set(prev);
+      if (next.has(fp)) next.delete(fp);
+      else next.add(fp);
+      storeDealt(next);
+      return next;
+    });
+  }
+
+  const dealtCount = items.filter((f) => dealt.has(fpOf(f))).length;
+
+  const visible = items.filter((f) => {
+    if (hideDealt && dealt.has(fpOf(f))) return false;
+    const q = query.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      (f.title || "").toLowerCase().includes(q) ||
+      (f.file || "").toLowerCase().includes(q) ||
+      (f.screen_name || "").toLowerCase().includes(q)
+    );
+  });
+
+  if (loading) return <p className="text-sm text-ink-500">Loading findings…</p>;
+  if (error) return <p className="text-sm text-red-400">Findings failed to load: {error}</p>;
+  if (items.length === 0)
+    return (
+      <p className="text-sm text-ink-500">No findings in recent runs. Clean audits, quiet inbox.</p>
+    );
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        {["all", "critical", "high", "medium", "low"].map((s) => (
+          <button
+            key={s}
+            type="button"
+            onClick={() => setSeverity(s)}
+            className={`rounded-full border px-2.5 py-1 text-xs ${
+              severity === s
+                ? "border-syrup-500/60 bg-syrup-500/10 text-syrup-300"
+                : "border-ink-800 text-ink-400 hover:border-ink-600"
+            }`}
+          >
+            {s}
+          </button>
+        ))}
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="filter title / file / screen…"
+          className="field !w-56 !py-1 text-xs"
+          aria-label="Filter findings"
+        />
+        <select
+          value={screenFilter}
+          onChange={(e) =>
+            setScreenFilter(e.target.value === "all" ? "all" : Number(e.target.value))
+          }
+          className="field !w-auto !py-1 text-xs"
+          aria-label="Filter by screen"
+        >
+          <option value="all">all screens</option>
+          {screens.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          onClick={() => setHideDealt((v) => !v)}
+          title={hideDealt ? "Currently hiding dealt findings" : "Currently showing dealt findings"}
+          className={`rounded-full border px-2.5 py-1 text-xs ${
+            hideDealt
+              ? "border-syrup-500/60 bg-syrup-500/10 text-syrup-300"
+              : "border-ink-800 text-ink-400 hover:border-ink-600"
+          }`}
+        >
+          {hideDealt ? `Hide dealt${dealtCount > 0 ? ` (${dealtCount})` : ""}` : "Show dealt"}
+        </button>
+      </div>
+      {visible.length === 0 ? (
+        <p className="text-sm text-ink-500">No findings match the filter.</p>
+      ) : (
+        <ul className="space-y-2">
+          {visible.map((f, idx) => {
+            // Index-qualified: duplicate findings (same title/file/line in one
+            // run) must not share a key or toggle together.
+            const key = `${f.run_id}:${f.screen_id}:${idx}`;
+            const open = openKey === key;
+            const screen = screenById(f.screen_id);
+            const fp = fpOf(f);
+            const isDealt = dealt.has(fp);
+            return (
+              <li key={key} className="rounded-lg border border-ink-800 p-3">
+                <button
+                  type="button"
+                  onClick={() => setOpenKey(open ? null : key)}
+                  className="flex w-full flex-wrap items-center gap-2 text-left"
+                  aria-expanded={open}
+                >
+                  <span
+                    className={`rounded px-1.5 py-0.5 text-[11px] font-medium ring-1 ring-inset ${SEVERITY_STYLES[f.severity] ?? SEVERITY_STYLES.medium}`}
+                  >
+                    {f.severity}
+                  </span>
+                  <span className="text-sm text-ink-200">{f.title}</span>
+                  {f.file && (
+                    <span className="font-mono text-xs text-ink-500">
+                      {f.file}
+                      {f.line != null ? `:${f.line}` : ""}
+                    </span>
+                  )}
+                  <span className="ml-auto font-mono text-[11px] text-ink-600">
+                    {f.screen_name} ·{" "}
+                    {f.finished_at ? new Date(f.finished_at).toLocaleString() : "—"}
+                  </span>
+                  <span className="text-ink-600">{open ? "▾" : "▸"}</span>
+                </button>
+                {open && (
+                  <div className="mt-2 space-y-1">
+                    {f.detail && <p className="text-xs text-ink-400">{f.detail}</p>}
+                    {f.recommendation && (
+                      <p className="text-xs text-ink-500">
+                        <span className="text-ink-400">Recommendation:</span> {f.recommendation}
+                      </p>
+                    )}
+                    {composingKey === key ? (
+                      screen ? (
+                        <FindingTaskComposer
+                          screen={screen}
+                          finding={{
+                            severity: (["critical", "high", "medium", "low"] as const).includes(
+                              f.severity as "critical" | "high" | "medium" | "low"
+                            )
+                              ? (f.severity as "critical" | "high" | "medium" | "low")
+                              : "medium",
+                            title: f.title || "(untitled)",
+                            file: f.file,
+                            line: f.line,
+                            detail: f.detail,
+                            recommendation: f.recommendation,
+                          }}
+                          onDone={() => setComposingKey(null)}
+                          onTaskCreated={(createdFp) =>
+                            setDealt((prev) => {
+                              const next = new Set(prev);
+                              next.add(createdFp);
+                              storeDealt(next);
+                              return next;
+                            })
+                          }
+                        />
+                      ) : (
+                        <p className="text-xs text-amber-400">
+                          Screen no longer loaded — cannot compose a task.
+                        </p>
+                      )
+                    ) : (
+                      <span className="mt-1 flex w-fit gap-2">
+                        <button
+                          type="button"
+                          className="btn-ghost !px-2 !py-1 text-xs"
+                          onClick={() => setComposingKey(key)}
+                        >
+                          New task from finding
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-ghost !px-2 !py-1 text-xs"
+                          onClick={() => toggleDealt(fp)}
+                        >
+                          {isDealt ? "Reopen" : "Mark dealt"}
+                        </button>
+                      </span>
+                    )}
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </div>
   );
 }
@@ -704,6 +986,7 @@ export default function Screenings() {
   const [editing, setEditing] = useState<Screen | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [openRuns, setOpenRuns] = useState<number | null>(null);
+  const [view, setView] = useState<"screens" | "findings">("findings");
 
   const load = useCallback(() => {
     api
@@ -766,6 +1049,46 @@ export default function Screenings() {
         </p>
       ))}
 
+      {!loading &&
+        (() => {
+          const failing = screens.filter((s) => s.latest_run?.status === "failed");
+          const disabled = screens.filter((s) => !s.enabled);
+          if (failing.length === 0 && disabled.length === 0) return null;
+          return (
+            <p className="surface animate-fade-up px-4 py-3 text-xs leading-relaxed">
+              {failing.length > 0 && (
+                <span className="text-red-400">
+                  {failing.length} of {screens.length} screen{failing.length > 1 ? "s" : ""} failing
+                  ({failing.map((s) => s.name).join(", ")}) — open History for the error.{" "}
+                </span>
+              )}
+              {disabled.length > 0 && (
+                <span className="text-ink-500">
+                  {disabled.length} disabled ({disabled.map((s) => s.name).join(", ")}) —
+                  off-schedule until re-enabled.
+                </span>
+              )}
+            </p>
+          );
+        })()}
+
+      <div className="flex gap-2">
+        {(["screens", "findings"] as const).map((v) => (
+          <button
+            key={v}
+            type="button"
+            onClick={() => setView(v)}
+            className={`rounded-lg px-3 py-1.5 text-sm capitalize transition-colors ${
+              view === v
+                ? "bg-ink-850 text-ink-100 ring-1 ring-inset ring-ink-700"
+                : "text-ink-400 hover:text-ink-100"
+            }`}
+          >
+            {v}
+          </button>
+        ))}
+      </div>
+
       {showForm && (
         <div className="animate-fade-up">
           <ScreenForm
@@ -786,7 +1109,11 @@ export default function Screenings() {
         </div>
       )}
 
-      {loading ? (
+      {view === "findings" ? (
+        <div className="animate-fade-up">
+          <FindingsInbox screens={screens} />
+        </div>
+      ) : loading ? (
         <p className="text-sm text-ink-500 animate-fade-up">Loading screens…</p>
       ) : screens.length === 0 && !showForm ? (
         <div className="surface flex flex-col items-start gap-3 p-6 animate-fade-up">

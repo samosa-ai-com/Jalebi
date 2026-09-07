@@ -221,3 +221,27 @@ After any code change, run the relevant tests and build before marking work done
 - **Suite totals now:** server **892 passed**, web **154 passed.**
   Ruff, ESLint, `tsc --noEmit`, Prettier, production build clean (the Vite
   large-chunk warning remains).
+
+- **Screening inbox round (server +3, web +3):**
+  - `test_api_screening.py` (+3): inbox ordering + context, severity/screen
+    filters + validation, empty case.
+  - `Screenings.test.tsx` (+3): inbox list + severity filter, composer from
+    inbox, health banner on failing screen.
+- **Suite totals now:** server **895 passed**, web **157 passed.**
+  Ruff, ESLint, `tsc --noEmit`, Prettier, production build clean (the Vite
+  large-chunk warning remains).
+
+- **Inbox AGY-review fixes (server +2, web +3):** unbounded scan bounded +
+  fields coerced (incl. malformed-row test), `screen_id` garbage 400s,
+  severity/screen filters server-side, unique inbox keys, sync-setState
+  violations removed (real `npm run lint` green), text-filter + empty-inbox +
+  screen-filter tests.
+- **Suite totals now:** server **897 passed**, web **160 passed.**
+  Ruff, `npm run lint`, `tsc --noEmit`, Prettier, production build clean (the
+  Vite large-chunk warning remains).
+
+- **Dealt-findings round (web +3):** hide-dealt-on-task-creation, reveal +
+  reopen via toggle, Findings-default tab.
+- **Suite totals now:** server **897 passed**, web **163 passed.**
+  Ruff, `npm run lint`, `tsc --noEmit`, Prettier, production build clean (the
+  Vite large-chunk warning remains).

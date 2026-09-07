@@ -79,6 +79,39 @@ const RUNNING_RUNS = [
   },
 ];
 
+const FINDINGS = [
+  {
+    screen_id: 7,
+    screen_name: "Security posture",
+    repo_id: 1,
+    repo_full_name: "owner/repo",
+    run_id: 1,
+    head_sha: "abc123",
+    finished_at: "2026-08-09T11:01:00",
+    severity: "high",
+    title: "Secret in config",
+    file: "config.py",
+    line: 3,
+    detail: "A token is hardcoded.",
+    recommendation: "Use an env var.",
+  },
+  {
+    screen_id: 7,
+    screen_name: "Security posture",
+    repo_id: 1,
+    repo_full_name: "owner/repo",
+    run_id: 1,
+    head_sha: "abc123",
+    finished_at: "2026-08-09T11:01:00",
+    severity: "low",
+    title: "Stale comment",
+    file: null,
+    line: null,
+    detail: null,
+    recommendation: null,
+  },
+];
+
 function makeFetchMock() {
   return vi.fn(async (url: string, init?: RequestInit) => {
     const method = init?.method ?? "GET";
@@ -113,6 +146,19 @@ function makeFetchMock() {
     if (u === "/api/screenings/7/runs") {
       return { ok: true, json: async () => RUNS };
     }
+    if (u.startsWith("/api/screenings/findings")) {
+      const qs = u.split("?")[1] ?? "";
+      const params = new URLSearchParams(qs);
+      const sev = params.get("severity");
+      const sid = params.get("screen_id");
+      return {
+        ok: true,
+        json: async () =>
+          FINDINGS.filter(
+            (f) => (!sev || f.severity === sev) && (!sid || String(f.screen_id) === sid)
+          ),
+      };
+    }
     if (u === "/api/screenings/7/run" && method === "POST") {
       return { ok: true, json: async () => ({ ok: true }) };
     }
@@ -131,6 +177,7 @@ function makeFetchMock() {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  localStorage.clear();
 });
 
 function renderScreenings() {
@@ -141,10 +188,15 @@ function renderScreenings() {
   );
 }
 
+async function goScreens() {
+  await userEvent.click(screen.getByRole("button", { name: "screens" }));
+}
+
 describe("Screenings", () => {
   it("lists screens and shows cadence", async () => {
     vi.stubGlobal("fetch", makeFetchMock());
     renderScreenings();
+    await goScreens();
     expect(await screen.findByText("Security posture")).toBeInTheDocument();
     expect(screen.getByText("0 6 * * 1")).toBeInTheDocument();
   });
@@ -155,6 +207,7 @@ describe("Screenings", () => {
       vi.fn(async () => new Promise(() => {}))
     );
     renderScreenings();
+    await goScreens();
     expect(await screen.findByText("Loading screens…")).toBeInTheDocument();
     expect(screen.queryByText("No screens yet")).not.toBeInTheDocument();
   });
@@ -162,6 +215,7 @@ describe("Screenings", () => {
   it("shows the latest-run summary on the card", async () => {
     vi.stubGlobal("fetch", makeFetchMock());
     renderScreenings();
+    await goScreens();
     await screen.findByText("Security posture");
     expect(screen.getByText("done")).toBeInTheDocument();
     expect(screen.getByText("1 finding")).toBeInTheDocument();
@@ -172,6 +226,7 @@ describe("Screenings", () => {
     const fetchMock = makeFetchMock();
     vi.stubGlobal("fetch", fetchMock);
     renderScreenings();
+    await goScreens();
     await screen.findByText("Security posture");
     await userEvent.click(screen.getByRole("button", { name: "New screen" }));
     await userEvent.selectOptions(
@@ -193,6 +248,7 @@ describe("Screenings", () => {
     vi.stubGlobal("fetch", fetchMock);
     vi.spyOn(window, "confirm").mockReturnValue(true);
     renderScreenings();
+    await goScreens();
     await screen.findByText("Security posture");
     await userEvent.click(screen.getByRole("button", { name: "Delete" }));
     await waitFor(() => {
@@ -207,6 +263,7 @@ describe("Screenings", () => {
     const fetchMock = makeFetchMock();
     vi.stubGlobal("fetch", fetchMock);
     renderScreenings();
+    await goScreens();
     await screen.findByText("Security posture");
     await userEvent.click(screen.getByRole("button", { name: "History" }));
     expect(await screen.findByText("Secret in config")).toBeInTheDocument();
@@ -238,6 +295,7 @@ describe("Screenings", () => {
     const fetchMock = makeFetchMock();
     vi.stubGlobal("fetch", fetchMock);
     renderScreenings();
+    await goScreens();
     await screen.findByText("Security posture");
     await userEvent.click(screen.getByRole("button", { name: "New screen" }));
     const tplSelect = screen.getByDisplayValue("Pick a starter screen…") as HTMLSelectElement;
@@ -249,6 +307,7 @@ describe("Screenings", () => {
     const fetchMock = makeFetchMock();
     vi.stubGlobal("fetch", fetchMock);
     renderScreenings();
+    await goScreens();
     await screen.findByText("Security posture");
     await userEvent.click(screen.getByRole("button", { name: "New screen" }));
     await userEvent.selectOptions(screen.getByLabelText("Repo"), "1");
@@ -264,6 +323,7 @@ describe("Screenings", () => {
     const fetchMock = makeFetchMock();
     vi.stubGlobal("fetch", fetchMock);
     renderScreenings();
+    await goScreens();
     await screen.findByText("Security posture");
     await userEvent.click(screen.getByRole("button", { name: "Edit" }));
     expect(await screen.findByText("Edit screen — Security posture")).toBeInTheDocument();
@@ -292,6 +352,7 @@ describe("Screenings", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     renderScreenings();
+    await goScreens();
     await screen.findByText("Security posture");
     await userEvent.click(screen.getByRole("button", { name: "History" }));
     expect(await screen.findByText(/Running…/)).toBeInTheDocument();
@@ -302,6 +363,7 @@ describe("Screenings", () => {
     const fetchMock = makeFetchMock();
     vi.stubGlobal("fetch", fetchMock);
     renderScreenings();
+    await goScreens();
     await screen.findByText("Security posture");
     await userEvent.click(screen.getByRole("button", { name: "New screen" }));
 
@@ -316,6 +378,7 @@ describe("Screenings", () => {
     const fetchMock = makeFetchMock();
     vi.stubGlobal("fetch", fetchMock);
     renderScreenings();
+    await goScreens();
     await screen.findByText("Security posture");
     await userEvent.click(screen.getByRole("button", { name: "New screen" }));
 
@@ -352,6 +415,7 @@ describe("Screenings", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     renderScreenings();
+    await goScreens();
     await screen.findByText("Security posture");
     await userEvent.click(screen.getByRole("button", { name: "Run now" }));
     // Correct endpoint (the old mock used /api/screenings/7) + inline error, no alert.
@@ -388,6 +452,7 @@ describe("Screenings", () => {
       })
     );
     renderScreenings();
+    await goScreens();
     await screen.findByText("Security posture");
     expect(screen.getByRole("button", { name: "Delete" })).toBeDisabled();
   });
@@ -395,6 +460,7 @@ describe("Screenings", () => {
   it("clears the model pin when the backend changes", async () => {
     vi.stubGlobal("fetch", makeFetchMock());
     renderScreenings();
+    await goScreens();
     await screen.findByText("Security posture");
     await userEvent.click(screen.getByRole("button", { name: "New screen" }));
 
@@ -419,6 +485,7 @@ describe("Screenings", () => {
       })
     );
     renderScreenings();
+    await goScreens();
     await screen.findByText("Security posture");
     await userEvent.click(screen.getByRole("button", { name: "New screen" }));
     await userEvent.selectOptions(screen.getByLabelText("Repo"), "1");
@@ -438,6 +505,7 @@ describe("Screenings", () => {
       })
     );
     renderScreenings();
+    await goScreens();
     await screen.findByText("Security posture");
     await userEvent.click(screen.getByRole("button", { name: "History" }));
     expect(await screen.findByText(/history boom/)).toBeInTheDocument();
@@ -478,6 +546,7 @@ describe("Screenings", () => {
       })
     );
     renderScreenings();
+    await goScreens();
     await screen.findByText("Security posture");
     expect(screen.getByText("Never run.")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Run now" }));
@@ -489,5 +558,150 @@ describe("Screenings", () => {
       { timeout: 10000 }
     );
     expect(screen.getByText("clean")).toBeInTheDocument();
+  });
+
+  it("shows a unified findings inbox with severity filter", async () => {
+    vi.stubGlobal("fetch", makeFetchMock());
+    renderScreenings();
+    await screen.findByText("Security posture");
+    await userEvent.click(screen.getByRole("button", { name: "findings" }));
+    expect(await screen.findByText("Stale comment")).toBeInTheDocument();
+    expect(screen.getByText("Secret in config")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "high" }));
+    expect(screen.queryByText("Stale comment")).not.toBeInTheDocument();
+    expect(screen.getByText("Secret in config")).toBeInTheDocument();
+  });
+
+  it("opens the task composer from an inbox finding", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    renderScreenings();
+    await screen.findByText("Security posture");
+    await userEvent.click(screen.getByRole("button", { name: "findings" }));
+    await screen.findByText("Secret in config");
+    await userEvent.click(screen.getByText("Secret in config"));
+    await userEvent.click(screen.getAllByRole("button", { name: "New task from finding" })[0]);
+    expect(
+      await screen.findByDisplayValue(/Finding \(untrusted\): Secret in config/)
+    ).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Create task" }));
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some((c) => c[0] === "/api/tasks" && c[1]?.method === "POST")
+      ).toBe(true);
+    });
+  });
+
+  it("shows a health banner when a screen is failing", async () => {
+    const failingScreens = [
+      {
+        ...SCREENS[0],
+        latest_run: { ...SCREENS[0].latest_run, status: "failed", error: "agent exploded" },
+      },
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        const u = url as string;
+        if (u === "/api/screenings/templates") return { ok: true, json: async () => TEMPLATES };
+        if (u === "/api/repos") return { ok: true, json: async () => REPOS };
+        if (u === "/api/screenings") return { ok: true, json: async () => failingScreens };
+        throw new Error(`unexpected fetch: ${u}`);
+      })
+    );
+    renderScreenings();
+    expect(await screen.findByText(/1 of 1 screen failing/)).toBeInTheDocument();
+  });
+
+  it("filters the inbox by text and shows the empty state", async () => {
+    vi.stubGlobal("fetch", makeFetchMock());
+    renderScreenings();
+    await screen.findByText("Security posture");
+    await userEvent.click(screen.getByRole("button", { name: "findings" }));
+    await screen.findByText("Secret in config");
+    await userEvent.type(screen.getByLabelText("Filter findings"), "stale");
+    expect(screen.queryByText("Secret in config")).not.toBeInTheDocument();
+    expect(screen.getByText("Stale comment")).toBeInTheDocument();
+    await userEvent.clear(screen.getByLabelText("Filter findings"));
+    await userEvent.type(screen.getByLabelText("Filter findings"), "zzz-no-match");
+    expect(await screen.findByText("No findings match the filter.")).toBeInTheDocument();
+  });
+
+  it("shows the empty inbox state when there are no findings", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        const u = url as string;
+        if (u === "/api/screenings/templates") return { ok: true, json: async () => TEMPLATES };
+        if (u === "/api/repos") return { ok: true, json: async () => REPOS };
+        if (u === "/api/screenings") return { ok: true, json: async () => SCREENS };
+        if (u.startsWith("/api/screenings/findings")) return { ok: true, json: async () => [] };
+        throw new Error(`unexpected fetch: ${u}`);
+      })
+    );
+    renderScreenings();
+    await goScreens();
+    await screen.findByText("Security posture");
+    await userEvent.click(screen.getByRole("button", { name: "findings" }));
+    expect(await screen.findByText(/Clean audits, quiet inbox/)).toBeInTheDocument();
+  });
+
+  it("filters the inbox by screen", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    renderScreenings();
+    await screen.findByText("Security posture");
+    await userEvent.click(screen.getByRole("button", { name: "findings" }));
+    await screen.findByText("Secret in config");
+    await userEvent.selectOptions(screen.getByLabelText("Filter by screen"), "7");
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([u]) => String(u).includes("screen_id=7"))).toBe(true);
+    });
+  });
+
+  it("hides dealt findings by default after task creation", async () => {
+    vi.stubGlobal("fetch", makeFetchMock());
+    renderScreenings();
+    await screen.findByText("Security posture");
+    await screen.findByText("Secret in config");
+    await userEvent.click(screen.getByText("Secret in config"));
+    await userEvent.click(screen.getAllByRole("button", { name: "New task from finding" })[0]);
+    await userEvent.click(screen.getByRole("button", { name: "Create task" }));
+    // The created task marks the finding dealt → hidden, toggle shows the count.
+    await waitFor(() => {
+      expect(screen.queryByText("Secret in config")).not.toBeInTheDocument();
+    });
+    expect(screen.getByRole("button", { name: /Hide dealt \(1\)/ })).toBeInTheDocument();
+    expect(screen.getByText("Stale comment")).toBeInTheDocument();
+  });
+
+  it("reveals and reopens dealt findings via the toggle", async () => {
+    vi.stubGlobal("fetch", makeFetchMock());
+    renderScreenings();
+    await screen.findByText("Security posture");
+    await screen.findByText("Secret in config");
+    await userEvent.click(screen.getByText("Stale comment"));
+    await userEvent.click(screen.getAllByRole("button", { name: "Mark dealt" })[0]);
+    await waitFor(() => {
+      expect(screen.queryByText("Stale comment")).not.toBeInTheDocument();
+    });
+    await userEvent.click(screen.getByRole("button", { name: /Hide dealt/ }));
+    expect(await screen.findByText("Stale comment")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Reopen" }));
+    // Reopened while showing dealt: still visible; hiding again keeps it (not dealt).
+    expect(screen.getByText("Stale comment")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Show dealt" }));
+    expect(screen.getByText("Stale comment")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Hide dealt \(\d+\)/ })).not.toBeInTheDocument();
+  });
+
+  it("opens the Screens view only on click (Findings is default)", async () => {
+    vi.stubGlobal("fetch", makeFetchMock());
+    renderScreenings();
+    // Findings tab content loads without visiting Screens.
+    expect(await screen.findByText("Secret in config")).toBeInTheDocument();
+    expect(screen.queryByText("Never run.")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "screens" }));
+    expect(await screen.findByText("0 6 * * 1")).toBeInTheDocument();
   });
 });

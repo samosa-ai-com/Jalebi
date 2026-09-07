@@ -405,6 +405,22 @@ export interface ScreeningRunSummary {
   error: string | null;
 }
 
+export interface ScreeningFinding {
+  screen_id: number;
+  screen_name: string;
+  repo_id: number;
+  repo_full_name: string | null;
+  run_id: number;
+  head_sha: string | null;
+  finished_at: string | null;
+  severity: string;
+  title: string;
+  file: string | null;
+  line: number | null;
+  detail: string | null;
+  recommendation: string | null;
+}
+
 export interface Screen {
   id: number;
   repo_id: number;

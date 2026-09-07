@@ -508,6 +508,84 @@ def latest_run(session: Session, screening_id: int) -> ScreeningRun | None:
     )
 
 
+def list_recent_findings(
+    session: Session,
+    *,
+    limit: int = 50,
+    severity: str | None = None,
+    screening_id: int | None = None,
+) -> list[dict[str, object]]:
+    """Flatten recent run findings into one newest-first inbox stream.
+
+    Read-only fan-out over stored runs (no new tables): newest runs first,
+    each finding annotated with its screen/run context. Findings blobs are
+    already capped at store time; ``limit`` is clamped to 200 rows. The scan
+    itself is SQL-bounded (only runs with stored findings, newest N) so the
+    inbox never loads the whole runs table into memory.
+    """
+    limit = max(1, min(limit, 200))
+    query = (
+        select(ScreeningRun, Screening, Repo.full_name)
+        .join(Screening, Screening.id == ScreeningRun.screening_id)
+        .join(Repo, Repo.id == Screening.repo_id)
+        .where(ScreeningRun.findings_json.is_not(None))
+        .order_by(ScreeningRun.id.desc())
+        .limit(max(limit * 5, 100))
+    )
+    if screening_id is not None:
+        query = query.where(ScreeningRun.screening_id == screening_id)
+    pairs = list(session.execute(query).all())
+    items: list[dict[str, object]] = []
+    for run, screen, repo_full_name in pairs:
+        if len(items) >= limit:
+            break
+        try:
+            parsed = json.loads(run.findings_json)
+        except (json.JSONDecodeError, ValueError, TypeError):
+            continue
+        if not isinstance(parsed, list):
+            continue
+        for finding in parsed:
+            if len(items) >= limit:
+                break
+            if not isinstance(finding, dict):
+                continue
+            if severity is not None and finding.get("severity") != severity:
+                continue
+            # Stored rows predate validation (or were hand-inserted): coerce so
+            # a non-string field can never crash the UI render.
+            sev = finding.get("severity")
+            title = finding.get("title")
+            file = finding.get("file")
+            line = finding.get("line")
+            detail = finding.get("detail")
+            recommendation = finding.get("recommendation")
+            items.append(
+                {
+                    "screen_id": screen.id,
+                    "screen_name": screen.name,
+                    "repo_id": screen.repo_id,
+                    "repo_full_name": repo_full_name,
+                    "run_id": run.id,
+                    "head_sha": run.head_sha,
+                    "finished_at": clock.to_iso(run.finished_at)
+                    if run.finished_at
+                    else None,
+                    "severity": sev if sev in SEVERITIES else "medium",
+                    "title": title if isinstance(title, str) and title else "(untitled)",
+                    "file": file if isinstance(file, str) else None,
+                    "line": line
+                    if isinstance(line, int) and not isinstance(line, bool)
+                    else None,
+                    "detail": detail if isinstance(detail, str) else None,
+                    "recommendation": recommendation
+                    if isinstance(recommendation, str)
+                    else None,
+                }
+            )
+    return items
+
+
 def _masker_for(session: Session, config: Config):
     """Build the run masker (PATs + secret_patterns) for error paths."""
     raw_patterns = settings.get_setting(session, "secret_patterns") or []
