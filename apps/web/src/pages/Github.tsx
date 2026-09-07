@@ -25,7 +25,7 @@ function AccountStatus({ account }: { account: Account }) {
       <div>
         <p className="text-xs text-ink-600">Status</p>
         <p className={`mt-0.5 text-sm ${account.valid ? "text-ink-100" : "text-red-400"}`}>
-          {account.valid ? "valid & authorized" : account.error ?? "invalid"}
+          {account.valid ? "valid & authorized" : (account.error ?? "invalid")}
         </p>
       </div>
       <div>
@@ -87,7 +87,11 @@ function AddAccountForm({ onAdded }: { onAdded: () => void }) {
           autoComplete="off"
           spellCheck={false}
         />
-        <button type="submit" disabled={busy || !name.trim() || !value.trim()} className="btn-primary">
+        <button
+          type="submit"
+          disabled={busy || !name.trim() || !value.trim()}
+          className="btn-primary"
+        >
           {busy ? "Adding…" : "Add account"}
         </button>
       </div>
@@ -140,7 +144,11 @@ function UpdateTokenForm({ account, onUpdated }: { account: Account; onUpdated: 
           autoComplete="off"
           spellCheck={false}
         />
-        <button type="submit" disabled={busy || !value.trim()} className="btn-primary !px-3 !py-1 text-xs">
+        <button
+          type="submit"
+          disabled={busy || !value.trim()}
+          className="btn-primary !px-3 !py-1 text-xs"
+        >
           {busy ? "Updating…" : "Update token"}
         </button>
       </div>
@@ -157,43 +165,131 @@ export default function Github() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [updating, setUpdating] = useState<string | null>(null);
+  const [loadingAccounts, setLoadingAccounts] = useState(true);
+  const [loadingRepos, setLoadingRepos] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [connecting, setConnecting] = useState<Set<string>>(new Set());
+  const [controls, setControls] = useState<
+    Record<string, { q: string; status: "all" | "connected" | "not"; sort: "name" | "connected" }>
+  >({});
 
-  const load = useCallback(() => {
-    api
-      .getTokens()
-      .then((t) => setAccounts(t.accounts ?? []))
-      .catch(() => {});
-    api
-      .getGithubRepos()
-      .then(setRepos)
-      .catch((e: Error) => setError(e.message));
-    api
-      .getRepos()
-      .then(setConnected)
-      .catch(() => {});
+  function controlsFor(account: string) {
+    return controls[account] ?? { q: "", status: "all" as const, sort: "name" as const };
+  }
+
+  function setControl(
+    account: string,
+    patch: Partial<{ q: string; status: "all" | "connected" | "not"; sort: "name" | "connected" }>
+  ) {
+    setControls((prev) => ({ ...prev, [account]: { ...controlsFor(account), ...patch } }));
+  }
+
+  const load = useCallback(async () => {
+    setLoadingAccounts(true);
+    setLoadingRepos(true);
+    try {
+      const t = await api.getTokens();
+      setAccounts(t.accounts ?? []);
+    } catch {
+      // Accounts fail silently (existing behavior); repos carry the error.
+    } finally {
+      setLoadingAccounts(false);
+    }
+    try {
+      setRepos(await api.getGithubRepos());
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "failed to list repositories");
+    } finally {
+      setLoadingRepos(false);
+    }
+    try {
+      setConnected(await api.getRepos());
+    } catch {
+      // Connected list is best-effort; rows fall back to Connect buttons.
+    }
   }, []);
 
   useEffect(() => {
+    // Mount-time data fetch (not derived state): loading flags start true and
+    // load() resolves them in finally blocks.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     load();
   }, [load]);
 
-  const reposByAccount = useMemo(() => {
+  async function refresh() {
+    setRefreshing(true);
+    try {
+      await load();
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  async function retryAccount(account: string) {
+    try {
+      const list = await api.getGithubRepos(account);
+      setRepos((prev) => [
+        ...prev.filter((r) => r.account !== account && !(r.error && r.account === account)),
+        ...list,
+      ]);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "failed to list repositories");
+    }
+  }
+
+  const { reposByAccount, repoErrors } = useMemo(() => {
     const map = new Map<string, GithubRepo[]>();
+    const errors = new Map<string, string>();
     for (const repo of repos) {
       const key = repo.account ?? "";
-      if (repo.error) continue; // per-account error is surfaced on the account card
+      if (repo.error) {
+        // A failed account contributes an error entry — surface it on the
+        // account card (previously these were silently dropped).
+        errors.set(key, repo.error);
+        continue;
+      }
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(repo);
     }
-    return map;
+    return { reposByAccount: map, repoErrors: errors };
   }, [repos]);
 
+  function visibleRepos(account: string): GithubRepo[] {
+    const c = controlsFor(account);
+    const q = c.q.trim().toLowerCase();
+    const connectedNames = new Set(connected.map((r) => r.full_name));
+    const filtered = (reposByAccount.get(account) ?? []).filter((r) => {
+      const isConnected = connectedNames.has(r.full_name);
+      if (c.status === "connected" && !isConnected) return false;
+      if (c.status === "not" && isConnected) return false;
+      if (!q) return true;
+      return r.full_name.toLowerCase().includes(q);
+    });
+    return [...filtered].sort((a, b) => {
+      if (c.sort === "connected") {
+        const ac = connectedNames.has(a.full_name) ? 0 : 1;
+        const bc = connectedNames.has(b.full_name) ? 0 : 1;
+        if (ac !== bc) return ac - bc;
+      }
+      return a.full_name.localeCompare(b.full_name);
+    });
+  }
+
   async function connect(account: string, fullName: string) {
+    if (connecting.has(fullName)) return;
+    setConnecting((prev) => new Set(prev).add(fullName));
     try {
       await api.connectRepo(fullName, account);
       setConnected(await api.getRepos());
     } catch (e) {
       setError(e instanceof Error ? e.message : "failed to connect repo");
+    } finally {
+      setConnecting((prev) => {
+        const next = new Set(prev);
+        next.delete(fullName);
+        return next;
+      });
     }
   }
 
@@ -244,12 +340,21 @@ export default function Github() {
 
   return (
     <div className="space-y-6">
-      <header className="animate-fade-up">
-        <h1 className="text-3xl font-bold tracking-tight text-ink-100">GitHub</h1>
-        <p className="mt-1 text-sm text-ink-500">
-          Every saved PAT is a separate account — each shows its own status and repositories.
-        </p>
+      <header className="flex items-start justify-between animate-fade-up">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight text-ink-100">GitHub</h1>
+          <p className="mt-1 text-sm text-ink-500">
+            Every saved PAT is a separate account — each shows its own status and repositories.
+          </p>
+        </div>
+        <button onClick={refresh} disabled={refreshing} className="btn-ghost text-xs">
+          {refreshing ? "Refreshing…" : "Refresh"}
+        </button>
       </header>
+
+      {loadingAccounts && accounts.length === 0 && (
+        <p className="text-sm text-ink-500 animate-fade-up">Loading accounts…</p>
+      )}
 
       {accounts.map((account) => (
         <section key={account.name} className="surface animate-fade-up">
@@ -257,9 +362,7 @@ export default function Github() {
             <span
               className={`h-2.5 w-2.5 rounded-full ${account.valid ? "bg-green-400" : "bg-red-400"}`}
             />
-            <h2 className="panel-title">
-              {account.login ?? account.name}
-            </h2>
+            <h2 className="panel-title">{account.login ?? account.name}</h2>
             <div className="ml-auto flex items-center gap-3">
               <button
                 onClick={() => setUpdating(updating === account.name ? null : account.name)}
@@ -276,9 +379,7 @@ export default function Github() {
             </div>
           </div>
           <div className="space-y-4 px-6 py-5">
-            {updating === account.name && (
-              <UpdateTokenForm account={account} onUpdated={load} />
-            )}
+            {updating === account.name && <UpdateTokenForm account={account} onUpdated={load} />}
             <AccountStatus account={account} />
 
             <div>
@@ -305,63 +406,134 @@ export default function Github() {
                     </span>
                   ))}
                 </div>
+                <p className="mt-1.5 text-[11px] text-ink-500">
+                  Without these, Jalebi can&apos;t review, comment, push, or report commit statuses.
+                  Create a token with the required scopes at{" "}
+                  <a
+                    href="https://github.com/settings/tokens"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="link"
+                  >
+                    github.com/settings/tokens
+                  </a>{" "}
+                  then use “update token” above.
+                </p>
               </div>
             )}
 
             <div className="border-t border-ink-800 pt-3">
               <p className="mb-2 text-xs text-ink-600">
-                Repositories ({reposByAccount.get(account.name)?.length ?? 0})
+                Repositories ({visibleRepos(account.name).length}
+                {visibleRepos(account.name).length !==
+                  (reposByAccount.get(account.name) ?? []).length &&
+                  ` of ${(reposByAccount.get(account.name) ?? []).length}`}
+                )
               </p>
-              {(reposByAccount.get(account.name) ?? []).length === 0 ? (
-                <p className="text-sm text-ink-600">No repositories listed for this account.</p>
+              {repoErrors.get(account.name) && (
+                <p className="mb-2 text-xs text-red-400">
+                  Couldn&apos;t list repositories: {repoErrors.get(account.name)}{" "}
+                  <button onClick={() => retryAccount(account.name)} className="link text-xs">
+                    Retry
+                  </button>
+                </p>
+              )}
+              {loadingRepos &&
+              (reposByAccount.get(account.name) ?? []).length === 0 &&
+              !repoErrors.get(account.name) ? (
+                <p className="text-sm text-ink-600">Loading repositories…</p>
+              ) : visibleRepos(account.name).length === 0 ? (
+                <p className="text-sm text-ink-600">
+                  {(reposByAccount.get(account.name) ?? []).length === 0
+                    ? "No repositories listed for this account."
+                    : "No repositories match the current search or filters."}
+                </p>
               ) : (
-                <div className="max-h-[26rem] overflow-y-auto rounded-md border border-ink-800/60">
-                  <ul className="divide-y divide-ink-800/70">
-                    {(reposByAccount.get(account.name) ?? []).map((r) => {
-                      const [owner, repo] = r.full_name.split("/");
-                      const connectedRow = connected.find((c) => c.full_name === r.full_name);
-                      return (
-                        <li key={r.full_name} className="flex items-center gap-3 py-2.5 px-3">
-                          <span className="h-2 w-2 shrink-0 rounded-full bg-chai-500" />
-                          <span className="min-w-0 flex-1">
-                            <a
-                              href={r.html_url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="font-mono text-sm text-ink-200 transition-colors hover:text-syrup-300"
-                            >
-                              <span className="text-ink-500">{owner}/</span>
-                              {repo}
-                            </a>
-                            <span className="ml-2 font-mono text-[11px] text-ink-600">
-                              {r.private ? "private" : "public"} · {r.default_branch ?? "—"}
-                            </span>
-                          </span>
-                          {connectedRow ? (
-                            <div className="flex items-center gap-2">
-                              <span className="rounded-full bg-green-500/10 px-3 py-1 font-mono text-[11px] text-green-300">
-                                connected
-                              </span>
-                              <button
-                                onClick={() => disconnect(connectedRow.id)}
-                                className="text-[11px] text-ink-500 transition-colors hover:text-red-300"
+                <>
+                  <div className="mb-2 flex flex-wrap items-center gap-2">
+                    <input
+                      value={controlsFor(account.name).q}
+                      onChange={(e) => setControl(account.name, { q: e.target.value })}
+                      placeholder="Search repositories…"
+                      className="field max-w-55 !py-1 text-xs"
+                    />
+                    <select
+                      value={controlsFor(account.name).sort}
+                      onChange={(e) =>
+                        setControl(account.name, {
+                          sort: e.target.value as "name" | "connected",
+                        })
+                      }
+                      className="field max-w-44 !py-1 text-xs"
+                      aria-label={`Sort repositories for ${account.name}`}
+                    >
+                      <option value="name">Sort: name</option>
+                      <option value="connected">Sort: connected first</option>
+                    </select>
+                    {(["all", "connected", "not"] as const).map((s) => (
+                      <button
+                        key={s}
+                        onClick={() => setControl(account.name, { status: s })}
+                        className={`rounded-full border px-2 py-0.5 text-[11px] transition-colors ${
+                          controlsFor(account.name).status === s
+                            ? "border-syrup-500 text-syrup-300"
+                            : "border-ink-800 text-ink-400 hover:text-ink-100"
+                        }`}
+                      >
+                        {s === "all" ? "All" : s === "connected" ? "Connected" : "Not connected"}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="max-h-[26rem] overflow-y-auto rounded-md border border-ink-800/60">
+                    <ul className="divide-y divide-ink-800/70">
+                      {visibleRepos(account.name).map((r) => {
+                        const [owner, repo] = r.full_name.split("/");
+                        const connectedRow = connected.find((c) => c.full_name === r.full_name);
+                        const isConnecting = connecting.has(r.full_name);
+                        return (
+                          <li key={r.full_name} className="flex items-center gap-3 py-2.5 px-3">
+                            <span className="h-2 w-2 shrink-0 rounded-full bg-chai-500" />
+                            <span className="min-w-0 flex-1">
+                              <a
+                                href={r.html_url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="font-mono text-sm text-ink-200 transition-colors hover:text-syrup-300"
                               >
-                                disconnect
+                                <span className="text-ink-500">{owner}/</span>
+                                {repo}
+                              </a>
+                              <span className="ml-2 font-mono text-[11px] text-ink-600">
+                                {r.private ? "private" : "public"} · {r.default_branch ?? "—"}
+                              </span>
+                            </span>
+                            {connectedRow ? (
+                              <div className="flex items-center gap-2">
+                                <span className="rounded-full bg-green-500/10 px-3 py-1 font-mono text-[11px] text-green-300">
+                                  connected
+                                </span>
+                                <button
+                                  onClick={() => disconnect(connectedRow.id)}
+                                  className="text-[11px] text-ink-500 transition-colors hover:text-red-300"
+                                >
+                                  disconnect
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => connect(account.name, r.full_name)}
+                                disabled={isConnecting}
+                                className="btn-ghost !px-3 !py-1 text-xs"
+                              >
+                                {isConnecting ? "Connecting…" : "Connect"}
                               </button>
-                            </div>
-                          ) : (
-                            <button
-                              onClick={() => connect(account.name, r.full_name)}
-                              className="btn-ghost !px-3 !py-1 text-xs"
-                            >
-                              Connect
-                            </button>
-                          )}
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </div>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                </>
               )}
             </div>
           </div>
