@@ -319,3 +319,19 @@ After any code change, run the relevant tests and build before marking work done
   resync (one pre-existing assertion widened: duplicate status pills).
 - **Suite totals now:** server **923 passed**, web **206 passed.**
   No backend changes; daemon NOT restarted (owner constraint pending task 63).
+
+- **Tasks queue overhaul (web +17):** `Tasks.test.tsx` 39 tests — benign
+  attention hidden, cancelled pill, repo filter, clickable stat cards, row
+  nav, prompt expand, clone prefill (+ branch preservation, proven against
+  the unguarded version), running-card Cancel, row re-run, bulk delete +
+  bulk dismiss, refresh stamp, collapsed Advanced, PR auto-branches,
+  optional review prompt + default, creation flash. Three pre-existing tests
+  adjusted for the collapsed Advanced section; `localStorage.clear()` per
+  block (remembered task defaults leak across tests otherwise); clone scroll
+  guarded for jsdom. AGY review (request-changes) caught 2 real blockers —
+  clone-branch clobber by the context fetch (fixed with a consume-once
+  preserve flag) and DepBadges links bubbling to the row nav — plus 5 nits
+  (ID link keyboard access, offset-aware `timeAgo`, prompt-cell keyboard,
+  clone pats/env, action coverage), all fixed.
+- **Suite totals now:** server **923 passed**, web **223 passed.**
+  No backend changes.
