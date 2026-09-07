@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import { useBackends } from "../hooks/useBackends";
 import { AVATARS, avatarFor, avatarUrl, suggestAvatar } from "../lib/agentAvatars";
-import type { AgentUsage, CatalogAgent, CatalogSkill, LibrarySkill } from "../types";
+import type { AgentUsage, CatalogAgent, LibrarySkill } from "../types";
 
 const EMPTY: CatalogAgent = {
   id: "",
@@ -19,55 +19,6 @@ const EMPTY: CatalogAgent = {
   avatar: null,
   created_at: "",
 };
-
-function SkillEditor({
-  skills,
-  onChange,
-}: {
-  skills: CatalogSkill[];
-  onChange: (skills: CatalogSkill[]) => void;
-}) {
-  function setSkill(i: number, patch: Partial<CatalogSkill>) {
-    onChange(skills.map((s, idx) => (idx === i ? { ...s, ...patch } : s)));
-  }
-  return (
-    <div className="space-y-2">
-      {skills.map((skill, i) => (
-        <div key={i} className="rounded-lg border border-ink-800 p-3">
-          <div className="flex items-center gap-2">
-            <input
-              value={skill.name}
-              onChange={(e) => setSkill(i, { name: e.target.value })}
-              placeholder="skill name (e.g. secure-coding)"
-              className="field !py-1 font-mono text-sm"
-            />
-            <button
-              type="button"
-              onClick={() => onChange(skills.filter((_, idx) => idx !== i))}
-              className="btn-ghost !px-2 !py-1 text-xs text-red-400"
-            >
-              Remove
-            </button>
-          </div>
-          <textarea
-            value={skill.content}
-            onChange={(e) => setSkill(i, { content: e.target.value })}
-            rows={4}
-            placeholder="Skill markdown (loaded by the agent via @path / .claude/skills)"
-            className="field mt-2 resize-y font-mono text-xs"
-          />
-        </div>
-      ))}
-      <button
-        type="button"
-        onClick={() => onChange([...skills, { name: "", content: "" }])}
-        className="btn-ghost text-xs"
-      >
-        + Add skill
-      </button>
-    </div>
-  );
-}
 
 function AgentForm({
   agent,
@@ -86,6 +37,8 @@ function AgentForm({
   const [models, setModels] = useState<string[]>([]);
   const [modelsError, setModelsError] = useState<string | null>(null);
   const [library, setLibrary] = useState<LibrarySkill[] | null>(null);
+  const [libraryError, setLibraryError] = useState<string | null>(null);
+  const [skillQuery, setSkillQuery] = useState("");
   const backendOptions = useBackends();
 
   // Live avatar suggestion from name+description (the "Auto" choice).
@@ -113,17 +66,24 @@ function AgentForm({
   }, [form.cli]);
 
   useEffect(() => {
-    // Library skills for the attach picker — best-effort; the section hides
-    // when the fetch fails rather than blocking the form.
+    // Library skills for the attach picker. A failure is shown with a retry
+    // (there is no inline fallback anymore — skills live in the library).
     let cancelled = false;
-    api
-      .getSkills()
-      .then((list) => {
-        if (!cancelled) setLibrary(list);
-      })
-      .catch(() => {
-        if (!cancelled) setLibrary(null);
-      });
+    async function fetchLibrary() {
+      try {
+        const list = await api.getSkills();
+        if (!cancelled) {
+          setLibrary(list);
+          setLibraryError(null);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setLibrary(null);
+          setLibraryError(e instanceof Error ? e.message : "failed to load skills");
+        }
+      }
+    }
+    fetchLibrary();
     return () => {
       cancelled = true;
     };
@@ -148,19 +108,28 @@ function AgentForm({
       });
       return;
     }
-    const unnamed = form.skills.findIndex((s) => !s.name.trim());
-    if (unnamed !== -1) {
-      setMsg({ kind: "err", text: `skill #${unnamed + 1} needs a name (or remove it)` });
-      return;
-    }
     setBusy(true);
     setMsg(null);
+    // Skills come from the library only (skill_ids). Inline extras are legacy:
+    // saving clears them — manage skills in the Skills section instead.
+    const payload = {
+      name: form.name,
+      kind: form.kind,
+      cli: form.cli,
+      model: form.model,
+      personality_md: form.personality_md,
+      skills: [],
+      skill_ids: form.skill_ids ?? [],
+      custom_instructions: form.custom_instructions,
+      enabled: form.enabled,
+      description: form.description ?? "",
+      avatar: form.avatar,
+    };
     try {
       if (isEdit) {
-        const { id: _ignored, created_at: _c, ...patch } = form;
-        await api.updateAgent(agent.id, patch);
+        await api.updateAgent(agent.id, payload);
       } else {
-        await api.createAgent(form);
+        await api.createAgent({ id: form.id.trim(), ...payload });
       }
       setMsg({ kind: "ok", text: "saved" });
       onSaved();
@@ -336,52 +305,87 @@ function AgentForm({
         />
       </label>
 
-      {library !== null && library.length > 0 && (
-        <div>
-          <span className="mb-1.5 block text-xs font-medium text-ink-400">
-            Library skills (linked by reference — library edits propagate to this agent)
-          </span>
-          <div className="max-h-44 space-y-1 overflow-y-auto rounded-lg border border-ink-800 p-2">
-            {library.map((s) => {
-              const linked = (form.skill_ids ?? []).includes(s.id);
-              return (
-                <label
-                  key={s.id}
-                  className="flex cursor-pointer items-start gap-2 rounded px-2 py-1.5 text-sm hover:bg-ink-850"
-                >
-                  <input
-                    type="checkbox"
-                    checked={linked}
-                    onChange={() =>
-                      set({
-                        skill_ids: linked
-                          ? (form.skill_ids ?? []).filter((id) => id !== s.id)
-                          : [...(form.skill_ids ?? []), s.id],
-                      })
-                    }
-                    className="mt-1 h-4 w-4 rounded border-ink-700 bg-ink-900"
-                  />
-                  <span className="min-w-0">
-                    <span className="font-mono text-xs text-syrup-300">{s.id}</span>
-                    <span className="ml-2 text-ink-200">{s.name}</span>
-                    {s.description && (
-                      <span className="block truncate text-[11px] text-ink-500">
-                        {s.description}
-                      </span>
-                    )}
-                  </span>
-                </label>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
       <div>
         <span className="mb-1.5 block text-xs font-medium text-ink-400">
-          One-off inline skills (stored on this agent only)
+          Skills (from the library only
+          {library !== null && (
+            <span className="text-ink-600">
+              {" "}
+              · {(form.skill_ids ?? []).length} of {library.length} selected
+            </span>
+          )}
+          )
         </span>
-        <SkillEditor skills={form.skills} onChange={(skills) => set({ skills })} />
+        <input
+          value={skillQuery}
+          onChange={(e) => setSkillQuery(e.target.value)}
+          placeholder="Search skills…"
+          className="field mb-2 !py-1.5 text-sm"
+        />
+        {libraryError && (
+          <p className="mb-2 text-xs text-red-400">
+            Couldn&apos;t load the skill library ({libraryError}).{" "}
+            <button
+              type="button"
+              onClick={() => {
+                setLibraryError(null);
+                api
+                  .getSkills()
+                  .then(setLibrary)
+                  .catch((e) =>
+                    setLibraryError(e instanceof Error ? e.message : "failed to load skills")
+                  );
+              }}
+              className="link text-xs"
+            >
+              Retry
+            </button>
+          </p>
+        )}
+        {library !== null && (
+          <div className="max-h-44 space-y-1 overflow-y-auto rounded-lg border border-ink-800 p-2">
+            {library
+              .filter((s) => {
+                const q = skillQuery.trim().toLowerCase();
+                if (!q) return true;
+                return `${s.id} ${s.name} ${s.description}`.toLowerCase().includes(q);
+              })
+              .map((s) => {
+                const linked = (form.skill_ids ?? []).includes(s.id);
+                return (
+                  <label
+                    key={s.id}
+                    className="flex cursor-pointer items-start gap-2 rounded px-2 py-1.5 text-sm hover:bg-ink-850"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={linked}
+                      onChange={() =>
+                        set({
+                          skill_ids: linked
+                            ? (form.skill_ids ?? []).filter((id) => id !== s.id)
+                            : [...(form.skill_ids ?? []), s.id],
+                        })
+                      }
+                      className="mt-1 h-4 w-4 rounded border-ink-700 bg-ink-900"
+                    />
+                    <span className="min-w-0">
+                      <span className="font-mono text-xs text-syrup-300">{s.id}</span>
+                      <span className="ml-2 text-ink-200">{s.name}</span>
+                      {s.description && (
+                        <span className="block truncate text-[11px] text-ink-500">
+                          {s.description}
+                        </span>
+                      )}
+                    </span>
+                  </label>
+                );
+              })}
+          </div>
+        )}
+        <span className="mt-1 block text-[11px] text-ink-600">
+          To add or edit a skill itself, use the Skills section.
+        </span>
       </div>
 
       <label className="block">
@@ -508,6 +512,10 @@ export default function Agents() {
   const [editing, setEditing] = useState<CatalogAgent | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [kindFilter, setKindFilter] = useState<"all" | "general" | "reviewer">("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | "enabled" | "disabled">("all");
+  const [sort, setSort] = useState<"name" | "kind" | "newest">("name");
 
   function load() {
     api
@@ -527,6 +535,22 @@ export default function Agents() {
   }
 
   useEffect(load, []);
+
+  const visible = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const filtered = agents.filter((a) => {
+      if (kindFilter !== "all" && a.kind !== kindFilter) return false;
+      if (statusFilter === "enabled" && !a.enabled) return false;
+      if (statusFilter === "disabled" && a.enabled) return false;
+      if (!q) return true;
+      return `${a.id} ${a.name} ${a.description ?? ""}`.toLowerCase().includes(q);
+    });
+    return [...filtered].sort((x, y) => {
+      if (sort === "kind") return x.kind.localeCompare(y.kind) || x.name.localeCompare(y.name);
+      if (sort === "newest") return y.created_at.localeCompare(x.created_at);
+      return x.name.localeCompare(y.name);
+    });
+  }, [agents, query, kindFilter, statusFilter, sort]);
 
   async function toggle(agent: CatalogAgent) {
     try {
@@ -581,6 +605,51 @@ export default function Agents() {
 
       {error && <p className="text-sm text-red-400">{error}</p>}
 
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search id, name, description…"
+          className="field max-w-xs !py-1.5 text-sm"
+        />
+        <select
+          value={sort}
+          onChange={(e) => setSort(e.target.value as "name" | "kind" | "newest")}
+          className="field max-w-44 !py-1.5 text-sm"
+          aria-label="Sort agents"
+        >
+          <option value="name">Sort: name</option>
+          <option value="kind">Sort: kind</option>
+          <option value="newest">Sort: newest</option>
+        </select>
+        {(["all", "general", "reviewer"] as const).map((k) => (
+          <button
+            key={k}
+            onClick={() => setKindFilter(k)}
+            className={`rounded-full border px-2.5 py-1 text-[11px] transition-colors ${
+              kindFilter === k
+                ? "border-syrup-500 text-syrup-300"
+                : "border-ink-800 text-ink-400 hover:text-ink-100"
+            }`}
+          >
+            {k === "all" ? "All kinds" : k}
+          </button>
+        ))}
+        {(["all", "enabled", "disabled"] as const).map((s) => (
+          <button
+            key={s}
+            onClick={() => setStatusFilter(s)}
+            className={`rounded-full border px-2.5 py-1 text-[11px] transition-colors ${
+              statusFilter === s
+                ? "border-syrup-500 text-syrup-300"
+                : "border-ink-800 text-ink-400 hover:text-ink-100"
+            }`}
+          >
+            {s === "all" ? "Any status" : s}
+          </button>
+        ))}
+      </div>
+
       {showForm && (
         <AgentForm
           key={editing?.id ?? "new"}
@@ -597,16 +666,20 @@ export default function Agents() {
         />
       )}
 
-      {agents.length === 0 && !showForm ? (
+      {visible.length === 0 && !showForm ? (
         <div className="surface flex flex-col items-start gap-3 p-6 animate-fade-up">
-          <h2 className="panel-title">No catalog agents yet</h2>
+          <h2 className="panel-title">
+            {agents.length === 0 ? "No catalog agents yet" : "No agents match"}
+          </h2>
           <p className="text-sm text-ink-400">
-            Create an agent to give tasks a personality, skills, and optional model/CLI pins.
+            {agents.length === 0
+              ? "Create an agent to give tasks a personality, skills, and optional model/CLI pins."
+              : "Try a different search or clear the filters."}
           </p>
         </div>
       ) : (
         <div className="grid gap-3 sm:grid-cols-2">
-          {agents.map((a) => (
+          {visible.map((a) => (
             <AgentRow
               key={a.id}
               agent={a}

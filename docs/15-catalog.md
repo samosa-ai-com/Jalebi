@@ -124,16 +124,19 @@ off inside an Alembic transaction). Validity is enforced in the service layer:
 
 ## 6. UI
 
-The **Agents** page (top-bar nav) is the catalog editor: avatar (auto-suggested
-from name+description via `lib/agentAvatars.ts` keyword map with a hash
-fallback; 12 built-in SVGs in `public/avatars/`, overridable in the picker),
-description, personality textarea, **library skill attach picker** (checkboxes,
-reference semantics) + inline one-off skills editor, model/CLI pins (model
-resets on CLI switch), custom instructions (with 20k cap counter), slug format
-guidance, kind explanations, and the enabled toggle. Rows show the avatar,
-description, usage (task count + trigger rules), an enable/disable toggle, and
-a delete confirm that names impacted rules. Editing agent B with the form open
-on A remounts via `key`.
+The **Agents** page (top-bar nav) is the catalog editor: search (id/name/
+description), kind pills (general/reviewer), status pills (enabled/disabled),
+sort (name/kind/newest), avatar (auto-suggested from name+description via
+`lib/agentAvatars.ts` keyword map with a hash fallback; 12 built-in SVGs in
+`public/avatars/`, overridable in the picker), description, personality
+textarea, **library-only skill picker** (checkboxes with their own search;
+reference semantics — to add or edit a skill itself, use the Skills page),
+model/CLI pins (model resets on CLI switch), custom instructions (with 20k cap
+counter), slug format guidance, kind explanations, and the enabled toggle.
+Saving an agent clears any legacy inline skill extras (they live in the
+library now). Rows show the avatar, description, usage (task count + trigger
+rules), an enable/disable toggle, and a delete confirm that names impacted
+rules. Editing agent B with the form open on A remounts via `key`.
 
 The **Skills** page (top-bar nav) manages the library: search (id/name/
 description/content), tag filter chips, sort (name / recently updated / most
@@ -166,9 +169,10 @@ resolve the rest at run time.
 - `tests/test_queue.py` — run time applies cli/model/custom_instructions/skills;
   a disabled-after-creation agent falls back to defaults.
 - `apps/web/src/pages/Agents.test.tsx` — page list/create/edit/delete, usage
-  display + row toggle, stale-form remount, inline slug/skill validation,
-  model reset on CLI switch, delete-impact confirm, avatar/description rows,
-  avatar suggestion + library attach + explicit pick.
+  display + row toggle, stale-form remount, slug validation (no inline skill
+  editor — library-only), search/kind/status/sort, picker search, save clears
+  legacy inline extras, model reset on CLI switch, delete-impact confirm,
+  avatar/description rows, avatar suggestion + library attach + explicit pick.
 - `apps/web/src/pages/Skills.test.tsx` — list with usage, search, tag filter,
   most-used sort, create with tags, slug validation, delete-impact confirm,
   stale-form remount.

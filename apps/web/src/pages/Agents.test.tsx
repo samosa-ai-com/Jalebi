@@ -265,14 +265,15 @@ describe("Agents", () => {
 
     const edits = await screen.findAllByRole("button", { name: "Edit" });
     expect(edits).toHaveLength(2);
+    // Sorted by name: Docs Guru first, Security Auditor second.
     await userEvent.click(edits[0]);
-    expect(await screen.findByDisplayValue("Security Auditor")).toBeInTheDocument();
+    expect(await screen.findByDisplayValue("Docs Guru")).toBeInTheDocument();
     await userEvent.click(edits[1]);
     // Without the key-remount fix the form would still show the first agent.
-    expect(await screen.findByDisplayValue("Docs Guru")).toBeInTheDocument();
+    expect(await screen.findByDisplayValue("Security Auditor")).toBeInTheDocument();
   });
 
-  it("refuses bad slugs and unnamed skills before saving", async () => {
+  it("refuses bad slugs before saving", async () => {
     const fetchMock = makeFetchMock();
     vi.stubGlobal("fetch", fetchMock);
     render(<Agents />);
@@ -283,12 +284,6 @@ describe("Agents", () => {
     await userEvent.type(screen.getByLabelText("Name"), "Bad");
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByText(/lowercase letters\/digits/)).toBeInTheDocument();
-
-    await userEvent.clear(screen.getByPlaceholderText("security-auditor"));
-    await userEvent.type(screen.getByPlaceholderText("security-auditor"), "ok-slug");
-    await userEvent.click(screen.getByRole("button", { name: "+ Add skill" }));
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
-    expect(await screen.findByText(/needs a name/)).toBeInTheDocument();
 
     expect(
       fetchMock.mock.calls.filter(
@@ -358,6 +353,7 @@ describe("Agents", () => {
       expect(JSON.parse((call?.[1] as RequestInit).body as string)).toMatchObject({
         id: "test-guru",
         skill_ids: ["secure-coding"],
+        skills: [],
         avatar: null,
       });
     });
@@ -382,6 +378,85 @@ describe("Agents", () => {
       expect(call).toBeDefined();
       expect(JSON.parse((call?.[1] as RequestInit).body as string)).toMatchObject({
         avatar: "rocket",
+      });
+    });
+  });
+
+  it("searches the agent list by id, name, and description", async () => {
+    vi.stubGlobal("fetch", makeFetchMock(AGENTS_TWO));
+    render(<Agents />);
+    await screen.findByText("security-auditor");
+    expect(screen.getByText("docs-guru")).toBeInTheDocument();
+
+    await userEvent.type(screen.getByPlaceholderText(/Search id, name/), "docs");
+    expect(screen.queryByText("security-auditor")).not.toBeInTheDocument();
+    expect(screen.getByText("docs-guru")).toBeInTheDocument();
+
+    await userEvent.clear(screen.getByPlaceholderText(/Search id, name/));
+    // Description match (the auditor's description mentions vulns).
+    await userEvent.type(screen.getByPlaceholderText(/Search id, name/), "vulns");
+    expect(screen.getByText("security-auditor")).toBeInTheDocument();
+    expect(screen.queryByText("docs-guru")).not.toBeInTheDocument();
+  });
+
+  it("filters by kind and status pills", async () => {
+    vi.stubGlobal("fetch", makeFetchMock(AGENTS_TWO));
+    render(<Agents />);
+    await screen.findByText("security-auditor");
+
+    // AGENTS_TWO: auditor = reviewer/enabled, guru = general/disabled.
+    await userEvent.click(screen.getByRole("button", { name: "general" }));
+    expect(screen.queryByText("security-auditor")).not.toBeInTheDocument();
+    expect(screen.getByText("docs-guru")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "All kinds" }));
+    await userEvent.click(screen.getByRole("button", { name: "disabled" }));
+    expect(screen.queryByText("security-auditor")).not.toBeInTheDocument();
+    expect(screen.getByText("docs-guru")).toBeInTheDocument();
+  });
+
+  it("sorts newest-first", async () => {
+    vi.stubGlobal("fetch", makeFetchMock(AGENTS_TWO));
+    render(<Agents />);
+    await screen.findByText("security-auditor");
+
+    await userEvent.selectOptions(screen.getByLabelText("Sort agents"), "newest");
+    const rows = screen.getAllByText(/security-auditor|docs-guru/, { exact: false });
+    // docs-guru (08-09) is newer than security-auditor (08-08).
+    expect(rows[0].textContent).toContain("docs-guru");
+  });
+
+  it("the skill picker searches the library", async () => {
+    vi.stubGlobal("fetch", makeFetchMock());
+    render(<Agents />);
+    await screen.findByText("security-auditor");
+
+    await userEvent.click(screen.getByRole("button", { name: "+ New agent" }));
+    expect(await screen.findByText("Secure Coding")).toBeInTheDocument();
+    await userEvent.type(screen.getByPlaceholderText("Search skills…"), "no-such-skill");
+    expect(screen.queryByText("Secure Coding")).not.toBeInTheDocument();
+  });
+
+  it("saving an edit drops legacy inline skills", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Agents />);
+    await screen.findByText("security-auditor");
+
+    // The mock agent carries one inline skill, but the form offers no editor:
+    // saving clears it (skills live in the library now).
+    await userEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.queryByPlaceholderText(/skill name/)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        ([url, init]) =>
+          String(url).includes("/api/agents/security-auditor") && init?.method === "PUT"
+      );
+      expect(call).toBeDefined();
+      expect(JSON.parse((call?.[1] as RequestInit).body as string)).toMatchObject({
+        skills: [],
       });
     });
   });
