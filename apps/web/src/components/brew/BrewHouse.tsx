@@ -185,10 +185,7 @@ export function BrewHouse({
   return (
     <div className="space-y-3 animate-fade-up">
       <div className="surface flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-2">
-        <svg viewBox="0 0 24 24" aria-hidden="true" className="h-6 w-6">
-          <polygon points="12,3 3,21 21,21" fill="#f7b955" stroke="#7c2d12" strokeWidth="1.5" />
-          <line x1="12" y1="3" x2="12" y2="21" stroke="#7c2d12" strokeWidth="1" opacity="0.6" />
-        </svg>
+        <img src="/samosa.png" alt="Samosa AI" className="h-6 w-6 object-contain" />
         <h2 className="panel-title">Halwai shop</h2>
         <p className="text-xs text-ink-500">
           {concurrency === 0

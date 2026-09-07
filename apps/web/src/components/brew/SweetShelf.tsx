@@ -14,12 +14,7 @@ import { snackForType, type SnackKind } from "./snacks";
 
 function SnackGlyph({ kind }: { kind: SnackKind }) {
   if (kind === "samosa") {
-    return (
-      <svg viewBox="0 0 24 24" aria-hidden="true" className="h-6 w-6">
-        <polygon points="12,3 3,21 21,21" fill="#f7b955" stroke="#7c2d12" strokeWidth="1.5" />
-        <line x1="12" y1="3" x2="12" y2="21" stroke="#7c2d12" strokeWidth="1" opacity="0.6" />
-      </svg>
-    );
+    return <img src="/samosa.png" alt="" className="h-6 w-6 object-contain" />;
   }
   if (kind === "pakora") {
     return (

@@ -74,19 +74,17 @@ function FlameJet({
 function Snack({ kind, progress }: { kind: SnackKind; progress: number }) {
   const color = fryColor(progress);
   if (kind === "samosa") {
+    // House logo, bobbing in the oil.
     return (
       <g className="brew-snack">
-        <polygon points="60,52 44,80 76,80" fill={color} stroke="#7c2d12" strokeWidth="1.5" />
-        <line
-          x1="60"
-          y1="52"
-          x2="60"
-          y2="80"
-          stroke="#7c2d12"
-          strokeWidth="1"
-          opacity={0.4 + progress * 0.6}
+        <image
+          href="/samosa.png"
+          x="36"
+          y="44"
+          width="48"
+          height="38"
+          preserveAspectRatio="xMidYMid meet"
         />
-        <line x1="52" y1="66" x2="68" y2="66" stroke="#7c2d12" strokeWidth="0.8" opacity="0.35" />
       </g>
     );
   }
