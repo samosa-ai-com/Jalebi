@@ -1,11 +1,14 @@
 """SQLAlchemy engine, session factory, and Phase-0 models."""
 
+import logging
 from datetime import datetime
 from pathlib import Path
 
 import sqlalchemy as sa
 from alembic import command as alembic_command
 from alembic.config import Config as AlembicConfig
+from alembic.runtime.environment import EnvironmentContext
+from alembic.script import ScriptDirectory
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
@@ -35,6 +38,8 @@ from sqlalchemy.orm import (
 from jalebi.clock import now
 
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
+
+logger = logging.getLogger(__name__)
 
 
 class Base(DeclarativeBase):
@@ -638,4 +643,33 @@ def run_migrations(db_url: str) -> None:
     cfg = AlembicConfig()
     cfg.set_main_option("script_location", str(MIGRATIONS_DIR))
     cfg.set_main_option("sqlalchemy.url", db_url)
-    alembic_command.upgrade(cfg, "head")
+    try:
+        _upgrade_with_cached_scripts(cfg)
+    except Exception:
+        # The cached-script path mirrors ``alembic upgrade head`` internals;
+        # on any surprise (e.g. a future Alembic changing them), fall back to
+        # the plain command so migrations still apply. Correctness first.
+        logger.exception("cached migration path failed; retrying plain upgrade")
+        alembic_command.upgrade(cfg, "head")
+
+
+# Alembic re-reads + re-execs every revision file on each ``upgrade`` call
+# (~0.15s: the dominant per-test cost since every test builds a fresh DB via
+# ``create_app``). Revision scripts are pure code with no connection state, so
+# the loaded ``ScriptDirectory`` is safe to reuse across databases in one
+# process; only ``env.py`` (fast) re-runs per call.
+_SCRIPT_DIR_CACHE: dict[str, ScriptDirectory] = {}
+
+
+def _upgrade_with_cached_scripts(cfg: AlembicConfig) -> None:
+    key = cfg.get_main_option("script_location") or ""
+    script = _SCRIPT_DIR_CACHE.get(key)
+    if script is None:
+        script = ScriptDirectory.from_config(cfg)
+        _SCRIPT_DIR_CACHE[key] = script
+
+    def upgrade(rev, context):
+        return script._upgrade_revs("head", rev)
+
+    with EnvironmentContext(cfg, script, fn=upgrade, destination_rev="head"):
+        script.run_env()

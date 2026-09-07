@@ -224,10 +224,15 @@ def test_default_backend_and_model_settings(client: FlaskClient) -> None:
     assert resp.status_code == 400
 
 
-def test_models_endpoint_cli_query_param(client: FlaskClient) -> None:
+def test_models_endpoint_cli_query_param(client: FlaskClient, monkeypatch) -> None:
     """GET /api/models?cli=<backend> returns that backend's models regardless of
     the global default_backend setting (used by the forms)."""
     from jalebi.adapters import get_adapter
+    from jalebi.adapters.opencode import OpenCodeAdapter
+
+    # The real opencode adapter shells out to the `opencode models` CLI
+    # (~1.5s process spawn); this test covers param routing, not the binary.
+    monkeypatch.setattr(OpenCodeAdapter, "list_models", lambda self: ["m1"])
 
     client.post("/api/settings", json={"key": "default_backend", "value": "opencode"})
 
@@ -255,3 +260,4 @@ def test_models_endpoint_cli_query_param(client: FlaskClient) -> None:
     # No param → the default_backend setting's backend.
     body = client.get("/api/models").get_json()
     assert body["cli"] == "opencode"
+    assert body["models"] == ["m1"]

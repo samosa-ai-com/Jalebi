@@ -9,6 +9,10 @@
 - Server tests: `uv run pytest` (inside `apps/server`).
 - Web tests: `npm test -w @jalebi/web` (vitest).
 - Both: `npm test` (runs server pytest then web vitest).
+- Fast server runs: `uv run pytest -n 4` (pytest-xdist, dev dep) — the suite is
+  worker-safe (per-test tmp dirs + file DBs, no bound ports); ~14s for 931
+  tests vs ~50s serial.
+- Slowest-first triage: `uv run pytest --durations=12`.
 - Lint/format: `uv run ruff check` (server); `npm run lint` / `npm run format` (web).
 - Typecheck: `npm run typecheck` (web, `tsc --noEmit`).
 - Build: `npm run build` (web → `apps/web/dist`, served by Flask).
@@ -285,6 +289,31 @@ After any code change, run the relevant tests and build before marking work done
   Ruff clean except one pre-existing I001 in `tests/test_api_catalog.py`
   (verified on the clean tree, untouched); `npm run lint`, `tsc --noEmit`,
   Prettier, production build clean.
+
+- **Speed round (2026-09-07):** suite took 4–10+ min serial; now **~50s
+  serial / ~14s with `-n 4`** (931 tests). Changes:
+  - `conftest.py`: session-scoped `template_db` (migrated + seeded once),
+    per-test file copy into the `app` fixture — replaces 20-migration +
+    ~50-seed-insert bootstrap per test (~0.25s → ms). Catalog wipe kept, so
+    each test still starts with an empty library.
+  - `db.py`: `run_migrations` reuses a cached Alembic `ScriptDirectory`
+    (revision files are pure code — safe across DBs in one process) with a
+    plain-`upgrade` fallback on any surprise. Also speeds up production
+    restarts marginally.
+  - `screening.py`: watchdog stop flag → `threading.Event` (`wait(1)`);
+    `join` returns immediately on run end instead of sleeping out a 1s
+    quantum (~1s saved per screening-run test; no behavior change).
+  - `test_sse.py`: fixed stale `_seq.get(task_id)` waits (key is
+    `(task_id, run_id)` since durable-SSE) via a `_published_seq` helper —
+    the backfill test alone burned ~20s spinning past two 10s deadlines.
+  - `test_api_settings.py`: `test_models_endpoint_cli_query_param`
+    monkeypatches `OpenCodeAdapter.list_models` (the real one spawns the
+    `opencode models` CLI, ~1.5s; the test covers param routing, not the
+    binary).
+  - `pytest-xdist` added to dev deps (worker-safe: per-test tmp dirs +
+    file DBs, no bound ports). Default stays serial; pass `-n auto` for
+    speed. Remaining slowest tests are intentional waits (stall timeouts,
+    worker-pool polling, concurrency threads).
 
 - **Agents library-only round (web +5):** `Agents.test.tsx` 20 tests — slug
   validation, search/kind/status/sort, picker search, save-drops-inline,

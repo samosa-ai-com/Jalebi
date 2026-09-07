@@ -266,7 +266,7 @@ def test_sse_after_seq_backfills_events_published_before_subscribe(
     # Wait until the run has published its first event (seq 1), then attach a
     # late subscriber that must backfill it from the replay buffer.
     deadline = time.monotonic() + 10
-    while q.events._seq.get(task_id, 0) < 1 and time.monotonic() < deadline:
+    while _published_seq(q.events, task_id) < 1 and time.monotonic() < deadline:
         time.sleep(0.01)
 
     client = app.test_client()
@@ -282,7 +282,7 @@ def test_sse_after_seq_backfills_events_published_before_subscribe(
 
     handle.release.set()  # let "working" flow; wait for it, then release the tail
     deadline = time.monotonic() + 10
-    while q.events._seq.get(task_id, 0) < 2 and time.monotonic() < deadline:
+    while _published_seq(q.events, task_id) < 2 and time.monotonic() < deadline:
         time.sleep(0.01)
     handle.release.set()
     runner.join(timeout=10)
@@ -300,6 +300,20 @@ def test_sse_after_seq_backfills_events_published_before_subscribe(
     assert ("message", "early", 1) in texts
     assert ("message", "working", 2) in texts
     assert texts[-1] == ("stream_end", None, None)
+
+
+def _published_seq(events: TaskEvents, task_id: int) -> int:
+    """Highest seq published for ``task_id`` across runs.
+
+    ``TaskEvents._seq`` is keyed by ``(task_id, run_id)`` since the durable-SSE
+    change — a bare ``_seq.get(task_id)`` never matches and spins until its
+    deadline (this test used to burn ~20s per run this way).
+    """
+    with events._lock:
+        return max(
+            (seq for (tid, _run_id), seq in events._seq.items() if tid == task_id),
+            default=0,
+        )
 
 
 def test_sse_not_found(app) -> None:

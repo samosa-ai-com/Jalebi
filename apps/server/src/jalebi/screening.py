@@ -77,7 +77,10 @@ class _WatchState:
     def __init__(self) -> None:
         self.last_event: float = time.monotonic()
         self.reason: str | None = None
-        self.stop: bool = False
+        # An event (not a plain bool) so the run loop wakes the watchdog
+        # immediately on completion instead of letting it sleep out a full
+        # 1s quantum before noticing `stop` (a ~1s tax on every run).
+        self.stop: threading.Event = threading.Event()
 
 
 def parse_findings(text: str) -> list[dict[str, object]]:
@@ -793,10 +796,10 @@ class ScreeningEngine:
             watch_lock = threading.Lock()
 
             def _watchdog() -> None:
-                while not watch.stop:
-                    time.sleep(1)
-                    if watch.stop:
-                        break
+                # `stop.wait(1)` instead of `sleep(1)` + flag check: the run
+                # loop sets the event on completion and the join below returns
+                # immediately instead of waiting out a full quantum.
+                while not watch.stop.wait(1):
                     with watch_lock:
                         elapsed = time.monotonic() - watch.last_event
                     if time.monotonic() >= deadline:
@@ -843,7 +846,7 @@ class ScreeningEngine:
                     ended_with_error = True
                 if event.type in ("done", "error"):
                     break
-            watch.stop = True
+            watch.stop.set()
             watchdog.join(timeout=2)
 
             output_text = "\n".join(raw_messages)[:MAX_OUTPUT_CHARS]
