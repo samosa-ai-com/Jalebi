@@ -285,3 +285,19 @@ After any code change, run the relevant tests and build before marking work done
   Ruff clean except one pre-existing I001 in `tests/test_api_catalog.py`
   (verified on the clean tree, untouched); `npm run lint`, `tsc --noEmit`,
   Prettier, production build clean.
+
+- **Agents library-only round (web +5):** `Agents.test.tsx` 20 tests — slug
+  validation, search/kind/status/sort, picker search, save-drops-inline,
+  avatar suggestion/attach/override.
+- **GitHub round (web +8):** `Github.test.tsx` 16 tests — repo search/filter/
+  sort, error + retry, refresh, connect busy, scope guidance, collapse
+  behaviors + persistence.
+- **Suite totals now:** server **919 passed**, web **192 passed.**
+
+- **Repos round (server +1, web +6 net):**
+  - `test_api_repos.py` (+1): `?include_disconnected=1` reveals
+    soft-disconnected repos (hidden by default).
+  - `Repos.test.tsx` (rewritten, 1 → 7 tests): metadata rows, no connect
+    form, search/account filter, statuses toggle, disconnected + reconnect,
+    refresh, GitHub-page empty state.
+- **Suite totals now:** server **920 passed**, web **198 passed.**

@@ -15,7 +15,12 @@ bp = Blueprint("repos", __name__, url_prefix="/api/repos")
 @bp.get("")
 def list_repos() -> ResponseReturnValue:
     session = db.get_session()
-    return jsonify([repos.repo_to_dict(row) for row in repos.list_repos(session)])
+    # Disconnected repos stay hidden by default (soft-disconnect hides them
+    # from pickers); ?include_disconnected=1 reveals them for the Repos page's
+    # Disconnected section with Reconnect buttons.
+    include_disconnected = request.args.get("include_disconnected") == "1"
+    rows = repos.list_repos(session, connected_only=not include_disconnected)
+    return jsonify([repos.repo_to_dict(row) for row in rows])
 
 
 @bp.post("")

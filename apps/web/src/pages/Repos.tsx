@@ -1,144 +1,311 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import type { Repo } from "../types";
 
+function timeAgo(iso: string | null): string {
+  if (!iso) return "never";
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "never";
+  const m = Math.floor((Date.now() - t) / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
+function RepoRow({
+  repo,
+  toggling,
+  onToggleStatuses,
+  onDisconnect,
+}: {
+  repo: Repo;
+  toggling: boolean;
+  onToggleStatuses: () => void;
+  onDisconnect: () => void;
+}) {
+  const [owner, name] = repo.full_name.split("/");
+  return (
+    <li className="flex items-center gap-3 px-6 py-3.5">
+      <span className="h-2 w-2 shrink-0 rounded-full bg-syrup-400" />
+      <span className="min-w-0 flex-1">
+        <span className="font-mono text-sm text-ink-200">
+          <span className="text-ink-500">{owner}/</span>
+          {name}
+        </span>
+        <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-[11px] text-ink-600">
+          <span>{repo.default_branch}</span>
+          {repo.pat_name && <span title="Bound GitHub account">@{repo.pat_name}</span>}
+          <span
+            title={
+              repo.webhook_registered
+                ? "Webhook registered — events push in real time"
+                : "No webhook — register one on the Triggers page for real-time events"
+            }
+            className={repo.webhook_registered ? "text-green-400" : "text-ink-600"}
+          >
+            webhook: {repo.webhook_registered ? "on" : "off"}
+          </span>
+          {repo.poll_fallback && <span title="Polling fallback enabled">polling</span>}
+          <span title="Last poller check">checked {timeAgo(repo.last_checked_at)}</span>
+        </span>
+      </span>
+      <span className="hidden font-mono text-[11px] text-ink-600 sm:block">#{repo.id}</span>
+      <button
+        type="button"
+        title={
+          repo.check_runs_enabled
+            ? "Commit statuses enabled (PRD F15)"
+            : "Report commit statuses on PRs"
+        }
+        onClick={onToggleStatuses}
+        disabled={toggling}
+        className={`text-[11px] transition-colors ${
+          repo.check_runs_enabled
+            ? "text-green-400 hover:text-green-300"
+            : "text-ink-500 hover:text-ink-300"
+        }`}
+      >
+        {toggling ? "…" : repo.check_runs_enabled ? "statuses: on" : "statuses: off"}
+      </button>
+      <button
+        onClick={onDisconnect}
+        className="text-[11px] text-ink-500 transition-colors hover:text-red-300"
+      >
+        disconnect
+      </button>
+    </li>
+  );
+}
+
+type SortKey = "name" | "checked";
+
 export default function Repos() {
   const [repos, setRepos] = useState<Repo[]>([]);
-  const [fullName, setFullName] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [disconnected, setDisconnected] = useState<Repo[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [toggling, setToggling] = useState<Set<number>>(new Set());
+  const [reconnecting, setReconnecting] = useState<Set<number>>(new Set());
+  const [query, setQuery] = useState("");
+  const [accountFilter, setAccountFilter] = useState<string>("all");
+  const [sort, setSort] = useState<SortKey>("name");
 
-  const load = useCallback(() => {
-    api
-      .getRepos()
-      .then(setRepos)
-      .catch((e) => setError(e.message));
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [connectedRows, allRows] = await Promise.all([api.getRepos(), api.getRepos(true)]);
+      setRepos(connectedRows);
+      setDisconnected(allRows.filter((r) => !r.connected));
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "failed to list repos");
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
+    // Mount-time fetch (not derived state).
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     load();
   }, [load]);
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!fullName.trim() || !fullName.includes("/")) return;
-    setBusy(true);
-    setError(null);
+  async function refresh() {
+    setRefreshing(true);
     try {
-      await api.connectRepo(fullName.trim());
-      setFullName("");
-      load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "failed to connect repo");
+      await load();
     } finally {
-      setBusy(false);
+      setRefreshing(false);
     }
   }
 
+  async function toggleStatuses(repo: Repo) {
+    if (toggling.has(repo.id)) return;
+    setToggling((prev) => new Set(prev).add(repo.id));
+    try {
+      await api.updateRepo(repo.id, { check_runs_enabled: !repo.check_runs_enabled });
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "toggle failed");
+    } finally {
+      setToggling((prev) => {
+        const next = new Set(prev);
+        next.delete(repo.id);
+        return next;
+      });
+    }
+  }
+
+  async function disconnect(id: number) {
+    try {
+      await api.disconnectRepo(id);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "failed to disconnect");
+    }
+  }
+
+  async function reconnect(id: number) {
+    if (reconnecting.has(id)) return;
+    setReconnecting((prev) => new Set(prev).add(id));
+    try {
+      await api.reconnectRepo(id);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "failed to reconnect");
+    } finally {
+      setReconnecting((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
+  }
+
+  const accounts = useMemo(() => {
+    const names = new Set<string>();
+    [...repos, ...disconnected].forEach((r) => {
+      if (r.pat_name) names.add(r.pat_name);
+    });
+    return [...names].sort();
+  }, [repos, disconnected]);
+
+  const visible = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const filtered = repos.filter((r) => {
+      if (accountFilter !== "all" && r.pat_name !== accountFilter) return false;
+      if (!q) return true;
+      return r.full_name.toLowerCase().includes(q);
+    });
+    return [...filtered].sort((a, b) => {
+      if (sort === "checked")
+        return (b.last_checked_at ?? "").localeCompare(a.last_checked_at ?? "");
+      return a.full_name.localeCompare(b.full_name);
+    });
+  }, [repos, query, accountFilter, sort]);
+
   return (
     <div className="space-y-6">
-      <header className="animate-fade-up">
-        <h1 className="text-3xl font-bold tracking-tight text-ink-100">Repos</h1>
-        <p className="mt-1 text-sm text-ink-500">
-          The connected repositories the agent can open worktrees in.
-        </p>
-      </header>
-
-      <form
-        onSubmit={submit}
-        className="surface flex flex-col gap-3 p-6 sm:flex-row sm:items-end animate-fade-up"
-        style={{ animationDelay: "0.05s" }}
-      >
-        <label className="flex-1">
-          <span className="mb-1.5 block text-xs font-medium text-ink-400">
-            Owner / repository
-          </span>
-          <input
-            value={fullName}
-            onChange={(e) => setFullName(e.target.value)}
-            placeholder="owner/repo"
-            className="field font-mono"
-            spellCheck={false}
-          />
-        </label>
-        <button
-          type="submit"
-          disabled={busy || !fullName.includes("/")}
-          className="btn-primary"
-        >
-          {busy ? "Connecting…" : "Connect"}
+      <header className="flex items-start justify-between animate-fade-up">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight text-ink-100">Repos</h1>
+          <p className="mt-1 text-sm text-ink-500">
+            The connected repositories the agent can open worktrees in. Connect new ones from the
+            GitHub page.
+          </p>
+        </div>
+        <button onClick={refresh} disabled={refreshing} className="btn-ghost text-xs">
+          {refreshing ? "Refreshing…" : "Refresh"}
         </button>
-      </form>
+      </header>
 
       {error && <p className="text-sm text-red-400">{error}</p>}
 
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search repositories…"
+          className="field max-w-xs !py-1.5 text-sm"
+        />
+        <select
+          value={accountFilter}
+          onChange={(e) => setAccountFilter(e.target.value)}
+          className="field max-w-44 !py-1.5 text-sm"
+          aria-label="Filter by account"
+        >
+          <option value="all">All accounts</option>
+          {accounts.map((a) => (
+            <option key={a} value={a}>
+              @{a}
+            </option>
+          ))}
+        </select>
+        <select
+          value={sort}
+          onChange={(e) => setSort(e.target.value as SortKey)}
+          className="field max-w-44 !py-1.5 text-sm"
+          aria-label="Sort repos"
+        >
+          <option value="name">Sort: name</option>
+          <option value="checked">Sort: recently checked</option>
+        </select>
+      </div>
+
       <section className="surface animate-fade-up" style={{ animationDelay: "0.1s" }}>
         <div className="border-b border-ink-800 px-6 py-4">
-          <h2 className="panel-title">Connected · {repos.length}</h2>
+          <h2 className="panel-title">
+            Connected · {visible.length}
+            {visible.length !== repos.length && ` of ${repos.length}`}
+          </h2>
         </div>
-        {repos.length === 0 && (
+        {loading && repos.length === 0 ? (
+          <div className="px-6 py-10 text-center text-sm text-ink-600">Loading repositories…</div>
+        ) : visible.length === 0 ? (
           <div className="px-6 py-10 text-center text-sm text-ink-600">
-            Nothing connected yet. Type an <code className="font-mono">owner/repo</code> above, or
-            pick one from the GitHub page.
+            {repos.length === 0 ? (
+              <>
+                Nothing connected yet. Pick one from the{" "}
+                <Link to="/github" className="link">
+                  GitHub page
+                </Link>
+                .
+              </>
+            ) : (
+              "No repositories match the current search or filters."
+            )}
           </div>
+        ) : (
+          <ul className="divide-y divide-ink-800/70">
+            {visible.map((r) => (
+              <RepoRow
+                key={r.id}
+                repo={r}
+                toggling={toggling.has(r.id)}
+                onToggleStatuses={() => toggleStatuses(r)}
+                onDisconnect={() => disconnect(r.id)}
+              />
+            ))}
+          </ul>
         )}
-        <ul className="divide-y divide-ink-800/70">
-          {repos.map((r) => {
-            const [owner, repo] = r.full_name.split("/");
-            return (
-              <li key={r.id} className="flex items-center gap-3 px-6 py-3.5">
-                <span className="h-2 w-2 shrink-0 rounded-full bg-syrup-400" />
-                <span className="min-w-0 flex-1 font-mono text-sm text-ink-200">
-                  <span className="text-ink-500">{owner}/</span>
-                  {repo}
-                </span>
-                <span className="rounded bg-ink-850 px-2 py-0.5 font-mono text-[11px] text-ink-400">
-                  {r.default_branch}
-                </span>
-                <span className="hidden font-mono text-[11px] text-ink-600 sm:block">
-                  #{r.id}
-                </span>
-                <button
-                  type="button"
-                  title={
-                    r.check_runs_enabled
-                      ? "Commit statuses enabled (PRD F15)"
-                      : "Report commit statuses on PRs"
-                  }
-                  onClick={async () => {
-                    try {
-                      await api.updateRepo(r.id, { check_runs_enabled: !r.check_runs_enabled });
-                      load();
-                    } catch (e) {
-                      setError(e instanceof Error ? e.message : "toggle failed");
-                    }
-                  }}
-                  className={`text-[11px] transition-colors ${
-                    r.check_runs_enabled
-                      ? "text-green-400 hover:text-green-300"
-                      : "text-ink-500 hover:text-ink-300"
-                  }`}
-                >
-                  {r.check_runs_enabled ? "statuses: on" : "statuses: off"}
-                </button>
-                <button
-                  onClick={async () => {
-                    try {
-                      await api.disconnectRepo(r.id);
-                      load();
-                    } catch (e) {
-                      setError(e instanceof Error ? e.message : "failed to disconnect");
-                    }
-                  }}
-                  className="text-[11px] text-ink-500 transition-colors hover:text-red-300"
-                >
-                  disconnect
-                </button>
-              </li>
-            );
-          })}
-        </ul>
       </section>
+
+      {disconnected.length > 0 && (
+        <section className="surface animate-fade-up">
+          <div className="border-b border-ink-800 px-6 py-4">
+            <h2 className="panel-title">Disconnected · {disconnected.length}</h2>
+          </div>
+          <ul className="divide-y divide-ink-800/70">
+            {disconnected.map((r) => {
+              const [owner, name] = r.full_name.split("/");
+              const busy = reconnecting.has(r.id);
+              return (
+                <li key={r.id} className="flex items-center gap-3 px-6 py-3.5">
+                  <span className="h-2 w-2 shrink-0 rounded-full bg-ink-700" />
+                  <span className="min-w-0 flex-1 font-mono text-sm text-ink-500">
+                    <span className="text-ink-600">{owner}/</span>
+                    {name}
+                  </span>
+                  {r.pat_name && (
+                    <span className="font-mono text-[11px] text-ink-600">@{r.pat_name}</span>
+                  )}
+                  <button
+                    onClick={() => reconnect(r.id)}
+                    disabled={busy}
+                    className="btn-ghost !px-3 !py-1 text-xs"
+                  >
+                    {busy ? "Reconnecting…" : "Reconnect"}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
     </div>
   );
 }

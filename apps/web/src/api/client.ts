@@ -352,7 +352,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ reviewers }),
     }),
-  getRepos: () => request<Repo[]>("/api/repos"),
+  getRepos: (includeDisconnected = false) =>
+    request<Repo[]>(`/api/repos${includeDisconnected ? "?include_disconnected=1" : ""}`),
   connectRepo: (fullName: string, patName?: string) =>
     request<Repo>("/api/repos", {
       method: "POST",
@@ -360,6 +361,7 @@ export const api = {
     }),
   disconnectRepo: (id: number) =>
     request<{ disconnected: string }>(`/api/repos/${id}`, { method: "DELETE" }),
+  reconnectRepo: (id: number) => request<Repo>(`/api/repos/${id}/reconnect`, { method: "POST" }),
   updateRepo: (id: number, input: { check_runs_enabled?: boolean }) =>
     request<Repo>(`/api/repos/${id}`, { method: "PATCH", body: JSON.stringify(input) }),
   pruneRepos: () => request<{ removed: string[] }>("/api/repos/prune", { method: "POST" }),
