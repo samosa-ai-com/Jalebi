@@ -17,7 +17,7 @@ every write path validates the slug here.
 import json
 import re
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from jalebi import clock
@@ -83,9 +83,9 @@ def validate_definition(
     enabled: bool,
 ) -> None:
     """Validate a catalog agent definition (shared by create + update)."""
-    if not name or not name.strip():
+    if not isinstance(name, str) or not name.strip():
         raise CatalogError("name is required")
-    if kind not in AGENT_KINDS:
+    if not isinstance(kind, str) or kind not in AGENT_KINDS:
         raise CatalogError(f"kind must be one of {AGENT_KINDS}")
     if cli is not None and not isinstance(cli, str):
         raise CatalogError("cli must be a string or null")
@@ -95,11 +95,19 @@ def validate_definition(
         raise CatalogError("model must be a string or null")
     if model is not None and not model.strip():
         raise CatalogError("model must be a non-empty string or null")
+    if not isinstance(personality_md, str):
+        raise CatalogError("personality_md must be a string")
+    if not isinstance(custom_instructions, str):
+        raise CatalogError("custom_instructions must be a string")
     if len(custom_instructions) > MAX_INSTRUCTION_CHARS:
         raise CatalogError(
             f"custom_instructions too long ({len(custom_instructions)} chars; "
             f"max {MAX_INSTRUCTION_CHARS})"
         )
+    if not isinstance(enabled, bool):
+        # bool("false") is True — loose coercion would silently enable what the
+        # owner meant to disable. Callers pass real booleans or omit the field.
+        raise CatalogError("enabled must be a boolean")
     for skill in skills:
         if "name" not in skill or "content" not in skill:
             raise CatalogError("each skill must have name and content")
@@ -198,6 +206,11 @@ def update_agent(
         cli = cli or None
     if provided_model:
         model = model or None
+    if provided_cli and not provided_model:
+        # A backend switch orphans the old model pin (it belonged to the old
+        # backend) — drop it unless a new pin arrives in the same call.
+        model = None
+        provided_model = True
     # Normalize + validate skills (name format, duplicates) — shared with create,
     # so the PUT route cannot store an invalid/poisoned skill name.
     merged_skills = _load_skills(row.skills_json) if skills is None else _load_skills(
@@ -236,6 +249,36 @@ def update_agent(
     session.commit()
     session.refresh(row)
     return row
+
+
+def agent_usage(session: Session, slug: str) -> dict[str, object]:
+    """Where a catalog agent is referenced: historical task count + live trigger
+    rules. Deleting an agent orphans task history (by design) but breaks live
+    rules at dispatch — the UI shows this before delete.
+    """
+    from jalebi.db import Repo, Task, TriggerRule
+
+    task_count = session.execute(
+        select(func.count()).select_from(Task).where(Task.agent_id == slug)
+    ).scalar_one()
+    rules = []
+    for rule in session.execute(select(TriggerRule)).scalars():
+        try:
+            agent_ids = json.loads(rule.agent_ids_json) if rule.agent_ids_json else []
+        except (ValueError, TypeError):
+            agent_ids = []
+        if slug in agent_ids:
+            repo = session.get(Repo, rule.repo_id)
+            rules.append(
+                {
+                    "id": rule.id,
+                    "event": rule.event,
+                    "action": rule.action,
+                    "repo_id": rule.repo_id,
+                    "repo_full_name": repo.full_name if repo is not None else None,
+                }
+            )
+    return {"task_count": task_count, "trigger_rules": rules}
 
 
 def delete_agent(session: Session, slug: str) -> bool:

@@ -245,3 +245,13 @@ After any code change, run the relevant tests and build before marking work done
 - **Suite totals now:** server **897 passed**, web **163 passed.**
   Ruff, `npm run lint`, `tsc --noEmit`, Prettier, production build clean (the
   Vite large-chunk warning remains).
+
+- **Agents round (server +3, web +5):**
+  - `test_api_catalog.py` (+3): strict create types, cli-switch drops model,
+    usage endpoint (tasks + rules, 404).
+  - `Agents.test.tsx` (+5): usage display + row toggle, stale-form remount,
+    slug/skill inline validation, model reset on CLI switch, delete-impact
+    confirm.
+- **Suite totals now:** server **900 passed**, web **168 passed.**
+  Ruff, `npm run lint`, `tsc --noEmit`, Prettier, production build clean (the
+  Vite large-chunk warning remains).

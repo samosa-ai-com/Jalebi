@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import { useBackends } from "../hooks/useBackends";
-import type { CatalogAgent, CatalogSkill } from "../types";
+import type { AgentUsage, CatalogAgent, CatalogSkill } from "../types";
 
 const EMPTY: CatalogAgent = {
   id: "",
@@ -79,6 +79,7 @@ function AgentForm({
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [models, setModels] = useState<string[]>([]);
+  const [modelsError, setModelsError] = useState<string | null>(null);
   const backendOptions = useBackends();
 
   useEffect(() => {
@@ -89,9 +90,13 @@ function AgentForm({
     api
       .getModels(form.cli ?? undefined)
       .then((m) => {
-        if (!cancelled) setModels(m.models ?? []);
+        if (cancelled) return;
+        setModels(m.models ?? []);
+        setModelsError(null);
       })
-      .catch(() => {});
+      .catch((e) => {
+        if (!cancelled) setModelsError(e instanceof Error ? e.message : "failed to load models");
+      });
     return () => {
       cancelled = true;
     };
@@ -101,10 +106,24 @@ function AgentForm({
     setForm((f) => ({ ...f, ...patch }));
   }
 
+  const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
   async function save(e: React.FormEvent) {
     e.preventDefault();
     if (!form.id.trim() || !form.name.trim()) {
       setMsg({ kind: "err", text: "id and name are required" });
+      return;
+    }
+    if (!isEdit && !SLUG_RE.test(form.id.trim())) {
+      setMsg({
+        kind: "err",
+        text: "id must be lowercase letters/digits with single hyphens (e.g. security-auditor)",
+      });
+      return;
+    }
+    const unnamed = form.skills.findIndex((s) => !s.name.trim());
+    if (unnamed !== -1) {
+      setMsg({ kind: "err", text: `skill #${unnamed + 1} needs a name (or remove it)` });
       return;
     }
     setBusy(true);
@@ -142,6 +161,12 @@ function AgentForm({
             placeholder="security-auditor"
             className="field font-mono"
           />
+          {!isEdit && (
+            <span className="mt-1 block text-[11px] text-ink-600">
+              Lowercase letters/digits with single hyphens. Permanent — tasks and rules reference
+              it.
+            </span>
+          )}
         </label>
         <label className="block">
           <span className="mb-1.5 block text-xs font-medium text-ink-400">Name</span>
@@ -162,6 +187,11 @@ function AgentForm({
             <option value="general">general</option>
             <option value="reviewer">reviewer</option>
           </select>
+          <span className="mt-1 block text-[11px] text-ink-600">
+            {form.kind === "reviewer"
+              ? "Reviewer: runs the PR review workflow and is selectable in trigger rules."
+              : "General: plain build agent for issue_fix / freeform tasks."}
+          </span>
         </label>
       </div>
 
@@ -172,7 +202,12 @@ function AgentForm({
           </span>
           <select
             value={form.cli ?? ""}
-            onChange={(e) => set({ cli: e.target.value })}
+            onChange={(e) => {
+              set({ cli: e.target.value });
+              // The old model pin belonged to the old backend — drop it rather
+              // than running an invalid combination (the server does the same).
+              set({ model: "" });
+            }}
             className="field"
           >
             <option value="">default (global setting)</option>
@@ -202,6 +237,11 @@ function AgentForm({
               <option value={form.model}>{form.model}</option>
             )}
           </select>
+          {modelsError && (
+            <span className="mt-1 block text-[11px] text-amber-400">
+              Model list failed to load ({modelsError}) — a saved pin still applies.
+            </span>
+          )}
         </label>
       </div>
 
@@ -225,7 +265,10 @@ function AgentForm({
 
       <label className="block">
         <span className="mb-1.5 block text-xs font-medium text-ink-400">
-          Custom instructions (appended to the task prompt)
+          Custom instructions (appended to the task prompt){" "}
+          <span className="text-ink-600">
+            {form.custom_instructions.length.toLocaleString()}/20,000
+          </span>
         </span>
         <textarea
           value={form.custom_instructions}
@@ -266,10 +309,14 @@ function AgentForm({
 
 function AgentRow({
   agent,
+  usage,
+  onToggle,
   onEdit,
   onDelete,
 }: {
   agent: CatalogAgent;
+  usage: AgentUsage | null;
+  onToggle: () => void;
   onEdit: () => void;
   onDelete: () => void;
 }) {
@@ -295,11 +342,25 @@ function AgentRow({
             <span className="font-mono">{agent.skills.length} skill(s)</span>
           )}
         </div>
+        {usage ? (
+          <p className="mt-1.5 text-[11px] text-ink-500">
+            Used by {usage.task_count} task{usage.task_count === 1 ? "" : "s"}
+            {usage.trigger_rules.length > 0 &&
+              ` · ${usage.trigger_rules.length} trigger rule${usage.trigger_rules.length === 1 ? "" : "s"}: ${usage.trigger_rules
+                .map((r) => `#${r.id} ${r.event}`)
+                .join(", ")}`}
+          </p>
+        ) : (
+          <p className="mt-1.5 text-[11px] text-ink-600">Usage unavailable.</p>
+        )}
         {agent.personality_md && (
           <p className="mt-2 line-clamp-2 text-xs text-ink-400">{agent.personality_md}</p>
         )}
       </div>
       <div className="flex shrink-0 gap-2">
+        <button onClick={onToggle} className="btn-ghost text-xs">
+          {agent.enabled ? "Disable" : "Enable"}
+        </button>
         <button onClick={onEdit} className="btn-ghost text-xs">
           Edit
         </button>
@@ -313,6 +374,7 @@ function AgentRow({
 
 export default function Agents() {
   const [agents, setAgents] = useState<CatalogAgent[]>([]);
+  const [usageById, setUsageById] = useState<Record<string, AgentUsage | null>>({});
   const [editing, setEditing] = useState<CatalogAgent | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -320,14 +382,44 @@ export default function Agents() {
   function load() {
     api
       .getAgents()
-      .then(setAgents)
+      .then((list) => {
+        setAgents(list);
+        // Usage per agent, best-effort: a failure leaves "unavailable", never
+        // blocks the list.
+        list.forEach((a) => {
+          api
+            .getAgentUsage(a.id)
+            .then((u) => setUsageById((prev) => ({ ...prev, [a.id]: u })))
+            .catch(() => setUsageById((prev) => ({ ...prev, [a.id]: null })));
+        });
+      })
       .catch((e) => setError(e.message));
   }
 
   useEffect(load, []);
 
+  async function toggle(agent: CatalogAgent) {
+    try {
+      await api.updateAgent(agent.id, { enabled: !agent.enabled });
+      load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "failed to update");
+    }
+  }
+
   async function remove(agent: CatalogAgent) {
-    if (!window.confirm(`Delete catalog agent "${agent.id}"? Tasks keep their history.`)) return;
+    const usage = usageById[agent.id];
+    const rules = usage?.trigger_rules ?? [];
+    const impact =
+      rules.length > 0
+        ? `\n\nWARNING: ${rules.length} trigger rule${rules.length === 1 ? "" : "s"} reference${
+            rules.length === 1 ? "s" : ""
+          } this agent (${rules.map((r) => `#${r.id} ${r.event}`).join(", ")}) — deleting will break ${
+            rules.length === 1 ? "it" : "them"
+          } at dispatch.`
+        : "";
+    if (!window.confirm(`Delete catalog agent "${agent.id}"? Tasks keep their history.${impact}`))
+      return;
     try {
       await api.deleteAgent(agent.id);
       load();
@@ -361,6 +453,7 @@ export default function Agents() {
 
       {showForm && (
         <AgentForm
+          key={editing?.id ?? "new"}
           agent={editing}
           onSaved={() => {
             setShowForm(false);
@@ -387,6 +480,8 @@ export default function Agents() {
             <AgentRow
               key={a.id}
               agent={a}
+              usage={usageById[a.id] ?? null}
+              onToggle={() => toggle(a)}
               onEdit={() => {
                 setEditing(a);
                 setShowForm(true);

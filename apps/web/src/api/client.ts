@@ -1,4 +1,5 @@
 import type {
+  AgentUsage,
   BackupInfo,
   BackendsResponse,
   CatalogAgent,
@@ -109,6 +110,8 @@ export const api = {
     request<{ deleted: string }>(`/api/agents/${encodeURIComponent(slug)}`, {
       method: "DELETE",
     }),
+  getAgentUsage: (slug: string) =>
+    request<AgentUsage>(`/api/agents/${encodeURIComponent(slug)}/usage`),
   getWebhookStatus: () => request<WebhookStatus>("/api/webhook/status"),
   getTriggerRules: (repoId?: number) =>
     request<TriggerRule[]>(`/api/triggers${repoId ? `?repo_id=${repoId}` : ""}`),

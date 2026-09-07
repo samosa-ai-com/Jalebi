@@ -302,6 +302,17 @@ export interface CatalogSkill {
   content: string;
 }
 
+export interface AgentUsage {
+  task_count: number;
+  trigger_rules: {
+    id: number;
+    event: string;
+    action: string;
+    repo_id: number;
+    repo_full_name: string | null;
+  }[];
+}
+
 export interface CatalogAgent {
   id: string;
   name: string;

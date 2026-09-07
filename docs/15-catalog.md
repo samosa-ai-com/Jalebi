@@ -85,13 +85,22 @@ off inside an Alembic transaction). Validity is enforced in the service layer:
   personality, skills, custom instructions, enabled). Returns `201`.
 - `GET /api/agents/<slug>` — fetch one.
 - `PUT /api/agents/<slug>` — partial update (missing fields keep their values).
+  Switching `cli` without a new `model` drops the stale model pin; `enabled`
+  must be a real boolean; text fields must be strings.
 - `DELETE /api/agents/<slug>` — delete (tasks keep history).
+- `GET /api/agents/<slug>/usage` — where the agent is referenced: historical
+  task count + live trigger rules (so the UI warns before a delete that would
+  break rules at dispatch).
 
 ## 6. UI
 
 The **Agents** page (top-bar nav) is the catalog editor: create/edit/delete
-agents with personality textarea, skills editor (add/remove markdown files),
-model/CLI pins, custom instructions, and the enabled toggle.
+agents with personality textarea, skills editor (add/remove markdown files,
+empty names blocked inline), model/CLI pins (model resets on CLI switch),
+custom instructions (with 20k cap counter), slug format guidance, kind
+explanations, and the enabled toggle. Rows show usage (task count + trigger
+rules), an enable/disable toggle, and a delete confirm that names impacted
+rules. Editing agent B with the form open on A remounts via `key`.
 
 The **New Task** form gains an **Agent** picker (default build agent or an
 enabled catalog agent). Selecting an agent prefills the model from the agent's
@@ -110,6 +119,8 @@ resolve the rest at run time.
   `.claude/skills/<name>/SKILL.md`, cleared when unused, kept out of `git add`.
 - `tests/test_queue.py` — run time applies cli/model/custom_instructions/skills;
   a disabled-after-creation agent falls back to defaults.
-- `apps/web/src/pages/Agents.test.tsx` — page list/create/edit/delete.
+- `apps/web/src/pages/Agents.test.tsx` — page list/create/edit/delete, usage
+  display + row toggle, stale-form remount, inline slug/skill validation,
+  model reset on CLI switch, delete-impact confirm.
 
 See `docs/09` for how to run the suites.

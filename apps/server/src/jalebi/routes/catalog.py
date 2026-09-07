@@ -37,6 +37,8 @@ def create_agent() -> ResponseReturnValue:
     payload = request.get_json(silent=True)
     if not isinstance(payload, dict):
         return jsonify({"error": "expected a JSON object"}), 400
+    if "enabled" in payload and not isinstance(payload["enabled"], bool):
+        return jsonify({"error": "enabled must be a boolean"}), 400
     session = db.get_session()
     try:
         agent = catalog.create_agent(
@@ -49,7 +51,7 @@ def create_agent() -> ResponseReturnValue:
             personality_md=payload.get("personality_md", "") or "",
             skills=_skills_from_payload(payload) or [],
             custom_instructions=payload.get("custom_instructions", "") or "",
-            enabled=bool(payload.get("enabled", True)),
+            enabled=payload.get("enabled", True),
         )
     except catalog.CatalogError as exc:
         return jsonify({"error": str(exc)}), 400
@@ -97,3 +99,12 @@ def delete_agent(slug: str) -> ResponseReturnValue:
     if not catalog.delete_agent(session, slug):
         return jsonify({"error": "agent not found"}), 404
     return jsonify({"deleted": slug})
+
+
+@bp.get("/<slug>/usage")
+def agent_usage(slug: str) -> ResponseReturnValue:
+    """Where an agent is referenced (task history count + live trigger rules)."""
+    session = db.get_session()
+    if catalog.agent_by_slug(session, slug) is None:
+        return jsonify({"error": "agent not found"}), 404
+    return jsonify(catalog.agent_usage(session, slug))

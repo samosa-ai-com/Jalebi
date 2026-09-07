@@ -18,13 +18,45 @@ const AGENTS = [
   },
 ];
 
-function makeFetchMock() {
+const AGENTS_TWO = [
+  AGENTS[0],
+  {
+    id: "docs-guru",
+    name: "Docs Guru",
+    kind: "general",
+    cli: null,
+    model: null,
+    personality_md: "",
+    skills: [],
+    custom_instructions: "",
+    enabled: false,
+    created_at: "2026-08-09T00:00:00",
+  },
+];
+
+const USAGE = {
+  task_count: 2,
+  trigger_rules: [
+    {
+      id: 3,
+      event: "pull_request.opened",
+      action: "start_review",
+      repo_id: 1,
+      repo_full_name: "owner/repo",
+    },
+  ],
+};
+
+function makeFetchMock(agents: unknown[] = AGENTS) {
   return vi.fn(async (url: string, init?: RequestInit) => {
     if (String(url).includes("/api/models")) {
       const models = String(url).includes("cli=codex")
         ? ["gpt-5.4-mini", "gpt-5.5"]
         : ["opencode-go/deepseek-v4-flash"];
       return { ok: true, json: async () => ({ cli: "opencode", models }) };
+    }
+    if (String(url).includes("/usage")) {
+      return { ok: true, json: async () => USAGE };
     }
     if (String(url).includes("/api/agents") && init?.method === "POST") {
       const body = JSON.parse(init.body as string) as Record<string, unknown>;
@@ -38,7 +70,7 @@ function makeFetchMock() {
       return { ok: true, json: async () => ({ ...AGENTS[0], ...body }) };
     }
     if (String(url).includes("/api/agents")) {
-      return { ok: true, json: async () => AGENTS };
+      return { ok: true, json: async () => agents };
     }
     return { ok: true, json: async () => [] };
   });
@@ -175,15 +207,100 @@ describe("Agents", () => {
       expect.arrayContaining(["opencode-go/deepseek-v4-flash"])
     );
 
-    await userEvent.selectOptions(
-      screen.getByLabelText("CLI override (optional)"),
-      "codex"
-    );
+    await userEvent.selectOptions(screen.getByLabelText("CLI override (optional)"), "codex");
     await waitFor(() => {
       expect([...model.options].map((o) => o.value)).toEqual(
         expect.arrayContaining(["gpt-5.4-mini", "gpt-5.5"])
       );
     });
     expect(fetchMock.mock.calls.some(([u]) => String(u).includes("cli=codex"))).toBe(true);
+  });
+
+  it("shows usage on rows and toggles enabled without the form", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Agents />);
+    await screen.findByText("security-auditor");
+
+    expect(await screen.findByText(/Used by 2 tasks/)).toBeInTheDocument();
+    expect(screen.getByText(/1 trigger rule/, { exact: false })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Disable" }));
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        ([url, init]) =>
+          String(url).includes("/api/agents/security-auditor") && init?.method === "PUT"
+      );
+      expect(call).toBeDefined();
+      expect(JSON.parse((call?.[1] as RequestInit).body as string)).toMatchObject({
+        enabled: false,
+      });
+    });
+  });
+
+  it("switching edits between agents shows the newly edited agent", async () => {
+    vi.stubGlobal("fetch", makeFetchMock(AGENTS_TWO));
+    render(<Agents />);
+    await screen.findByText("security-auditor");
+
+    const edits = await screen.findAllByRole("button", { name: "Edit" });
+    expect(edits).toHaveLength(2);
+    await userEvent.click(edits[0]);
+    expect(await screen.findByDisplayValue("Security Auditor")).toBeInTheDocument();
+    await userEvent.click(edits[1]);
+    // Without the key-remount fix the form would still show the first agent.
+    expect(await screen.findByDisplayValue("Docs Guru")).toBeInTheDocument();
+  });
+
+  it("refuses bad slugs and unnamed skills before saving", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Agents />);
+    await screen.findByText("security-auditor");
+
+    await userEvent.click(screen.getByRole("button", { name: "+ New agent" }));
+    await userEvent.type(screen.getByPlaceholderText("security-auditor"), "Bad Slug!");
+    await userEvent.type(screen.getByLabelText("Name"), "Bad");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText(/lowercase letters\/digits/)).toBeInTheDocument();
+
+    await userEvent.clear(screen.getByPlaceholderText("security-auditor"));
+    await userEvent.type(screen.getByPlaceholderText("security-auditor"), "ok-slug");
+    await userEvent.click(screen.getByRole("button", { name: "+ Add skill" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText(/needs a name/)).toBeInTheDocument();
+
+    expect(
+      fetchMock.mock.calls.filter(
+        ([url, init]) => String(url).includes("/api/agents") && init?.method === "POST"
+      )
+    ).toHaveLength(0);
+  });
+
+  it("clears the model pin when the CLI override changes", async () => {
+    vi.stubGlobal("fetch", makeFetchMock());
+    render(<Agents />);
+    await screen.findByText("security-auditor");
+
+    await userEvent.click(screen.getByRole("button", { name: "+ New agent" }));
+    const model = screen.getByLabelText("Model pin (optional)") as HTMLSelectElement;
+    await userEvent.selectOptions(model, "opencode-go/deepseek-v4-flash");
+    expect(model.value).toBe("opencode-go/deepseek-v4-flash");
+    await userEvent.selectOptions(screen.getByLabelText("CLI override (optional)"), "codex");
+    await waitFor(() => expect(model.value).toBe(""));
+  });
+
+  it("delete confirmation names the impacted trigger rules", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    vi.stubGlobal("fetch", makeFetchMock());
+    render(<Agents />);
+    await screen.findByText("security-auditor");
+    await screen.findByText(/Used by 2 tasks/);
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    expect(confirm).toHaveBeenCalledTimes(1);
+    const message = String(confirm.mock.calls[0][0]);
+    expect(message).toContain("WARNING");
+    expect(message).toContain("#3 pull_request.opened");
   });
 });

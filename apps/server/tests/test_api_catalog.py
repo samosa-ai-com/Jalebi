@@ -166,3 +166,61 @@ def test_create_task_rejects_bad_agent(client, session) -> None:
     )
     assert res.status_code == 400
     assert "catalog agent not found" in res.get_json()["error"]
+
+
+def test_create_rejects_strict_types(client) -> None:
+    """Booleans must be real booleans and text fields real strings — loose
+    coercion either 500s (AttributeError) or silently enables."""
+    res = client.post("/api/agents", json=_agent_payload(enabled="false"))
+    assert res.status_code == 400
+    assert "enabled" in res.get_json()["error"]
+    res = client.post("/api/agents", json=_agent_payload(name=123))
+    assert res.status_code == 400
+    res = client.post("/api/agents", json=_agent_payload(cli=123))
+    assert res.status_code == 400
+
+
+def test_update_cli_switch_drops_stale_model(client) -> None:
+    """Switching cli without a new model clears the old pin (it belonged to
+    the old backend); an explicit new model in the same call is kept."""
+    assert client.post("/api/agents", json=_agent_payload()).status_code == 201
+    res = client.put("/api/agents/security-auditor", json={"cli": "codex"})
+    assert res.status_code == 200
+    assert res.get_json()["cli"] == "codex"
+    assert res.get_json()["model"] is None
+    res = client.put(
+        "/api/agents/security-auditor", json={"cli": "opencode", "model": "m-2"}
+    )
+    assert (res.get_json()["cli"], res.get_json()["model"]) == ("opencode", "m-2")
+
+
+def test_agent_usage_reports_tasks_and_rules(client, session) -> None:
+    """Usage shows historical task references plus live trigger rules, so the
+    UI can warn before a delete that would break rules at dispatch."""
+    from jalebi import repos, tasks as tasks_service, webhooks
+
+    assert client.post("/api/agents", json=_agent_payload()).status_code == 201
+    row, _ = repos.upsert_repo(
+        session, full_name="owner/repo", default_branch="main",
+        clone_url="https://example.com/owner/repo.git", pat_name="test",
+    )
+    tasks_service.create_task(
+        session, type_="freeform", repo_id=row.id, prompt="P",
+        agent_id="security-auditor",
+    )
+    rule = webhooks.create_rule(
+        session, repo_id=row.id, event="pull_request.opened",
+        action="start_review", agent_ids=["security-auditor"],
+    )
+    res = client.get("/api/agents/security-auditor/usage")
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body["task_count"] == 1
+    assert body["trigger_rules"] == [
+        {
+            "id": rule.id, "event": "pull_request.opened",
+            "action": "start_review", "repo_id": row.id,
+            "repo_full_name": "owner/repo",
+        }
+    ]
+    assert client.get("/api/agents/nonexistent/usage").status_code == 404
