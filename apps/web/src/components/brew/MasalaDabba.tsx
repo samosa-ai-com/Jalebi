@@ -53,7 +53,7 @@ function Dabba({ skills }: { skills: SkillChord[] }) {
         viewBox="0 0 120 120"
         role="img"
         aria-label="Masala dabba, spice box"
-        className="h-24 w-24 shrink-0"
+        className="h-20 w-20 shrink-0"
       >
         <circle cx="60" cy="60" r="56" fill="#2a2018" stroke="#b08050" strokeWidth="3" />
         <circle cx="60" cy="60" r="50" fill="none" stroke="#4a3a2d" strokeWidth="1" />
@@ -193,7 +193,7 @@ export function MasalaDabba({
         {agents.length === 0 ? (
           <p className="mt-3 text-xs text-ink-600">No agents in the catalog yet.</p>
         ) : (
-          <ul className="mt-1.5 max-h-32 space-y-1 overflow-y-auto">
+          <ul className="mt-1.5 max-h-28 space-y-1 overflow-y-auto">
             {agents.map(({ agent, activeTasks }) => {
               const talks = talkerId === agent.id;
               const pool = agent.kind === "reviewer" ? CHATTER_REVIEWER : CHATTER_GENERAL;

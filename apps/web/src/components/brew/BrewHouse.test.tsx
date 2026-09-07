@@ -210,7 +210,9 @@ describe("BrewHouse", () => {
   it("says when all kadhais are simmering with no orders", async () => {
     stubFetch({ ...HANDLERS });
     renderHouse([]);
-    expect(await screen.findByText(/all kadhais simmering/)).toBeInTheDocument();
+    expect(await screen.findByText("stove 1 · simmering")).toBeInTheDocument();
+    // The menu board invites the first order.
+    expect(screen.getByText("Today's menu")).toBeInTheDocument();
   });
 
   it("bowls skills in the masala dabba and glows the ones seasoning now", async () => {

@@ -1132,17 +1132,29 @@ export default function Tasks() {
 
   return (
     <div className="space-y-6">
-      <header className="flex flex-wrap items-start justify-between gap-3 animate-fade-up">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight text-ink-100">Tasks</h1>
-          <p className="mt-1 text-sm text-ink-500">
-            Your agent queue — what&apos;s running, what&apos;s done, what needs a decision.
-          </p>
-        </div>
+      <header
+        className={
+          view === "mission"
+            ? "flex items-center gap-3 animate-fade-up"
+            : "flex flex-wrap items-start justify-between gap-3 animate-fade-up"
+        }
+      >
+        {view === "mission" ? (
+          <h1 className="text-xl font-bold tracking-tight text-ink-100">
+            Tasks <span className="font-normal text-ink-500">· Mission control</span>
+          </h1>
+        ) : (
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight text-ink-100">Tasks</h1>
+            <p className="mt-1 text-sm text-ink-500">
+              Your agent queue — what&apos;s running, what&apos;s done, what needs a decision.
+            </p>
+          </div>
+        )}
         <div
           role="group"
           aria-label="Tasks view"
-          className="flex overflow-hidden rounded-full border border-ink-800 text-sm"
+          className="flex overflow-hidden rounded-full border border-ink-800 text-sm ml-auto"
         >
           {(["queue", "mission"] as const).map((v) => (
             <button

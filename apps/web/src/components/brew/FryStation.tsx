@@ -172,11 +172,11 @@ export function FryStation({
           onOpen(station!.task.id);
         }
       }}
-      className={`surface group w-40 shrink-0 px-2.5 pt-1.5 pb-1.5 text-left transition-colors ${
+      className={`surface group flex w-60 shrink-0 items-center gap-2.5 px-2.5 py-2 text-left transition-colors ${
         brewing ? "cursor-pointer hover:border-syrup-500/50" : ""
       }`}
     >
-      <svg viewBox="0 0 120 138" role="img" aria-hidden="true" className="w-full">
+      <svg viewBox="0 0 120 138" role="img" aria-hidden="true" className="h-28 w-auto shrink-0">
         {brewing && (
           <ellipse
             cx="60"
@@ -291,14 +291,16 @@ export function FryStation({
       </svg>
 
       {station ? (
-        <span className="mt-1 block">
+        <span className="block min-w-0 flex-1">
           <span className="flex items-center gap-1.5">
             {station.avatarUrl && (
-              <img src={station.avatarUrl} alt="" className="h-4 w-4 rounded-full" />
+              <img src={station.avatarUrl} alt="" className="h-4 w-4 shrink-0 rounded-full" />
             )}
             <span className="font-mono text-xs text-syrup-400">#{station.task.id}</span>
             <span className="font-mono text-[10px] text-ink-500">{snack}</span>
-            {needsYou && <span className="h-1.5 w-1.5 rounded-full bg-syrup-400 brew-needs-you" />}
+            {needsYou && (
+              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-syrup-400 brew-needs-you" />
+            )}
           </span>
           <span
             className="mt-0.5 block truncate text-[11px] text-ink-300"
@@ -306,13 +308,13 @@ export function FryStation({
           >
             {station.agentName ?? station.task.cli ?? station.task.status}
           </span>
-          <span className="font-mono text-[10px] tabular-nums text-ink-500">
+          <span className="font-mono text-[10px] whitespace-nowrap tabular-nums text-ink-500">
             {formatElapsed(elapsedMs)}
             {station.steps > 0 ? ` · ${station.steps} steps` : ""}
           </span>
         </span>
       ) : (
-        <span className="mt-1 block text-center">
+        <span className="block min-w-0 flex-1">
           <span className="block font-mono text-[10px] text-ink-600">stove {slot} · simmering</span>
           <button
             type="button"
@@ -322,7 +324,7 @@ export function FryStation({
               e.stopPropagation();
               onOrder();
             }}
-            className="mt-1 cursor-pointer rounded-full border border-ink-700 px-2.5 py-0.5 font-mono text-[10px] text-syrup-300 transition-colors hover:border-syrup-500/60 hover:bg-syrup-500/10"
+            className="mt-1 cursor-pointer rounded-full border border-ink-700 px-2.5 py-0.5 font-mono text-[10px] whitespace-nowrap text-syrup-300 transition-colors hover:border-syrup-500/60 hover:bg-syrup-500/10"
           >
             🪔 strike a match
           </button>

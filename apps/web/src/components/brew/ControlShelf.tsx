@@ -10,7 +10,7 @@ function Ring({ fraction, label }: { fraction: number; label: string }) {
   const c = 2 * Math.PI * r;
   const clamped = Math.max(0, Math.min(1, fraction));
   return (
-    <svg viewBox="0 0 64 64" role="img" aria-label={label} className="h-12 w-12">
+    <svg viewBox="0 0 64 64" role="img" aria-label={label} className="h-10 w-10">
       <circle cx="32" cy="32" r={r} fill="none" stroke="#33271e" strokeWidth="7" />
       <circle
         cx="32"

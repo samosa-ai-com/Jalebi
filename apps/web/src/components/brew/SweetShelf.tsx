@@ -219,7 +219,7 @@ export function SweetShelf({
 
       <section className="surface px-3 py-2.5 lg:col-span-1" aria-label="Seven day shelf">
         <h3 className="panel-title">7-day shelf</h3>
-        <div className="mt-1.5 flex h-20 items-end justify-around gap-1">
+        <div className="mt-1.5 flex h-16 items-end justify-around gap-1">
           {days.map((d, i) => {
             const shown = Math.min(5, perDay[i]);
             return (
