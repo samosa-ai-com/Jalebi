@@ -386,3 +386,11 @@ After any code change, run the relevant tests and build before marking work done
   Ruff `src/` clean (one pre-existing I001 in `tests/test_api_catalog.py`
   untouched); `tsc --noEmit`, production build clean (the Vite
   large-chunk warning remains).
+
+- **Brew House round (web +12):** `components/brew/BrewHouse.test.tsx`
+  (new, 12 tests) — kettle brews active task, idle slots, station click
+  navigates, needs-you pulse, cold-kettles + paused-queue + empty-catalog
+  states, skill rack glow, agent live counts, backends + default badge,
+  live screens + findings ticker, worker-load ring. Classic Tasks view
+  untouched (toggle defaults to queue; existing `Tasks.test.tsx` unmodified).
+- **Suite totals now:** web **239 passed** (12 new; no backend changes).

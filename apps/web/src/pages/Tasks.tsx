@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { AttentionBadge } from "../components/AttentionBadge";
+import { BrewHouse } from "../components/brew/BrewHouse";
 import { DepBadges } from "../components/DepBadges";
 import { RunningCard } from "../components/RunningCard";
 import { StatusBadge } from "../components/StatusBadge";
@@ -875,6 +876,13 @@ export default function Tasks() {
   const [lastLoaded, setLastLoaded] = useState<Date | null>(null);
   const [prefill, setPrefill] = useState<TaskPrefill | null>(null);
   const [prefillNonce, setPrefillNonce] = useState(0);
+  const [view, setView] = useState<"queue" | "mission">(() => {
+    try {
+      return localStorage.getItem("jalebi-tasks-view") === "mission" ? "mission" : "queue";
+    } catch {
+      return "queue";
+    }
+  });
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const load = useCallback(() => {
@@ -985,6 +993,15 @@ export default function Tasks() {
     setFilter(f);
     setPage(0);
     setSelected(new Set());
+  }
+
+  function selectView(v: "queue" | "mission") {
+    setView(v);
+    try {
+      localStorage.setItem("jalebi-tasks-view", v);
+    } catch {
+      /* private-mode storage — non-fatal */
+    }
   }
 
   function handleDismissAttention(taskId: number) {
@@ -1098,168 +1115,423 @@ export default function Tasks() {
 
   return (
     <div className="space-y-6">
-      <header className="animate-fade-up">
-        <h1 className="text-3xl font-bold tracking-tight text-ink-100">Tasks</h1>
-        <p className="mt-1 text-sm text-ink-500">
-          Your agent queue — what&apos;s running, what&apos;s done, what needs a decision.
-        </p>
-      </header>
-
-      <div
-        className="grid grid-cols-2 gap-3 sm:grid-cols-5 animate-fade-up"
-        style={{ animationDelay: "0.05s" }}
-      >
-        {statCards.map((c) => (
-          <button
-            key={c.label}
-            type="button"
-            onClick={() => selectFilter(c.filter)}
-            title={`Show ${c.label.toLowerCase()} tasks`}
-            className={`surface px-5 py-4 text-left transition-colors hover:border-ink-600 ${
-              filter === c.filter ? "border-syrup-500/50" : ""
-            }`}
-          >
-            <span className="block text-xs font-medium uppercase tracking-wider text-ink-500">
-              {c.label}
-            </span>
-            <span className={`mt-1 block font-mono text-3xl font-medium tabular-nums ${c.accent}`}>
-              {c.value}
-            </span>
-          </button>
-        ))}
-      </div>
-
-      {/* Phase 4 T4.4 — live "running now" panel: one card per
-          queued/running task, scroll-bounded for long queues. */}
-      {visible.some((t) => t.status === "running" || t.status === "queued") && (
-        <div className="max-h-[24rem] space-y-2 overflow-y-auto">
-          {visible
-            .filter((t) => t.status === "running" || t.status === "queued")
-            .map((t) => (
-              <RunningCard
-                key={t.id}
-                task={t}
-                repoName={t.repo_full_name ?? repoName(repos, t.repo_id)}
-                onCancel={() => handleCancel(t.id)}
-              />
-            ))}
+      <header className="flex flex-wrap items-start justify-between gap-3 animate-fade-up">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight text-ink-100">Tasks</h1>
+          <p className="mt-1 text-sm text-ink-500">
+            Your agent queue — what&apos;s running, what&apos;s done, what needs a decision.
+          </p>
         </div>
-      )}
-
-      <CreateTask
-        key={prefillNonce}
-        repos={repos}
-        accounts={accounts}
-        onCreated={handleCreated}
-        prefill={prefill}
-        prefillNonce={prefillNonce}
-      />
-
-      {flash != null && (
-        <p className="rounded-xl border border-green-500/30 bg-green-500/10 px-4 py-2.5 text-sm text-green-300">
-          Task{" "}
-          <Link to={`/tasks/${flash}`} className="font-mono underline underline-offset-2">
-            #{flash}
-          </Link>{" "}
-          created — it will pick up a worker shortly.
-          <button
-            type="button"
-            onClick={() => setFlash(null)}
-            className="ml-3 text-xs text-green-400/70 hover:text-green-300"
-          >
-            Dismiss
-          </button>
-        </p>
-      )}
-
-      {error && (
-        <p className="text-sm text-red-400">
-          {error}{" "}
-          <button type="button" onClick={load} className="underline underline-offset-2">
-            Retry
-          </button>
-        </p>
-      )}
-
-      <section className="surface animate-fade-up" style={{ animationDelay: "0.1s" }}>
-        <div className="flex flex-wrap items-center gap-2 border-b border-ink-800 px-4 py-3">
-          {FILTERS.map((f) => (
+        <div
+          role="group"
+          aria-label="Tasks view"
+          className="flex overflow-hidden rounded-full border border-ink-800 text-sm"
+        >
+          {(["queue", "mission"] as const).map((v) => (
             <button
-              key={f.id}
-              onClick={() => selectFilter(f.id)}
-              className={`rounded-full px-3.5 py-1 text-sm transition-colors ${
-                filter === f.id
-                  ? "bg-syrup-500 text-ink-950 font-semibold"
+              key={v}
+              type="button"
+              onClick={() => selectView(v)}
+              aria-pressed={view === v}
+              className={`px-3.5 py-1 transition-colors ${
+                view === v
+                  ? "bg-syrup-500 font-semibold text-ink-950"
                   : "text-ink-400 hover:bg-ink-850 hover:text-ink-100"
               }`}
             >
-              {f.label} ({filterCounts[f.id]})
+              {v === "queue" ? "Queue" : "Mission control"}
             </button>
           ))}
-          <select
-            value={repoFilter}
-            onChange={(e) => {
-              setRepoFilter(e.target.value);
-              setPage(0);
-            }}
-            aria-label="Filter by repository"
-            className="field !w-auto !py-1 text-sm"
-          >
-            <option value="">All repos</option>
-            {repoNames.map((n) => (
-              <option key={n} value={n}>
-                {n}
-              </option>
-            ))}
-          </select>
-          <input
-            value={query}
-            onChange={(e) => {
-              setQuery(e.target.value);
-              setPage(0);
-            }}
-            placeholder="Search tasks…"
-            className="field ml-auto w-48 !py-1 text-sm"
-          />
         </div>
+      </header>
 
-        <div className="flex flex-wrap items-center gap-2 border-b border-ink-800 px-4 py-2 text-xs text-ink-500">
-          {selected.size > 0 ? (
-            <>
-              <span className="font-mono">{selected.size} selected</span>
+      {view === "mission" ? (
+        <BrewHouse tasks={tasks} repos={repos} />
+      ) : (
+        <>
+          <div
+            className="grid grid-cols-2 gap-3 sm:grid-cols-5 animate-fade-up"
+            style={{ animationDelay: "0.05s" }}
+          >
+            {statCards.map((c) => (
               <button
+                key={c.label}
                 type="button"
-                onClick={() => void handleBulkDismiss()}
-                disabled={bulkBusy}
-                className="btn-ghost !px-2 !py-1 disabled:opacity-40"
+                onClick={() => selectFilter(c.filter)}
+                title={`Show ${c.label.toLowerCase()} tasks`}
+                className={`surface px-5 py-4 text-left transition-colors hover:border-ink-600 ${
+                  filter === c.filter ? "border-syrup-500/50" : ""
+                }`}
               >
-                Dismiss attention
+                <span className="block text-xs font-medium uppercase tracking-wider text-ink-500">
+                  {c.label}
+                </span>
+                <span
+                  className={`mt-1 block font-mono text-3xl font-medium tabular-nums ${c.accent}`}
+                >
+                  {c.value}
+                </span>
               </button>
-              <button
-                type="button"
-                onClick={() => void handleBulkDelete()}
-                disabled={bulkBusy}
-                className="btn-ghost !px-2 !py-1 text-red-300 disabled:opacity-40"
-              >
-                {bulkBusy ? "Working…" : "Delete"}
-              </button>
-              <button
-                type="button"
-                onClick={() => setSelected(new Set())}
-                className="btn-ghost !px-2 !py-1"
-              >
-                Clear
-              </button>
-            </>
-          ) : (
-            <span>
-              {visible.length} task{visible.length === 1 ? "" : "s"}
-              {lastLoaded ? ` · updated ${timeAgo(lastLoaded.toISOString())}` : ""}
-            </span>
+            ))}
+          </div>
+
+          {/* Phase 4 T4.4 — live "running now" panel: one card per
+          queued/running task, scroll-bounded for long queues. */}
+          {visible.some((t) => t.status === "running" || t.status === "queued") && (
+            <div className="max-h-[24rem] space-y-2 overflow-y-auto">
+              {visible
+                .filter((t) => t.status === "running" || t.status === "queued")
+                .map((t) => (
+                  <RunningCard
+                    key={t.id}
+                    task={t}
+                    repoName={t.repo_full_name ?? repoName(repos, t.repo_id)}
+                    onCancel={() => handleCancel(t.id)}
+                  />
+                ))}
+            </div>
           )}
-          <span className="ml-auto flex items-center gap-2">
+
+          <CreateTask
+            key={prefillNonce}
+            repos={repos}
+            accounts={accounts}
+            onCreated={handleCreated}
+            prefill={prefill}
+            prefillNonce={prefillNonce}
+          />
+
+          {flash != null && (
+            <p className="rounded-xl border border-green-500/30 bg-green-500/10 px-4 py-2.5 text-sm text-green-300">
+              Task{" "}
+              <Link to={`/tasks/${flash}`} className="font-mono underline underline-offset-2">
+                #{flash}
+              </Link>{" "}
+              created — it will pick up a worker shortly.
+              <button
+                type="button"
+                onClick={() => setFlash(null)}
+                className="ml-3 text-xs text-green-400/70 hover:text-green-300"
+              >
+                Dismiss
+              </button>
+            </p>
+          )}
+
+          {error && (
+            <p className="text-sm text-red-400">
+              {error}{" "}
+              <button type="button" onClick={load} className="underline underline-offset-2">
+                Retry
+              </button>
+            </p>
+          )}
+
+          <section className="surface animate-fade-up" style={{ animationDelay: "0.1s" }}>
+            <div className="flex flex-wrap items-center gap-2 border-b border-ink-800 px-4 py-3">
+              {FILTERS.map((f) => (
+                <button
+                  key={f.id}
+                  onClick={() => selectFilter(f.id)}
+                  className={`rounded-full px-3.5 py-1 text-sm transition-colors ${
+                    filter === f.id
+                      ? "bg-syrup-500 text-ink-950 font-semibold"
+                      : "text-ink-400 hover:bg-ink-850 hover:text-ink-100"
+                  }`}
+                >
+                  {f.label} ({filterCounts[f.id]})
+                </button>
+              ))}
+              <select
+                value={repoFilter}
+                onChange={(e) => {
+                  setRepoFilter(e.target.value);
+                  setPage(0);
+                }}
+                aria-label="Filter by repository"
+                className="field !w-auto !py-1 text-sm"
+              >
+                <option value="">All repos</option>
+                {repoNames.map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+              <input
+                value={query}
+                onChange={(e) => {
+                  setQuery(e.target.value);
+                  setPage(0);
+                }}
+                placeholder="Search tasks…"
+                className="field ml-auto w-48 !py-1 text-sm"
+              />
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 border-b border-ink-800 px-4 py-2 text-xs text-ink-500">
+              {selected.size > 0 ? (
+                <>
+                  <span className="font-mono">{selected.size} selected</span>
+                  <button
+                    type="button"
+                    onClick={() => void handleBulkDismiss()}
+                    disabled={bulkBusy}
+                    className="btn-ghost !px-2 !py-1 disabled:opacity-40"
+                  >
+                    Dismiss attention
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleBulkDelete()}
+                    disabled={bulkBusy}
+                    className="btn-ghost !px-2 !py-1 text-red-300 disabled:opacity-40"
+                  >
+                    {bulkBusy ? "Working…" : "Delete"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelected(new Set())}
+                    className="btn-ghost !px-2 !py-1"
+                  >
+                    Clear
+                  </button>
+                </>
+              ) : (
+                <span>
+                  {visible.length} task{visible.length === 1 ? "" : "s"}
+                  {lastLoaded ? ` · updated ${timeAgo(lastLoaded.toISOString())}` : ""}
+                </span>
+              )}
+              <span className="ml-auto flex items-center gap-2">
+                {pageCount > 1 && (
+                  <>
+                    <button
+                      disabled={page === 0}
+                      onClick={() => setPage((p) => p - 1)}
+                      className="btn-ghost !px-2 !py-1 disabled:opacity-40"
+                    >
+                      ← Prev
+                    </button>
+                    <span className="font-mono">
+                      {page + 1} / {pageCount}
+                    </span>
+                    <button
+                      disabled={page >= pageCount - 1}
+                      onClick={() => setPage((p) => p + 1)}
+                      className="btn-ghost !px-2 !py-1 disabled:opacity-40"
+                    >
+                      Next →
+                    </button>
+                  </>
+                )}
+                <button type="button" onClick={load} className="btn-ghost !px-2 !py-1">
+                  Refresh
+                </button>
+              </span>
+            </div>
+
+            <div className="max-h-[60vh] overflow-y-auto">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 z-10 bg-ink-900">
+                  <tr className="text-left text-xs uppercase tracking-wider text-ink-500">
+                    <th className="px-4 pt-3 pb-2 font-medium">
+                      <input
+                        type="checkbox"
+                        aria-label="Select tasks on this page"
+                        checked={pageRows.length > 0 && pageRows.every((t) => selected.has(t.id))}
+                        onChange={() => toggleSelectPage(pageRows.map((t) => t.id))}
+                        className="accent-syrup-500"
+                      />
+                    </th>
+                    <th
+                      className="cursor-pointer select-none px-4 pt-3 pb-2 font-medium hover:text-ink-300"
+                      onClick={() => toggleSort("id")}
+                    >
+                      ID {sortKey === "id" ? (sortDesc ? "↓" : "↑") : ""}
+                    </th>
+                    <th
+                      className="cursor-pointer select-none px-4 pb-2 font-medium hover:text-ink-300"
+                      onClick={() => toggleSort("status")}
+                    >
+                      Status {sortKey === "status" ? (sortDesc ? "↓" : "↑") : ""}
+                    </th>
+                    <th
+                      className="cursor-pointer select-none px-4 pb-2 font-medium hover:text-ink-300"
+                      onClick={() => toggleSort("repo")}
+                    >
+                      Repo {sortKey === "repo" ? (sortDesc ? "↓" : "↑") : ""}
+                    </th>
+                    <th className="px-4 pb-2 font-medium">Prompt</th>
+                    <th className="px-4 pb-2 font-medium">PR / Issues</th>
+                    <th
+                      className="cursor-pointer select-none px-4 pb-2 font-medium hover:text-ink-300"
+                      onClick={() => toggleSort("updated_at")}
+                    >
+                      Updated {sortKey === "updated_at" ? (sortDesc ? "↓" : "↑") : ""}
+                    </th>
+                    <th className="px-4 pb-2 font-medium">
+                      <span className="sr-only">Actions</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pageRows.length === 0 && (
+                    <tr>
+                      <td colSpan={8} className="px-4 py-8 text-center text-ink-600">
+                        {query || repoFilter ? (
+                          <>
+                            No tasks{filter !== "all" ? ` in “${filter}”` : ""} matching your
+                            search.
+                          </>
+                        ) : (
+                          EMPTY_STATE[filter]
+                        )}
+                      </td>
+                    </tr>
+                  )}
+                  {pageRows.map((t) => {
+                    const rn = t.repo_full_name ?? repoName(repos, t.repo_id);
+                    const expanded = expandedPrompt === t.id;
+                    const failed =
+                      t.status === "failed" ||
+                      t.status === "timed_out" ||
+                      t.status === "interrupted";
+                    return (
+                      <tr
+                        key={t.id}
+                        onClick={() => navigate(`/tasks/${t.id}`)}
+                        className="cursor-pointer border-t border-ink-800/70 transition-colors hover:bg-ink-875/50"
+                      >
+                        <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            aria-label={`Select task #${t.id}`}
+                            checked={selected.has(t.id)}
+                            onChange={() => toggleSelected(t.id)}
+                            className="accent-syrup-500"
+                          />
+                        </td>
+                        <td className="px-4 py-3">
+                          <Link
+                            to={`/tasks/${t.id}`}
+                            onClick={(e) => e.stopPropagation()}
+                            className="font-mono text-syrup-400 hover:text-syrup-300"
+                          >
+                            #{t.id}
+                          </Link>
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <StatusBadge status={t.status} />
+                            {t.attention === "needs_you" && (
+                              <AttentionBadge attention={t.attention} />
+                            )}
+                            {/* DepBadges renders Links — stop them bubbling to the row nav. */}
+                            <span onClick={(e) => e.stopPropagation()}>
+                              <DepBadges
+                                dependsOn={t.depends_on}
+                                blockedBy={t.blocked_by}
+                                blocking={t.blocking}
+                                blocked={t.blocked}
+                              />
+                            </span>
+                            {t.attention === "needs_you" && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  handleDismissAttention(t.id);
+                                }}
+                                className="rounded px-1.5 py-0.5 text-[10px] font-medium text-ink-400 ring-1 ring-ink-700/60 hover:bg-ink-800 hover:text-ink-200 transition-colors"
+                                title="Dismiss attention for this task"
+                              >
+                                Dismiss
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <RepoChip name={rn} />
+                        </td>
+                        <td
+                          className={`max-w-xs cursor-pointer px-4 py-3 text-ink-300 ${expanded ? "" : "truncate"}`}
+                          title={expanded ? "Collapse" : t.prompt}
+                          role="button"
+                          tabIndex={0}
+                          aria-expanded={expanded}
+                          aria-label={expanded ? "Collapse prompt" : "Expand prompt"}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setExpandedPrompt(expanded ? null : t.id);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setExpandedPrompt(expanded ? null : t.id);
+                            }
+                          }}
+                        >
+                          {t.prompt}
+                        </td>
+                        <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {(t.prs?.length ? t.prs : t.pr_number ? [t.pr_number] : []).map((n) => (
+                              <GhLink key={`p${n}`} repo={rn} kind="pull" number={n} />
+                            ))}
+                            {(t.issues ?? []).map((n) => (
+                              <GhLink key={`i${n}`} repo={rn} kind="issues" number={n} />
+                            ))}
+                            {!t.prs?.length && !t.issues?.length && (
+                              <span className="text-ink-600">–</span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-ink-500">
+                          {timeAgo(t.updated_at)}
+                        </td>
+                        <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => handleClone(t)}
+                              title="Clone — pre-fill the form from this task"
+                              className="rounded px-1.5 py-0.5 font-mono text-xs text-ink-400 hover:bg-ink-800 hover:text-ink-200"
+                            >
+                              ⧉
+                            </button>
+                            {failed && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  api
+                                    .rerunTask(t.id)
+                                    .then(() => load())
+                                    .catch((e) =>
+                                      setError(
+                                        e instanceof Error ? e.message : "failed to re-run task"
+                                      )
+                                    );
+                                }}
+                                title="Re-run this task"
+                                className="rounded px-1.5 py-0.5 font-mono text-xs text-ink-400 hover:bg-ink-800 hover:text-ink-200"
+                              >
+                                ↻
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
             {pageCount > 1 && (
-              <>
+              <div className="flex items-center justify-end gap-2 border-t border-ink-800 px-4 py-3 text-xs text-ink-500">
                 <button
                   disabled={page === 0}
                   onClick={() => setPage((p) => p - 1)}
@@ -1277,226 +1549,11 @@ export default function Tasks() {
                 >
                   Next →
                 </button>
-              </>
+              </div>
             )}
-            <button type="button" onClick={load} className="btn-ghost !px-2 !py-1">
-              Refresh
-            </button>
-          </span>
-        </div>
-
-        <div className="max-h-[60vh] overflow-y-auto">
-          <table className="w-full text-sm">
-            <thead className="sticky top-0 z-10 bg-ink-900">
-              <tr className="text-left text-xs uppercase tracking-wider text-ink-500">
-                <th className="px-4 pt-3 pb-2 font-medium">
-                  <input
-                    type="checkbox"
-                    aria-label="Select tasks on this page"
-                    checked={pageRows.length > 0 && pageRows.every((t) => selected.has(t.id))}
-                    onChange={() => toggleSelectPage(pageRows.map((t) => t.id))}
-                    className="accent-syrup-500"
-                  />
-                </th>
-                <th
-                  className="cursor-pointer select-none px-4 pt-3 pb-2 font-medium hover:text-ink-300"
-                  onClick={() => toggleSort("id")}
-                >
-                  ID {sortKey === "id" ? (sortDesc ? "↓" : "↑") : ""}
-                </th>
-                <th
-                  className="cursor-pointer select-none px-4 pb-2 font-medium hover:text-ink-300"
-                  onClick={() => toggleSort("status")}
-                >
-                  Status {sortKey === "status" ? (sortDesc ? "↓" : "↑") : ""}
-                </th>
-                <th
-                  className="cursor-pointer select-none px-4 pb-2 font-medium hover:text-ink-300"
-                  onClick={() => toggleSort("repo")}
-                >
-                  Repo {sortKey === "repo" ? (sortDesc ? "↓" : "↑") : ""}
-                </th>
-                <th className="px-4 pb-2 font-medium">Prompt</th>
-                <th className="px-4 pb-2 font-medium">PR / Issues</th>
-                <th
-                  className="cursor-pointer select-none px-4 pb-2 font-medium hover:text-ink-300"
-                  onClick={() => toggleSort("updated_at")}
-                >
-                  Updated {sortKey === "updated_at" ? (sortDesc ? "↓" : "↑") : ""}
-                </th>
-                <th className="px-4 pb-2 font-medium">
-                  <span className="sr-only">Actions</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {pageRows.length === 0 && (
-                <tr>
-                  <td colSpan={8} className="px-4 py-8 text-center text-ink-600">
-                    {query || repoFilter ? (
-                      <>No tasks{filter !== "all" ? ` in “${filter}”` : ""} matching your search.</>
-                    ) : (
-                      EMPTY_STATE[filter]
-                    )}
-                  </td>
-                </tr>
-              )}
-              {pageRows.map((t) => {
-                const rn = t.repo_full_name ?? repoName(repos, t.repo_id);
-                const expanded = expandedPrompt === t.id;
-                const failed =
-                  t.status === "failed" || t.status === "timed_out" || t.status === "interrupted";
-                return (
-                  <tr
-                    key={t.id}
-                    onClick={() => navigate(`/tasks/${t.id}`)}
-                    className="cursor-pointer border-t border-ink-800/70 transition-colors hover:bg-ink-875/50"
-                  >
-                    <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
-                      <input
-                        type="checkbox"
-                        aria-label={`Select task #${t.id}`}
-                        checked={selected.has(t.id)}
-                        onChange={() => toggleSelected(t.id)}
-                        className="accent-syrup-500"
-                      />
-                    </td>
-                    <td className="px-4 py-3">
-                      <Link
-                        to={`/tasks/${t.id}`}
-                        onClick={(e) => e.stopPropagation()}
-                        className="font-mono text-syrup-400 hover:text-syrup-300"
-                      >
-                        #{t.id}
-                      </Link>
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <StatusBadge status={t.status} />
-                        {t.attention === "needs_you" && <AttentionBadge attention={t.attention} />}
-                        {/* DepBadges renders Links — stop them bubbling to the row nav. */}
-                        <span onClick={(e) => e.stopPropagation()}>
-                          <DepBadges
-                            dependsOn={t.depends_on}
-                            blockedBy={t.blocked_by}
-                            blocking={t.blocking}
-                            blocked={t.blocked}
-                          />
-                        </span>
-                        {t.attention === "needs_you" && (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              handleDismissAttention(t.id);
-                            }}
-                            className="rounded px-1.5 py-0.5 text-[10px] font-medium text-ink-400 ring-1 ring-ink-700/60 hover:bg-ink-800 hover:text-ink-200 transition-colors"
-                            title="Dismiss attention for this task"
-                          >
-                            Dismiss
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3">
-                      <RepoChip name={rn} />
-                    </td>
-                    <td
-                      className={`max-w-xs cursor-pointer px-4 py-3 text-ink-300 ${expanded ? "" : "truncate"}`}
-                      title={expanded ? "Collapse" : t.prompt}
-                      role="button"
-                      tabIndex={0}
-                      aria-expanded={expanded}
-                      aria-label={expanded ? "Collapse prompt" : "Expand prompt"}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setExpandedPrompt(expanded ? null : t.id);
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          setExpandedPrompt(expanded ? null : t.id);
-                        }
-                      }}
-                    >
-                      {t.prompt}
-                    </td>
-                    <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        {(t.prs?.length ? t.prs : t.pr_number ? [t.pr_number] : []).map((n) => (
-                          <GhLink key={`p${n}`} repo={rn} kind="pull" number={n} />
-                        ))}
-                        {(t.issues ?? []).map((n) => (
-                          <GhLink key={`i${n}`} repo={rn} kind="issues" number={n} />
-                        ))}
-                        {!t.prs?.length && !t.issues?.length && (
-                          <span className="text-ink-600">–</span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-ink-500">
-                      {timeAgo(t.updated_at)}
-                    </td>
-                    <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
-                      <div className="flex items-center gap-1">
-                        <button
-                          type="button"
-                          onClick={() => handleClone(t)}
-                          title="Clone — pre-fill the form from this task"
-                          className="rounded px-1.5 py-0.5 font-mono text-xs text-ink-400 hover:bg-ink-800 hover:text-ink-200"
-                        >
-                          ⧉
-                        </button>
-                        {failed && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              api
-                                .rerunTask(t.id)
-                                .then(() => load())
-                                .catch((e) =>
-                                  setError(e instanceof Error ? e.message : "failed to re-run task")
-                                );
-                            }}
-                            title="Re-run this task"
-                            className="rounded px-1.5 py-0.5 font-mono text-xs text-ink-400 hover:bg-ink-800 hover:text-ink-200"
-                          >
-                            ↻
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-
-        {pageCount > 1 && (
-          <div className="flex items-center justify-end gap-2 border-t border-ink-800 px-4 py-3 text-xs text-ink-500">
-            <button
-              disabled={page === 0}
-              onClick={() => setPage((p) => p - 1)}
-              className="btn-ghost !px-2 !py-1 disabled:opacity-40"
-            >
-              ← Prev
-            </button>
-            <span className="font-mono">
-              {page + 1} / {pageCount}
-            </span>
-            <button
-              disabled={page >= pageCount - 1}
-              onClick={() => setPage((p) => p + 1)}
-              className="btn-ghost !px-2 !py-1 disabled:opacity-40"
-            >
-              Next →
-            </button>
-          </div>
-        )}
-      </section>
+          </section>
+        </>
+      )}
     </div>
   );
 }

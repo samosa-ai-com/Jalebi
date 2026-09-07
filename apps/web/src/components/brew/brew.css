@@ -1,0 +1,95 @@
+/**
+ * Brew House — mission-control motion set.
+ *
+ * All animation is cheap SVG/CSS (opacity, transform, stroke-dashoffset) so
+ * the scene stays smooth while tasks poll underneath. Every animation is
+ * disabled under `prefers-reduced-motion`.
+ */
+
+@keyframes brew-steam-rise {
+  0% {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  30% {
+    opacity: 0.9;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-14px);
+  }
+}
+
+@keyframes brew-bubble {
+  0%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.55;
+  }
+  50% {
+    transform: translateY(-3px);
+    opacity: 1;
+  }
+}
+
+@keyframes brew-glow-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+@keyframes brew-needs-you {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes brew-ticker-drift {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+.brew-steam {
+  animation: brew-steam-rise 2.8s ease-in-out infinite;
+}
+.brew-steam-late {
+  animation: brew-steam-rise 2.8s ease-in-out -1.4s infinite;
+}
+.brew-bubble {
+  animation: brew-bubble 1.6s ease-in-out infinite;
+}
+.brew-glow {
+  animation: brew-glow-pulse 2.4s ease-in-out infinite;
+}
+.brew-needs-you {
+  animation: brew-needs-you 1.8s ease-in-out infinite;
+}
+.brew-ticker-track {
+  animation: brew-ticker-drift 40s linear infinite;
+}
+.brew-ticker:hover .brew-ticker-track {
+  animation-play-state: paused;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .brew-steam,
+  .brew-steam-late,
+  .brew-bubble,
+  .brew-glow,
+  .brew-needs-you,
+  .brew-ticker-track {
+    animation: none;
+  }
+}
