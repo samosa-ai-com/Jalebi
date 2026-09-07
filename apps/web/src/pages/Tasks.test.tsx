@@ -911,6 +911,29 @@ describe("Tasks page (queue overhaul)", () => {
     });
   });
 
+  it("mission order buttons flip back with the matching type pre-selected", async () => {
+    stubFetch({
+      ...DEFAULT_HANDLERS,
+      "/api/settings": { default_backend: "opencode", default_model: "x", concurrency: 4 },
+      "/api/agents": [],
+      "/api/skills": [],
+      "/api/backends": { backends: ["opencode"], enabled: ["opencode"], default: "opencode" },
+      "/api/screenings": [],
+      "/api/screenings/findings": [],
+    });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    await screen.findByText("New task");
+    await userEvent.click(screen.getByRole("button", { name: "Mission control" }));
+    await userEvent.click(await screen.findByRole("button", { name: "New issue_fix →" }));
+    await waitFor(() => {
+      expect((screen.getByLabelText("Task type") as HTMLSelectElement).value).toBe("issue_fix");
+    });
+  });
+
   it("shows a creation confirmation linking to the new task", async () => {
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       if (url === "/api/tasks" && init?.method === "POST") {

@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { AttentionBadge } from "../components/AttentionBadge";
 import { BrewHouse } from "../components/brew/BrewHouse";
+import type { SnackKind } from "../components/brew/snacks";
 import { DepBadges } from "../components/DepBadges";
 import { RunningCard } from "../components/RunningCard";
 import { StatusBadge } from "../components/StatusBadge";
@@ -1005,8 +1006,12 @@ export default function Tasks() {
     }
   }
 
-  // Mission-control order buttons flip back to the queue and land on the form.
-  function handleMissionOrder() {
+  // Mission-control order buttons flip back to the queue, pre-select the
+  // task type matching the ordered snack, and land on the form.
+  function handleMissionOrder(kind?: SnackKind) {
+    const type = kind === "samosa" ? "issue_fix" : kind === "pakora" ? "pr_review" : "freeform";
+    setPrefill({ type });
+    setPrefillNonce((n) => n + 1);
     selectView("queue");
     window.setTimeout(() => {
       const form = document.getElementById("new-task-form");

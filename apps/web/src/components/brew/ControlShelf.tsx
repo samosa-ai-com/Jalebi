@@ -10,7 +10,7 @@ function Ring({ fraction, label }: { fraction: number; label: string }) {
   const c = 2 * Math.PI * r;
   const clamped = Math.max(0, Math.min(1, fraction));
   return (
-    <svg viewBox="0 0 64 64" role="img" aria-label={label} className="h-16 w-16">
+    <svg viewBox="0 0 64 64" role="img" aria-label={label} className="h-12 w-12">
       <circle cx="32" cy="32" r={r} fill="none" stroke="#33271e" strokeWidth="7" />
       <circle
         cx="32"
@@ -83,7 +83,7 @@ export function ControlShelf({
         </div>
       </section>
 
-      <section className="surface p-4" aria-label="Configured backends">
+      <section className="surface px-3 py-2.5" aria-label="Configured backends">
         <div className="flex items-baseline justify-between">
           <h3 className="panel-title">Backends</h3>
           <Link to="/settings" className="link font-mono text-[11px]">
@@ -126,7 +126,7 @@ export function ControlShelf({
         )}
       </section>
 
-      <section className="surface p-4" aria-label="Repositories">
+      <section className="surface px-3 py-2.5" aria-label="Repositories">
         <div className="flex items-baseline justify-between">
           <h3 className="panel-title">Repos</h3>
           <Link to="/repos" className="link font-mono text-[11px]">
@@ -163,7 +163,7 @@ export function ControlShelf({
         )}
       </section>
 
-      <section className="surface p-4" aria-label="Screenings">
+      <section className="surface px-3 py-2.5" aria-label="Screenings">
         <div className="flex items-baseline justify-between">
           <h3 className="panel-title">Screenings</h3>
           <Link to="/screenings" className="link font-mono text-[11px]">

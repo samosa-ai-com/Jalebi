@@ -172,7 +172,7 @@ export function FryStation({
           onOpen(station!.task.id);
         }
       }}
-      className={`surface group w-48 shrink-0 px-3 pt-2 pb-2 text-left transition-colors ${
+      className={`surface group w-40 shrink-0 px-2.5 pt-1.5 pb-1.5 text-left transition-colors ${
         brewing ? "cursor-pointer hover:border-syrup-500/50" : ""
       }`}
     >

@@ -408,3 +408,14 @@ After any code change, run the relevant tests and build before marking work done
   7-day shelf, "Today's menu" + "(spice box)" wording, personality chatter
   with hover-aware auto-scroll; `BrewHouse.test.tsx` 19 tests.
 - **Suite totals now:** web **246 passed** (no backend changes).
+
+- **Halwai v3 round (owner UX pass):** in-flow below-row chatter (Codex
+  pick — no clipping, no auto-scroll needed), double-spiral jalebi glyph
+  (AGY spec) at larger sizes, unexplained thali center motif removed,
+  brushed-steel dabba rework (AGY spec: rim arcs, bowl glints, mound
+  highlights), centered kadhai strip, pakora naming, "Today's menu" +
+  "(spice box)", engineering menu board (glyph + count + real task type;
+  order buttons pre-select the type via prefill remount), compacted
+  single-viewport layout; `BrewHouse.test.tsx` 19 + `Tasks.test.tsx` +1
+  (mission order prefill).
+- **Suite totals now:** web **247 passed** (no backend changes).

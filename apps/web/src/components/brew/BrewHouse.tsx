@@ -26,6 +26,7 @@ import { ControlShelf } from "./ControlShelf";
 import { FryStation, type StationTask } from "./FryStation";
 import { MasalaDabba, type AgentChord, type SkillChord } from "./MasalaDabba";
 import { SweetShelf } from "./SweetShelf";
+import type { SnackKind } from "./snacks";
 
 function parseTime(iso: string | null): number | null {
   if (!iso) return null;
@@ -43,7 +44,7 @@ export function BrewHouse({
 }: {
   tasks: Task[];
   repos: Repo[];
-  onNewTask: () => void;
+  onNewTask: (kind?: SnackKind) => void;
 }) {
   const navigate = useNavigate();
   const [now, setNow] = useState(() => Date.now());
@@ -182,8 +183,8 @@ export function BrewHouse({
   });
 
   return (
-    <div className="space-y-4 animate-fade-up">
-      <div className="surface flex flex-wrap items-center gap-x-4 gap-y-1 px-5 py-3">
+    <div className="space-y-3 animate-fade-up">
+      <div className="surface flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-2">
         <svg viewBox="0 0 24 24" aria-hidden="true" className="h-6 w-6">
           <polygon points="12,3 3,21 21,21" fill="#f7b955" stroke="#7c2d12" strokeWidth="1.5" />
           <line x1="12" y1="3" x2="12" y2="21" stroke="#7c2d12" strokeWidth="1" opacity="0.6" />
@@ -200,7 +201,7 @@ export function BrewHouse({
         <span className="ml-auto font-mono text-xs tabular-nums text-ink-400">{clock}</span>
       </div>
 
-      <section className="surface p-4" aria-label="Kadhai stations">
+      <section className="surface px-4 py-3" aria-label="Kadhai stations">
         <div className="flex items-baseline justify-between">
           <h3 className="panel-title">Kadhais</h3>
           <Link
@@ -222,7 +223,7 @@ export function BrewHouse({
                 station={stations[i] ?? null}
                 now={now}
                 onOpen={(id) => navigate(`/tasks/${id}`)}
-                onOrder={onNewTask}
+                onOrder={() => onNewTask()}
               />
             ))}
           </div>

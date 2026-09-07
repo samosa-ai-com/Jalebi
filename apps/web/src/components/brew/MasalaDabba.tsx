@@ -8,7 +8,6 @@
  * live tasks) take turns showing a speech bubble from the chatter pool
  * while the shop is idle — the shelf is never still.
  */
-import { useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import { avatarFor, avatarUrl } from "../../lib/agentAvatars";
 import type { CatalogAgent, LibrarySkill } from "../../types";
@@ -54,7 +53,7 @@ function Dabba({ skills }: { skills: SkillChord[] }) {
         viewBox="0 0 120 120"
         role="img"
         aria-label="Masala dabba, spice box"
-        className="h-28 w-28 shrink-0"
+        className="h-24 w-24 shrink-0"
       >
         <circle cx="60" cy="60" r="56" fill="#2a2018" stroke="#b08050" strokeWidth="3" />
         <circle cx="60" cy="60" r="50" fill="none" stroke="#4a3a2d" strokeWidth="1" />
@@ -160,24 +159,14 @@ export function MasalaDabba({
 }) {
   // One resting agent talks at a time, rotating every ~5 s while idle.
   // Lines match the agent's personality (reviewers get review lines).
-  // The shelf auto-scrolls to the talker unless the mouse is over it.
+  // The bubble renders in-flow *below* its row, so it never covers the
+  // agent name above and never clips at the top of the scroll box.
   const resting = agents.filter((a) => a.activeTasks === 0);
   const chatterIdx = resting.length > 0 ? Math.floor(tick / 5000) % resting.length : -1;
   const talkerId = idle && chatterIdx >= 0 ? resting[chatterIdx].agent.id : null;
-  const shelfRef = useRef<HTMLUListElement>(null);
-  const shelfHovered = useRef(false);
-  useEffect(() => {
-    if (!talkerId || shelfHovered.current) return;
-    const row = shelfRef.current?.querySelector(
-      `[data-agent-row="${CSS.escape(talkerId)}"]`
-    );
-    if (row && typeof (row as HTMLElement).scrollIntoView === "function") {
-      (row as HTMLElement).scrollIntoView({ behavior: "smooth", block: "nearest" });
-    }
-  }, [talkerId]);
   return (
     <div className="grid gap-4 lg:grid-cols-5">
-      <section className="surface p-4 lg:col-span-3" aria-label="Masala dabba, spice box">
+      <section className="surface px-3 py-2.5 lg:col-span-3" aria-label="Masala dabba, spice box">
         <div className="flex items-baseline justify-between">
           <h3 className="panel-title">
             Masala dabba <span className="font-normal text-ink-500">(spice box)</span>
@@ -194,7 +183,7 @@ export function MasalaDabba({
         </p>
       </section>
 
-      <section className="surface p-4 lg:col-span-2" aria-label="Agent resting shelf">
+      <section className="surface px-3 py-2.5 lg:col-span-2" aria-label="Agent resting shelf">
         <div className="flex items-baseline justify-between">
           <h3 className="panel-title">Resting shelf</h3>
           <Link to="/agents" className="link font-mono text-[11px]">
@@ -204,18 +193,13 @@ export function MasalaDabba({
         {agents.length === 0 ? (
           <p className="mt-3 text-xs text-ink-600">No agents in the catalog yet.</p>
         ) : (
-          <ul
-            ref={shelfRef}
-            onMouseEnter={() => (shelfHovered.current = true)}
-            onMouseLeave={() => (shelfHovered.current = false)}
-            className="mt-2 max-h-44 space-y-1.5 overflow-y-auto"
-          >
+          <ul className="mt-1.5 max-h-32 space-y-1 overflow-y-auto">
             {agents.map(({ agent, activeTasks }) => {
               const talks = talkerId === agent.id;
               const pool = agent.kind === "reviewer" ? CHATTER_REVIEWER : CHATTER_GENERAL;
               const line = pool[Math.floor(tick / 5000) % pool.length];
               return (
-                <li key={agent.id} data-agent-row={agent.id} className="relative">
+                <li key={agent.id}>
                   <Link
                     to="/agents"
                     className="flex items-center gap-2 rounded-lg px-2 py-1 transition-colors hover:bg-ink-875/60"
@@ -247,9 +231,9 @@ export function MasalaDabba({
                   {talks && (
                     <span
                       role="status"
-                      className="brew-chatter pointer-events-none absolute -top-7 left-8 z-10 max-w-44 truncate rounded-lg rounded-bl-none border border-syrup-500/40 bg-ink-900 px-2 py-1 font-mono text-[10px] text-syrup-300 shadow-lg"
+                      className="brew-chatter ml-7 line-clamp-2 rounded-lg rounded-tl-none border border-syrup-500/40 bg-ink-900 px-2 py-1 font-mono text-[10px] text-syrup-300"
                     >
-                      “{line}”
+                      <span className="text-ink-500">{agent.name}:</span> “{line}”
                     </span>
                   )}
                 </li>

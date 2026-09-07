@@ -308,12 +308,13 @@ describe("BrewHouse", () => {
     };
     renderHouse([TASK, doneToday]);
     expect(await screen.findByText("Today's menu")).toBeInTheDocument();
-    // One samosa served all-time; the thali shows today's count.
-    expect(screen.getByText(/1 samosas/)).toBeInTheDocument();
+    // Engineering legend maps the snack to its task type with all-time counts.
+    expect(screen.getByText("issue_fix")).toBeInTheDocument();
+    expect(screen.getByText("freeform")).toBeInTheDocument();
     expect(screen.getByText("1 served")).toBeInTheDocument();
   });
 
-  it("menu order buttons call back to start a new task", async () => {
+  it("menu order buttons call back with their snack kind", async () => {
     stubFetch({ ...HANDLERS });
     const onNewTask = vi.fn();
     render(
@@ -321,8 +322,9 @@ describe("BrewHouse", () => {
         <BrewHouse tasks={[]} repos={REPOS as never} onNewTask={onNewTask} />
       </MemoryRouter>
     );
-    await userEvent.click(await screen.findByRole("button", { name: "Fry a pakora →" }));
+    await userEvent.click(await screen.findByRole("button", { name: "New pr_review →" }));
     expect(onNewTask).toHaveBeenCalledTimes(1);
+    expect(onNewTask).toHaveBeenCalledWith("pakora");
   });
 
   it("centers the kadhai strip while it fits", async () => {
