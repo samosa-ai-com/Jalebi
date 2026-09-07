@@ -240,7 +240,7 @@ export function BrewHouse({
 
       {/* Single-viewport mission grid on wide screens: side rails scroll
           internally, the page itself stays put. Stacks below xl. */}
-      <div className="grid gap-3 xl:grid-cols-[230px_minmax(0,1fr)_300px] xl:overflow-hidden">
+      <div className="grid gap-3 xl:grid-cols-[210px_minmax(0,1fr)_280px] xl:overflow-hidden">
         <div className="flex min-h-0 flex-col gap-3 xl:max-h-[calc(100vh-16rem)] xl:min-h-[540px]">
           <div className="flex min-h-0 flex-1 flex-col [&>section]:flex-1">
             <CooksRail cooks={cooks} />

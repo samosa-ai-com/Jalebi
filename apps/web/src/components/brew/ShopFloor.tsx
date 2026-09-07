@@ -53,14 +53,16 @@ export function ShopFloor({
             key={m.type}
             type="button"
             onClick={() => onNewTaskKind(snackForType(m.type))}
-            title={`Order a ${snackForType(m.type)} (${m.type})`}
-            className="flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full border border-ink-800 px-2 py-0.5 transition-colors hover:border-syrup-500/60 hover:bg-syrup-500/10"
+            title={`Order a ${snackForType(m.type)} (${m.type}, ${m.total} total)`}
+            className="flex min-w-0 flex-1 cursor-pointer items-center gap-0.5 rounded-full border border-ink-800 px-1 py-0.5 transition-colors hover:border-syrup-500/60 hover:bg-syrup-500/10"
           >
-            <span className="font-mono text-[11px] text-ink-200">{snackForType(m.type)}</span>
-            <span className="font-mono text-[10px] text-ink-500">
+            <span className="truncate font-mono text-[10px] text-ink-200">
+              {snackForType(m.type)}
+            </span>
+            <span className="shrink-0 font-mono text-[9px] text-ink-500">
               {m.type} · {m.total}
             </span>
-            <span className="font-mono text-[10px] text-syrup-300">New →</span>
+            <span className="shrink-0 font-mono text-[10px] text-syrup-300">New →</span>
           </button>
         ))}
       </div>

@@ -180,7 +180,7 @@ export function FryStation({
         brewing ? "cursor-pointer hover:border-syrup-500/50" : ""
       }`}
     >
-      <svg viewBox="0 0 120 138" aria-hidden="true" className="w-full">
+      <svg viewBox="0 0 120 138" aria-hidden="true" className="mx-auto h-48 w-auto">
         {brewing && (
           <ellipse
             cx="60"

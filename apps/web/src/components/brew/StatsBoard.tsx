@@ -92,7 +92,7 @@ export function StatsBoard({ tasks, now }: { tasks: Task[]; now: number }) {
         </div>
         <div>
           <dt className="font-mono text-[10px] uppercase tracking-wide text-ink-500">avg fry</dt>
-          <dd className="font-mono text-lg tabular-nums text-ink-100">
+          <dd className="whitespace-nowrap font-mono text-lg tabular-nums text-ink-100">
             {stats.avg === null ? "—" : formatMinutes(stats.avg)}
           </dd>
         </div>
@@ -101,14 +101,14 @@ export function StatsBoard({ tasks, now }: { tasks: Task[]; now: number }) {
         Served · last 7 days
       </h4>
       <div
-        className="mt-1 flex h-10 items-end gap-1.5"
+        className="mt-1 flex h-10 items-stretch gap-1.5"
         role="img"
         aria-label={`Tasks served per day: ${stats.bars.map((b) => `${b.label} ${b.count}`).join(", ")}`}
       >
         {stats.bars.map((b) => (
           <div
             key={b.key}
-            className="flex min-w-0 flex-1 flex-col items-center gap-1"
+            className="flex min-w-0 flex-1 flex-col items-center justify-end gap-1"
             title={`${b.count} served`}
           >
             <div

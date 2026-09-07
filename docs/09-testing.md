@@ -443,3 +443,11 @@ After any code change, run the relevant tests and build before marking work done
   screens); `BrewHouse.test.tsx` +1 (menu-above-floor order),
   `Tasks.test.tsx` mission prefill updated to the chip name.
 - **Suite totals now:** web **254 passed** (no backend changes).
+
+- **Screenshot review round (throwaway 2062 instance, seeded demo data):
+  fixed from real screenshots — stove SVG capped (`h-48`), 7-day bars
+  actually render (`items-stretch` + `justify-end` columns; % heights
+  need a definite parent), avg `whitespace-nowrap`, mini headers never
+  wrap (compact links collapse to `→` with labels), menu chips share
+  the strip (`flex-1` + truncate, tighter padding), rails narrowed to
+  210/280 so all three chips fit. Verified 1600×900: no page scroll.

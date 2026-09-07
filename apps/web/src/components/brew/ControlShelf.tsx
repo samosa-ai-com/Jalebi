@@ -68,7 +68,7 @@ export function ControlShelf({
       className={compact ? "grid grid-cols-2 gap-3" : "grid gap-4 md:grid-cols-2 xl:grid-cols-4"}
     >
       <section
-        className={`surface flex items-center ${compact ? "gap-2 px-2.5 py-2" : "gap-4 p-4"}`}
+        className={`surface flex ${compact ? "flex-col items-start gap-1 px-2.5 py-2" : "items-center gap-4 p-4"}`}
         aria-label="Worker load"
       >
         <Ring
@@ -97,10 +97,15 @@ export function ControlShelf({
         className={`surface ${compact ? "px-2.5 py-2" : "px-3 py-2.5"}`}
         aria-label="Configured backends"
       >
-        <div className="flex items-baseline justify-between">
-          <h3 className="panel-title">Backends</h3>
-          <Link to="/settings?section=agent" className="link font-mono text-[11px]">
-            settings →
+        <div className="flex items-baseline justify-between gap-1">
+          <h3 className="panel-title truncate">Backends</h3>
+          <Link
+            to="/settings?section=agent"
+            title="Backend settings"
+            aria-label="Backend settings"
+            className="link shrink-0 whitespace-nowrap font-mono text-[11px]"
+          >
+            {compact ? "→" : "settings →"}
           </Link>
         </div>
         {backends === null ? (
@@ -143,10 +148,15 @@ export function ControlShelf({
         className={`surface ${compact ? "px-2.5 py-2" : "px-3 py-2.5"}`}
         aria-label="Repositories"
       >
-        <div className="flex items-baseline justify-between">
-          <h3 className="panel-title">Repos</h3>
-          <Link to="/repos" className="link font-mono text-[11px]">
-            {repos.length} connected →
+        <div className="flex items-baseline justify-between gap-1">
+          <h3 className="panel-title truncate">Repos</h3>
+          <Link
+            to="/repos"
+            title={`${repos.length} connected — open repos`}
+            aria-label={`${repos.length} connected — open repos`}
+            className="link shrink-0 whitespace-nowrap font-mono text-[11px]"
+          >
+            {compact ? `${repos.length} →` : `${repos.length} connected →`}
           </Link>
         </div>
         {repos.length === 0 ? (
@@ -183,10 +193,15 @@ export function ControlShelf({
         className={`surface ${compact ? "px-2.5 py-2" : "px-3 py-2.5"}`}
         aria-label="Screenings"
       >
-        <div className="flex items-baseline justify-between">
-          <h3 className="panel-title">Screenings</h3>
-          <Link to="/screenings" className="link font-mono text-[11px]">
-            {screens.length} screens →
+        <div className="flex items-baseline justify-between gap-1">
+          <h3 className="panel-title truncate">Screenings</h3>
+          <Link
+            to="/screenings"
+            title={`${screens.length} screens — open screenings`}
+            aria-label={`${screens.length} screens — open screenings`}
+            className="link shrink-0 whitespace-nowrap font-mono text-[11px]"
+          >
+            {compact ? `${screens.length} →` : `${screens.length} screens →`}
           </Link>
         </div>
         {liveScreens.length > 0 ? (
