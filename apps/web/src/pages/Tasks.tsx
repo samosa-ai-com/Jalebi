@@ -430,6 +430,7 @@ function CreateTask({
     <form
       onSubmit={submit}
       ref={formRef}
+      id="new-task-form"
       className="surface space-y-4 scroll-mt-4 p-6 animate-fade-up"
       style={{ animationDelay: "0.05s" }}
     >
@@ -1004,6 +1005,17 @@ export default function Tasks() {
     }
   }
 
+  // Mission-control order buttons flip back to the queue and land on the form.
+  function handleMissionOrder() {
+    selectView("queue");
+    window.setTimeout(() => {
+      const form = document.getElementById("new-task-form");
+      if (form && typeof form.scrollIntoView === "function") {
+        form.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    }, 60);
+  }
+
   function handleDismissAttention(taskId: number) {
     setTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, attention: "done" } : t)));
     api.dismissAttention(taskId).catch((e) => {
@@ -1146,7 +1158,7 @@ export default function Tasks() {
       </header>
 
       {view === "mission" ? (
-        <BrewHouse tasks={tasks} repos={repos} />
+        <BrewHouse tasks={tasks} repos={repos} onNewTask={handleMissionOrder} />
       ) : (
         <>
           <div

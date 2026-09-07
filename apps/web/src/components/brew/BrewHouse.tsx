@@ -23,8 +23,9 @@ import type {
 } from "../../types";
 import "./brew.css";
 import { ControlShelf } from "./ControlShelf";
-import { KettleStation, type StationTask } from "./KettleStation";
-import { SpiceRack, type AgentChord, type SkillChord } from "./SpiceRack";
+import { FryStation, type StationTask } from "./FryStation";
+import { MasalaDabba, type AgentChord, type SkillChord } from "./MasalaDabba";
+import { SweetShelf } from "./SweetShelf";
 
 function parseTime(iso: string | null): number | null {
   if (!iso) return null;
@@ -35,7 +36,15 @@ function parseTime(iso: string | null): number | null {
 
 const SCREENS_POLL_MS = 15_000;
 
-export function BrewHouse({ tasks, repos }: { tasks: Task[]; repos: Repo[] }) {
+export function BrewHouse({
+  tasks,
+  repos,
+  onNewTask,
+}: {
+  tasks: Task[];
+  repos: Repo[];
+  onNewTask: () => void;
+}) {
   const navigate = useNavigate();
   const [now, setNow] = useState(() => Date.now());
   const [agents, setAgents] = useState<CatalogAgent[]>([]);
@@ -175,42 +184,55 @@ export function BrewHouse({ tasks, repos }: { tasks: Task[]; repos: Repo[] }) {
   return (
     <div className="space-y-4 animate-fade-up">
       <div className="surface flex flex-wrap items-center gap-x-4 gap-y-1 px-5 py-3">
-        <h2 className="panel-title">Brew house</h2>
+        <svg viewBox="0 0 24 24" aria-hidden="true" className="h-6 w-6">
+          <polygon points="12,3 3,21 21,21" fill="#f7b955" stroke="#7c2d12" strokeWidth="1.5" />
+          <line x1="12" y1="3" x2="12" y2="21" stroke="#7c2d12" strokeWidth="1" opacity="0.6" />
+        </svg>
+        <h2 className="panel-title">Halwai shop</h2>
         <p className="text-xs text-ink-500">
           {concurrency === 0
-            ? "queue paused — kettles banked"
+            ? "queue paused — burners banked"
             : stations.length === 0
-              ? "all kettles cold — nothing brewing"
-              : `${stations.length} brew${stations.length === 1 ? "" : "s"} on the fire`}
+              ? "all kadhais simmering — no orders on the fire"
+              : `${stations.length} order${stations.length === 1 ? "" : "s"} frying`}
+          {" · "}by Samosa AI
         </p>
         <span className="ml-auto font-mono text-xs tabular-nums text-ink-400">{clock}</span>
       </div>
 
-      <section className="surface p-4" aria-label="Worker stations">
+      <section className="surface p-4" aria-label="Kadhai stations">
         <div className="flex items-baseline justify-between">
-          <h3 className="panel-title">Kettles</h3>
+          <h3 className="panel-title">Kadhais</h3>
           <Link
             to="/settings"
             className="font-mono text-[11px] text-ink-500"
             title="Worker slots come from the queue concurrency setting"
           >
-            {slots} worker slot{slots === 1 ? "" : "s"} →
+            {slots} burner{slots === 1 ? "" : "s"} →
           </Link>
         </div>
         <div className="mt-2 flex gap-3 overflow-x-auto pb-1">
           {Array.from({ length: slots }, (_, i) => (
-            <KettleStation
+            <FryStation
               key={i}
               slot={i + 1}
               station={stations[i] ?? null}
               now={now}
               onOpen={(id) => navigate(`/tasks/${id}`)}
+              onOrder={onNewTask}
             />
           ))}
         </div>
       </section>
 
-      <SpiceRack skills={skillChords} agents={agentChords} />
+      <MasalaDabba
+        skills={skillChords}
+        agents={agentChords}
+        idle={stations.length === 0}
+        tick={now}
+      />
+
+      <SweetShelf tasks={tasks} idle={stations.length === 0} onOrder={onNewTask} />
 
       <ControlShelf
         tasks={tasks}

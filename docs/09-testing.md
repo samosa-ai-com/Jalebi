@@ -394,3 +394,11 @@ After any code change, run the relevant tests and build before marking work done
   live screens + findings ticker, worker-load ring. Classic Tasks view
   untouched (toggle defaults to queue; existing `Tasks.test.tsx` unmodified).
 - **Suite totals now:** web **239 passed** (12 new; no backend changes).
+
+- **Halwai Shop v2 (web +5 net):** `FryStation` (ex-`KettleStation`) and
+  `MasalaDabba` (ex-`SpiceRack`) rewritten, `SweetShelf` + `snacks.ts` new;
+  `BrewHouse.test.tsx` 17 tests — snack-per-type, strike-a-match + menu
+  order callbacks, thali counts, served-ticker links, idle chatter,
+  7-day shelf rendering. Shared `snackForType` moved to `snacks.ts`
+  (react-refresh zero-warning rule). Classic view untouched.
+- **Suite totals now:** web **244 passed** (no backend changes).

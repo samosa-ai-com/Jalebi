@@ -61,6 +61,110 @@
   }
 }
 
+/* Stove flames: each jet flickers with its own phase; heat level is set
+   by scaling the flame group (see .brew-heat-*). */
+@keyframes brew-flame-flicker {
+  0%,
+  100% {
+    transform: scaleY(1) skewX(0deg);
+    opacity: 0.9;
+  }
+  25% {
+    transform: scaleY(1.12) skewX(-2deg);
+    opacity: 1;
+  }
+  50% {
+    transform: scaleY(0.92) skewX(1.5deg);
+    opacity: 0.8;
+  }
+  75% {
+    transform: scaleY(1.06) skewX(-1deg);
+    opacity: 0.95;
+  }
+}
+
+/* Snack bobbing in hot oil. */
+@keyframes brew-snack-bob {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-2deg);
+  }
+  50% {
+    transform: translateY(-3px) rotate(2deg);
+  }
+}
+
+/* Chakli inspection wheel. */
+@keyframes brew-spin-slow {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Inspection ticks blinking around the chakli. */
+@keyframes brew-tick-blink {
+  0%,
+  100% {
+    opacity: 0.15;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* Jalebi coil draws itself as the fry progresses (dashoffset is set
+   inline from progress; the transition smooths poll jumps). */
+.brew-coil-draw {
+  transition: stroke-dashoffset 1.2s ease-out;
+}
+
+/* Agent chatter bubble: gentle rise-and-fade loop. */
+@keyframes brew-chatter {
+  0%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.85;
+  }
+  50% {
+    transform: translateY(-2px);
+    opacity: 1;
+  }
+}
+
+/* Served snack dropping onto the thali. */
+@keyframes brew-serve-drop {
+  0% {
+    transform: translateY(-10px) scale(0.7);
+    opacity: 0;
+  }
+  60% {
+    transform: translateY(1px) scale(1.05);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+}
+
+/* Spice pinch falling from dabba bowl toward the kadhai. */
+@keyframes brew-pinch-fall {
+  0% {
+    transform: translateY(0);
+    opacity: 0;
+  }
+  25% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(14px);
+    opacity: 0;
+  }
+}
+
 .brew-steam {
   animation: brew-steam-rise 2.8s ease-in-out infinite;
 }
@@ -76,10 +180,39 @@
 .brew-needs-you {
   animation: brew-needs-you 1.8s ease-in-out infinite;
 }
+.brew-flame {
+  animation: brew-flame-flicker 0.9s ease-in-out infinite;
+  transform-origin: bottom center;
+  transform-box: fill-box;
+}
+.brew-snack {
+  animation: brew-snack-bob 2.2s ease-in-out infinite;
+}
+.brew-spin {
+  animation: brew-spin-slow 9s linear infinite;
+  transform-origin: center;
+  transform-box: fill-box;
+}
+.brew-tick {
+  animation: brew-tick-blink 1.6s ease-in-out infinite;
+}
+.brew-chatter {
+  animation: brew-chatter 3s ease-in-out infinite;
+}
+.brew-serve-drop {
+  animation: brew-serve-drop 0.7s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+.brew-pinch {
+  animation: brew-pinch-fall 1.4s ease-in infinite;
+}
 .brew-ticker-track {
   animation: brew-ticker-drift 40s linear infinite;
 }
-.brew-ticker:hover .brew-ticker-track {
+.brew-ticker-fast-track {
+  animation: brew-ticker-drift 26s linear infinite;
+}
+.brew-ticker:hover .brew-ticker-track,
+.brew-ticker:hover .brew-ticker-fast-track {
   animation-play-state: paused;
 }
 
@@ -89,7 +222,15 @@
   .brew-bubble,
   .brew-glow,
   .brew-needs-you,
-  .brew-ticker-track {
+  .brew-ticker-track,
+  .brew-ticker-fast-track,
+  .brew-flame,
+  .brew-snack,
+  .brew-spin,
+  .brew-tick,
+  .brew-chatter,
+  .brew-serve-drop,
+  .brew-pinch {
     animation: none;
   }
 }
