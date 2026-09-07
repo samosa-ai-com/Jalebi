@@ -35,7 +35,16 @@ function stubFetch(handlers: Record<string, unknown>) {
 describe("Github", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    localStorage.clear();
   });
+
+  async function expandAccount(login: string) {
+    // findBy: accounts load asynchronously after render.
+    const btn = await screen.findByRole("button", {
+      name: new RegExp(`Expand account ${login}`),
+    });
+    await userEvent.click(btn);
+  }
 
   it("shows the add-account form when no accounts are configured", async () => {
     stubFetch({ "/api/github/tokens": NO_TOKENS });
@@ -79,6 +88,8 @@ describe("Github", () => {
       </MemoryRouter>
     );
 
+    await expandAccount("acct1");
+    await expandAccount("acct2");
     expect((await screen.findAllByText("acct1")).length).toBeGreaterThan(0);
     expect(screen.getAllByText("acct2").length).toBeGreaterThan(0);
     expect(screen.getByRole("link", { name: "acct1/hello" })).toBeInTheDocument();
@@ -160,6 +171,7 @@ describe("Github", () => {
         <Github />
       </MemoryRouter>
     );
+    await expandAccount("acct2");
     await screen.findByRole("button", { name: "update token" });
     await userEvent.click(screen.getByRole("button", { name: "update token" }));
     await userEvent.type(screen.getByPlaceholderText("label (e.g. work, personal)"), "work");
@@ -176,7 +188,16 @@ describe("Github", () => {
 describe("Github page (token update)", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    localStorage.clear();
   });
+
+  async function expandAccount(login: string) {
+    // findBy: accounts load asynchronously after render.
+    const btn = await screen.findByRole("button", {
+      name: new RegExp(`Expand account ${login}`),
+    });
+    await userEvent.click(btn);
+  }
 
   function account() {
     return ACCOUNT("work", "acct2");
@@ -203,6 +224,7 @@ describe("Github page (token update)", () => {
         <Github />
       </MemoryRouter>
     );
+    await expandAccount("acct2");
     await screen.findByRole("button", { name: "update token" });
     await userEvent.click(screen.getByRole("button", { name: "update token" }));
     await userEvent.type(screen.getByPlaceholderText("new ghp_…"), "ghp_new");
@@ -238,6 +260,7 @@ describe("Github page (token update)", () => {
         <Github />
       </MemoryRouter>
     );
+    await expandAccount("acct2");
     await screen.findByRole("button", { name: "update token" });
     await userEvent.click(screen.getByRole("button", { name: "update token" }));
     await userEvent.type(screen.getByPlaceholderText("new ghp_…"), "ghp_rotated");
@@ -271,6 +294,7 @@ describe("Github page (token update)", () => {
         <Github />
       </MemoryRouter>
     );
+    await expandAccount("acct2");
     await screen.findByRole("button", { name: "update token" });
     await userEvent.click(screen.getByRole("button", { name: "update token" }));
     await userEvent.type(screen.getByPlaceholderText("new ghp_…"), "ghp_bad");
@@ -281,6 +305,19 @@ describe("Github page (token update)", () => {
 });
 
 describe("Github page (Phase 4 T5.2)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    localStorage.clear();
+  });
+
+  async function expandAccount(login: string) {
+    // findBy: accounts load asynchronously after render.
+    const btn = await screen.findByRole("button", {
+      name: new RegExp(`Expand account ${login}`),
+    });
+    await userEvent.click(btn);
+  }
+
   it("bounds each account's repo list in a scrollable wrapper below the count line", async () => {
     const ACCOUNT = {
       name: "primary",
@@ -328,6 +365,7 @@ describe("Github page (Phase 4 T5.2)", () => {
         <Github />
       </MemoryRouter>
     );
+    await expandAccount("acct1");
     await screen.findByText("hello");
     const count = await screen.findByText("Repositories (2)");
     const wrapper = screen.getByText("hello").closest("div.rounded-md") as HTMLElement | null;
@@ -342,7 +380,16 @@ describe("Github page (Phase 4 T5.2)", () => {
 describe("Github page (repo controls)", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    localStorage.clear();
   });
+
+  async function expandAccount(login: string) {
+    // findBy: accounts load asynchronously after render.
+    const btn = await screen.findByRole("button", {
+      name: new RegExp(`Expand account ${login}`),
+    });
+    await userEvent.click(btn);
+  }
 
   const ACCT = ACCOUNT("primary", "acct1");
   const REPOS = [
@@ -379,6 +426,7 @@ describe("Github page (repo controls)", () => {
 
   it("searches repos and filters by connected status", async () => {
     renderPage({});
+    await expandAccount("acct1");
     await screen.findByText("hello");
 
     await userEvent.type(screen.getByPlaceholderText("Search repositories…"), "hello");
@@ -397,6 +445,7 @@ describe("Github page (repo controls)", () => {
 
   it("sorts connected-first and shows filtered counts", async () => {
     renderPage({});
+    await expandAccount("acct1");
     await screen.findByText("hello");
     expect(await screen.findByText("Repositories (2)")).toBeInTheDocument();
 
@@ -423,6 +472,7 @@ describe("Github page (repo controls)", () => {
       </MemoryRouter>
     );
 
+    await expandAccount("acct1");
     expect(await screen.findByText(/Couldn't list repositories/)).toBeInTheDocument();
     expect(screen.getByText(/rate limited/)).toBeInTheDocument();
 
@@ -452,6 +502,7 @@ describe("Github page (repo controls)", () => {
         <Github />
       </MemoryRouter>
     );
+    await expandAccount("acct1");
     await screen.findByText("hello");
 
     await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
@@ -485,11 +536,83 @@ describe("Github page (repo controls)", () => {
       </MemoryRouter>
     );
 
+    await expandAccount("acct1");
     expect(await screen.findByText("Missing scopes")).toBeInTheDocument();
     expect(screen.getByText(/can't review, comment, push/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "github.com/settings/tokens" })).toHaveAttribute(
       "href",
       "https://github.com/settings/tokens"
     );
+  });
+
+  it("collapses accounts by default and toggles on header click", async () => {
+    renderPage({});
+    // Header is visible but the body (repos, scopes) is hidden.
+    expect(await screen.findByRole("button", { name: "Expand account acct1" })).toBeInTheDocument();
+    expect(screen.queryByText("hello")).not.toBeInTheDocument();
+    expect(screen.queryByText("Granted scopes")).not.toBeInTheDocument();
+
+    await expandAccount("acct1");
+    expect(await screen.findByText("hello")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Collapse account acct1" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Collapse account acct1" }));
+    expect(screen.queryByText("hello")).not.toBeInTheDocument();
+  });
+
+  it("expand-all and collapse-all flip every account", async () => {
+    stubFetch({
+      "/api/github/tokens": { accounts: [ACCT, ACCOUNT("work", "acct2")] },
+      "/api/github/repos": [
+        ...REPOS,
+        {
+          full_name: "acct2/other",
+          private: false,
+          default_branch: "main",
+          html_url: "h3",
+          account: "work",
+        },
+      ],
+      "/api/repos": [],
+    });
+    render(
+      <MemoryRouter>
+        <Github />
+      </MemoryRouter>
+    );
+    await screen.findByRole("button", { name: "Expand account acct1" });
+    expect(screen.queryByText("hello")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Expand all" }));
+    expect(await screen.findByText("hello")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "acct2/other" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Collapse all" }));
+    expect(screen.queryByText("hello")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "acct2/other" })).not.toBeInTheDocument();
+  });
+
+  it("persists open accounts across remounts", async () => {
+    stubFetch({
+      "/api/github/tokens": { accounts: [ACCT] },
+      "/api/github/repos": REPOS,
+      "/api/repos": [],
+    });
+    const first = render(
+      <MemoryRouter>
+        <Github />
+      </MemoryRouter>
+    );
+    await expandAccount("acct1");
+    await screen.findByText("hello");
+    first.unmount();
+
+    // localStorage still holds the open account from the first mount.
+    render(
+      <MemoryRouter>
+        <Github />
+      </MemoryRouter>
+    );
+    expect(await screen.findByText("hello")).toBeInTheDocument();
   });
 });

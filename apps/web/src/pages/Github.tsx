@@ -158,6 +158,19 @@ function UpdateTokenForm({ account, onUpdated }: { account: Account; onUpdated: 
   );
 }
 
+const OPEN_ACCOUNTS_KEY = "jalebi-github-open-accounts";
+
+function loadOpenAccounts(): Set<string> {
+  try {
+    const raw = localStorage.getItem(OPEN_ACCOUNTS_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    if (Array.isArray(parsed)) return new Set(parsed.filter((x) => typeof x === "string"));
+  } catch {
+    // Corrupt storage falls back to all-collapsed.
+  }
+  return new Set();
+}
+
 export default function Github() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [repos, setRepos] = useState<GithubRepo[]>([]);
@@ -169,6 +182,9 @@ export default function Github() {
   const [loadingRepos, setLoadingRepos] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [connecting, setConnecting] = useState<Set<string>>(new Set());
+  // Account sections are collapsible (collapsed by default); open state
+  // persists in localStorage like the Settings sections.
+  const [openAccounts, setOpenAccounts] = useState<Set<string>>(loadOpenAccounts);
   const [controls, setControls] = useState<
     Record<string, { q: string; status: "all" | "connected" | "not"; sort: "name" | "connected" }>
   >({});
@@ -215,6 +231,30 @@ export default function Github() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     load();
   }, [load]);
+
+  function toggleAccount(name: string) {
+    setOpenAccounts((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      try {
+        localStorage.setItem(OPEN_ACCOUNTS_KEY, JSON.stringify([...next]));
+      } catch {
+        // Storage failures (private mode quota) just lose persistence.
+      }
+      return next;
+    });
+  }
+
+  function setAllAccounts(open: boolean) {
+    const next = open ? new Set(accounts.map((a) => a.name)) : new Set<string>();
+    try {
+      localStorage.setItem(OPEN_ACCOUNTS_KEY, JSON.stringify([...next]));
+    } catch {
+      // Storage failures just lose persistence.
+    }
+    setOpenAccounts(next);
+  }
 
   async function refresh() {
     setRefreshing(true);
@@ -356,192 +396,219 @@ export default function Github() {
         <p className="text-sm text-ink-500 animate-fade-up">Loading accounts…</p>
       )}
 
-      {accounts.map((account) => (
-        <section key={account.name} className="surface animate-fade-up">
-          <div className="flex items-center gap-3 border-b border-ink-800 px-6 py-4">
-            <span
-              className={`h-2.5 w-2.5 rounded-full ${account.valid ? "bg-green-400" : "bg-red-400"}`}
-            />
-            <h2 className="panel-title">{account.login ?? account.name}</h2>
-            <div className="ml-auto flex items-center gap-3">
+      {accounts.map((account) => {
+        const open = openAccounts.has(account.name);
+        return (
+          <section key={account.name} className="surface animate-fade-up">
+            <div className="flex items-center gap-3 border-b border-ink-800 px-6 py-4">
               <button
-                onClick={() => setUpdating(updating === account.name ? null : account.name)}
-                className="text-[11px] text-ink-500 transition-colors hover:text-syrup-300"
+                onClick={() => toggleAccount(account.name)}
+                aria-expanded={open}
+                aria-label={`${open ? "Collapse" : "Expand"} account ${account.login ?? account.name}`}
+                className="flex min-w-0 flex-1 items-center gap-3 text-left"
               >
-                {updating === account.name ? "cancel" : "update token"}
+                <span
+                  className={`h-2.5 w-2.5 shrink-0 rounded-full ${account.valid ? "bg-green-400" : "bg-red-400"}`}
+                />
+                <span className="text-ink-500" aria-hidden="true">
+                  {open ? "▾" : "▸"}
+                </span>
+                <h2 className="panel-title truncate">{account.login ?? account.name}</h2>
               </button>
-              <button
-                onClick={() => removeAccount(account.name)}
-                className="text-[11px] text-ink-500 transition-colors hover:text-red-300"
-              >
-                remove
-              </button>
-            </div>
-          </div>
-          <div className="space-y-4 px-6 py-5">
-            {updating === account.name && <UpdateTokenForm account={account} onUpdated={load} />}
-            <AccountStatus account={account} />
-
-            <div>
-              <p className="mb-2 text-xs text-ink-600">Granted scopes</p>
-              <div className="flex flex-wrap gap-1.5">
-                {account.granted_scopes.length === 0 ? (
-                  <span className="text-sm text-ink-600">none</span>
-                ) : (
-                  account.granted_scopes.map((s) => <ScopeChip key={s} scope={s} />)
-                )}
+              <div className="ml-auto flex shrink-0 items-center gap-3">
+                <button
+                  onClick={() => setUpdating(updating === account.name ? null : account.name)}
+                  className="text-[11px] text-ink-500 transition-colors hover:text-syrup-300"
+                >
+                  {updating === account.name ? "cancel" : "update token"}
+                </button>
+                <button
+                  onClick={() => removeAccount(account.name)}
+                  className="text-[11px] text-ink-500 transition-colors hover:text-red-300"
+                >
+                  remove
+                </button>
               </div>
             </div>
+            {open && (
+              <div className="space-y-4 px-6 py-5">
+                {updating === account.name && (
+                  <UpdateTokenForm account={account} onUpdated={load} />
+                )}
+                <AccountStatus account={account} />
 
-            {account.missing_scopes.length > 0 && (
-              <div>
-                <p className="mb-2 text-xs text-red-400">Missing scopes</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {account.missing_scopes.map((s) => (
-                    <span
-                      key={s}
-                      className="rounded bg-red-500/10 px-2 py-0.5 font-mono text-[11px] text-red-300"
-                    >
-                      {s}
-                    </span>
-                  ))}
+                <div>
+                  <p className="mb-2 text-xs text-ink-600">Granted scopes</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {account.granted_scopes.length === 0 ? (
+                      <span className="text-sm text-ink-600">none</span>
+                    ) : (
+                      account.granted_scopes.map((s) => <ScopeChip key={s} scope={s} />)
+                    )}
+                  </div>
                 </div>
-                <p className="mt-1.5 text-[11px] text-ink-500">
-                  Without these, Jalebi can&apos;t review, comment, push, or report commit statuses.
-                  Create a token with the required scopes at{" "}
-                  <a
-                    href="https://github.com/settings/tokens"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="link"
-                  >
-                    github.com/settings/tokens
-                  </a>{" "}
-                  then use “update token” above.
-                </p>
+
+                {account.missing_scopes.length > 0 && (
+                  <div>
+                    <p className="mb-2 text-xs text-red-400">Missing scopes</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {account.missing_scopes.map((s) => (
+                        <span
+                          key={s}
+                          className="rounded bg-red-500/10 px-2 py-0.5 font-mono text-[11px] text-red-300"
+                        >
+                          {s}
+                        </span>
+                      ))}
+                    </div>
+                    <p className="mt-1.5 text-[11px] text-ink-500">
+                      Without these, Jalebi can&apos;t review, comment, push, or report commit
+                      statuses. Create a token with the required scopes at{" "}
+                      <a
+                        href="https://github.com/settings/tokens"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="link"
+                      >
+                        github.com/settings/tokens
+                      </a>{" "}
+                      then use “update token” above.
+                    </p>
+                  </div>
+                )}
+
+                <div className="border-t border-ink-800 pt-3">
+                  <p className="mb-2 text-xs text-ink-600">
+                    Repositories ({visibleRepos(account.name).length}
+                    {visibleRepos(account.name).length !==
+                      (reposByAccount.get(account.name) ?? []).length &&
+                      ` of ${(reposByAccount.get(account.name) ?? []).length}`}
+                    )
+                  </p>
+                  {repoErrors.get(account.name) && (
+                    <p className="mb-2 text-xs text-red-400">
+                      Couldn&apos;t list repositories: {repoErrors.get(account.name)}{" "}
+                      <button onClick={() => retryAccount(account.name)} className="link text-xs">
+                        Retry
+                      </button>
+                    </p>
+                  )}
+                  {loadingRepos &&
+                  (reposByAccount.get(account.name) ?? []).length === 0 &&
+                  !repoErrors.get(account.name) ? (
+                    <p className="text-sm text-ink-600">Loading repositories…</p>
+                  ) : visibleRepos(account.name).length === 0 ? (
+                    <p className="text-sm text-ink-600">
+                      {(reposByAccount.get(account.name) ?? []).length === 0
+                        ? "No repositories listed for this account."
+                        : "No repositories match the current search or filters."}
+                    </p>
+                  ) : (
+                    <>
+                      <div className="mb-2 flex flex-wrap items-center gap-2">
+                        <input
+                          value={controlsFor(account.name).q}
+                          onChange={(e) => setControl(account.name, { q: e.target.value })}
+                          placeholder="Search repositories…"
+                          className="field max-w-55 !py-1 text-xs"
+                        />
+                        <select
+                          value={controlsFor(account.name).sort}
+                          onChange={(e) =>
+                            setControl(account.name, {
+                              sort: e.target.value as "name" | "connected",
+                            })
+                          }
+                          className="field max-w-44 !py-1 text-xs"
+                          aria-label={`Sort repositories for ${account.name}`}
+                        >
+                          <option value="name">Sort: name</option>
+                          <option value="connected">Sort: connected first</option>
+                        </select>
+                        {(["all", "connected", "not"] as const).map((s) => (
+                          <button
+                            key={s}
+                            onClick={() => setControl(account.name, { status: s })}
+                            className={`rounded-full border px-2 py-0.5 text-[11px] transition-colors ${
+                              controlsFor(account.name).status === s
+                                ? "border-syrup-500 text-syrup-300"
+                                : "border-ink-800 text-ink-400 hover:text-ink-100"
+                            }`}
+                          >
+                            {s === "all"
+                              ? "All"
+                              : s === "connected"
+                                ? "Connected"
+                                : "Not connected"}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="max-h-[26rem] overflow-y-auto rounded-md border border-ink-800/60">
+                        <ul className="divide-y divide-ink-800/70">
+                          {visibleRepos(account.name).map((r) => {
+                            const [owner, repo] = r.full_name.split("/");
+                            const connectedRow = connected.find((c) => c.full_name === r.full_name);
+                            const isConnecting = connecting.has(r.full_name);
+                            return (
+                              <li key={r.full_name} className="flex items-center gap-3 py-2.5 px-3">
+                                <span className="h-2 w-2 shrink-0 rounded-full bg-chai-500" />
+                                <span className="min-w-0 flex-1">
+                                  <a
+                                    href={r.html_url}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="font-mono text-sm text-ink-200 transition-colors hover:text-syrup-300"
+                                  >
+                                    <span className="text-ink-500">{owner}/</span>
+                                    {repo}
+                                  </a>
+                                  <span className="ml-2 font-mono text-[11px] text-ink-600">
+                                    {r.private ? "private" : "public"} · {r.default_branch ?? "—"}
+                                  </span>
+                                </span>
+                                {connectedRow ? (
+                                  <div className="flex items-center gap-2">
+                                    <span className="rounded-full bg-green-500/10 px-3 py-1 font-mono text-[11px] text-green-300">
+                                      connected
+                                    </span>
+                                    <button
+                                      onClick={() => disconnect(connectedRow.id)}
+                                      className="text-[11px] text-ink-500 transition-colors hover:text-red-300"
+                                    >
+                                      disconnect
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <button
+                                    onClick={() => connect(account.name, r.full_name)}
+                                    disabled={isConnecting}
+                                    className="btn-ghost !px-3 !py-1 text-xs"
+                                  >
+                                    {isConnecting ? "Connecting…" : "Connect"}
+                                  </button>
+                                )}
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      </div>
+                    </>
+                  )}
+                </div>
               </div>
             )}
-
-            <div className="border-t border-ink-800 pt-3">
-              <p className="mb-2 text-xs text-ink-600">
-                Repositories ({visibleRepos(account.name).length}
-                {visibleRepos(account.name).length !==
-                  (reposByAccount.get(account.name) ?? []).length &&
-                  ` of ${(reposByAccount.get(account.name) ?? []).length}`}
-                )
-              </p>
-              {repoErrors.get(account.name) && (
-                <p className="mb-2 text-xs text-red-400">
-                  Couldn&apos;t list repositories: {repoErrors.get(account.name)}{" "}
-                  <button onClick={() => retryAccount(account.name)} className="link text-xs">
-                    Retry
-                  </button>
-                </p>
-              )}
-              {loadingRepos &&
-              (reposByAccount.get(account.name) ?? []).length === 0 &&
-              !repoErrors.get(account.name) ? (
-                <p className="text-sm text-ink-600">Loading repositories…</p>
-              ) : visibleRepos(account.name).length === 0 ? (
-                <p className="text-sm text-ink-600">
-                  {(reposByAccount.get(account.name) ?? []).length === 0
-                    ? "No repositories listed for this account."
-                    : "No repositories match the current search or filters."}
-                </p>
-              ) : (
-                <>
-                  <div className="mb-2 flex flex-wrap items-center gap-2">
-                    <input
-                      value={controlsFor(account.name).q}
-                      onChange={(e) => setControl(account.name, { q: e.target.value })}
-                      placeholder="Search repositories…"
-                      className="field max-w-55 !py-1 text-xs"
-                    />
-                    <select
-                      value={controlsFor(account.name).sort}
-                      onChange={(e) =>
-                        setControl(account.name, {
-                          sort: e.target.value as "name" | "connected",
-                        })
-                      }
-                      className="field max-w-44 !py-1 text-xs"
-                      aria-label={`Sort repositories for ${account.name}`}
-                    >
-                      <option value="name">Sort: name</option>
-                      <option value="connected">Sort: connected first</option>
-                    </select>
-                    {(["all", "connected", "not"] as const).map((s) => (
-                      <button
-                        key={s}
-                        onClick={() => setControl(account.name, { status: s })}
-                        className={`rounded-full border px-2 py-0.5 text-[11px] transition-colors ${
-                          controlsFor(account.name).status === s
-                            ? "border-syrup-500 text-syrup-300"
-                            : "border-ink-800 text-ink-400 hover:text-ink-100"
-                        }`}
-                      >
-                        {s === "all" ? "All" : s === "connected" ? "Connected" : "Not connected"}
-                      </button>
-                    ))}
-                  </div>
-                  <div className="max-h-[26rem] overflow-y-auto rounded-md border border-ink-800/60">
-                    <ul className="divide-y divide-ink-800/70">
-                      {visibleRepos(account.name).map((r) => {
-                        const [owner, repo] = r.full_name.split("/");
-                        const connectedRow = connected.find((c) => c.full_name === r.full_name);
-                        const isConnecting = connecting.has(r.full_name);
-                        return (
-                          <li key={r.full_name} className="flex items-center gap-3 py-2.5 px-3">
-                            <span className="h-2 w-2 shrink-0 rounded-full bg-chai-500" />
-                            <span className="min-w-0 flex-1">
-                              <a
-                                href={r.html_url}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="font-mono text-sm text-ink-200 transition-colors hover:text-syrup-300"
-                              >
-                                <span className="text-ink-500">{owner}/</span>
-                                {repo}
-                              </a>
-                              <span className="ml-2 font-mono text-[11px] text-ink-600">
-                                {r.private ? "private" : "public"} · {r.default_branch ?? "—"}
-                              </span>
-                            </span>
-                            {connectedRow ? (
-                              <div className="flex items-center gap-2">
-                                <span className="rounded-full bg-green-500/10 px-3 py-1 font-mono text-[11px] text-green-300">
-                                  connected
-                                </span>
-                                <button
-                                  onClick={() => disconnect(connectedRow.id)}
-                                  className="text-[11px] text-ink-500 transition-colors hover:text-red-300"
-                                >
-                                  disconnect
-                                </button>
-                              </div>
-                            ) : (
-                              <button
-                                onClick={() => connect(account.name, r.full_name)}
-                                disabled={isConnecting}
-                                className="btn-ghost !px-3 !py-1 text-xs"
-                              >
-                                {isConnecting ? "Connecting…" : "Connect"}
-                              </button>
-                            )}
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-        </section>
-      ))}
+          </section>
+        );
+      })}
 
       {accounts.length > 0 && (
         <div className="flex items-center justify-end gap-2">
+          <button onClick={() => setAllAccounts(true)} className="btn-ghost !px-3 !py-1 text-xs">
+            Expand all
+          </button>
+          <button onClick={() => setAllAccounts(false)} className="btn-ghost !px-3 !py-1 text-xs">
+            Collapse all
+          </button>
           <button onClick={prune} className="btn-ghost !px-3 !py-1 text-xs">
             Prune deleted repos
           </button>
