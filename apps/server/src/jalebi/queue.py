@@ -47,11 +47,6 @@ DEFAULT_TIMEOUT_MINUTES = 60
 STALL_TIMEOUT_SECONDS = 600  # default no-output stall threshold (settings-overridable)
 MAX_RECOVERY_TIMEOUT_MINUTES = 180  # cap on auto-recovery timeout escalation
 
-# F6 — durable-SSE cap enforcement cadence: prune_task_events scans the
-# whole task_events table, so sweeping on every publish would be wasteful;
-# sweep every _PRUNE_EVERY_N_PUBLISHES persisted publishes instead.
-_PRUNE_EVERY_N_PUBLISHES = 250
-
 GIT_USER_NAME = "Jalebi"
 GIT_USER_EMAIL = "jalebi@localhost"
 
@@ -197,14 +192,11 @@ class TaskQueue:
         self._db_session_factory = db_session_factory
         # Phase 4 T4.3 — wire TaskEvents with DB persistence when running
         # under create_app. Standalone TaskQueue() (tests) stays memory-only.
-        # F6 — the prune callback enforces PERSIST_CAP during long runs
-        # (throttled; startup still sweeps in app.py).
+        # No automatic prune: timeline data is never auto-deleted (owner
+        # decision) — it grows until pruned manually via Settings → Data.
         self.events = TaskEvents(
             db_session_factory=db_session_factory,
-            prune_callback=self._prune_task_events_throttled,
         )
-        self._prune_counter = 0
-        self._prune_lock = threading.Lock()
         # Items: ("task", task_id) | ("followup", task_id, body) | None (stop).
         self._queue: queue.Queue[object] = queue.Queue()
         self._running: dict[int, _RunState] = {}
@@ -214,31 +206,6 @@ class TaskQueue:
         self._target_concurrency = 0
 
     # -- pool lifecycle ----------------------------------------------------
-
-    def _prune_task_events_throttled(self, run_id: int) -> None:
-        """Enforce PERSIST_CAP on the durable task_events table (F6).
-
-        Called by ``TaskEvents.publish`` after every persisted publish;
-        sweeps at most every ``_PRUNE_EVERY_N_PUBLISHES`` calls in a FRESH
-        session (never the caller's — its transaction is still open).
-        Never raises.
-        """
-        from jalebi.events import PERSIST_CAP, prune_task_events
-
-        try:
-            with self._prune_lock:
-                self._prune_counter += 1
-                if self._prune_counter % _PRUNE_EVERY_N_PUBLISHES != 0:
-                    return
-            if self._db_session_factory is None:
-                return
-            session = self._db_session_factory()
-            try:
-                prune_task_events(session, PERSIST_CAP)
-            finally:
-                session.close()
-        except Exception:
-            logger.exception("throttled task_events prune failed for run %s", run_id)
 
     def start(self, concurrency: int) -> None:
         """Spawn ``concurrency`` workers (0 = paused queue)."""
@@ -488,7 +455,7 @@ class TaskQueue:
         if agent is None:
             return cli, None
         effective_cli = task.cli or agent.cli or cli
-        return effective_cli, catalog.skills(agent)
+        return effective_cli, catalog.resolve_skills(session, agent)
 
     def _prepare_run(self, session, task: Task, cli: str) -> Run:
         """Open a fresh run row and flip the task to ``running``."""
@@ -546,10 +513,10 @@ class TaskQueue:
                 event = AgentEvent(type="message", text="Run cancelled by user.")
             if event.type in ("step", "message", "tool_call", "done", "error"):
                 entry = self._step_from_event(event, masker)
-                # Phase 4 T4.3 — durable SSE timeline. ``session`` is the
-                # already-open ``_stream_and_finish`` session; events.publish
-                # inserts a task_events row in the same transaction.
-                self.events.publish(task.id, entry, run_id=run.id, session=session)
+                # Phase 4 T4.3 — durable SSE timeline. events.publish persists
+                # each event on its own short-lived session (never this worker
+                # session — sharing it poisoned workers on lock contention).
+                self.events.publish(task.id, entry, run_id=run.id)
                 # Persist tool_call too so a reload doesn't lose console lines.
                 steps.append(entry)
                 if event.type in ("step", "message", "done", "error"):
@@ -641,7 +608,20 @@ class TaskQueue:
         # needs_approval publish failure), with the agent's final message. The
         # run-level masker already includes the env-var values + token, so a
         # value the agent echoed is redacted in the push too.
-        self._notify_terminal(session, task, repo, state, masker=masker)
+        #
+        # Smart-recovery coalescing: a failure that will be auto-recovered
+        # notifies only on the FIRST attempt (so the owner knows), while
+        # intermediate attempts stay on the timeline silently. A final give-up
+        # (attempt cap / non-retryable) notifies once from _maybe_recover with
+        # the give-up reason included — never twice.
+        decision, _reason = self._recovery_decision(session, task, run)
+        if decision == "recover":
+            if (task.retry_count or 0) == 0:
+                self._notify_terminal(session, task, repo, state, masker=masker)
+        elif decision in ("give_up_cap", "non_retryable"):
+            pass  # _maybe_recover sends the single give-up notification.
+        else:
+            self._notify_terminal(session, task, repo, state, masker=masker)
 
         # Capture agent-produced (untracked) files from the worktree (PRD F18).
         # Text files are masked at ingest; files containing a known secret value
@@ -763,9 +743,29 @@ class TaskQueue:
         cap = cap if isinstance(cap, int) and cap >= 1 else MAX_RECOVERY_TIMEOUT_MINUTES
         return min(max(1, int(base * (multiplier**retries))), cap)
 
+    @staticmethod
+    def _enabled_cli(session, cli: str) -> str:
+        """Fall back to the first enabled backend when ``cli`` was disabled.
+
+        Tasks/screens pinned to a backend that the owner later disabled must
+        still run instead of 500ing mid-dispatch; the substitution is logged.
+        """
+        enabled = settings.get_setting(session, "enabled_backends")
+        if not isinstance(enabled, list) or not enabled:
+            return cli
+        if cli in enabled:
+            return cli
+        fallback = next((c for c in enabled if isinstance(c, str) and c), "opencode")
+        logger.warning("backend %s is disabled; running on %s instead", cli, fallback)
+        return fallback
+
     def _run_task(self, task_id: int) -> None:
         session = Session()
         run: Run | None = None
+        # Plain-int snapshot for the except handler (see _run_review): reading
+        # run.id on a poisoned/expired session can raise, which would skip the
+        # run-failed marking and freeze the run at `running`.
+        run_id: int | None = None
         state: _RunState | None = None
         # Initialized here so the exception path can (best-effort) close out the
         # commit status even if the failure happened mid-setup.
@@ -802,6 +802,7 @@ class TaskQueue:
                 or "opencode"
             )
             cli, agent_skills = self._agent_run_opts(session, task, resolved_cli)
+            cli = self._enabled_cli(session, cli)
             agent = self._catalog_agent(session, task)
             effective_model = task.model or (agent.model if agent is not None else None)
             if not effective_model:
@@ -850,7 +851,7 @@ class TaskQueue:
             if task.type == "pr_review":
                 run = self._run_review(session, task, repo, cli, timeout, token, masker, state)
                 session.commit()
-                self._maybe_recover(session, task, run)
+                self._maybe_recover(session, task, run, repo, state, masker)
                 return
 
             # Phase 4 T4.1 — a task with unmet deps is gated to `blocked`; a
@@ -865,6 +866,7 @@ class TaskQueue:
             run = self._prepare_run(session, task, cli)
             run.pat_name = task.pat_name
             session.commit()
+            run_id = run.id
 
             git = GitWorkspace(self.config)
             git.ensure_mirror(repo.full_name, repo.clone_url, token)
@@ -881,7 +883,7 @@ class TaskQueue:
                 self._reset_task_branch(git, task, repo, token)
             worktree_bootstrap.bootstrap_worktree(
                 wt,
-                prompts.build_agent_md(task, repo, agent=agent, cli=cli),
+                prompts.build_agent_md(task, repo, agent=agent, cli=cli, session=session),
                 cli=cli,
                 skills=agent_skills,
             )
@@ -909,11 +911,16 @@ class TaskQueue:
             session.commit()
             self._complete_status(session, task, repo, run, git, token)
             session.commit()
-            self._maybe_recover(session, task, run)
+            self._maybe_recover(session, task, run, repo, state, masker)
         except Exception:
+            # Roll back FIRST (see _run_review): the session may be poisoned by
+            # a failed flush, and even reading run.id can raise on it. The
+            # logger uses the plain-int task_id arg, never the ORM object.
+            try:
+                session.rollback()
+            except Exception:
+                pass
             logger.exception("task %s run failed", task_id)
-            run_id = run.id if run is not None else None
-            session.rollback()
             if state is not None and state.handle is not None:
                 _kill_proc(state.handle.proc)
             with self._running_lock:
@@ -971,6 +978,12 @@ class TaskQueue:
         run = self._prepare_run(session, task, cli)
         run.pat_name = task.pat_name
         session.commit()
+        # Plain-int snapshots for the except handler below: after a session
+        # failure (e.g. a locked flush), attribute access on ORM objects can
+        # raise while lazy-loading expired state — the handler must never touch
+        # the objects themselves (task 63: even the logger call crashed).
+        task_id = task.id
+        run_id = run.id
 
         git: GitWorkspace | None = None
         try:
@@ -987,7 +1000,7 @@ class TaskQueue:
             wt = git.create_review_worktree(task.id, repo.full_name, pr_number, token)
             worktree_bootstrap.bootstrap_worktree(
                 wt,
-                prompts.build_agent_md(task, repo, agent=agent, cli=cli),
+                prompts.build_agent_md(task, repo, agent=agent, cli=cli, session=session),
                 cli=cli,
                 skills=agent_skills,
             )
@@ -1031,29 +1044,38 @@ class TaskQueue:
             self._complete_status(session, task, repo, run, git, token)
             session.commit()
         except Exception:
-            logger.exception("pr_review task %s failed", task.id)
-            run_id = run.id
-            session.rollback()
+            # Roll back FIRST: the session may be poisoned by a failed flush
+            # (PendingRollbackError). Everything below uses only plain-int ids
+            # and freshly re-fetched rows — never the possibly-stale objects.
+            try:
+                session.rollback()
+            except Exception:
+                pass
+            logger.exception("pr_review task %s failed", task_id)
             if state.handle is not None:
                 _kill_proc(state.handle.proc)
             with self._running_lock:
-                self._running.pop(task.id, None)
+                self._running.pop(task_id, None)
             run = session.get(Run, run_id)
+            task = session.get(Task, task_id)
             if run is not None:
                 run.status = "failed"
                 run.finished_at = now()
-            if task.status not in ("cancelled",):
+            if task is not None and task.status not in ("cancelled",):
                 task.status = "failed"
                 task.updated_at = now()
             session.commit()
             # Best-effort: a crashed review must not leave a forever-`pending`
             # status on the PR head (never raise out of the handler).
-            if git is not None:
+            if git is not None and task is not None and run is not None:
                 try:
                     self._complete_status(session, task, repo, run, git, token)
                 except Exception:
                     logger.exception("could not set terminal status after review failure")
-            reviews.set_assignment_status(session, task.id, "failed", run_id=run_id)
+            try:
+                reviews.set_assignment_status(session, task_id, "failed", run_id=run_id)
+            except Exception:
+                logger.exception("could not mark review assignment failed")
         return run
 
     def _post_review(
@@ -1323,6 +1345,10 @@ class TaskQueue:
         """
         session = Session()
         run: Run | None = None
+        # Plain-int snapshot for the except handler (see _run_review): reading
+        # run.id on a poisoned/expired session can raise, which would skip the
+        # run-failed marking and freeze the run at `running`.
+        run_id: int | None = None
         state: _RunState | None = None
         repo: Repo | None = None
         token: str | None = None
@@ -1330,6 +1356,8 @@ class TaskQueue:
         try:
             task = session.get(Task, task_id)
             if task is None:
+                return
+            if task.status == "cancelled":  # cancelled while queued (e.g. a pending recovery)
                 return
             repo = session.get(Repo, task.repo_id)
             if repo is None:
@@ -1366,6 +1394,7 @@ class TaskQueue:
             effective_model = model or task.model or prev.model
 
             cli, agent_skills = self._agent_run_opts(session, task, resolved_cli)
+            cli = self._enabled_cli(session, cli)
             agent = self._catalog_agent(session, task)
             if agent is not None and agent.model:
                 effective_model = effective_model or agent.model
@@ -1401,6 +1430,7 @@ class TaskQueue:
             run.pat_name = pat_name or task.pat_name
             run.model = effective_model
             session.commit()
+            run_id = run.id
 
             git = GitWorkspace(self.config)
             git.ensure_mirror(repo.full_name, repo.clone_url, token)
@@ -1417,7 +1447,7 @@ class TaskQueue:
                 wt = self._ensure_task_worktree(git, task, repo, token)
             worktree_bootstrap.bootstrap_worktree(
                 wt,
-                prompts.build_agent_md(task, repo, agent=agent, cli=cli),
+                prompts.build_agent_md(task, repo, agent=agent, cli=cli, session=session),
                 cli=cli,
                 skills=agent_skills,
             )
@@ -1490,11 +1520,16 @@ class TaskQueue:
                     model=effective_model,
                 )
             session.commit()
-            self._maybe_recover(session, task, run)
+            self._maybe_recover(session, task, run, repo, state, masker)
         except Exception:
+            # Roll back FIRST (see _run_review): the session may be poisoned by
+            # a failed flush, and even reading run.id can raise on it. The
+            # logger uses the plain-int task_id arg, never the ORM object.
+            try:
+                session.rollback()
+            except Exception:
+                pass
             logger.exception("follow-up for task %s failed", task_id)
-            run_id = run.id if run is not None else None
-            session.rollback()
             if state is not None and state.handle is not None:
                 _kill_proc(state.handle.proc)
             with self._running_lock:
@@ -1724,7 +1759,65 @@ class TaskQueue:
             for dep in deps_unblocked:
                 self.enqueue(dep.id)
 
-    def _maybe_recover(self, session, task: Task, run: Run) -> None:
+    @staticmethod
+    def _recovery_policy(session) -> dict:
+        """The retry_policy setting as a dict ({} when missing/malformed)."""
+        policy = settings.get_setting(session, "retry_policy") or {}
+        return policy if isinstance(policy, dict) else {}
+
+    @staticmethod
+    def _max_attempts(policy: dict) -> int:
+        """Max auto-recovery attempts per task (default 3, minimum 1)."""
+        raw = policy.get("max_attempts")
+        return raw if isinstance(raw, int) and raw >= 1 else 3
+
+    @staticmethod
+    def _non_retryable_match(policy: dict, run: Run) -> str | None:
+        """First configured non-retryable pattern matching the run's output.
+
+        Case-insensitive substring match over the run's step texts. A wrong
+        model name, revoked token, or missing session fails the same way on
+        every attempt — retrying only burns time and spams notifications.
+        """
+        patterns = policy.get("non_retryable_patterns")
+        if not isinstance(patterns, list) or not patterns:
+            return None
+        try:
+            steps = json.loads(run.steps_json or "[]")
+        except (ValueError, TypeError):
+            return None
+        haystack = " ".join(
+            str(s.get("text") or "") for s in steps if isinstance(s, dict)
+        ).lower()
+        if not haystack.strip():
+            return None
+        for pattern in patterns:
+            if isinstance(pattern, str) and pattern.strip() and pattern.lower() in haystack:
+                return pattern
+        return None
+
+    def _recovery_decision(self, session, task: Task, run: Run) -> tuple[str, str | None]:
+        """Decide what happens after a terminal run: ``(decision, reason)``.
+
+        Decisions: ``"terminal_ok"`` (nothing failed), ``"off"`` (auto_retry
+        disabled), ``"non_retryable"`` (failure matches a non-retryable
+        pattern), ``"give_up_cap"`` (attempt cap reached), ``"recover"``.
+        """
+        if run.status not in ("failed", "timed_out"):
+            return "terminal_ok", None
+        policy = self._recovery_policy(session)
+        if not policy.get("auto_retry"):
+            return "off", None
+        matched = self._non_retryable_match(policy, run)
+        if matched is not None:
+            return "non_retryable", matched
+        if (task.retry_count or 0) + 1 > self._max_attempts(policy):
+            return "give_up_cap", f"attempt cap ({self._max_attempts(policy)}) reached"
+        return "recover", None
+
+    def _maybe_recover(
+        self, session, task: Task, run: Run, repo=None, state=None, masker=None
+    ) -> None:
         """Auto-recover a failed/timed_out run that never delivered its output.
 
         Every task type has an expected deliverable; if the agent failed,
@@ -1737,18 +1830,60 @@ class TaskQueue:
 
         The per-run timeout is escalated on each attempt (``timeout_multiplier``,
         capped at ``max_timeout_minutes``) so sub-agent-heavy runs aren't cut
-        short again. Recovery is **unbounded by design**: each run is still
-        bounded by its own timeout, and terminal/progress notifications keep the
-        owner informed. ``task.retry_count`` is bumped for observability only.
+        short again. Recovery is **bounded by ``max_attempts``** (default 3):
+        a deterministically failing task (wrong model, revoked token) stops
+        after the cap instead of looping until the owner cancels it. Failures
+        matching ``non_retryable_patterns`` fail immediately with no recovery.
+        Only the first failure and the final give-up/success notify —
+        intermediate attempts are timeline-only. ``task.retry_count`` counts
+        recovery attempts for observability.
         """
         # Phase 4 T4.1 — when a task transitions to a satisfied terminal
         # state, unblock any dependents whose deps are now all met.
         if task.status in tasks.DEP_SATISFIED_STATUSES:
             self._cascade_unblock(session, task.id)
-        if run.status not in ("failed", "timed_out"):
+        decision, reason = self._recovery_decision(session, task, run)
+        if decision in ("terminal_ok", "off"):
             return
-        policy = settings.get_setting(session, "retry_policy") or {}
-        if not isinstance(policy, dict) or not policy.get("auto_retry"):
+        policy = self._recovery_policy(session)
+
+        if decision in ("give_up_cap", "non_retryable"):
+            # Final state: stay failed, explain why on the timeline, and send
+            # the ONE give-up notification (suppressed in _stream_and_finish).
+            if decision == "give_up_cap":
+                total_attempts = (task.retry_count or 0) + 1
+                text = (
+                    f"Auto-recovery gave up after {total_attempts} attempt(s) "
+                    f"({reason}). Fix the underlying issue and re-run manually."
+                )
+            else:
+                text = (
+                    f"Not auto-recovering: failure matches non-retryable "
+                    f"pattern {reason!r}. Fix the underlying issue and re-run "
+                    "manually."
+                )
+            steps = json.loads(run.steps_json or "[]")
+            steps.append(
+                {
+                    "type": "message",
+                    "phase": None,
+                    "text": text,
+                    "ts": clock.to_iso(now()),
+                }
+            )
+            run.steps_json = json.dumps(steps[-MAX_STEPS:])
+            session.commit()
+            if (
+                repo is not None
+                and state is not None
+                and self._notify_enabled(session, "notify_on_failed")
+            ):
+                if masker is None:
+                    masker = self._build_masker(session)
+                # The push quotes the give-up reason, not stale agent output.
+                state.last_step_text = text
+                self._notify(session, task, repo.full_name, state, masker=masker)
+                logger.info("auto-recovery gave up for task %s (%s)", task.id, decision)
             return
 
         task.retry_count = (task.retry_count or 0) + 1

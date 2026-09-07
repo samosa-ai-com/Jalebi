@@ -9,8 +9,13 @@ import threading
 from flask import Blueprint, Response, current_app, jsonify, request
 from flask.typing import ResponseReturnValue
 
-from jalebi import db, screening
-from jalebi.screening import ScreeningError, run_to_dict, screen_to_dict
+from jalebi import db, masking, screening, secrets, settings
+from jalebi.screening import (
+    ScreeningError,
+    run_summary_to_dict,
+    run_to_dict,
+    screen_to_dict,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -108,8 +113,31 @@ def list_screens_route() -> ResponseReturnValue:
     result = []
     for s in rows:
         latest = screening.latest_run(session, s.id)
-        result.append({**screen_to_dict(s), "latest_run": run_to_dict(latest) if latest else None})
+        result.append(
+            {
+                **screen_to_dict(s),
+                "latest_run": run_summary_to_dict(latest) if latest else None,
+            }
+        )
     return jsonify(result)
+
+
+def _strict_bool(payload: dict, key: str, default: bool) -> bool:
+    """Booleans must be real booleans — ``bool("false")`` is True, so a loose
+    coercion would silently enable what the owner meant to disable."""
+    if key not in payload:
+        return default
+    value = payload[key]
+    if not isinstance(value, bool):
+        raise ScreeningError(f"{key} must be a boolean")
+    return value
+
+
+def _optional_str(payload: dict, key: str) -> str | None:
+    value = payload.get(key)
+    if value is not None and not isinstance(value, str):
+        raise ScreeningError(f"{key} must be a string or null")
+    return value
 
 
 @bp.post("")
@@ -118,8 +146,12 @@ def create_screen_route() -> ResponseReturnValue:
     if not isinstance(payload, dict):
         return jsonify({"error": "expected a JSON object"}), 400
     repo_id = payload.get("repo_id")
-    if not isinstance(repo_id, int):
+    # bool is a subclass of int — `repo_id: true` must not pass as repo 1.
+    if not isinstance(repo_id, int) or isinstance(repo_id, bool):
         return jsonify({"error": "repo_id is required"}), 400
+    for key in ("name", "system_prompt", "cadence_cron"):
+        if not isinstance(payload.get(key), str):
+            return jsonify({"error": f"{key} is required"}), 400
     session = db.get_session()
     try:
         screen = screening.create_screen(
@@ -128,11 +160,11 @@ def create_screen_route() -> ResponseReturnValue:
             name=str(payload.get("name") or ""),
             system_prompt=str(payload.get("system_prompt") or ""),
             cadence_cron=str(payload.get("cadence_cron") or ""),
-            scope_branch=payload.get("scope_branch"),
-            cli=payload.get("cli"),
-            model=payload.get("model"),
-            enabled=bool(payload.get("enabled", True)),
-            notify_ntfy=bool(payload.get("notify_ntfy", True)),
+            scope_branch=_optional_str(payload, "scope_branch"),
+            cli=_optional_str(payload, "cli"),
+            model=_optional_str(payload, "model"),
+            enabled=_strict_bool(payload, "enabled", True),
+            notify_ntfy=_strict_bool(payload, "notify_ntfy", True),
         )
     except ScreeningError as exc:
         return jsonify({"error": str(exc)}), 400
@@ -157,19 +189,27 @@ def update_screen_route(screen_id: int) -> ResponseReturnValue:
     screen = screening.get_screen(session, screen_id)
     if screen is None:
         return jsonify({"error": "screen not found"}), 404
+    # Present-key semantics: only sent keys change; an explicit null on a
+    # nullable field (scope_branch/cli/model) clears it. Omitted keys —
+    # including enabled/notify_ntfy — are left alone.
     try:
-        screen = screening.update_screen(
-            session,
-            screen,
-            name=payload.get("name"),
-            system_prompt=payload.get("system_prompt"),
-            cadence_cron=payload.get("cadence_cron"),
-            scope_branch=payload.get("scope_branch"),
-            cli=payload.get("cli"),
-            model=payload.get("model"),
-            enabled=payload.get("enabled"),
-            notify_ntfy=payload.get("notify_ntfy"),
-        )
+        kwargs: dict = {}
+        for key in ("name", "system_prompt", "cadence_cron"):
+            if key in payload:
+                value = payload[key]
+                if not isinstance(value, str):
+                    raise ScreeningError(f"{key} must be a string")
+                kwargs[key] = value
+        for key in ("scope_branch", "cli", "model"):
+            if key in payload:
+                kwargs[key] = _optional_str(payload, key)
+        for key in ("enabled", "notify_ntfy"):
+            if key in payload:
+                value = payload[key]
+                if not isinstance(value, bool):
+                    raise ScreeningError(f"{key} must be a boolean")
+                kwargs[key] = value
+        screen = screening.update_screen(session, screen, **kwargs)
     except ScreeningError as exc:
         return jsonify({"error": str(exc)}), 400
     return jsonify(screen_to_dict(screen))
@@ -197,6 +237,31 @@ def list_runs_route(screen_id: int) -> ResponseReturnValue:
     return jsonify([run_to_dict(r) for r in runs])
 
 
+@bp.get("/findings")
+def recent_findings_route() -> ResponseReturnValue:
+    """Unified newest-first findings inbox across screens (read-only fan-out)."""
+    session = db.get_session()
+    try:
+        limit = int(request.args.get("limit", 50))
+    except (TypeError, ValueError):
+        return jsonify({"error": "limit must be an integer"}), 400
+    severity = request.args.get("severity")
+    if severity is not None and severity not in ("critical", "high", "medium", "low"):
+        return jsonify({"error": "invalid severity"}), 400
+    screen_id = request.args.get("screen_id", type=int)
+    # type=int swallows garbage into None — an explicitly passed but
+    # non-integer screen_id must 400, not silently list everything.
+    if "screen_id" in request.args and screen_id is None:
+        return jsonify({"error": "screen_id must be an integer"}), 400
+    if screen_id is not None and screening.get_screen(session, screen_id) is None:
+        return jsonify({"error": "screen not found"}), 404
+    return jsonify(
+        screening.list_recent_findings(
+            session, limit=limit, severity=severity, screening_id=screen_id
+        )
+    )
+
+
 @bp.post("/<int:screen_id>/run")
 def run_screen_route(screen_id: int) -> ResponseReturnValue:
     """Manually run a screen now (ignores baseline dedup), asynchronously."""
@@ -206,6 +271,16 @@ def run_screen_route(screen_id: int) -> ResponseReturnValue:
         return jsonify({"error": "screen not found"}), 404
     force = bool(request.args.get("force", "1") not in ("0", "false", "False"))
     engine = current_app.config["JALEBI_SCREENING"].engine
+    # The background thread runs outside the request's app context — capture
+    # everything it needs now.
+    app_config = current_app.config["JALEBI_CONFIG"]
+    # Synchronous fast-path: a run already in flight is a 409 now, not a
+    # silent no-op discovered after the 200.
+    held = engine._locks.get(screen_id)
+    if held is not None and held.locked():
+        return jsonify({"error": f"screen '{screen.name}' is already running"}), 409
+    before = screening.latest_run(session, screen_id)
+    before_id = before.id if before is not None else None
 
     def _background() -> None:
         from jalebi import db as _db
@@ -217,8 +292,28 @@ def run_screen_route(screen_id: int) -> ResponseReturnValue:
                 logger.warning("screen %s deleted before its background run started", screen_id)
                 return
             engine.run_screen(s, fresh, force=force)
+        except screening.ScreeningBusyError as exc:
+            # Lost the race after the peek: nothing started, nothing to record.
+            logger.warning("screening run %s not started: %s", screen_id, exc)
         except ScreeningError as exc:
+            # Record preflight failures as failed runs — but never double-record:
+            # a runtime failure already committed its own failed row (a newer id
+            # proves it), so only record when no new row appeared.
             logger.warning("screening run %s failed: %s", screen_id, exc)
+            try:
+                latest = screening.latest_run(s, screen_id)
+                latest_id = latest.id if latest is not None else None
+                if latest_id != before_id:
+                    return
+                patterns = settings.get_setting(s, "secret_patterns") or []
+                patterns = [str(p) for p in patterns] if isinstance(patterns, list) else []
+                masker = masking.build_masker(
+                    secrets.all_token_values(app_config),
+                    patterns,
+                )
+                screening.record_failed_run(s, screen_id, masker(str(exc))[:2000])
+            except Exception:  # noqa: BLE001 - best-effort visibility
+                logger.exception("could not record failed screening run %s", screen_id)
         finally:
             s.close()
 
@@ -236,7 +331,10 @@ def run_events(run_id: int) -> ResponseReturnValue:
 
     session = db.get_session()
     run = session.get(db.ScreeningRun, run_id)
-    terminal = run is not None and run.status in ("done", "failed")
+    if run is None:
+        events.unsubscribe(run_id, q)
+        return jsonify({"error": "screening run not found"}), 404
+    terminal = run.status in ("done", "failed")
 
     def generate():
         try:

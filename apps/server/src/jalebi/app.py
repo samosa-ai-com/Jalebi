@@ -11,16 +11,18 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from flask import Flask, Response, current_app, g, jsonify, request, send_from_directory
 from flask.typing import ResponseReturnValue
 
-from jalebi import artifacts, clock, db, ide, masking, notify, secrets, settings
-from jalebi.adapters import available_adapters, get_adapter
+from jalebi import artifacts, clock, db, ide, masking, notify, secrets, seed_catalog, settings
+from jalebi.adapters import ADAPTERS, available_adapters, get_adapter
 from jalebi.config import Config, load_config, repo_root
 from jalebi.poller import Poller
 from jalebi.queue import TaskQueue
 from jalebi.routes.catalog import bp as catalog_bp
+from jalebi.routes.data import bp as data_bp
 from jalebi.routes.envvars import bp as envvars_bp
 from jalebi.routes.github import bp as github_bp
 from jalebi.routes.repos import bp as repos_bp
 from jalebi.routes.screening import bp as screening_bp
+from jalebi.routes.skills import bp as skills_bp
 from jalebi.routes.tasks import bp as tasks_bp
 from jalebi.routes.triggers import bp as triggers_bp
 from jalebi.routes.webhooks import bp as webhooks_bp
@@ -48,11 +50,14 @@ def _valid_secret_patterns(value: object) -> bool:
 
 
 def _valid_retry_policy(v) -> bool:
-    """retry_policy: {auto_retry, continue_prompt?, timeout_multiplier?, max_timeout_minutes?}.
+    """retry_policy: {auto_retry, continue_prompt?, timeout_multiplier?,
+    max_timeout_minutes?, max_attempts?, non_retryable_patterns?}.
 
     Accepts the legacy ``{"auto_retry": bool}`` shape too; new keys are optional.
     ``timeout_multiplier`` may be fractional (matches the consumer, which accepts
-    int/float); ``max_timeout_minutes`` is an int (minutes).
+    int/float); ``max_timeout_minutes`` is an int (minutes); ``max_attempts``
+    caps total auto-recovery attempts per task (>= 1); ``non_retryable_patterns``
+    is a list of case-insensitive substrings that fail immediately.
     """
     if not isinstance(v, dict) or not isinstance(v.get("auto_retry"), bool):
         return False
@@ -65,6 +70,15 @@ def _valid_retry_policy(v) -> bool:
         return False
     if "max_timeout_minutes" in v and not (
         isinstance(v["max_timeout_minutes"], int) and v["max_timeout_minutes"] >= 1
+    ):
+        return False
+    if "max_attempts" in v and not (
+        isinstance(v["max_attempts"], int) and v["max_attempts"] >= 1
+    ):
+        return False
+    if "non_retryable_patterns" in v and not (
+        isinstance(v["non_retryable_patterns"], list)
+        and all(isinstance(p, str) for p in v["non_retryable_patterns"])
     ):
         return False
     return True
@@ -84,6 +98,36 @@ def _valid_timezone(v) -> bool:
         return False
 
 
+COMMON_TIMEZONES = [
+    "Pacific/Honolulu",
+    "America/Anchorage",
+    "America/Los_Angeles",
+    "America/Denver",
+    "America/Chicago",
+    "America/New_York",
+    "America/Sao_Paulo",
+    "Atlantic/Azores",
+    "Europe/London",
+    "Europe/Berlin",
+    "Europe/Paris",
+    "Europe/Moscow",
+    "Africa/Cairo",
+    "Asia/Dubai",
+    "Asia/Karachi",
+    "Asia/Kolkata",
+    "Asia/Dhaka",
+    "Asia/Bangkok",
+    "Asia/Singapore",
+    "Asia/Tokyo",
+    "Asia/Seoul",
+    "Asia/Shanghai",
+    "Australia/Perth",
+    "Australia/Sydney",
+    "Pacific/Auckland",
+    "UTC",
+]
+
+
 def _valid_adapter_model_lists(v) -> bool:
     """adapter_model_lists: {cli: [model names]} overriding each adapter's curated list.
 
@@ -97,6 +141,15 @@ def _valid_adapter_model_lists(v) -> bool:
         and isinstance(models, list)
         and all(isinstance(m, str) and m.strip() for m in models)
         for cli, models in v.items()
+    )
+
+
+def _valid_enabled_backends(v) -> bool:
+    """enabled_backends: non-empty subset of the registered adapters."""
+    return (
+        isinstance(v, list)
+        and len(v) > 0
+        and all(isinstance(c, str) and c in ALLOWED_AGENT_CLIS for c in v)
     )
 
 
@@ -114,6 +167,7 @@ _SETTING_VALIDATORS = {
     "artifact_ttl_days": lambda v: isinstance(v, int) and v >= 1,
     "default_backend": lambda v: v in ALLOWED_AGENT_CLIS,
     "default_model": lambda v: isinstance(v, str) and bool(v.strip()),
+    "enabled_backends": _valid_enabled_backends,
     "adapter_model_lists": _valid_adapter_model_lists,
     "notify_on_done": lambda v: isinstance(v, bool),
     "notify_on_failed": lambda v: isinstance(v, bool),
@@ -264,6 +318,9 @@ def create_app(config: Config | None = None) -> Flask:
 
     app = Flask(__name__)
     app.config["JALEBI_CONFIG"] = config
+    # /webhook is auth-exempt by design (the HMAC signature is its auth), so
+    # cap request bodies: oversized deliveries 413 instead of exhausting memory.
+    app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
 
     db.init_db(config.db_url)
     db.run_migrations(config.db_url)
@@ -275,6 +332,9 @@ def create_app(config: Config | None = None) -> Flask:
         session = db.get_session()
         try:
             settings.seed_defaults(session)
+            # Preloaded skill/agent library (version-gated, insert-missing
+            # only — owner edits and deletions are never overwritten).
+            seed_catalog.seed_catalog(session)
             # Sync the app wall clock to the configured timezone (default: the
             # machine's local zone) so the screening scheduler's cron matching
             # and every timestamp follow it.
@@ -282,8 +342,12 @@ def create_app(config: Config | None = None) -> Flask:
         finally:
             session.close()
 
+    # NOTE: the factory must be the plain sessionmaker, NOT db.get_session:
+    # event persistence runs on worker threads with no Flask app context, and
+    # get_session() is request-scoped (Flask `g`) — it raises RuntimeError
+    # outside a request. db.Session() is context-free.
     app.config["JALEBI_QUEUE"] = TaskQueue(
-        config, db_session_factory=db.get_session
+        config, db_session_factory=db.Session
     )
     app.config["JALEBI_SCREENING"] = ScreeningScheduler(config)
     app.config["JALEBI_POLLER"] = Poller(
@@ -295,6 +359,8 @@ def create_app(config: Config | None = None) -> Flask:
     app.register_blueprint(tasks_bp)
     app.register_blueprint(envvars_bp)
     app.register_blueprint(catalog_bp)
+    app.register_blueprint(skills_bp)
+    app.register_blueprint(data_bp)
     app.register_blueprint(triggers_bp)
     app.register_blueprint(webhooks_bp)
     app.register_blueprint(screening_bp)
@@ -348,6 +414,34 @@ def create_app(config: Config | None = None) -> Flask:
             models = []
         return jsonify({"cli": cli, "models": models})
 
+    @app.get("/api/timezones")
+    def list_timezones() -> ResponseReturnValue:
+        """IANA timezones for the Settings dropdown (plus ``local`` first)."""
+        from zoneinfo import available_timezones
+
+        try:
+            all_zones = sorted(available_timezones())
+        except Exception:
+            all_zones = []
+        return jsonify({"local": "local", "common": COMMON_TIMEZONES, "all": all_zones})
+
+    @app.get("/api/backends")
+    def list_backends() -> ResponseReturnValue:
+        """Backends the app may use: registry order with enabled flags."""
+        session = db.get_session()
+        enabled = settings.get_setting(session, "enabled_backends")
+        if not isinstance(enabled, list):
+            enabled = list(ADAPTERS)
+        order = list(ADAPTERS)
+        default = str(settings.get_setting(session, "default_backend") or "opencode")
+        return jsonify(
+            {
+                "backends": order,
+                "enabled": [c for c in order if c in enabled],
+                "default": default,
+            }
+        )
+
     @app.post("/api/settings")
     def update_settings() -> ResponseReturnValue:
         payload = request.get_json(silent=True)
@@ -361,6 +455,29 @@ def create_app(config: Config | None = None) -> Flask:
         if validator is not None and not validator(value):
             return jsonify({"error": f"invalid value for {key}"}), 400
         session = db.get_session()
+        # Cross-field invariant: the default backend must stay enabled, and at
+        # least one backend must stay enabled (shape already validated above).
+        if key == "enabled_backends" and isinstance(value, list):
+            default_backend = str(settings.get_setting(session, "default_backend"))
+            if default_backend not in value:
+                return (
+                    jsonify(
+                        {
+                            "error": (
+                                f"cannot disable {default_backend}: it is the default "
+                                "backend (change the default first)"
+                            )
+                        }
+                    ),
+                    400,
+                )
+        if key == "default_backend" and isinstance(value, str):
+            enabled = settings.get_setting(session, "enabled_backends") or []
+            if not isinstance(enabled, list) or value not in enabled:
+                return (
+                    jsonify({"error": f"{value} is not an enabled backend"}),
+                    400,
+                )
         # A write-only secret that was fetched masked and re-submitted unchanged
         # must not clobber the stored value; empty clears it.
         if key == "webhook_secret" and value == settings.SECRET_MASK:
@@ -444,6 +561,19 @@ def create_app(config: Config | None = None) -> Flask:
         # Unknown /api/* paths must 404 as JSON, not fall through to the SPA.
         return jsonify({"error": f"no such route: /api/{rest}"}), 404
 
+    @app.post("/api/<path:rest>")
+    @app.put("/api/<path:rest>")
+    @app.patch("/api/<path:rest>")
+    @app.delete("/api/<path:rest>")
+    def api_not_found_write(rest: str) -> ResponseReturnValue:
+        # Same JSON 404 for writes — otherwise an unknown POST answers HTML
+        # 405 (the GET catch-all claims the path for another method).
+        return jsonify({"error": f"no such route: /api/{rest}"}), 404
+
+    @app.errorhandler(413)
+    def api_too_large(_exc) -> ResponseReturnValue:
+        return jsonify({"error": "request body exceeds 10 MB"}), 413
+
     @app.get("/<path:filename>")
     def spa_files(filename: str) -> ResponseReturnValue:
         return _serve_spa(WEB_DIST, filename)
@@ -466,12 +596,8 @@ def main() -> None:
             pruned = artifacts.prune_artifacts(session, config.data_dir, ttl)
             if pruned:
                 logger.info("pruned %s expired artifact(s)", pruned)
-            # Phase 4 T4.3 — cap the durable task_events table (per-run).
-            from jalebi.events import prune_task_events
-
-            events_pruned = prune_task_events(session)
-            if events_pruned:
-                logger.info("pruned %s expired task_events row(s)", events_pruned)
+            # Timeline data (task_events) is never auto-deleted by design —
+            # it grows until pruned manually via Settings → Data management.
         finally:
             session.close()
     recovered = queue.recover()

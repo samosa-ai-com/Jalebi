@@ -95,6 +95,18 @@ def test_disconnect_missing_repo(client: FlaskClient) -> None:
     assert resp.status_code == 404
 
 
+def test_list_include_disconnected(client: FlaskClient, app, monkeypatch, session) -> None:
+    """Disconnected repos stay hidden by default; ?include_disconnected=1 reveals them."""
+    monkeypatch.setattr(routes_repos, "GitHubClient", FakeGitHubClient)
+    _CONNECT = {"full_name": "octocat/hello", "pat_name": "test"}
+    created = client.post("/api/repos", json=_CONNECT).get_json()
+    assert client.delete(f"/api/repos/{created['id']}").status_code == 200
+    assert client.get("/api/repos").get_json() == []
+    rows = client.get("/api/repos?include_disconnected=1").get_json()
+    assert [r["full_name"] for r in rows] == ["octocat/hello"]
+    assert rows[0]["connected"] is False
+
+
 def test_prune_removes_deleted_repos(client: FlaskClient, app, monkeypatch) -> None:
     monkeypatch.setattr(routes_repos, "GitHubClient", FakeGitHubClient)
     client.post("/api/repos", json={"full_name": "octocat/hello", "pat_name": "test"})

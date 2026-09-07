@@ -1129,6 +1129,12 @@ def task_events(task_id: int) -> ResponseReturnValue:
     durable ``task_events`` table first (replay across restarts), then the
     in-memory bus takes over. Falls back to memory-only if persistence is not
     wired (standalone ``TaskEvents()`` in tests).
+
+    Every data frame also carries a standard SSE ``id:`` line (the event seq)
+    so native ``EventSource`` auto-reconnect resumes from ``Last-Event-ID``
+    when the query param is absent. Idle heartbeats are sent as ``ping`` data
+    frames (not ``:`` comments, which browsers discard without dispatching)
+    so clients can tell a quiet-but-alive stream apart from a stalled socket.
     """
     from jalebi.events import replay_from_db
 
@@ -1141,6 +1147,14 @@ def task_events(task_id: int) -> ResponseReturnValue:
     terminal = run is not None and run.status in TERMINAL_STATUSES
     events = _queue().events
     after_seq = request.args.get("after_seq", type=int)
+    if after_seq is None:
+        # Native EventSource reconnect: the browser re-sends Last-Event-ID
+        # from the last `id:` line it received.
+        last_id = request.headers.get("Last-Event-ID")
+        try:
+            after_seq = int(last_id) if last_id is not None else None
+        except (TypeError, ValueError):
+            after_seq = None
     run_id = run.id if run is not None else None
     # Phase 4 T4.3 — durable backfill on reconnect, WITHOUT duplicating
     # what the memory bus will also replay (F6): read the DB first, then
@@ -1158,11 +1172,16 @@ def task_events(task_id: int) -> ResponseReturnValue:
                 resume_from = _seq
     q = events.subscribe(task_id, after_seq=resume_from, run_id=run_id)
 
+    def _frame(item: dict) -> str:
+        seq = item.get("seq") if isinstance(item, dict) else None
+        prefix = f"id: {seq}\n" if isinstance(seq, int) else ""
+        return f"{prefix}data: {json.dumps(item)}\n\n"
+
     def generate():
         try:
             yield f"data: {json.dumps({'type': 'connected'})}\n\n"
             for item in db_items:
-                yield f"data: {json.dumps(item)}\n\n"
+                yield _frame(item)
             if terminal:
                 yield f"data: {json.dumps({'type': 'stream_end'})}\n\n"
                 return
@@ -1170,12 +1189,12 @@ def task_events(task_id: int) -> ResponseReturnValue:
                 try:
                     item = q.get(timeout=15)
                 except _queue_module.Empty:
-                    yield ": keepalive\n\n"
+                    yield f"data: {json.dumps({'type': 'ping'})}\n\n"
                     continue
                 if item is None:
                     yield f"data: {json.dumps({'type': 'stream_end'})}\n\n"
                     return
-                yield f"data: {json.dumps(item)}\n\n"
+                yield _frame(item)
         finally:
             events.unsubscribe(task_id, q)
 

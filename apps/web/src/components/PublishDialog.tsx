@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { api } from "../api/client";
 
@@ -33,6 +34,11 @@ function targetDescription(options: PublishOptions): string {
  * Confirmation dialog for a publish action. Surfaces a yellow force-push
  * warning for `update_pr` / `push_branch` modes (the remote branch will be
  * overwritten), shows the target, and posts the publish request on confirm.
+ *
+ * Rendered via `createPortal` into `document.body`: TaskDetail's root carries
+ * `animate-fade-up` (a persisting `transform`), which would otherwise capture
+ * `position: fixed` and center the dialog in the whole tall page instead of
+ * the viewport.
  */
 export default function PublishDialog({
   taskId,
@@ -77,7 +83,7 @@ export default function PublishDialog({
     }
   }
 
-  return (
+  return createPortal(
     <div
       role="dialog"
       aria-modal="true"
@@ -96,30 +102,23 @@ export default function PublishDialog({
 
         {isForcePush && (
           <div className="rounded-md border border-amber-700/60 bg-amber-900/20 p-3 text-xs text-amber-200">
-            <strong>Force-update:</strong> the remote branch will be overwritten
-            with the agent&apos;s commits. The push uses{" "}
-            <code>--force-with-lease</code> so concurrent pushes by others
-            refuse instead of clobbering their work.
+            <strong>Force-update:</strong> the remote branch will be overwritten with the
+            agent&apos;s commits. The push uses <code>--force-with-lease</code> so concurrent pushes
+            by others refuse instead of clobbering their work.
           </div>
         )}
 
         {options.mode === "new_pr" && (
           <p className="text-xs text-ink-400">
-            A new pull request will be opened into the task&apos;s target branch.
-            Linked issues (for <code>issue_fix</code>) will be commented with the
-            PR link.
+            A new pull request will be opened into the task&apos;s target branch. Linked issues (for{" "}
+            <code>issue_fix</code>) will be commented with the PR link.
           </p>
         )}
 
         {error && <p className="text-xs text-red-400">{error}</p>}
 
         <div className="flex justify-end gap-2">
-          <button
-            type="button"
-            className="btn-ghost"
-            onClick={closeIfIdle}
-            disabled={busy}
-          >
+          <button type="button" className="btn-ghost" onClick={closeIfIdle} disabled={busy}>
             Cancel
           </button>
           <button
@@ -132,6 +131,7 @@ export default function PublishDialog({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

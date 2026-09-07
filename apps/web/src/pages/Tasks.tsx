@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { AttentionBadge } from "../components/AttentionBadge";
 import { DepBadges } from "../components/DepBadges";
 import { RunningCard } from "../components/RunningCard";
 import { StatusBadge } from "../components/StatusBadge";
+import { useBackends } from "../hooks/useBackends";
 import type { Account, CatalogAgent, GithubContext, Repo, SettingsMap, Task } from "../types";
 
 function repoName(repos: Repo[], id: number): string {
@@ -15,9 +16,11 @@ function repoById(repos: Repo[], id: number): Repo | undefined {
   return repos.find((r) => r.id === id);
 }
 
-/** Server emits naive-UTC timestamps; treat them as UTC so relative times are right. */
+/** Server emits timestamps with a zone offset (or naive UTC); parse as-is
+ * when a designator is present so offset strings don't become Invalid Date. */
 function timeAgo(iso: string): string {
-  const parsed = new Date(iso.endsWith("Z") ? iso : `${iso}Z`);
+  const zoned = /([zZ]|[+-]\d{2}:?\d{2})$/.test(iso);
+  const parsed = new Date(zoned ? iso : `${iso}Z`);
   if (Number.isNaN(parsed.getTime())) return "—";
   const s = Math.max(0, (Date.now() - parsed.getTime()) / 1000);
   if (s < 60) return "just now";
@@ -76,40 +79,95 @@ function Select({
   );
 }
 
+/** Fields a task row can push back into the form via the Clone button. */
+export interface TaskPrefill {
+  repoId?: number;
+  type?: string;
+  prompt?: string;
+  sourceBranch?: string;
+  targetBranch?: string;
+  agentId?: string;
+  cli?: string;
+  model?: string;
+  publishMode?: "auto" | "manual" | "";
+  prNumber?: string;
+  issueNumber?: string;
+  patName?: string;
+  envVars?: string[];
+}
+
+const TASK_DEFAULTS_KEY = "jalebi-task-defaults";
+
+function loadTaskDefaults(): Partial<
+  Pick<TaskPrefill, "repoId" | "type" | "agentId" | "cli" | "model" | "publishMode">
+> {
+  try {
+    const raw = localStorage.getItem(TASK_DEFAULTS_KEY);
+    return raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
 function CreateTask({
   repos,
   accounts,
   onCreated,
+  prefill,
+  prefillNonce,
 }: {
   repos: Repo[];
   accounts: Account[];
-  onCreated: () => void;
+  onCreated: (id?: number) => void;
+  prefill: TaskPrefill | null;
+  prefillNonce: number;
 }) {
-  const [repoId, setRepoId] = useState<number>(0);
-  const [type, setType] = useState("freeform");
-  const [prompt, setPrompt] = useState("");
-  const [sourceBranch, setSourceBranch] = useState("");
-  const [targetBranch, setTargetBranch] = useState("");
-  const [agentId, setAgentId] = useState("");
-  const [model, setModel] = useState("");
-  const [patName, setPatName] = useState("");
-  const [issueNumber, setIssueNumber] = useState("");
-  const [prNumber, setPrNumber] = useState("");
-  const [publishMode, setPublishMode] = useState<"auto" | "manual" | "">("");
+  const stored = useMemo(() => loadTaskDefaults(), []);
+  const [repoId, setRepoId] = useState<number>(prefill?.repoId ?? 0);
+  const [type, setType] = useState(prefill?.type ?? stored.type ?? "freeform");
+  const [prompt, setPrompt] = useState(prefill?.prompt ?? "");
+  const [sourceBranch, setSourceBranch] = useState(prefill?.sourceBranch ?? "");
+  const [targetBranch, setTargetBranch] = useState(prefill?.targetBranch ?? "");
+  const [agentId, setAgentId] = useState(prefill?.agentId ?? stored.agentId ?? "");
+  const [model, setModel] = useState(prefill?.model ?? stored.model ?? "");
+  const [patName, setPatName] = useState(prefill?.patName ?? "");
+  const [issueNumber, setIssueNumber] = useState(prefill?.issueNumber ?? "");
+  const [prNumber, setPrNumber] = useState(prefill?.prNumber ?? "");
+  const [publishMode, setPublishMode] = useState<"auto" | "manual" | "">(
+    prefill?.publishMode ?? stored.publishMode ?? ""
+  );
   const [context, setContext] = useState<GithubContext | null>(null);
   const [models, setModels] = useState<string[]>([]);
-  const [agentCli, setAgentCli] = useState<string | null>(null);
+  const [agentCli, setAgentCli] = useState<string | null>(prefill?.cli ?? stored.cli ?? null);
   const [settings, setSettings] = useState<SettingsMap | null>(null);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const formRef = useRef<HTMLFormElement>(null);
+  // Clone remounts the form (parent keys on prefillNonce) with the
+  // prefill baked into the initial state above — scroll it into view once.
+  const scrollOnMount = useRef(prefillNonce > 0);
+  // Clone remounts with branches baked into the initial state — the context
+  // fetch must not clobber them back to the repo default on arrival. The
+  // flag is consumed by the first context load; picking another repo clears
+  // the branches and re-arms defaulting.
+  const preserveBranches = useRef(!!(prefill?.sourceBranch || prefill?.targetBranch));
+  const backendOptions = useBackends();
   const [agents, setAgents] = useState<CatalogAgent[]>([]);
   const [reviewers, setReviewers] = useState<string[]>([]);
-  const [envVars, setEnvVars] = useState<string[]>([]);
+  const [envVars, setEnvVars] = useState<string[]>(prefill?.envVars ?? []);
   const [availableEnvVars, setAvailableEnvVars] = useState<{ name: string; masked: string }[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const settingsLoading = agentCli === null;
-  const effectiveRepoId = repoId || repos[0]?.id || 0;
+  // The remembered repo applies without an effect: an explicitly picked repo
+  // wins, then the remembered one (when still connected), then the first.
+  const storedRepoValid =
+    stored.repoId && repos.some((r) => r.id === stored.repoId) ? stored.repoId : 0;
+  const effectiveRepoId = repoId || storedRepoValid || repos[0]?.id || 0;
   const repo = repoById(repos, effectiveRepoId);
+  // Credentials likewise fall back to the effective repo's account until the
+  // user picks a repo or an account explicitly.
+  const effectivePatName = patName || repo?.pat_name || "";
 
   // Fork-aware fix flow: a freeform task linked to a fork PR can be based on
   // the PR head commit (which never exists on origin) instead of an origin
@@ -124,6 +182,31 @@ function CreateTask({
     !!selectedPr &&
     (!!selectedPr.is_fork || prHeadMissingOnOrigin || !!selectedPr.head_repo);
   const isPrHeadSelected = !!prHeadValue && sourceBranch === prHeadValue;
+
+  // Review tasks carry their brief with the agent — instructions optional.
+  const promptRequired = type !== "pr_review";
+
+  const agentName = agents.find((a) => a.id === agentId)?.name ?? null;
+  const advancedSummary = [
+    agentCli ?? "…",
+    model || "default model",
+    agentName ?? "default agent",
+    publishMode === "manual" ? "manual publish" : "auto publish",
+    effectivePatName ? `as ${accountLabel(effectivePatName)}` : null,
+    envVars.length > 0 ? `${envVars.length} env` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  const STARTERS: Record<string, string[]> = {
+    freeform: ["Fix the failing tests in …", "Implement …", "Refactor … for clarity"],
+    issue_fix: ["Fix with minimal changes", "Fix and add a regression test"],
+    pr_review: ["Focus on security issues", "Focus on performance", "Check tests and edge cases"],
+  };
+
+  function insertStarter(s: string) {
+    setPrompt((cur) => (cur.trim() ? `${cur.trim()}\n${s}` : s));
+  }
 
   function usePrHeadBase() {
     if (!selectedPr) return;
@@ -141,24 +224,59 @@ function CreateTask({
     const r = repoById(repos, id);
     setPatName(r?.pat_name ?? "");
     setEnvVars([]);
+    // A new repo means new branches — drop the old picks so the context
+    // load below re-defaults to this repo's default branch.
+    setSourceBranch("");
+    setTargetBranch("");
+    preserveBranches.current = false;
+  }
+
+  function selectPr(num: string) {
+    setPrNumber(num);
+    // Intuitive default: picking a PR bases the work on its head branch and
+    // targets its base branch — but only when those branches exist on
+    // origin. A fork head missing from origin keeps the current base; the
+    // PR-head hint below offers the `pr/<N>/head` sentinel instead.
+    if (type !== "freeform" || !num || !context) return;
+    const pr = context.prs.find((p) => p.number === Number(num)) ?? null;
+    if (!pr) return;
+    if (pr.head && context.branches.includes(pr.head)) setSourceBranch(pr.head);
+    if (pr.base && context.branches.includes(pr.base)) setTargetBranch(pr.base);
   }
 
   useEffect(() => {
-    // The Backend select defaults to the global default_backend; the Model
-    // dropdown follows the backend selected in THIS form. When the selected
-    // backend is the default backend and a default model is configured, the
-    // Model selection defaults to it (unless the user already picked one).
+    // The Backend select defaults to the global default_backend, unless a
+    // last-used backend was remembered — the Model dropdown follows the
+    // backend selected in THIS form. When the selected backend is the
+    // default backend and a default model is configured, the Model
+    // selection defaults to it (unless the user already picked one).
     api
       .getSettings()
       .then((s) => {
         setSettings(s);
-        setAgentCli(s.default_backend || "opencode");
+        setAgentCli((cur) => cur ?? s.default_backend ?? "opencode");
       })
-      .catch(() => {});
+      .catch(() => {
+        setAgentCli((cur) => cur ?? "opencode");
+      });
     api
       .getAgents(true)
-      .then((a) => setAgents(a ?? []))
+      .then((a) => {
+        const list = a ?? [];
+        setAgents(list);
+        // Drop a remembered agent that no longer exists in the catalog.
+        setAgentId((cur) => (cur && list.some((x) => x.id === cur) ? cur : ""));
+      })
       .catch(() => {});
+  }, []);
+
+  // After a clone remount, bring the form into view (no state is set here).
+  useEffect(() => {
+    if (!scrollOnMount.current) return;
+    const formEl = formRef.current;
+    if (formEl && typeof formEl.scrollIntoView === "function") {
+      formEl.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
   }, []);
 
   useEffect(() => {
@@ -207,7 +325,7 @@ function CreateTask({
       .then((c) => {
         if (cancelled) return;
         setContext(c);
-        if (c.branches.length > 0) {
+        if (c.branches.length > 0 && !preserveBranches.current) {
           const def =
             repo.default_branch && c.branches.includes(repo.default_branch)
               ? repo.default_branch
@@ -215,6 +333,7 @@ function CreateTask({
           setSourceBranch(def);
           setTargetBranch(def);
         }
+        preserveBranches.current = false;
       })
       .catch(() => {});
     return () => {
@@ -225,7 +344,11 @@ function CreateTask({
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!effectiveRepoId || !prompt.trim()) return;
+    // (promptRequired is computed above: reviews don't need instructions.
+    // The backend still requires a non-empty prompt, so an empty review box
+    // sends a `Review PR #N` default.)
+    const trimmed = prompt.trim();
+    if (!effectiveRepoId || (promptRequired && !trimmed)) return;
     if (agentCli === null) return; // settings still loading — refuse submit
     if (type === "issue_fix" && !issueNumber) {
       setError("Pick the issue to fix.");
@@ -235,32 +358,51 @@ function CreateTask({
       setError("Pick the pull request to review.");
       return;
     }
+    const effectivePrompt =
+      trimmed || (type === "pr_review" && prNumber ? `Review PR #${prNumber}.` : trimmed);
+    if (!effectivePrompt) return;
     setBusy(true);
     setError(null);
     try {
-      await api.createTask({
+      const created = await api.createTask({
         repo_id: effectiveRepoId,
         type,
-        prompt: prompt.trim(),
+        prompt: effectivePrompt,
         source_branch: sourceBranch || undefined,
         target_branch: targetBranch || undefined,
         agent_id: agentId || undefined,
         cli: agentCli || undefined,
         model: model || undefined,
-        pat_name: patName || undefined,
+        pat_name: effectivePatName || undefined,
         issue_number: issueNumber ? Number(issueNumber) : undefined,
         pr_number: prNumber ? Number(prNumber) : undefined,
         publish_mode: publishMode === "" ? undefined : publishMode,
         reviewers: reviewers.length > 0 ? reviewers : undefined,
         env_vars: envVars,
       });
+      // Remember last-used settings so the next task starts where this one did.
+      try {
+        localStorage.setItem(
+          TASK_DEFAULTS_KEY,
+          JSON.stringify({
+            repoId: effectiveRepoId,
+            type,
+            agentId,
+            cli: agentCli,
+            model,
+            publishMode,
+          })
+        );
+      } catch {
+        /* private-mode storage — non-fatal */
+      }
       setPrompt("");
       setIssueNumber("");
       setPrNumber("");
       setEnvVars([]);
       setAgentId("");
       setReviewers([]);
-      onCreated();
+      onCreated(created.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "failed to create task");
     } finally {
@@ -286,7 +428,8 @@ function CreateTask({
   return (
     <form
       onSubmit={submit}
-      className="surface space-y-4 p-6 animate-fade-up"
+      ref={formRef}
+      className="surface space-y-4 scroll-mt-4 p-6 animate-fade-up"
       style={{ animationDelay: "0.05s" }}
     >
       <div className="flex items-baseline justify-between">
@@ -352,7 +495,7 @@ function CreateTask({
             <Select
               label={type === "pr_review" ? "Pull request" : "Link PR (optional)"}
               value={prNumber}
-              onChange={setPrNumber}
+              onChange={selectPr}
               placeholder={context.prs.length ? "Select a PR…" : "No open PRs"}
             >
               {context.prs.map((p) => (
@@ -492,116 +635,161 @@ function CreateTask({
         </fieldset>
       )}
 
-      <div className="grid gap-4 sm:grid-cols-4">
-        <Select
-          label="Agent"
-          value={agentId}
-          onChange={setAgentId}
-          placeholder="Default build agent"
+      <div className="rounded-xl border border-ink-800/70">
+        <button
+          type="button"
+          onClick={() => setShowAdvanced((v) => !v)}
+          aria-expanded={showAdvanced}
+          className="flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left"
         >
-          {agents.map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.name} ({a.id})
-            </option>
-          ))}
-        </Select>
-        <Select
-          label="Backend"
-          value={agentCli ?? ""}
-          onChange={setAgentCli}
-          disabled={settingsLoading}
-        >
-          {["opencode", "codex", "claude"].map((c) => (
-            <option key={c} value={c}>
-              {c}
-            </option>
-          ))}
-        </Select>
-        <Select label="Model" value={model} onChange={setModel} placeholder="default model">
-          {models.map((m) => (
-            <option key={m} value={m}>
-              {m}
-            </option>
-          ))}
-        </Select>
-        <Select
-          label="Credentials"
-          value={patName}
-          onChange={setPatName}
-          placeholder="Inherit repo account"
-        >
-          {accounts.map((a) => (
-            <option key={a.name} value={a.name}>
-              {a.login ?? a.name} ({a.masked})
-            </option>
-          ))}
-        </Select>
-        <Select
-          label="Publish mode"
-          value={publishMode}
-          onChange={(v) => setPublishMode(v as "auto" | "manual" | "")}
-          placeholder="Auto (by type)"
-        >
-          <option value="auto">Auto — publish when done</option>
-          <option value="manual">Manual — I publish</option>
-        </Select>
+          <span className="shrink-0 text-xs font-medium text-ink-400">
+            Advanced {showAdvanced ? "▾" : "▸"}
+          </span>
+          <span className="truncate font-mono text-[11px] text-ink-500">{advancedSummary}</span>
+        </button>
+        {showAdvanced && (
+          <div className="space-y-4 px-4 pb-4">
+            <div className="grid gap-4 sm:grid-cols-4">
+              <Select
+                label="Agent"
+                value={agentId}
+                onChange={setAgentId}
+                placeholder="Default build agent"
+              >
+                {agents.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name} ({a.id})
+                  </option>
+                ))}
+              </Select>
+              <Select
+                label="Backend"
+                value={agentCli ?? ""}
+                onChange={setAgentCli}
+                disabled={settingsLoading}
+              >
+                {backendOptions.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </Select>
+              <Select label="Model" value={model} onChange={setModel} placeholder="default model">
+                {models.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </Select>
+              <Select
+                label="Credentials"
+                value={patName}
+                onChange={setPatName}
+                placeholder="Inherit repo account"
+              >
+                {accounts.map((a) => (
+                  <option key={a.name} value={a.name}>
+                    {a.login ?? a.name} ({a.masked})
+                  </option>
+                ))}
+              </Select>
+              <Select
+                label="Publish mode"
+                value={publishMode}
+                onChange={(v) => setPublishMode(v as "auto" | "manual" | "")}
+                placeholder="Auto (by type)"
+              >
+                <option value="auto">Auto — publish when done</option>
+                <option value="manual">Manual — I publish</option>
+              </Select>
+            </div>
+
+            {availableEnvVars.length > 0 && (
+              <fieldset>
+                <legend className="mb-1.5 block text-xs font-medium text-ink-400">
+                  Environment variables
+                </legend>
+                <div className="flex flex-wrap gap-2">
+                  {availableEnvVars.map((v) => {
+                    const checked = envVars.includes(v.name);
+                    return (
+                      <label
+                        key={v.name}
+                        className={`inline-flex cursor-pointer items-center gap-1.5 rounded-full border px-3 py-1 font-mono text-xs transition-colors ${
+                          checked
+                            ? "border-syrup-500/60 bg-syrup-500/10 text-syrup-300"
+                            : "border-ink-800 text-ink-400 hover:border-ink-600"
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() =>
+                            setEnvVars((prev) =>
+                              checked ? prev.filter((n) => n !== v.name) : [...prev, v.name]
+                            )
+                          }
+                          className="hidden"
+                        />
+                        {v.name}
+                      </label>
+                    );
+                  })}
+                </div>
+                <p className="mt-1.5 text-[11px] text-ink-500">
+                  These variables are injected into the agent&apos;s environment for this task.
+                </p>
+              </fieldset>
+            )}
+          </div>
+        )}
       </div>
 
-      {availableEnvVars.length > 0 && (
-        <fieldset>
-          <legend className="mb-1.5 block text-xs font-medium text-ink-400">
-            Environment variables
-          </legend>
-          <div className="flex flex-wrap gap-2">
-            {availableEnvVars.map((v) => {
-              const checked = envVars.includes(v.name);
-              return (
-                <label
-                  key={v.name}
-                  className={`inline-flex cursor-pointer items-center gap-1.5 rounded-full border px-3 py-1 font-mono text-xs transition-colors ${
-                    checked
-                      ? "border-syrup-500/60 bg-syrup-500/10 text-syrup-300"
-                      : "border-ink-800 text-ink-400 hover:border-ink-600"
-                  }`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={() =>
-                      setEnvVars((prev) =>
-                        checked ? prev.filter((n) => n !== v.name) : [...prev, v.name]
-                      )
-                    }
-                    className="hidden"
-                  />
-                  {v.name}
-                </label>
-              );
-            })}
-          </div>
-          <p className="mt-1.5 text-[11px] text-ink-500">
-            These variables are injected into the agent&apos;s environment for this task.
-          </p>
-        </fieldset>
-      )}
-
-      <label className="block">
-        <span className="mb-1.5 block text-xs font-medium text-ink-400">Instructions</span>
+      <div>
+        <div className="mb-1.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+          <span className="text-xs font-medium text-ink-400">
+            Instructions
+            {!promptRequired && (
+              <span className="font-normal text-ink-500">
+                {" "}
+                (optional — the reviewer already knows what to do)
+              </span>
+            )}
+          </span>
+          {(STARTERS[type] ?? []).map((s) => (
+            <button
+              key={s}
+              type="button"
+              onClick={() => insertStarter(s)}
+              className="rounded-full border border-ink-800 px-2 py-0.5 text-[11px] text-ink-400 transition-colors hover:border-ink-600 hover:text-ink-200"
+            >
+              {s}
+            </button>
+          ))}
+        </div>
         <textarea
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
-          rows={3}
-          placeholder="Instructions…"
+          rows={4}
+          placeholder={
+            type === "pr_review"
+              ? "Optional focus areas — e.g. security, performance…"
+              : type === "issue_fix"
+                ? "How should the agent approach the fix? (optional context)"
+                : "Instructions…"
+          }
           className="field resize-y"
         />
-      </label>
+      </div>
 
       {error && <p className="text-xs text-red-400">{error}</p>}
 
       <div className="flex justify-end">
         <button
           type="submit"
-          disabled={busy || settingsLoading || !effectiveRepoId || !prompt.trim()}
+          disabled={
+            busy || settingsLoading || !effectiveRepoId || (promptRequired && !prompt.trim())
+          }
           className="btn-primary"
         >
           {busy ? "Creating…" : settingsLoading ? "Loading…" : "Create"}
@@ -631,11 +819,27 @@ const FILTERS = [
       t.status === "failed" || t.status === "timed_out" || t.status === "interrupted",
   },
   { id: "review", label: "Review", test: (t: Task) => t.status === "needs_approval" },
+  {
+    id: "cancelled",
+    label: "Cancelled",
+    test: (t: Task) => t.status === "cancelled",
+  },
 ] as const;
 
 type FilterId = (typeof FILTERS)[number]["id"];
 
-type SortKey = "id" | "updated_at" | "status";
+/** Friendly empty states per filter — "No tasks in failed yet" reads like a bug. */
+const EMPTY_STATE: Record<FilterId, string> = {
+  all: "No tasks yet — create one above.",
+  needs_you: "Nothing needs you. All agents are working or done.",
+  running: "Nothing running right now.",
+  done: "No finished tasks yet.",
+  failed: "No failed tasks — everything's healthy.",
+  review: "Nothing awaiting review.",
+  cancelled: "No cancelled tasks.",
+};
+
+type SortKey = "id" | "updated_at" | "status" | "repo";
 const PAGE_SIZE = 10;
 
 function GhLink({ repo, kind, number }: { repo: string; kind: "pull" | "issues"; number: number }) {
@@ -653,20 +857,33 @@ function GhLink({ repo, kind, number }: { repo: string; kind: "pull" | "issues";
 }
 
 export default function Tasks() {
+  const navigate = useNavigate();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [repos, setRepos] = useState<Repo[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterId>("all");
   const [query, setQuery] = useState("");
+  const [repoFilter, setRepoFilter] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("updated_at");
   const [sortDesc, setSortDesc] = useState(true);
   const [page, setPage] = useState(0);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [expandedPrompt, setExpandedPrompt] = useState<number | null>(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [flash, setFlash] = useState<number | null>(null);
+  const [lastLoaded, setLastLoaded] = useState<Date | null>(null);
+  const [prefill, setPrefill] = useState<TaskPrefill | null>(null);
+  const [prefillNonce, setPrefillNonce] = useState(0);
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const load = useCallback(() => {
     api
       .getTasks()
-      .then(setTasks)
+      .then((t) => {
+        setTasks(t);
+        setLastLoaded(new Date());
+      })
       .catch((e) => setError(e.message));
     api
       .getRepos()
@@ -684,6 +901,13 @@ export default function Tasks() {
     return () => clearInterval(timer);
   }, [load]);
 
+  useEffect(
+    () => () => {
+      if (flashTimer.current) clearTimeout(flashTimer.current);
+    },
+    []
+  );
+
   const stats = useMemo(() => {
     const running = tasks.filter((t) => t.status === "queued" || t.status === "running").length;
     const done = tasks.filter((t) => t.status === "done").length;
@@ -692,21 +916,49 @@ export default function Tasks() {
     return { total: tasks.length, running, done, review, needsYou };
   }, [tasks]);
 
+  const filterCounts = useMemo(() => {
+    const counts = {} as Record<FilterId, number>;
+    for (const f of FILTERS) counts[f.id] = tasks.filter(f.test).length;
+    return counts;
+  }, [tasks]);
+
+  const repoNames = useMemo(() => {
+    const names = new Set<string>();
+    for (const t of tasks) names.add(t.repo_full_name ?? repoName(repos, t.repo_id));
+    return [...names].sort((a, b) => a.localeCompare(b));
+  }, [tasks, repos]);
+
   const visible = useMemo(() => {
     const test = FILTERS.find((f) => f.id === filter)!.test;
     const q = query.trim().toLowerCase();
     const list = tasks.filter((t) => {
       if (!test(t)) return false;
+      const rn = t.repo_full_name ?? repoName(repos, t.repo_id);
+      if (repoFilter && rn !== repoFilter) return false;
       if (!q) return true;
       return (
         String(t.id).includes(q) ||
         t.prompt.toLowerCase().includes(q) ||
-        (t.repo_full_name ?? repoName(repos, t.repo_id)).toLowerCase().includes(q)
+        rn.toLowerCase().includes(q)
       );
     });
     list.sort((a, b) => {
-      const av = sortKey === "status" ? a.status : sortKey === "id" ? a.id : a.updated_at;
-      const bv = sortKey === "status" ? b.status : sortKey === "id" ? b.id : b.updated_at;
+      const av =
+        sortKey === "status"
+          ? a.status
+          : sortKey === "id"
+            ? a.id
+            : sortKey === "repo"
+              ? (a.repo_full_name ?? repoName(repos, a.repo_id))
+              : a.updated_at;
+      const bv =
+        sortKey === "status"
+          ? b.status
+          : sortKey === "id"
+            ? b.id
+            : sortKey === "repo"
+              ? (b.repo_full_name ?? repoName(repos, b.repo_id))
+              : b.updated_at;
       const cmp =
         typeof av === "number" && typeof bv === "number"
           ? av - bv
@@ -714,7 +966,7 @@ export default function Tasks() {
       return sortDesc ? -cmp : cmp;
     });
     return list;
-  }, [tasks, filter, query, sortKey, sortDesc, repos]);
+  }, [tasks, filter, query, repoFilter, sortKey, sortDesc, repos]);
 
   const pageCount = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
   const pageRows = visible.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
@@ -724,7 +976,7 @@ export default function Tasks() {
       setSortDesc((d) => !d);
     } else {
       setSortKey(key);
-      setSortDesc(key !== "id");
+      setSortDesc(key !== "id" && key !== "repo");
     }
     setPage(0);
   }
@@ -732,6 +984,7 @@ export default function Tasks() {
   function selectFilter(f: FilterId) {
     setFilter(f);
     setPage(0);
+    setSelected(new Set());
   }
 
   function handleDismissAttention(taskId: number) {
@@ -742,12 +995,105 @@ export default function Tasks() {
     });
   }
 
-  const statCards = [
-    { label: "Total", value: stats.total, accent: "text-ink-100" },
-    { label: "Needs you", value: stats.needsYou, accent: "text-syrup-300" },
-    { label: "Running", value: stats.running, accent: "text-syrup-300" },
-    { label: "Done", value: stats.done, accent: "text-green-300" },
-    { label: "Needs review", value: stats.review, accent: "text-purple-300" },
+  function handleCancel(taskId: number) {
+    api
+      .cancelTask(taskId)
+      .then(() => load())
+      .catch((e) => setError(e instanceof Error ? e.message : "failed to cancel task"));
+  }
+
+  function handleClone(t: Task) {
+    setPrefill({
+      repoId: t.repo_id,
+      type: t.type,
+      prompt: t.prompt,
+      sourceBranch: t.source_branch ?? undefined,
+      targetBranch: t.target_branch ?? undefined,
+      agentId: t.agent_id ?? undefined,
+      cli: t.cli ?? undefined,
+      model: t.model ?? undefined,
+      publishMode: (t.publish_mode as "auto" | "manual" | "") ?? "",
+      prNumber:
+        t.prs?.[0] != null
+          ? String(t.prs[0])
+          : t.pr_number != null
+            ? String(t.pr_number)
+            : undefined,
+      issueNumber: t.issues?.[0] != null ? String(t.issues[0]) : undefined,
+      patName: t.pat_name ?? undefined,
+      envVars: t.env_vars ?? undefined,
+    });
+    setPrefillNonce((n) => n + 1);
+  }
+
+  function handleCreated(id?: number) {
+    load();
+    if (id === undefined) return;
+    setFlash(id);
+    if (flashTimer.current) clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setFlash(null), 10000);
+  }
+
+  function toggleSelected(id: number) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectPage(ids: number[]) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      const allIn = ids.every((id) => next.has(id));
+      if (allIn) ids.forEach((id) => next.delete(id));
+      else ids.forEach((id) => next.add(id));
+      return next;
+    });
+  }
+
+  async function handleBulkDelete() {
+    const ids = [...selected];
+    if (ids.length === 0) return;
+    if (!window.confirm(`Delete ${ids.length} selected task${ids.length === 1 ? "" : "s"}?`)) {
+      return;
+    }
+    setBulkBusy(true);
+    try {
+      await Promise.all(ids.map((id) => api.deleteTask(id)));
+      setSelected(new Set());
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "bulk delete failed");
+      load();
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  async function handleBulkDismiss() {
+    const ids = [...selected];
+    if (ids.length === 0) return;
+    setBulkBusy(true);
+    try {
+      await Promise.all(ids.map((id) => api.dismissAttention(id)));
+      setSelected(new Set());
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "bulk dismiss failed");
+      load();
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  const statCards: { label: string; value: number; accent: string; filter: FilterId }[] = [
+    { label: "Total", value: stats.total, accent: "text-ink-100", filter: "all" },
+    { label: "Needs you", value: stats.needsYou, accent: "text-syrup-300", filter: "needs_you" },
+    { label: "Running", value: stats.running, accent: "text-syrup-300", filter: "running" },
+    { label: "Done", value: stats.done, accent: "text-green-300", filter: "done" },
+    { label: "Needs review", value: stats.review, accent: "text-purple-300", filter: "review" },
   ];
 
   return (
@@ -764,12 +1110,22 @@ export default function Tasks() {
         style={{ animationDelay: "0.05s" }}
       >
         {statCards.map((c) => (
-          <div key={c.label} className="surface px-5 py-4">
-            <p className="text-xs font-medium uppercase tracking-wider text-ink-500">{c.label}</p>
-            <p className={`mt-1 font-mono text-3xl font-medium tabular-nums ${c.accent}`}>
+          <button
+            key={c.label}
+            type="button"
+            onClick={() => selectFilter(c.filter)}
+            title={`Show ${c.label.toLowerCase()} tasks`}
+            className={`surface px-5 py-4 text-left transition-colors hover:border-ink-600 ${
+              filter === c.filter ? "border-syrup-500/50" : ""
+            }`}
+          >
+            <span className="block text-xs font-medium uppercase tracking-wider text-ink-500">
+              {c.label}
+            </span>
+            <span className={`mt-1 block font-mono text-3xl font-medium tabular-nums ${c.accent}`}>
               {c.value}
-            </p>
-          </div>
+            </span>
+          </button>
         ))}
       </div>
 
@@ -784,14 +1140,46 @@ export default function Tasks() {
                 key={t.id}
                 task={t}
                 repoName={t.repo_full_name ?? repoName(repos, t.repo_id)}
+                onCancel={() => handleCancel(t.id)}
               />
             ))}
         </div>
       )}
 
-      <CreateTask repos={repos} accounts={accounts} onCreated={load} />
+      <CreateTask
+        key={prefillNonce}
+        repos={repos}
+        accounts={accounts}
+        onCreated={handleCreated}
+        prefill={prefill}
+        prefillNonce={prefillNonce}
+      />
 
-      {error && <p className="text-sm text-red-400">{error}</p>}
+      {flash != null && (
+        <p className="rounded-xl border border-green-500/30 bg-green-500/10 px-4 py-2.5 text-sm text-green-300">
+          Task{" "}
+          <Link to={`/tasks/${flash}`} className="font-mono underline underline-offset-2">
+            #{flash}
+          </Link>{" "}
+          created — it will pick up a worker shortly.
+          <button
+            type="button"
+            onClick={() => setFlash(null)}
+            className="ml-3 text-xs text-green-400/70 hover:text-green-300"
+          >
+            Dismiss
+          </button>
+        </p>
+      )}
+
+      {error && (
+        <p className="text-sm text-red-400">
+          {error}{" "}
+          <button type="button" onClick={load} className="underline underline-offset-2">
+            Retry
+          </button>
+        </p>
+      )}
 
       <section className="surface animate-fade-up" style={{ animationDelay: "0.1s" }}>
         <div className="flex flex-wrap items-center gap-2 border-b border-ink-800 px-4 py-3">
@@ -805,9 +1193,25 @@ export default function Tasks() {
                   : "text-ink-400 hover:bg-ink-850 hover:text-ink-100"
               }`}
             >
-              {f.label}
+              {f.label} ({filterCounts[f.id]})
             </button>
           ))}
+          <select
+            value={repoFilter}
+            onChange={(e) => {
+              setRepoFilter(e.target.value);
+              setPage(0);
+            }}
+            aria-label="Filter by repository"
+            className="field !w-auto !py-1 text-sm"
+          >
+            <option value="">All repos</option>
+            {repoNames.map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
           <input
             value={query}
             onChange={(e) => {
@@ -819,10 +1223,81 @@ export default function Tasks() {
           />
         </div>
 
+        <div className="flex flex-wrap items-center gap-2 border-b border-ink-800 px-4 py-2 text-xs text-ink-500">
+          {selected.size > 0 ? (
+            <>
+              <span className="font-mono">{selected.size} selected</span>
+              <button
+                type="button"
+                onClick={() => void handleBulkDismiss()}
+                disabled={bulkBusy}
+                className="btn-ghost !px-2 !py-1 disabled:opacity-40"
+              >
+                Dismiss attention
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleBulkDelete()}
+                disabled={bulkBusy}
+                className="btn-ghost !px-2 !py-1 text-red-300 disabled:opacity-40"
+              >
+                {bulkBusy ? "Working…" : "Delete"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelected(new Set())}
+                className="btn-ghost !px-2 !py-1"
+              >
+                Clear
+              </button>
+            </>
+          ) : (
+            <span>
+              {visible.length} task{visible.length === 1 ? "" : "s"}
+              {lastLoaded ? ` · updated ${timeAgo(lastLoaded.toISOString())}` : ""}
+            </span>
+          )}
+          <span className="ml-auto flex items-center gap-2">
+            {pageCount > 1 && (
+              <>
+                <button
+                  disabled={page === 0}
+                  onClick={() => setPage((p) => p - 1)}
+                  className="btn-ghost !px-2 !py-1 disabled:opacity-40"
+                >
+                  ← Prev
+                </button>
+                <span className="font-mono">
+                  {page + 1} / {pageCount}
+                </span>
+                <button
+                  disabled={page >= pageCount - 1}
+                  onClick={() => setPage((p) => p + 1)}
+                  className="btn-ghost !px-2 !py-1 disabled:opacity-40"
+                >
+                  Next →
+                </button>
+              </>
+            )}
+            <button type="button" onClick={load} className="btn-ghost !px-2 !py-1">
+              Refresh
+            </button>
+          </span>
+        </div>
+
         <div className="max-h-[60vh] overflow-y-auto">
           <table className="w-full text-sm">
             <thead className="sticky top-0 z-10 bg-ink-900">
               <tr className="text-left text-xs uppercase tracking-wider text-ink-500">
+                <th className="px-4 pt-3 pb-2 font-medium">
+                  <input
+                    type="checkbox"
+                    aria-label="Select tasks on this page"
+                    checked={pageRows.length > 0 && pageRows.every((t) => selected.has(t.id))}
+                    onChange={() => toggleSelectPage(pageRows.map((t) => t.id))}
+                    className="accent-syrup-500"
+                  />
+                </th>
                 <th
                   className="cursor-pointer select-none px-4 pt-3 pb-2 font-medium hover:text-ink-300"
                   onClick={() => toggleSort("id")}
@@ -835,7 +1310,12 @@ export default function Tasks() {
                 >
                   Status {sortKey === "status" ? (sortDesc ? "↓" : "↑") : ""}
                 </th>
-                <th className="px-4 pb-2 font-medium">Repo</th>
+                <th
+                  className="cursor-pointer select-none px-4 pb-2 font-medium hover:text-ink-300"
+                  onClick={() => toggleSort("repo")}
+                >
+                  Repo {sortKey === "repo" ? (sortDesc ? "↓" : "↑") : ""}
+                </th>
                 <th className="px-4 pb-2 font-medium">Prompt</th>
                 <th className="px-4 pb-2 font-medium">PR / Issues</th>
                 <th
@@ -844,27 +1324,47 @@ export default function Tasks() {
                 >
                   Updated {sortKey === "updated_at" ? (sortDesc ? "↓" : "↑") : ""}
                 </th>
+                <th className="px-4 pb-2 font-medium">
+                  <span className="sr-only">Actions</span>
+                </th>
               </tr>
             </thead>
             <tbody>
               {pageRows.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-4 py-8 text-center text-ink-600">
-                    No tasks{filter !== "all" ? ` in “${filter}”` : ""}
-                    {query ? " matching your search" : ""} yet.
+                  <td colSpan={8} className="px-4 py-8 text-center text-ink-600">
+                    {query || repoFilter ? (
+                      <>No tasks{filter !== "all" ? ` in “${filter}”` : ""} matching your search.</>
+                    ) : (
+                      EMPTY_STATE[filter]
+                    )}
                   </td>
                 </tr>
               )}
               {pageRows.map((t) => {
                 const rn = t.repo_full_name ?? repoName(repos, t.repo_id);
+                const expanded = expandedPrompt === t.id;
+                const failed =
+                  t.status === "failed" || t.status === "timed_out" || t.status === "interrupted";
                 return (
                   <tr
                     key={t.id}
-                    className="border-t border-ink-800/70 transition-colors hover:bg-ink-875/50"
+                    onClick={() => navigate(`/tasks/${t.id}`)}
+                    className="cursor-pointer border-t border-ink-800/70 transition-colors hover:bg-ink-875/50"
                   >
+                    <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        aria-label={`Select task #${t.id}`}
+                        checked={selected.has(t.id)}
+                        onChange={() => toggleSelected(t.id)}
+                        className="accent-syrup-500"
+                      />
+                    </td>
                     <td className="px-4 py-3">
                       <Link
                         to={`/tasks/${t.id}`}
+                        onClick={(e) => e.stopPropagation()}
                         className="font-mono text-syrup-400 hover:text-syrup-300"
                       >
                         #{t.id}
@@ -873,13 +1373,16 @@ export default function Tasks() {
                     <td className="px-4 py-3">
                       <div className="flex flex-wrap items-center gap-1.5">
                         <StatusBadge status={t.status} />
-                        <AttentionBadge attention={t.attention ?? "working"} />
-                        <DepBadges
-                          dependsOn={t.depends_on}
-                          blockedBy={t.blocked_by}
-                          blocking={t.blocking}
-                          blocked={t.blocked}
-                        />
+                        {t.attention === "needs_you" && <AttentionBadge attention={t.attention} />}
+                        {/* DepBadges renders Links — stop them bubbling to the row nav. */}
+                        <span onClick={(e) => e.stopPropagation()}>
+                          <DepBadges
+                            dependsOn={t.depends_on}
+                            blockedBy={t.blocked_by}
+                            blocking={t.blocking}
+                            blocked={t.blocked}
+                          />
+                        </span>
                         {t.attention === "needs_you" && (
                           <button
                             type="button"
@@ -899,8 +1402,28 @@ export default function Tasks() {
                     <td className="px-4 py-3">
                       <RepoChip name={rn} />
                     </td>
-                    <td className="max-w-xs truncate px-4 py-3 text-ink-300">{t.prompt}</td>
-                    <td className="px-4 py-3">
+                    <td
+                      className={`max-w-xs cursor-pointer px-4 py-3 text-ink-300 ${expanded ? "" : "truncate"}`}
+                      title={expanded ? "Collapse" : t.prompt}
+                      role="button"
+                      tabIndex={0}
+                      aria-expanded={expanded}
+                      aria-label={expanded ? "Collapse prompt" : "Expand prompt"}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setExpandedPrompt(expanded ? null : t.id);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setExpandedPrompt(expanded ? null : t.id);
+                        }
+                      }}
+                    >
+                      {t.prompt}
+                    </td>
+                    <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                       <div className="flex flex-wrap items-center gap-1.5">
                         {(t.prs?.length ? t.prs : t.pr_number ? [t.pr_number] : []).map((n) => (
                           <GhLink key={`p${n}`} repo={rn} kind="pull" number={n} />
@@ -915,6 +1438,35 @@ export default function Tasks() {
                     </td>
                     <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-ink-500">
                       {timeAgo(t.updated_at)}
+                    </td>
+                    <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => handleClone(t)}
+                          title="Clone — pre-fill the form from this task"
+                          className="rounded px-1.5 py-0.5 font-mono text-xs text-ink-400 hover:bg-ink-800 hover:text-ink-200"
+                        >
+                          ⧉
+                        </button>
+                        {failed && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              api
+                                .rerunTask(t.id)
+                                .then(() => load())
+                                .catch((e) =>
+                                  setError(e instanceof Error ? e.message : "failed to re-run task")
+                                );
+                            }}
+                            title="Re-run this task"
+                            className="rounded px-1.5 py-0.5 font-mono text-xs text-ink-400 hover:bg-ink-800 hover:text-ink-200"
+                          >
+                            ↻
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 );

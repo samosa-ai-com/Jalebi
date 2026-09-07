@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Link, useParams } from "react-router-dom";
 import { api, taskEvents } from "../api/client";
 import { StatusBadge } from "../components/StatusBadge";
@@ -10,7 +11,9 @@ import { MergeReadinessPanel } from "../components/MergeReadinessPanel";
 import WaitingCard from "../components/WaitingCard";
 import PublishDialog from "../components/PublishDialog";
 import { parseUnifiedDiff } from "../lib/unifiedDiff";
+import { avatarFor, avatarUrl } from "../lib/agentAvatars";
 import { useInView } from "../lib/useInView";
+import { useBackends } from "../hooks/useBackends";
 import type {
   Account,
   Artifact,
@@ -104,6 +107,37 @@ function Action({
   return (
     <button onClick={onClick} disabled={disabled} className="btn-ghost disabled:opacity-40">
       {children}
+    </button>
+  );
+}
+
+function CopyButton({ text, label }: { text: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (timer.current) clearTimeout(timer.current);
+    };
+  }, []);
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      if (timer.current) clearTimeout(timer.current);
+      timer.current = setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Clipboard unavailable (permissions/insecure context) — stay silent.
+    }
+  }
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      title={`Copy ${label}`}
+      aria-label={`Copy ${label}`}
+      className="shrink-0 text-[11px] text-ink-500 transition-colors hover:text-syrup-300"
+    >
+      {copied ? "copied ✓" : "copy"}
     </button>
   );
 }
@@ -451,6 +485,7 @@ function FollowUpComposer({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [defaultBackend, setDefaultBackend] = useState<string | null>(null);
+  const backendOptions = useBackends();
 
   // Fetch the global default backend so the "fresh session" warning exactly
   // matches the queue's resolution (which uses ``cli || task.cli ||
@@ -575,7 +610,7 @@ function FollowUpComposer({
             <span className="mb-1.5 block text-xs font-medium text-ink-400">Backend</span>
             <select value={cli} onChange={(e) => setCli(e.target.value)} className="field">
               <option value="">Reuse task backend</option>
-              {["opencode", "codex", "claude"].map((c) => (
+              {backendOptions.map((c) => (
                 <option key={c} value={c}>
                   {c}
                 </option>
@@ -783,7 +818,7 @@ function ArtifactPreview({
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
 
-  return (
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-ink-950/80 p-4"
       onClick={onClose}
@@ -828,7 +863,8 @@ function ArtifactPreview({
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
@@ -880,6 +916,9 @@ function DiffFileSection({
 }) {
   const { ref, inView } = useInView<HTMLDivElement>();
   const letter = STATUS_LETTER[file.status] ?? "M";
+  const rawText = file.hunks
+    .map((h) => (h.header ? `${h.header}\n` : "") + h.lines.join("\n"))
+    .join("\n");
   return (
     <details open={defaultOpen}>
       <summary className="cursor-pointer select-none font-mono text-xs text-ink-200 transition-colors hover:text-syrup-300">
@@ -901,6 +940,11 @@ function DiffFileSection({
         <span className="text-ink-100">{pathLabel(file)}</span>
         {file.additions > 0 && <span className="ml-2 text-green-400">+{file.additions}</span>}
         {file.deletions > 0 && <span className="ml-2 text-red-400">−{file.deletions}</span>}
+        {!file.binary && (
+          <span className="ml-2" onClick={(e) => e.preventDefault()}>
+            <CopyButton text={rawText} label={`${pathLabel(file)} diff`} />
+          </span>
+        )}
       </summary>
       <div ref={ref}>
         {file.binary ? (
@@ -1010,16 +1054,34 @@ export default function TaskDetail() {
     branch?: string;
     pr_number?: number;
   } | null>(null);
+  // Agent chip (avatar + name for task.agent_id; best-effort, hidden otherwise).
+  const [agentName, setAgentName] = useState<string | null>(null);
+  const [agentAvatar, setAgentAvatar] = useState<string | null>(null);
+  // Live elapsed ticker while running (1s, cleaned up when terminal).
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  // Timeline controls: text search + step-type pills.
+  const [tlQuery, setTlQuery] = useState("");
+  const [tlType, setTlType] = useState<"all" | "message" | "tool_call" | "error">("all");
+  // Bumped to force an SSE resubscribe (background-tab / offline recovery).
+  const [streamEpoch, setStreamEpoch] = useState(0);
   const closePreview = useCallback(() => setPreview(null), []);
   const actionInFlightRef = useRef(false);
   const lastRunIdRef = useRef<number | null>(null);
   const lastSeqRef = useRef(0);
+  const agentIdRef = useRef<string | null | undefined>(undefined);
 
   const load = useCallback(() => {
     api
       .getTask(taskId)
       .then((t) => {
         const runId = t.run?.id ?? null;
+        // Reset a stale agent chip only when the agent actually changed
+        // (avoids flicker on plain refreshes).
+        if (agentIdRef.current !== (t.agent_id ?? null)) {
+          agentIdRef.current = t.agent_id ?? null;
+          setAgentName(null);
+          setAgentAvatar(null);
+        }
         if (lastRunIdRef.current !== runId) {
           const prior = lastRunIdRef.current;
           setLive([]);
@@ -1119,8 +1181,33 @@ export default function TaskDetail() {
   const isLatest = selectedRunId === null || selectedRunId === task?.run?.id;
 
   const runId = task?.run?.id ?? null;
+  // Last time any SSE frame (event, `connected`, or `ping` heartbeat) arrived.
+  // The stall watchdog below resubscribes when this goes stale while running.
+  // Initialized to 0 and stamped on subscribe: `Date.now()` can't be called
+  // inline here (react-hooks/purity), and the subscribe effect always runs
+  // before any watchdog tick can read it.
+  const lastActivityRef = useRef<number>(0);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+    };
+  }, []);
+
+  function scheduleReconnect(delayMs: number) {
+    if (reconnectTimerRef.current) return; // one pending reconnect at a time
+    reconnectTimerRef.current = setTimeout(() => {
+      reconnectTimerRef.current = null;
+      lastActivityRef.current = Date.now();
+      load();
+      setStreamEpoch((e) => e + 1);
+    }, delayMs);
+  }
+
   useEffect(() => {
     if (!task || !running || !isLatest) return;
+    lastActivityRef.current = Date.now();
     const unsubscribe = taskEvents(
       taskId,
       (event) => {
@@ -1139,11 +1226,52 @@ export default function TaskDetail() {
         setLive([]);
         load();
       },
-      lastSeqRef.current
+      lastSeqRef.current,
+      {
+        onActivity: () => {
+          lastActivityRef.current = Date.now();
+        },
+        // Fatal socket error (browser gave up retrying): resubscribe with a
+        // fresh watermark after a short backoff.
+        onConnectionLost: () => scheduleReconnect(2000),
+      }
     );
     return unsubscribe;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [taskId, runId, running, isLatest]);
+  }, [taskId, runId, running, isLatest, streamEpoch]);
+
+  // Stall watchdog: the server sends a `ping` data frame every 15 s on an
+  // idle-but-alive stream, so 45 s of silence while running means the socket
+  // is a zombie (throttled tab, slept laptop, dead TCP). Resubscribe at the
+  // current watermark — dedupe keeps the replay loss-free.
+  useEffect(() => {
+    if (!running || !isLatest) return;
+    const timer = setInterval(() => {
+      if (Date.now() - lastActivityRef.current > 45000) {
+        scheduleReconnect(0);
+      }
+    }, 10000);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [running, isLatest, streamEpoch, taskId]);
+
+  // Terminal-transition safety poll: `run.steps_json` is only committed when
+  // the run ends, so there are no live steps to merge — but if `stream_end`
+  // was missed on a dead socket, this catches the status flip and closes SSE.
+  useEffect(() => {
+    if (!running) return;
+    const timer = setInterval(() => {
+      api
+        .getTask(taskId)
+        .then((t) => {
+          if ((t.run?.id ?? null) !== lastRunIdRef.current || t.status !== task?.status) {
+            load();
+          }
+        })
+        .catch(() => {}); // poll failures just retry on the next tick
+    }, 20000);
+    return () => clearInterval(timer);
+  }, [running, taskId, task?.status, load]);
 
   // After sending a follow-up, poll until a new run appears, then refresh.
   useEffect(() => {
@@ -1172,6 +1300,67 @@ export default function TaskDetail() {
     }, 1500);
     return () => clearInterval(timer);
   }, [followUpPending, taskId]);
+
+  // Poll while queued: SSE only subscribes once running, so without this a
+  // queued task sits stale. Stops when the task leaves queued (SSE takes over
+  // once running) or unmounts.
+  useEffect(() => {
+    if (task?.status !== "queued") return;
+    const timer = setInterval(load, 5000);
+    return () => clearInterval(timer);
+  }, [task?.status, load, taskId]);
+
+  // Background-tab / offline recovery: browsers throttle timers and can stall
+  // the SSE socket while hidden. On visible/online, refresh state and force an
+  // SSE resubscribe at the current watermark (dedupe keeps it loss-free).
+  useEffect(() => {
+    function resync() {
+      load();
+      setStreamEpoch((e) => e + 1);
+    }
+    function onVisibility() {
+      if (document.visibilityState === "visible") resync();
+    }
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("online", resync);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("online", resync);
+    };
+  }, [load]);
+
+  // Live elapsed ticker, only while a run is active (first tick fires the
+  // interval; no synchronous set needed).
+  const runningForTicker = task !== null && !TERMINAL.has(task.status);
+  useEffect(() => {
+    if (!runningForTicker) return;
+    const timer = setInterval(() => setNowTick(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [runningForTicker, taskId]);
+
+  // Agent chip: resolve task.agent_id to a name + avatar (best-effort).
+  // The null-reset lives in load(), not here: setting state synchronously in
+  // an effect body trips react-hooks/set-state-in-effect.
+  useEffect(() => {
+    if (!task?.agent_id) return;
+    let cancelled = false;
+    api
+      .getAgent(task.agent_id)
+      .then((a) => {
+        if (cancelled) return;
+        setAgentName(a.name);
+        setAgentAvatar(a.avatar);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setAgentName(null);
+          setAgentAvatar(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [task?.agent_id]);
 
   // Hooks must run unconditionally — compute safe deps before the early returns.
   const previewRun = task
@@ -1247,6 +1436,13 @@ export default function TaskDetail() {
   const canReply = runs.some((r) => r.session_id) && TERMINAL.has(task.status);
   const timeline = isLatest ? [...steps, ...live] : steps;
   const consoleLines = timeline.filter((s) => s.type === "message" || s.type === "tool_call");
+  const tlActive = tlQuery.trim() !== "" || tlType !== "all";
+  const filteredTimeline = timeline.filter((s) => {
+    if (tlType !== "all" && s.type !== tlType) return false;
+    const q = tlQuery.trim().toLowerCase();
+    if (!q) return true;
+    return (s.text ?? "").toLowerCase().includes(q) || (s.phase ?? "").toLowerCase().includes(q);
+  });
 
   const lastPhase = timeline.reduce<string | null>((acc, s) => s.phase ?? acc, null);
   const phaseIndex = lastPhase ? PHASE_ORDER.indexOf(lastPhase) : -1;
@@ -1307,10 +1503,46 @@ export default function TaskDetail() {
                 {accounts.find((a) => a.name === task.pat_name)?.login ?? task.pat_name}
               </>
             )}
+            {task.agent_id && (
+              <span
+                className="ml-1.5 inline-flex items-center gap-1 rounded-full border border-ink-800 px-2 py-0.5 text-[11px] text-ink-300"
+                title={`Agent: ${agentName ?? task.agent_id}`}
+              >
+                <img
+                  src={avatarUrl(
+                    avatarFor({
+                      id: task.agent_id,
+                      name: agentName ?? task.agent_id,
+                      avatar: agentAvatar,
+                    })
+                  )}
+                  alt=""
+                  className="h-3.5 w-3.5"
+                />
+                {agentName ?? task.agent_id}
+              </span>
+            )}
+            {running && selectedRun?.started_at && (
+              <>
+                <span className="mx-1.5 text-ink-700">·</span>
+                <span title={`Timeout: ${task.timeout_minutes}m`}>
+                  {runDuration(selectedRun.started_at, new Date(nowTick).toISOString())} /{" "}
+                  {task.timeout_minutes}m
+                </span>
+              </>
+            )}
           </span>
         </div>
 
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={load}
+            title="Reload task state"
+            className="rounded-lg border border-ink-800 px-3 py-1.5 text-xs text-ink-400 transition-colors hover:border-ink-700 hover:text-ink-200"
+          >
+            Refresh
+          </button>
           {ideConfigured ? (
             <button
               type="button"
@@ -1377,16 +1609,21 @@ export default function TaskDetail() {
       )}
 
       <section className="surface p-6">
-        <div className="flex items-center justify-between gap-4">
+        <div className="flex items-start justify-between gap-4">
           <p className="whitespace-pre-wrap text-sm leading-relaxed text-ink-100">{task.prompt}</p>
-          {phaseIndex >= 0 && (
-            <div className="hidden shrink-0 flex-col items-center gap-1.5 md:flex">
-              <div className="flex h-10 w-10 items-center justify-center rounded-full border border-syrup-500/40 bg-syrup-500/10 font-mono text-sm text-syrup-300">
-                {phaseIndex + 1}/{PHASE_ORDER.length}
+          <div className="flex shrink-0 items-start gap-3">
+            <CopyButton text={task.prompt} label="prompt" />
+            {phaseIndex >= 0 && (
+              <div className="hidden flex-col items-center gap-1.5 md:flex">
+                <div className="flex h-10 w-10 items-center justify-center rounded-full border border-syrup-500/40 bg-syrup-500/10 font-mono text-sm text-syrup-300">
+                  {phaseIndex + 1}/{PHASE_ORDER.length}
+                </div>
+                <span className="font-mono text-[11px] text-ink-500">
+                  {PHASE_ORDER[phaseIndex]}
+                </span>
               </div>
-              <span className="font-mono text-[11px] text-ink-500">{PHASE_ORDER[phaseIndex]}</span>
-            </div>
-          )}
+            )}
+          </div>
         </div>
 
         <div className="mt-4 flex flex-wrap gap-2 border-t border-ink-800 pt-4">
@@ -1457,6 +1694,18 @@ export default function TaskDetail() {
             <dt className="text-ink-600">Retries</dt>
             <dd className="mt-0.5 font-mono text-ink-300">{task.retry_count}</dd>
           </div>
+          {task.triggered_by && (
+            <div>
+              <dt className="text-ink-600">Started by</dt>
+              <dd
+                className="mt-0.5 font-mono text-ink-300"
+                title={`delivery ${task.triggered_by.delivery_id}`}
+              >
+                {task.triggered_by.event} ·{" "}
+                {new Date(task.triggered_by.received_at).toLocaleString()}
+              </dd>
+            </div>
+          )}
         </dl>
       </section>
 
@@ -1514,7 +1763,7 @@ export default function TaskDetail() {
         />
       )}
 
-      {runs.some((r) => r.session_id) && TERMINAL.has(task.status) && (
+      {runs.some((r) => r.session_id) && TERMINAL.has(task.status) ? (
         <FollowUpComposer
           task={task}
           followups={task.followups ?? []}
@@ -1525,6 +1774,13 @@ export default function TaskDetail() {
           }}
           prefill={replyPrefill}
         />
+      ) : (
+        !TERMINAL.has(task.status) && (
+          <p className="text-xs text-ink-600">
+            Follow-ups open when this run finishes
+            {task.status === "queued" ? " and a run starts" : ""}.
+          </p>
+        )
       )}
 
       {selectedRun && selectedRun.artifacts && selectedRun.artifacts.length > 0 && (
@@ -1560,7 +1816,14 @@ export default function TaskDetail() {
           <div ref={timelineRef} className="min-h-0 flex-1 overflow-y-auto pr-2">
             <div className="sticky top-0 z-10 bg-ink-900/85 pb-3 backdrop-blur-sm">
               <div className="flex items-center justify-between gap-2">
-                <h2 className="panel-title">Timeline</h2>
+                <h2 className="panel-title">
+                  Timeline
+                  {tlActive && (
+                    <span className="ml-2 font-mono text-[11px] text-ink-500">
+                      {filteredTimeline.length}/{timeline.length}
+                    </span>
+                  )}
+                </h2>
                 <label className="flex shrink-0 items-center gap-1.5 text-[11px] text-ink-500">
                   <input
                     type="checkbox"
@@ -1571,10 +1834,36 @@ export default function TaskDetail() {
                   auto-scroll
                 </label>
               </div>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <input
+                  value={tlQuery}
+                  onChange={(e) => setTlQuery(e.target.value)}
+                  placeholder="Filter steps…"
+                  className="field max-w-44 !py-1 text-xs"
+                />
+                {(["all", "message", "tool_call", "error"] as const).map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => setTlType(t)}
+                    className={`rounded-full border px-2 py-0.5 font-mono text-[10px] transition-colors ${
+                      tlType === t
+                        ? "border-syrup-500 text-syrup-300"
+                        : "border-ink-800 text-ink-400 hover:text-ink-100"
+                    }`}
+                  >
+                    {t === "all" ? "all" : t}
+                  </button>
+                ))}
+              </div>
             </div>
             <ol className="space-y-3 text-sm">
-              {timeline.length === 0 && <li className="text-ink-600">No steps yet.</li>}
-              {timeline.map((step, i) => (
+              {filteredTimeline.length === 0 && (
+                <li className="text-ink-600">
+                  {tlActive ? "No steps match the current filter." : "No steps yet."}
+                </li>
+              )}
+              {filteredTimeline.map((step, i) => (
                 <TimelineItem
                   key={step.seq ?? `${step.ts ?? "?"}-${step.type}`}
                   step={step}
@@ -1636,10 +1925,10 @@ export default function TaskDetail() {
         />
       )}
 
-      {runs.length > 1 && (
+      {runs.length >= 1 && (
         <section className="surface p-5 animate-fade-up">
           <div className="mb-3 flex items-center justify-between gap-2">
-            <h2 className="panel-title">Run history</h2>
+            <h2 className="panel-title">{runs.length > 1 ? "Run history" : "Run"}</h2>
             <p className="text-xs text-ink-500">
               The live stream follows the latest run. Click a run to view its logs, diff, and
               artifacts.

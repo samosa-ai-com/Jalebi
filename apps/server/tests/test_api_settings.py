@@ -45,9 +45,84 @@ def test_ntfy_topic_accepts_topic_or_url(client: FlaskClient) -> None:
     assert resp.status_code == 400
 
 
+def test_enabled_backends_validated_and_listed(client: FlaskClient) -> None:
+    """enabled_backends: non-empty known subset; default must stay enabled."""
+    body = client.get("/api/backends").get_json()
+    assert body["backends"] == ["opencode", "codex", "claude"]
+    assert body["enabled"] == ["opencode", "codex", "claude"]
+    assert body["default"] == "opencode"
+
+    # A valid subset saves and is reflected.
+    resp = client.post(
+        "/api/settings", json={"key": "enabled_backends", "value": ["opencode", "codex"]}
+    )
+    assert resp.status_code == 200
+    assert client.get("/api/backends").get_json()["enabled"] == ["opencode", "codex"]
+
+    # The default backend can't be switched off (change the default first).
+    resp = client.post("/api/settings", json={"key": "enabled_backends", "value": ["codex"]})
+    assert resp.status_code == 400
+    # Empty / unknown / non-list rejected.
+    for bad in ([], ["gemini"], "opencode", [None]):
+        resp = client.post("/api/settings", json={"key": "enabled_backends", "value": bad})
+        assert resp.status_code == 400, bad
+
+    # The default backend must be an enabled one.
+    resp = client.post("/api/settings", json={"key": "default_backend", "value": "claude"})
+    assert resp.status_code == 400
+    resp = client.post("/api/settings", json={"key": "default_backend", "value": "codex"})
+    assert resp.status_code == 200
+
+
+def test_timezones_endpoint(client: FlaskClient) -> None:
+    body = client.get("/api/timezones").get_json()
+    assert body["local"] == "local"
+    assert "Asia/Kolkata" in body["common"]
+    assert "UTC" in body["all"]
+    assert body["all"] == sorted(body["all"])
+
+
 def test_ntfy_url_no_longer_valid(client: FlaskClient) -> None:
     """ntfy_url was merged into ntfy_topic — the old key is rejected."""
     resp = client.post("/api/settings", json={"key": "ntfy_url", "value": "https://ntfy.sh"})
+    assert resp.status_code == 400
+
+
+def test_retry_policy_accepts_attempt_cap_and_patterns(client: FlaskClient) -> None:
+    """retry_policy accepts max_attempts + non_retryable_patterns; rejects bad shapes."""
+    resp = client.post(
+        "/api/settings",
+        json={
+            "key": "retry_policy",
+            "value": {
+                "auto_retry": True,
+                "max_attempts": 5,
+                "non_retryable_patterns": ["model not found"],
+            },
+        },
+    )
+    assert resp.status_code == 200
+    body = client.get("/api/settings").get_json()
+    assert body["retry_policy"]["max_attempts"] == 5
+    assert body["retry_policy"]["non_retryable_patterns"] == ["model not found"]
+    # Legacy shape still valid.
+    resp = client.post("/api/settings", json={"key": "retry_policy", "value": {"auto_retry": True}})
+    assert resp.status_code == 200
+    # max_attempts must be an int >= 1; patterns must be a str list.
+    resp = client.post(
+        "/api/settings",
+        json={"key": "retry_policy", "value": {"auto_retry": True, "max_attempts": 0}},
+    )
+    assert resp.status_code == 400
+    resp = client.post(
+        "/api/settings",
+        json={"key": "retry_policy", "value": {"auto_retry": True, "max_attempts": "many"}},
+    )
+    assert resp.status_code == 400
+    resp = client.post(
+        "/api/settings",
+        json={"key": "retry_policy", "value": {"auto_retry": True, "non_retryable_patterns": "x"}},
+    )
     assert resp.status_code == 400
 
 
@@ -149,10 +224,15 @@ def test_default_backend_and_model_settings(client: FlaskClient) -> None:
     assert resp.status_code == 400
 
 
-def test_models_endpoint_cli_query_param(client: FlaskClient) -> None:
+def test_models_endpoint_cli_query_param(client: FlaskClient, monkeypatch) -> None:
     """GET /api/models?cli=<backend> returns that backend's models regardless of
     the global default_backend setting (used by the forms)."""
     from jalebi.adapters import get_adapter
+    from jalebi.adapters.opencode import OpenCodeAdapter
+
+    # The real opencode adapter shells out to the `opencode models` CLI
+    # (~1.5s process spawn); this test covers param routing, not the binary.
+    monkeypatch.setattr(OpenCodeAdapter, "list_models", lambda self: ["m1"])
 
     client.post("/api/settings", json={"key": "default_backend", "value": "opencode"})
 
@@ -180,3 +260,4 @@ def test_models_endpoint_cli_query_param(client: FlaskClient) -> None:
     # No param → the default_backend setting's backend.
     body = client.get("/api/models").get_json()
     assert body["cli"] == "opencode"
+    assert body["models"] == ["m1"]

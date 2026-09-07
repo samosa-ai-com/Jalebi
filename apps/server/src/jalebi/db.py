@@ -1,11 +1,14 @@
 """SQLAlchemy engine, session factory, and Phase-0 models."""
 
+import logging
 from datetime import datetime
 from pathlib import Path
 
 import sqlalchemy as sa
 from alembic import command as alembic_command
 from alembic.config import Config as AlembicConfig
+from alembic.runtime.environment import EnvironmentContext
+from alembic.script import ScriptDirectory
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
@@ -35,6 +38,8 @@ from sqlalchemy.orm import (
 from jalebi.clock import now
 
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
+
+logger = logging.getLogger(__name__)
 
 
 class Base(DeclarativeBase):
@@ -196,16 +201,43 @@ class Artifact(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now)
 
 
+class CatalogSkill(Base):
+    """A standalone, reusable skill in the catalog library.
+
+    ``id`` is a user-chosen slug. ``content`` is the markdown body materialized
+    into task worktrees. Agents link skills via
+    ``CatalogAgent.skill_ids_json`` (ordered, FK-less by design — same
+    rationale as ``tasks.agent_id``); validity is enforced in the service
+    layer. Deleting a linked skill is refused (409 with the linking agents).
+    """
+
+    __tablename__ = "catalog_skills"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=sa.text("''")
+    )
+    content: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=sa.text("''")
+    )
+    tags_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now)
+
+
 class CatalogAgent(Base):
     """A named, user-configured agent = personality + skills + optional overrides.
 
     ``kind`` is ``general`` or ``reviewer`` (reviewers get the reviewer workflow).
     The ``id`` is a user-chosen slug. ``personality_md`` is merged into the task
-    worktree's ``AGENTS.md``; ``skills_json`` holds ``[{name, content}]`` markdown
-    files materialized to ``.claude/skills/<name>/SKILL.md`` in the worktree so
-    the CLI auto-discovers them; ``custom_instructions`` is appended to the task
-    prompt when this agent is selected. ``cli``/``model`` override the task
-    defaults. ``tasks.agent_id`` references this table by slug but is deliberately
+    worktree's ``AGENTS.md``; ``skill_ids_json`` holds the ordered list of linked
+    library skill slugs (resolved from ``catalog_skills`` at run time);
+    ``skills_json`` holds legacy inline ``[{name, content}]`` extras, appended
+    after library skills (kept so pre-library agents keep working).
+    ``custom_instructions`` is appended to the task prompt when this agent is
+    selected. ``cli``/``model`` override the task defaults.
+    ``tasks.agent_id`` references this table by slug but is deliberately
     FK-less (a SQLite batch rebuild of the FK-referenced ``tasks`` parent is the
     Step-37 migration hazard) — validity is enforced in the service layer.
     """
@@ -223,6 +255,11 @@ class CatalogAgent(Base):
         Text, nullable=False, default="", server_default=sa.text("''")
     )
     skills_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    skill_ids_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    description: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=sa.text("''")
+    )
+    avatar: Mapped[str | None] = mapped_column(Text, nullable=True)
     custom_instructions: Mapped[str] = mapped_column(
         Text, nullable=False, default="", server_default=sa.text("''")
     )
@@ -567,6 +604,11 @@ def _set_sqlite_pragmas(dbapi_connection, _connection_record) -> None:
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA foreign_keys=ON")
     cursor.execute("PRAGMA journal_mode=WAL")
+    # WAL serializes writers: concurrent reviewer runs otherwise hit
+    # "database is locked" on the 5s driver default and poison their session
+    # (task 63). Wait up to 30s instead of failing fast — well under the
+    # 60-minute task timeout, and readers never block under WAL.
+    cursor.execute("PRAGMA busy_timeout=30000")
     cursor.close()
 
 
@@ -601,4 +643,33 @@ def run_migrations(db_url: str) -> None:
     cfg = AlembicConfig()
     cfg.set_main_option("script_location", str(MIGRATIONS_DIR))
     cfg.set_main_option("sqlalchemy.url", db_url)
-    alembic_command.upgrade(cfg, "head")
+    try:
+        _upgrade_with_cached_scripts(cfg)
+    except Exception:
+        # The cached-script path mirrors ``alembic upgrade head`` internals;
+        # on any surprise (e.g. a future Alembic changing them), fall back to
+        # the plain command so migrations still apply. Correctness first.
+        logger.exception("cached migration path failed; retrying plain upgrade")
+        alembic_command.upgrade(cfg, "head")
+
+
+# Alembic re-reads + re-execs every revision file on each ``upgrade`` call
+# (~0.15s: the dominant per-test cost since every test builds a fresh DB via
+# ``create_app``). Revision scripts are pure code with no connection state, so
+# the loaded ``ScriptDirectory`` is safe to reuse across databases in one
+# process; only ``env.py`` (fast) re-runs per call.
+_SCRIPT_DIR_CACHE: dict[str, ScriptDirectory] = {}
+
+
+def _upgrade_with_cached_scripts(cfg: AlembicConfig) -> None:
+    key = cfg.get_main_option("script_location") or ""
+    script = _SCRIPT_DIR_CACHE.get(key)
+    if script is None:
+        script = ScriptDirectory.from_config(cfg)
+        _SCRIPT_DIR_CACHE[key] = script
+
+    def upgrade(rev, context):
+        return script._upgrade_revs("head", rev)
+
+    with EnvironmentContext(cfg, script, fn=upgrade, destination_rev="head"):
+        script.run_env()

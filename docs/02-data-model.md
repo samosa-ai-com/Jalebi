@@ -246,7 +246,7 @@ See `docs/05` §5.
 | `key` | text PK | |
 | `value` | text | JSON-encoded |
 
-Settings keys (defaults in `jalebi/settings.py`): `concurrency` (4), `auto_publish` (true), `ntfy_topic` ("" — merged: bare topic **or** full URL), `default_timeout_minutes` (60), `retry_policy` (`{"auto_retry": false}`), `secret_patterns` (`[]`), `artifact_ttl_days` (7), `default_backend` (`"opencode"`), `default_model` (`""`, required), `notify_on_done` (true), `notify_on_failed` (true), `notify_on_progress` (true), `notify_on_needs_approval` (true), `notify_progress_interval_minutes` (30). **Every key is materialized as a row at startup (`seed_defaults`)** — settings are persistent and never held in memory; stored values override the code default.
+Settings keys (defaults in `jalebi/settings.py`): `concurrency` (4), `auto_publish` (true), `auto_nudge` (false), `ntfy_topic` ("" — merged: bare topic **or** full URL), `default_timeout_minutes` (60), `retry_policy` (`{"auto_retry": true, "continue_prompt": "continue", "timeout_multiplier": 2, "max_timeout_minutes": 180, "max_attempts": 3, "non_retryable_patterns": [...]}` — recovery is **bounded** by `max_attempts`; failures matching a pattern fail immediately), `secret_patterns` (`[]`), `artifact_ttl_days` (7), `default_backend` (`"opencode"`), `default_model` (`""`, required), `adapter_model_lists` (`{}` — per-backend model-dropdown overrides), `notify_on_done` (true), `notify_on_failed` (true), `notify_on_progress` (true), `notify_on_needs_approval` (true), `notify_progress_interval_minutes` (30). **Every key is materialized as a row at startup (`seed_defaults`)** — settings are persistent and never held in memory; stored values override the code default. `enabled_backends` (default all three) is the backend allow-list consumed via `GET /api/backends`; `GET /api/timezones` serves the IANA list for the Timezone dropdown.
 
 ### `catalog_agents` (Phase 1 — PRD F6)
 
@@ -258,7 +258,10 @@ Settings keys (defaults in `jalebi/settings.py`): `concurrency` (4), `auto_publi
 | `cli` | text, null | backend override (opencode/codex/claude) |
 | `model` | text, null | pinned model |
 | `personality_md` | text | markdown merged into the worktree `AGENTS.md` |
-| `skills_json` | text, null | JSON list of `{name, content}` markdown files |
+| `skills_json` | text, null | legacy inline `[{name, content}]` extras (appended after library skills) |
+| `skill_ids_json` | text, null | ordered JSON list of linked `catalog_skills` slugs |
+| `description` | text | one-liner shown on cards and in pickers |
+| `avatar` | text, null | avatar id (`apps/web/public/avatars/*.svg`); NULL = auto-assign |
 | `custom_instructions` | text | appended to the task prompt |
 | `enabled` | bool | disabled agents aren't selectable on new tasks |
 | `created_at` | datetime | |
@@ -270,6 +273,22 @@ time. Skill content lives in the DB and is materialized directly into the task
 worktree (`.claude/skills/<name>/SKILL.md`) at run time (see
 `docs/15-catalog.md`).
 
+### `catalog_skills` (skills library)
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | text PK | slug, e.g. `secure-coding` |
+| `name` | text | display name |
+| `description` | text | one-liner for pickers/cards |
+| `content` | text | markdown body (≤100 KB) |
+| `tags_json` | text, null | JSON list of tag strings (≤12) |
+| `created_at` / `updated_at` | datetime | |
+
+Agents link library skills via `catalog_agents.skill_ids_json` (ordered JSON
+list, FK-less by design — unknown slugs refused at write time, skipped at run
+time). Deleting a linked skill is refused (409 + linking agents). Seed content
+is versioned (`catalog_seed_version` setting) — see `docs/15-catalog.md` §8.
+
 ## 3. Relationships (Phase 0 + Phase 1 catalog + reviewers)
 
 ```
@@ -280,6 +299,7 @@ runs  1───* followups  (run_id nullable)
 runs  1───* artifacts
 repos 0───* env_vars   (repo_id nullable = global)
 tasks 0───1 catalog_agents  (agent_id slug, FK-less by design)
+catalog_agents *───* catalog_skills  (skill_ids_json ordered slug list, FK-less)
 repos 1───* review_assignments
 tasks 1───* review_assignments  (task_id = the reviewer's own pr_review task)
 runs  0───1 review_assignments  (run_id, set when the reviewer run starts)
@@ -312,4 +332,6 @@ None — all Phase-0/1/2 tables are materialized. (Phase 3 adds no new tables.)
   - `task_dependencies(task_id FK→tasks, depends_on_id FK→tasks, created_at)` — composite PK `(task_id, depends_on_id)`, self-ref CHECK, two-side CASCADE. Dep edges are dropped from both directions inside `delete_tasks_cascade`.
   - `task_events(id, task_id FK→tasks, run_id FK→runs, seq, payload_json, created_at)` — durable SSE timeline (Phase 4 T4.3). Per-(task, run) cap at 2000 (`prune_task_events` startup sweep).
   - `nudges(id, task_id FK→tasks, signature, kind, created_at)` — auto-nudge dedup (Phase 4 T4.2). Unique pair `(task_id, signature)`.
+
+- **Delete cascade (`tasks.delete_tasks_cascade`):** TaskDependency → Followup → ReviewAssignment → **CheckRun** → Artifact → Run → Task, plus the task's `task_events` rows (deleted by the caller in prune; the task-delete route relies on FK CASCADE for events). `check_runs.task_id`/`run_id` carry **no** `ON DELETE CASCADE` (the SQLite batch-rebuild hazard), so check runs are deleted explicitly — deleting a task that ever reported a commit status would otherwise `IntegrityError` under `PRAGMA foreign_keys=ON`.
   - `tasks.status` widened to include `"blocked"` (T4.1). A blocked task sits with deps unmet; cleared by `cascade_unblock` when the last unsatisfied dep finishes.

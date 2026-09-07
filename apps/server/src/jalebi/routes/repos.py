@@ -15,7 +15,12 @@ bp = Blueprint("repos", __name__, url_prefix="/api/repos")
 @bp.get("")
 def list_repos() -> ResponseReturnValue:
     session = db.get_session()
-    return jsonify([repos.repo_to_dict(row) for row in repos.list_repos(session)])
+    # Disconnected repos stay hidden by default (soft-disconnect hides them
+    # from pickers); ?include_disconnected=1 reveals them for the Repos page's
+    # Disconnected section with Reconnect buttons.
+    include_disconnected = request.args.get("include_disconnected") == "1"
+    rows = repos.list_repos(session, connected_only=not include_disconnected)
+    return jsonify([repos.repo_to_dict(row) for row in rows])
 
 
 @bp.post("")
@@ -231,6 +236,20 @@ def register_webhook(repo_id: int) -> ResponseReturnValue:
     try:
         client.create_hook(row.full_name, url, secret)
     except (httpx.HTTPError, GitHubError) as exc:
+        # The hook already lives on GitHub (e.g. DB reset or repo re-added
+        # after manual registration): adopt it instead of stranding the repo
+        # on a Register button that 502s forever.
+        if "HTTP 422" in str(exc):
+            row.webhook_registered = True
+            session.commit()
+            return jsonify(
+                {
+                    "full_name": row.full_name,
+                    "webhook_url": url,
+                    "registered": True,
+                    "adopted": True,
+                }
+            )
         return jsonify({"error": str(exc)}), 502
     finally:
         client.close()
@@ -254,27 +273,37 @@ def unregister_webhook(repo_id: int) -> ResponseReturnValue:
 
     base_url = str(settings.get_setting(session, "webhook_url") or "")
     expected_url = f"{base_url.rstrip('/')}/webhook" if base_url else None
+    if expected_url is None:
+        # Without the expected URL we cannot tell Jalebi's hook from another
+        # integration's — refuse rather than risk deleting foreign hooks.
+        return jsonify(
+            {"error": "webhook_url is not set — set it in Settings first so "
+             "Jalebi knows which hook is its own"}
+        ), 409
 
     client = GitHubClient(token)
     removed = 0
+    listed = False
     try:
         hooks = client.list_hooks(row.full_name)
+        listed = True
         for hook in hooks:
             url = (hook.get("url") or "").rstrip("/")
             # Match the exact expected URL (never another integration's hook).
-            if expected_url is not None and url != expected_url:
+            if url != expected_url:
                 continue
-            if url.endswith("/webhook"):
-                client.delete_hook(row.full_name, hook["id"])
-                removed += 1
+            client.delete_hook(row.full_name, hook["id"])
+            removed += 1
     except (httpx.HTTPError, GitHubError):
         removed = 0
     finally:
         client.close()
 
-    # Only clear the flag when we actually removed hooks; a failed/live orphan
-    # must keep its registration state so the UI still shows it.
-    if removed:
+    # Clear the flag when we removed hooks OR successfully listed and found
+    # nothing of ours (hook deleted GitHub-side, URL changed) — otherwise the
+    # repo strands on "registered" with no working hook. A failed listing keeps
+    # the flag so a transient error can't fake an unregistered state.
+    if removed or listed:
         row.webhook_registered = False
         session.commit()
     return jsonify(

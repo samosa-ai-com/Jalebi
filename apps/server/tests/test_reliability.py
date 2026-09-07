@@ -747,6 +747,242 @@ def test_no_recovery_when_disabled(q, session, repo_row, monkeypatch) -> None:
     assert fresh.status == "failed"
 
 
+def test_maybe_recover_gives_up_at_cap(q, session, repo_row, monkeypatch) -> None:
+    """A task at the attempt cap stays failed with a give-up note (no loop)."""
+    _no_publish(session)
+    settings.set_setting(
+        session,
+        "retry_policy",
+        {"auto_retry": True, "max_attempts": 3, "non_retryable_patterns": []},
+    )
+    settings.set_setting(session, "ntfy_topic", "test-topic")  # give-up push is toggle-gated
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
+    task.retry_count = 3  # cap already reached
+    run = Run(
+        task_id=task.id,
+        seq=4,
+        session_id="ses_x",
+        status="failed",
+        started_at=now(),
+        finished_at=now(),
+        steps_json=json.dumps([{"type": "error", "text": "boom", "ts": now().isoformat()}]),
+    )
+    session.add(run)
+    task.status = "failed"
+    session.commit()
+
+    enqueued: list[int] = []
+    resumed: list[tuple[int, str]] = []
+    notified: list[int] = []
+    monkeypatch.setattr(q, "enqueue", lambda tid: enqueued.append(tid))
+    monkeypatch.setattr(q, "enqueue_followup", lambda tid, body, **k: resumed.append((tid, body)))
+    monkeypatch.setattr(q, "_notify", lambda *a, **k: notified.append(1))
+
+    import types as _types
+
+    state = _types.SimpleNamespace(last_step_text=None, last_phase=None)
+    q._maybe_recover(session, task, run, repo_row, state)
+
+    assert enqueued == []
+    assert resumed == []
+    session.expire_all()
+    fresh = tasks.get_task(session, task.id)
+    assert fresh is not None
+    assert fresh.status == "failed"
+    assert fresh.retry_count == 3  # not bumped past the cap
+    latest = tasks.latest_run(session, task.id)
+    assert latest is not None
+    steps = json.loads(latest.steps_json or "[]")
+    assert any("gave up" in str(s.get("text") or "") for s in steps)
+    assert notified == [1]  # exactly one give-up notification
+
+
+def test_give_up_message_reports_total_attempts(q, session, repo_row, monkeypatch) -> None:
+    """The give-up note counts the initial run plus recoveries (L6).
+
+    With max_attempts=3 and retry_count=3 the task ran 4 times total
+    (1 initial + 3 recoveries), so the message must say "4 attempt(s)".
+    """
+    _no_publish(session)
+    settings.set_setting(
+        session,
+        "retry_policy",
+        {"auto_retry": True, "max_attempts": 3, "non_retryable_patterns": []},
+    )
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
+    task.retry_count = 3  # cap already reached
+    run = Run(
+        task_id=task.id,
+        seq=4,
+        session_id="ses_x",
+        status="failed",
+        started_at=now(),
+        finished_at=now(),
+        steps_json=json.dumps([{"type": "error", "text": "boom", "ts": now().isoformat()}]),
+    )
+    session.add(run)
+    task.status = "failed"
+    session.commit()
+
+    import types as _types
+
+    state = _types.SimpleNamespace(last_step_text=None, last_phase=None)
+    q._maybe_recover(session, task, run, repo_row, state)
+
+    latest = tasks.latest_run(session, task.id)
+    assert latest is not None
+    steps = json.loads(latest.steps_json or "[]")
+    assert any("after 4 attempt(s)" in str(s.get("text") or "") for s in steps)
+
+
+def test_maybe_recover_non_retryable_fails_fast(q, session, repo_row, monkeypatch) -> None:
+    """A wrong-model failure never recovers, even on the first attempt."""
+    _no_publish(session)
+    settings.set_setting(
+        session,
+        "retry_policy",
+        {
+            "auto_retry": True,
+            "max_attempts": 3,
+            "non_retryable_patterns": ["model not found"],
+        },
+    )
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
+    run = Run(
+        task_id=task.id,
+        seq=1,
+        session_id="ses_x",
+        status="failed",
+        started_at=now(),
+        finished_at=now(),
+        steps_json=json.dumps(
+            [{"type": "error", "text": "Model not found: gpt-wrong", "ts": now().isoformat()}]
+        ),
+    )
+    session.add(run)
+    task.status = "failed"
+    session.commit()
+
+    enqueued: list[int] = []
+    resumed: list[tuple[int, str]] = []
+    monkeypatch.setattr(q, "enqueue", lambda tid: enqueued.append(tid))
+    monkeypatch.setattr(q, "enqueue_followup", lambda tid, body, **k: resumed.append((tid, body)))
+
+    q._maybe_recover(session, task, run)
+
+    assert enqueued == []
+    assert resumed == []
+    session.expire_all()
+    fresh = tasks.get_task(session, task.id)
+    assert fresh is not None
+    assert fresh.status == "failed"
+    assert fresh.retry_count == 0
+    latest = tasks.latest_run(session, task.id)
+    assert latest is not None
+    steps = json.loads(latest.steps_json or "[]")
+    assert any("non-retryable" in str(s.get("text") or "") for s in steps)
+
+
+def test_always_failing_task_notifies_twice_then_stops(    q, session, repo_row, monkeypatch
+) -> None:
+    """End-to-end: first failure + give-up notify; nothing loops forever."""
+    _no_publish(session)
+    settings.set_setting(
+        session, "retry_policy", {"auto_retry": True, "max_attempts": 1}
+    )
+    settings.set_setting(session, "ntfy_topic", "test-topic")
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
+
+    class AlwaysFailsAdapter:
+        def start(self, cwd, prompt, model=None, env=None):
+            return FakeHandle(
+                [AgentEvent(type="error", text="boom")], session_id="ses_loop"
+            )
+
+        def resume(self, cwd, session_id, prompt, model=None, env=None):
+            return FakeHandle(
+                [AgentEvent(type="error", text="boom")], session_id="ses_loop"
+            )
+
+        def list_models(self):
+            return []
+
+    monkeypatch.setattr("jalebi.queue.get_adapter", lambda cli: AlwaysFailsAdapter())
+    notified: list[str] = []
+    monkeypatch.setattr(
+        q, "_notify", lambda session, task, repo, state, **k: notified.append(task.status)
+    )
+
+    q._run_task(task.id)  # run 1 fails -> notify (first) + recover
+    session.expire_all()
+    queued = tasks.get_task(session, task.id)
+    assert queued is not None
+    assert queued.status == "queued"
+    q._run_followup(task.id, "continue", auto=True)  # run 2 fails -> give-up notify
+    session.expire_all()
+
+    fresh = tasks.get_task(session, task.id)
+    assert fresh is not None
+    assert fresh.status == "failed"
+    assert fresh.retry_count == 1
+    assert notified == ["failed", "failed"]  # first failure + give-up, nothing more
+    assert len(tasks.runs_for_task(session, task.id)) == 2
+
+
+def test_enabled_cli_falls_back_to_first_enabled(q, session) -> None:
+    """A run pinned to a disabled backend uses the first enabled one."""
+    from jalebi.queue import TaskQueue
+
+    settings.set_setting(session, "enabled_backends", ["opencode", "codex", "claude"])
+    assert TaskQueue._enabled_cli(session, "codex") == "codex"
+    settings.set_setting(session, "enabled_backends", ["opencode"])
+    assert TaskQueue._enabled_cli(session, "codex") == "opencode"
+
+
+def test_give_up_respects_notify_on_failed_off(q, session, repo_row, monkeypatch) -> None:
+    """With failure notifications off, the give-up push is suppressed too."""
+    _no_publish(session)
+    settings.set_setting(
+        session,
+        "retry_policy",
+        {"auto_retry": True, "max_attempts": 1, "non_retryable_patterns": []},
+    )
+    settings.set_setting(session, "ntfy_topic", "test-topic")
+    settings.set_setting(session, "notify_on_failed", False)
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
+    task.retry_count = 1  # cap already reached
+    run = Run(
+        task_id=task.id,
+        seq=2,
+        session_id="ses_x",
+        status="failed",
+        started_at=now(),
+        finished_at=now(),
+        steps_json=json.dumps([{"type": "error", "text": "boom", "ts": now().isoformat()}]),
+    )
+    session.add(run)
+    task.status = "failed"
+    session.commit()
+
+    notified: list[int] = []
+    monkeypatch.setattr(q, "_notify", lambda *a, **k: notified.append(1))
+
+    import types as _types
+
+    state = _types.SimpleNamespace(last_step_text=None, last_phase=None)
+    q._maybe_recover(session, task, run, repo_row, state)
+
+    assert notified == []
+    session.expire_all()
+    fresh = tasks.get_task(session, task.id)
+    assert fresh is not None
+    assert fresh.status == "failed"  # still gives up, just silently
+    latest = tasks.latest_run(session, task.id)
+    assert latest is not None
+    steps = json.loads(latest.steps_json or "[]")
+    assert any("gave up" in str(s.get("text") or "") for s in steps)
+
+
 def test_cancel_between_pickup_and_running_bails(q, session, repo_row, monkeypatch) -> None:
     """A cancel committed after the worker snapshots a queued task must not run.
 

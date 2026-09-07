@@ -21,11 +21,7 @@ import { Link } from "react-router-dom";
 
 import { taskEvents } from "../api/client";
 import { StatusBadge } from "./StatusBadge";
-import {
-  buildActivityBars,
-  formatElapsed,
-  lastMessageText,
-} from "../lib/runningCard";
+import { buildActivityBars, formatElapsed, lastMessageText } from "../lib/runningCard";
 import type { Run, Task } from "../types";
 
 function Sparkline({ bars }: { bars: number[] }) {
@@ -61,7 +57,15 @@ function Sparkline({ bars }: { bars: number[] }) {
   );
 }
 
-export function RunningCard({ task, repoName }: { task: Task; repoName?: string }) {
+export function RunningCard({
+  task,
+  repoName,
+  onCancel,
+}: {
+  task: Task;
+  repoName?: string;
+  onCancel?: () => void;
+}) {
   const run = task.run;
   const [, setTick] = useState(0);
   // Re-render every 1 s so the elapsed timer advances.
@@ -78,7 +82,7 @@ export function RunningCard({ task, repoName }: { task: Task; repoName?: string 
     if (!runId) return;
     const stop = taskEvents(
       task.id,
-      () => setTick((t) => t + 1),  // re-render on each new event
+      () => setTick((t) => t + 1), // re-render on each new event
       () => setTick((t) => t + 1)
     );
     return stop;
@@ -88,8 +92,7 @@ export function RunningCard({ task, repoName }: { task: Task; repoName?: string 
   const lastMsg = lastMessageText(steps as never) ?? null;
   const bars = buildActivityBars(steps as never);
   const elapsed = formatElapsed(run?.started_at ?? null);
-  const prNumber =
-    task.prs?.length ? task.prs[0] : (task.pr_number ?? null);
+  const prNumber = task.prs?.length ? task.prs[0] : (task.pr_number ?? null);
 
   return (
     <div className="surface flex flex-wrap items-center gap-3 px-4 py-3">
@@ -133,6 +136,16 @@ export function RunningCard({ task, repoName }: { task: Task; repoName?: string 
         </a>
       )}
       {bars.length > 0 && <Sparkline bars={bars} />}
+      {onCancel && (
+        <button
+          type="button"
+          onClick={onCancel}
+          title="Cancel this task"
+          className="rounded px-1.5 py-0.5 font-mono text-[11px] text-ink-400 ring-1 ring-ink-700/60 transition-colors hover:bg-red-500/10 hover:text-red-300"
+        >
+          Cancel
+        </button>
+      )}
     </div>
   );
 }

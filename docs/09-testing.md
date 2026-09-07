@@ -9,6 +9,10 @@
 - Server tests: `uv run pytest` (inside `apps/server`).
 - Web tests: `npm test -w @jalebi/web` (vitest).
 - Both: `npm test` (runs server pytest then web vitest).
+- Fast server runs: `uv run pytest -n 4` (pytest-xdist, dev dep) — the suite is
+  worker-safe (per-test tmp dirs + file DBs, no bound ports); ~14s for 931
+  tests vs ~50s serial.
+- Slowest-first triage: `uv run pytest --durations=12`.
 - Lint/format: `uv run ruff check` (server); `npm run lint` / `npm run format` (web).
 - Typecheck: `npm run typecheck` (web, `tsc --noEmit`).
 - Build: `npm run build` (web → `apps/web/dist`, served by Flask).
@@ -17,8 +21,8 @@ After any code change, run the relevant tests and build before marking work done
 
 ## 2. Test layout
 
-- **Server (`apps/server/tests/`, pytest):** `test_health`, `test_config`, `test_clock` (the app wall clock: local default, IANA override, offset-suffixed serialization), `test_schema` (migrations match models via `compare_metadata`), `test_settings` (defaults, round-trip, cross-session persistence, **`seed_defaults` materializes all keys at startup without overwriting user values**, full-restart persistence), `test_api_settings` (incl. merged `ntfy_topic` validation, notify toggles, removed `ntfy_url`), `test_secrets` (strict no-fallback resolution), `test_github` (client, incl. fork-PR metadata: `head_repo`/`head_sha`/`is_fork`/`maintainer_can_modify`), `test_api_github` (equal-account model), `test_repos`, `test_api_repos` (connect requires an account), `test_git_workspace` (local git repos, incl. real `refs/pull/N` review worktree, PR-head fix worktree + fork-head merge, stale-branch reset, prune of missing-but-registered worktrees, and publish-time `merge_origin_into` clean + conflict-abort + no-merge-in-progress raise), `test_opencode_adapter` (incl. no server-env leak in `_spawn`), `test_codex_adapter` (parse mapping incl. the notices-not-fatal invariant, `turn.failed` JSON unwrap, sandbox-probe both branches, **sandbox fallback logs a one-time warning**, models-cache read incl. **`supported_in_api` preference**, spawn wrapper), `test_claude_adapter` (no-auth `is_error` discriminator, init session capture, `result` terminal mapping, spawn wrapper), `test_runhandle`, `test_masking`, `test_prompts` (incl. **catalog personality + `@path` skill links**), `test_worktree_bootstrap` (incl. `external_directory: deny` guard, **per-CLI gh-guards — codex `.codex/rules/default.rules` (with `match`/`not_match` self-tests) + claude `.claude/settings.json` + the `PreToolUse` external-dir hook (`.claude/hooks/jalebi_deny_external.py`, unit-tested with hook JSON payloads), `CLAUDE.md` write for claude runs, all three guards skip repo-owned files (no-clobber) + remove_guard content-match cleanup, pre-commit hook rejects staged claude settings/skills, agent skills materialized to all three roots (`.claude`/`.codex`/`.agents`)/pruned when unused/excluded from git add**), `test_catalog` (service CRUD, slug/definition/skills validation, enable-only listing, file materialization), `test_api_catalog` (routes + task-creation with an agent), `test_reviews` (assign → one pr_review task per reviewer, kind/enabled validation, default prompt, status transitions, assignment dict, dedupe + partial-cleanup), `test_api_reviews` (assign endpoint, reviewers-on-create, kind validation, no-PR 409, address-reviewers follow-up embeds masked reviews, pr_number-column fallback), `test_webhooks` (signature verify, event-context extraction, rule CRUD + branch/author/label matching, delivery dedup, dispatch for start_review/triage_issue/create_task/rerun_review), `test_api_webhooks` (POST /webhook end-to-end incl. dedup + signature 403 + unconnected-repo ignore + **write-only webhook_secret + password-requires-secret + triage masking + concurrent redelivery race**, /api/triggers CRUD + validation, webhook status, replay-with-dedup, registration-without-URL 409, `/api/models?cli=` per-backend + unknown→empty + override), `test_artifacts`, `test_queue` (incl. selected-account agent env, dirty-tree surfacing, per-task publish mode, issue_fix single-target worktree base, publish conflict → needs_approval, issue comment on new-PR only, manual-publish no-op gate, **terminal + progress ntfy notifications, env-var injection into agent env, env-var value masking, catalog agent cli/model/custom-instructions/skills applied at run time + disabled-agent fallback, reviewer assignment lifecycle (posted on success, failed on posting error / non-done run)**), `test_cron` (5-field matcher: single/list/range/step values, invalid expressions, `datetime` wrapper + day-of-week shift), `test_screening` (findings parse incl. fenced/prose/bad input + string-literal bracket handling + severity normalization, run loop with fake adapter over a real git remote, baseline dedup + force, no-account failure, findings/output masking, error-event → failed, ntfy on findings when enabled / skipped when disabled, CRUD validation, scheduler `_due_screens` + `tick` with a fixed clock, unpinned screen resolves `default_backend` while a pinned one wins, default model applied only on the default backend), `test_api_screening` (templates, CRUD + validation, runs history, async run-now), `test_check_runs` (state mapping, status context, type+flag gating, pr_review pending→terminal on the PR head, issue_fix status set completed at publish, status API failure is non-fatal), `test_api_repos` (incl. `PATCH /api/repos/<id>` check_runs_enabled toggle + validation), `test_followups` (incl. follow-up backend override → fresh-session fork seeded with the prior conversation; same-backend resumes), `test_reliability`, `test_api_tasks` (incl. publish-mode defaults/override, oversized-prompt rejection, delete, account required, publish 409 on conflict/no-op, `env_vars` on create, PR-head sentinel validation + PR-base target resolution), `test_publish_modes` (incl. fork-PR `update_pr`: push to fork URL with head-SHA lease, maintainer-edits-off refusal, fork conflict propagation), `test_envvars` (service + routes: upsert/scope/`.env` import incl. empty/multiline/skipped-line reporting/masked API), `test_notify` (endpoint parsing, JSON publishing to server root, masked send, silent failure), `test_api_notify` (test endpoint), `test_sse`, `test_spa`. Fixtures in `conftest.py`: `config` (tmp data dir), `app` (via `create_app(config)`), `client` (Flask test client), `session`, `engine`. (~807 tests; `uv run pytest`.))
-- **Web (`apps/web/src`, vitest + RTL):** `App.test.tsx` (shell), `pages/Tasks.test.tsx`, `pages/TaskDetail.test.tsx` (incl. run-end diff rendering with file label + stats, run history rows with status/duration/markers), `pages/Github.test.tsx`, `pages/Settings.test.tsx`, `pages/Repos.test.tsx` (incl. the check-runs toggle), `pages/Screenings.test.tsx` (incl. template-selection visibility, scope-branch dropdown, cron presets, edit-from-card, the in-flight "Running…" state, and the UNTRUSTED finding→task prompt),            `pages/Agents.test.tsx` (incl. the CLI override + model-pin dropdown options). (~110 tests; `npm test -w @jalebi/web`.)
+- **Server (`apps/server/tests/`, pytest):** `test_health`, `test_config`, `test_clock` (the app wall clock: local default, IANA override, offset-suffixed serialization), `test_schema` (migrations match models via `compare_metadata`), `test_settings` (defaults incl. bounded `retry_policy`, round-trip, cross-session persistence, **`seed_defaults` materializes all keys at startup without overwriting user values**, full-restart persistence), `test_api_settings` (incl. merged `ntfy_topic` validation, notify toggles, removed `ntfy_url`, `retry_policy` cap/pattern validation), `test_api_data` (usage, backup round-trip + snapshot consistency, vacuum, prune dry-run→execute + orphans), `test_reliability` (incl. **bounded recovery**: cap give-up with single notification, non-retryable fast-fail, always-failing task notifies twice then stops), `test_secrets` (strict no-fallback resolution), `test_github` (client, incl. fork-PR metadata: `head_repo`/`head_sha`/`is_fork`/`maintainer_can_modify`), `test_api_github` (equal-account model), `test_repos`, `test_api_repos` (connect requires an account), `test_git_workspace` (local git repos, incl. real `refs/pull/N` review worktree, PR-head fix worktree + fork-head merge, stale-branch reset, prune of missing-but-registered worktrees, and publish-time `merge_origin_into` clean + conflict-abort + no-merge-in-progress raise), `test_opencode_adapter` (incl. no server-env leak in `_spawn`), `test_codex_adapter` (parse mapping incl. the notices-not-fatal invariant, `turn.failed` JSON unwrap, sandbox-probe both branches, **sandbox fallback logs a one-time warning**, models-cache read incl. **`supported_in_api` preference**, spawn wrapper), `test_claude_adapter` (no-auth `is_error` discriminator, init session capture, `result` terminal mapping, spawn wrapper), `test_runhandle`, `test_masking`, `test_prompts` (incl. **catalog personality + `@path` skill links**), `test_worktree_bootstrap` (incl. `external_directory: deny` guard, **per-CLI gh-guards — codex `.codex/rules/default.rules` (with `match`/`not_match` self-tests) + claude `.claude/settings.json` + the `PreToolUse` external-dir hook (`.claude/hooks/jalebi_deny_external.py`, unit-tested with hook JSON payloads), `CLAUDE.md` write for claude runs, all three guards skip repo-owned files (no-clobber) + remove_guard content-match cleanup, pre-commit hook rejects staged claude settings/skills, agent skills materialized to all three roots (`.claude`/`.codex`/`.agents`)/pruned when unused/excluded from git add**), `test_catalog` (service CRUD, slug/definition/skills validation, enable-only listing, file materialization), `test_api_catalog` (routes + task-creation with an agent), `test_reviews` (assign → one pr_review task per reviewer, kind/enabled validation, default prompt, status transitions, assignment dict, dedupe + partial-cleanup), `test_api_reviews` (assign endpoint, reviewers-on-create, kind validation, no-PR 409, address-reviewers follow-up embeds masked reviews, pr_number-column fallback), `test_webhooks` (signature verify, event-context extraction, rule CRUD + branch/author/label matching, delivery dedup, dispatch for start_review/triage_issue/create_task/rerun_review), `test_api_webhooks` (POST /webhook end-to-end incl. dedup + signature 403 + unconnected-repo ignore + **write-only webhook_secret + password-requires-secret + triage masking + concurrent redelivery race**, /api/triggers CRUD + validation, webhook status, replay-with-dedup, registration-without-URL 409, `/api/models?cli=` per-backend + unknown→empty + override), `test_artifacts`, `test_queue` (incl. selected-account agent env, dirty-tree surfacing, per-task publish mode, issue_fix single-target worktree base, publish conflict → needs_approval, issue comment on new-PR only, manual-publish no-op gate, **terminal + progress ntfy notifications, env-var injection into agent env, env-var value masking, catalog agent cli/model/custom-instructions/skills applied at run time + disabled-agent fallback, reviewer assignment lifecycle (posted on success, failed on posting error / non-done run)**), `test_cron` (5-field matcher: single/list/range/step values, invalid expressions, `datetime` wrapper + day-of-week shift), `test_screening` (findings parse incl. fenced/prose/bad input + string-literal bracket handling + severity normalization, run loop with fake adapter over a real git remote, baseline dedup + force, no-account failure, findings/output masking, error-event → failed, ntfy on findings when enabled / skipped when disabled, CRUD validation, scheduler `_due_screens` + `tick` with a fixed clock, unpinned screen resolves `default_backend` while a pinned one wins, default model applied only on the default backend), `test_api_screening` (templates, CRUD + validation, runs history, async run-now), `test_check_runs` (state mapping, status context, type+flag gating, pr_review pending→terminal on the PR head, issue_fix status set completed at publish, status API failure is non-fatal), `test_api_repos` (incl. `PATCH /api/repos/<id>` check_runs_enabled toggle + validation), `test_followups` (incl. follow-up backend override → fresh-session fork seeded with the prior conversation; same-backend resumes), `test_reliability`, `test_api_tasks` (incl. publish-mode defaults/override, oversized-prompt rejection, delete, account required, publish 409 on conflict/no-op, `env_vars` on create, PR-head sentinel validation + PR-base target resolution), `test_publish_modes` (incl. fork-PR `update_pr`: push to fork URL with head-SHA lease, maintainer-edits-off refusal, fork conflict propagation), `test_envvars` (service + routes: upsert/scope/`.env` import incl. empty/multiline/skipped-line reporting/masked API), `test_notify` (endpoint parsing, JSON publishing to server root, masked send, silent failure), `test_api_notify` (test endpoint), `test_sse`, `test_spa`. Fixtures in `conftest.py`: `config` (tmp data dir), `app` (via `create_app(config)`), `client` (Flask test client), `session`, `engine`. (~807 tests; `uv run pytest`.))
+- **Web (`apps/web/src`, vitest + RTL):** `App.test.tsx` (shell), `pages/Tasks.test.tsx`, `pages/TaskDetail.test.tsx` (incl. run-end diff rendering with file label + stats, run history rows with status/duration/markers), `pages/Github.test.tsx`, `pages/Settings.test.tsx` (collapsible sections, blur-only IDE saves, custom IDE with zero detections, recovery-attempt save, stale-model warning, Data section), `pages/Repos.test.tsx` (incl. the check-runs toggle), `pages/Screenings.test.tsx` (incl. template-selection visibility, scope-branch dropdown, cron presets, edit-from-card, the in-flight "Running…" state, and the UNTRUSTED finding→task prompt),            `pages/Agents.test.tsx` (incl. the CLI override + model-pin dropdown options), `pages/Triggers.test.tsx` (rule form validation, agent picker, stale-form remount, delivery expansion + replay outcome, log filter). (144 tests; `npm test -w @jalebi/web`.)
 
 ## 3. Test strategy per layer (PRD §13)
 
@@ -136,3 +140,249 @@ After any code change, run the relevant tests and build before marking work done
     bare remotes, GitHub via mocks.
 - **Suite totals at PR:** server **828 collected**, web **119 passed**.
   Full gates green (server suite modulo the known flake).
+
+- **Settings overhaul + smart recovery + data management (server +10, web +5):**
+  - `test_api_data.py` (new, 6) — usage, backup round-trip + snapshot
+    consistency, vacuum, prune dry-run→execute + orphans.
+  - `test_api_settings.py` (+1) — `retry_policy` cap/pattern validation.
+  - `test_reliability.py` (+3) — cap give-up with single notification,
+    non-retryable fast-fail, always-failing task notifies twice then stops.
+  - `test_settings.py` — default `retry_policy` shape updated (bounded).
+  - `Settings.test.tsx` (+5) — custom IDE with zero detections, blur-only IDE
+    saves, recovery-attempt save, stale-model warning, Data section — plus
+    collapsed-by-default, search narrowing, and the no-match empty note (+3).
+- **Suite totals now:** server **853 passed**, web **128 passed**.
+  Ruff, ESLint, `tsc --noEmit`, Prettier, production build clean (the Vite
+  large-chunk warning remains).
+
+- **AGY review fixes (server +5, web +3):**
+  - `test_api_data.py` (+4) — prune task with a `CheckRun` row (no
+    IntegrityError), deliveries scope removes screening worktrees, logs +
+    orphan artifacts, backup `0600` + WAL counted in usage.
+  - `test_reliability.py` (+1) — `notify_on_failed=false` suppresses the
+    give-up push (still gives up silently with the timeline note).
+  - `Settings.test.tsx` (+3) — failed save reverts the draft, expand-all
+    opens every section, one-click stale-model fix saves the first model.
+- **Suite totals now:** server **858 passed**, web **131 passed.**
+  Ruff, ESLint, `tsc --noEmit`, Prettier, production build clean (the Vite
+  large-chunk warning remains).
+
+- **Settings round 2 — backends, timezones, presets, no-auto-delete (server +3, web +3):**
+  - `test_api_settings.py` (+2) — `enabled_backends` validation + cross-field
+    rules, `/api/backends` shape, `/api/timezones` shape.
+  - `test_reliability.py` (+1) — `_enabled_cli` falls back to first enabled.
+  - `test_events.py` — throttled-sweep test replaced with a no-auto-prune test
+    (publishing never trims the table; `prune_task_events` kept as a utility).
+  - `Settings.test.tsx` (+3) — backend uncheck saves the reduced list,
+    timezone dropdown saves, secret preset tick saves the combined list.
+- **Suite totals now:** server **861 passed**, web **134 passed.**
+  Ruff, ESLint, `tsc --noEmit`, Prettier, production build clean (the Vite
+  large-chunk warning remains).
+
+- **Settings round 3 — restore UI, model copy (server +2, web +1):**
+  - `test_api_data.py` (+2) — restore dry-run→execute round-trip (setting
+    value comes back, safety snapshot listed), busy/unknown/confirm refusals.
+  - `Settings.test.tsx` (+1) — restore previews then executes on RESTORE.
+- **Suite totals now:** server **863 passed**, web **135 passed.**
+  Ruff, ESLint, `tsc --noEmit`, Prettier, production build clean (the Vite
+  large-chunk warning remains).
+
+- **Triggers round — AGY review + Codex adjudication + full fix (server +13, web +9):**
+  - `test_api_webhooks.py` (+13 net: 4 rewritten to the new contracts, 11 new) —
+    bare `pull_request_review` firing, replay persist + error/empty retry +
+    second-replay skip, PUT null-clears, rerun assignment reset, register
+    adopt-on-422, unregister refuse/clear, rule validation, default-branch
+    targeting, `triggered_by`, corrupt-result resilience, JSON 404 writes, 413.
+  - `Triggers.test.tsx` (+8), `TaskDetail.test.tsx` (+1) — inline validation,
+    per-action agent picker, stale-form remount, chips, secret warning,
+    delivery expansion + task links, log filter, replay outcome, Started-by.
+  - Adjudication record: Codex CONFIRMED the webhook `main` hardcode as a real
+    bug (fixed: repo `default_branch` passed at dispatch); DOWNGRADED the
+    missing triage/create agent picker (default-agent fallback, no failure)
+    and the `poll_fallback` toggle (stays hidden — PRD-deferred; the running
+    poller is the Phase 4 PR observer, not trigger fallback).
+  - Intern-review follow-ups: dead-code + double-stamp cleanup, JSON 404 for
+    all write methods (not just POST).
+- **Suite totals now:** server **875 passed**, web **144 passed.**
+  Ruff, ESLint, `tsc --noEmit`, Prettier, production build clean (the Vite
+  large-chunk warning remains).
+
+- **Screening round — Codex review (23 items) + full fix (server +13, web +8):**
+  - `test_screening.py` (+7), `test_cron.py` (+1), `test_api_screening.py` (+5):
+    strict findings parsing + garbage-fails-run, stale-run reconcile,
+    delete-race recheck, nullable clears, model-drop on backend switch, finding
+    caps, cron full-range OR, strict input types, preflight-failure runs with
+    masking, SSE 404, summary lists.
+  - AGY-review follow-ups (+4 server): 409-on-held-lock, no-ghost-row on
+    runtime failure, strict rejection of non-finding arrays, scheduler-tick
+    preflight persistence.
+  - `Screenings.test.tsx` (+7), `App.test.tsx` (+1): loading state, card
+    latest-run summary, prompt-review composer + task link, run-now endpoint +
+    inline error, delete-disabled mid-run, model reset, branch/history error
+    states, nav badge.
+  - AGY-review frontend follow-ups (+2 web): badge clears on navigation,
+    card refresh waits for the background run row.
+- **Suite totals now:** server **892 passed**, web **154 passed.**
+  Ruff, ESLint, `tsc --noEmit`, Prettier, production build clean (the Vite
+  large-chunk warning remains).
+
+- **Screening inbox round (server +3, web +3):**
+  - `test_api_screening.py` (+3): inbox ordering + context, severity/screen
+    filters + validation, empty case.
+  - `Screenings.test.tsx` (+3): inbox list + severity filter, composer from
+    inbox, health banner on failing screen.
+- **Suite totals now:** server **895 passed**, web **157 passed.**
+  Ruff, ESLint, `tsc --noEmit`, Prettier, production build clean (the Vite
+  large-chunk warning remains).
+
+- **Inbox AGY-review fixes (server +2, web +3):** unbounded scan bounded +
+  fields coerced (incl. malformed-row test), `screen_id` garbage 400s,
+  severity/screen filters server-side, unique inbox keys, sync-setState
+  violations removed (real `npm run lint` green), text-filter + empty-inbox +
+  screen-filter tests.
+- **Suite totals now:** server **897 passed**, web **160 passed.**
+  Ruff, `npm run lint`, `tsc --noEmit`, Prettier, production build clean (the
+  Vite large-chunk warning remains).
+
+- **Dealt-findings round (web +3):** hide-dealt-on-task-creation, reveal +
+  reopen via toggle, Findings-default tab.
+- **Suite totals now:** server **897 passed**, web **163 passed.**
+  Ruff, `npm run lint`, `tsc --noEmit`, Prettier, production build clean (the
+  Vite large-chunk warning remains).
+
+- **Agents round (server +3, web +5):**
+  - `test_api_catalog.py` (+3): strict create types, cli-switch drops model,
+    usage endpoint (tasks + rules, 404).
+  - `Agents.test.tsx` (+5): usage display + row toggle, stale-form remount,
+    slug/skill inline validation, model reset on CLI switch, delete-impact
+    confirm.
+- **Suite totals now:** server **900 passed**, web **168 passed.**
+  Ruff, `npm run lint`, `tsc --noEmit`, Prettier, production build clean (the
+  Vite large-chunk warning remains; one pre-existing ruff I001 in
+  `tests/test_api_catalog.py` untouched).
+
+- **Skills/agents round (server +17, web +11):**
+  - `test_catalog_skills.py` (+9): library CRUD/validation, link validation,
+    resolve order/merge/unknown-skip, reference propagation, usage + delete
+    guard, description/avatar validation.
+  - `test_api_skills.py` (+4): skill routes, 409-with-agents, usage, agent
+    link/meta + unknown-link 400s.
+  - `test_seed_catalog.py` (+4): insert-noop, never-overwrites,
+    deletion-stays-deleted, version-bump.
+  - `Skills.test.tsx` (+8), `Agents.test.tsx` (+3): library page behaviors;
+    avatar rows/suggestion/attach/override.
+  - Migration `d4e5f6a7b8c9` verified end-to-end on a scratch DB (alembic to
+    prior head → legacy inline rows → upgrade head: dedupe, `-2` collision
+    suffix, links preserved, `skills_json` cleared).
+- **Suite totals now:** server **917 passed**, web **179 passed.**
+  `npm run lint`, `tsc --noEmit`, Prettier, production build clean (the Vite
+  large-chunk warning remains).
+
+- **Seed landing + review fixes (server +2):**
+  - `test_seed_content.py` (+2): all 31 seed skills pass the service
+    validator; all 16 agents link only seeded skills, valid avatars/kinds.
+  - `conftest.py`: the `app` fixture wipes both catalog tables + resets the
+    seed version per test (startup seeds would otherwise collide with test
+    slugs; done in `app` — not autouse — so pure-tmp_path git tests never
+    instantiate the app and its `data/` dir).
+- **Suite totals now:** server **919 passed**, web **179 passed.**
+  Ruff clean except one pre-existing I001 in `tests/test_api_catalog.py`
+  (verified on the clean tree, untouched); `npm run lint`, `tsc --noEmit`,
+  Prettier, production build clean.
+
+- **Speed round (2026-09-07):** suite took 4–10+ min serial; now **~50s
+  serial / ~14s with `-n 4`** (931 tests). Changes:
+  - `conftest.py`: session-scoped `template_db` (migrated + seeded once),
+    per-test file copy into the `app` fixture — replaces 20-migration +
+    ~50-seed-insert bootstrap per test (~0.25s → ms). Catalog wipe kept, so
+    each test still starts with an empty library.
+  - `db.py`: `run_migrations` reuses a cached Alembic `ScriptDirectory`
+    (revision files are pure code — safe across DBs in one process) with a
+    plain-`upgrade` fallback on any surprise. Also speeds up production
+    restarts marginally.
+  - `screening.py`: watchdog stop flag → `threading.Event` (`wait(1)`);
+    `join` returns immediately on run end instead of sleeping out a 1s
+    quantum (~1s saved per screening-run test; no behavior change).
+  - `test_sse.py`: fixed stale `_seq.get(task_id)` waits (key is
+    `(task_id, run_id)` since durable-SSE) via a `_published_seq` helper —
+    the backfill test alone burned ~20s spinning past two 10s deadlines.
+  - `test_api_settings.py`: `test_models_endpoint_cli_query_param`
+    monkeypatches `OpenCodeAdapter.list_models` (the real one spawns the
+    `opencode models` CLI, ~1.5s; the test covers param routing, not the
+    binary).
+  - `pytest-xdist` added to dev deps (worker-safe: per-test tmp dirs +
+    file DBs, no bound ports). Default stays serial; pass `-n auto` for
+    speed. Remaining slowest tests are intentional waits (stall timeouts,
+    worker-pool polling, concurrency threads).
+
+- **Agents library-only round (web +5):** `Agents.test.tsx` 20 tests — slug
+  validation, search/kind/status/sort, picker search, save-drops-inline,
+  avatar suggestion/attach/override.
+- **GitHub round (web +8):** `Github.test.tsx` 16 tests — repo search/filter/
+  sort, error + retry, refresh, connect busy, scope guidance, collapse
+  behaviors + persistence.
+- **Suite totals now:** server **919 passed**, web **192 passed.**
+
+- **Repos round (server +1, web +6 net):**
+  - `test_api_repos.py` (+1): `?include_disconnected=1` reveals
+    soft-disconnected repos (hidden by default).
+  - `Repos.test.tsx` (rewritten, 1 → 7 tests): metadata rows, no connect
+    form, search/account filter, statuses toggle, disconnected + reconnect,
+    refresh, GitHub-page empty state.
+- **Suite totals now:** server **920 passed**, web **198 passed.**
+
+- **Task-63 lock-crash fix (server +3):**
+  - `test_events_concurrency.py` (+3, new file): threaded publishers lose
+    nothing; lock-failure isolation (caller session untouched); memory-only
+    without run_id.
+  - Independently validated by AGY (approve): caught a real showstopper
+    (`db.get_session` factory unusable on worker threads → `db.Session`),
+    snapshot-before-try for all three handlers, `_run_followup` repair
+    verified clean. Pre-existing `test_api_catalog.py` I001 left untouched.
+- **Suite totals now:** server **923 passed**, web **198 passed** (no frontend
+  changes this round).
+
+- **TaskDetail round (web +8):** `TaskDetail.test.tsx` 43 tests — queued
+  polling + refresh, agent chip + vitality, single-run strip, timeline
+  search/filter, follow-up hint, prompt + waiting-message copy, tab-visible
+  resync (one pre-existing assertion widened: duplicate status pills).
+- **Suite totals now:** server **923 passed**, web **206 passed.**
+  No backend changes; daemon NOT restarted (owner constraint pending task 63).
+
+- **Tasks queue overhaul (web +17):** `Tasks.test.tsx` 39 tests — benign
+  attention hidden, cancelled pill, repo filter, clickable stat cards, row
+  nav, prompt expand, clone prefill (+ branch preservation, proven against
+  the unguarded version), running-card Cancel, row re-run, bulk delete +
+  bulk dismiss, refresh stamp, collapsed Advanced, PR auto-branches,
+  optional review prompt + default, creation flash. Three pre-existing tests
+  adjusted for the collapsed Advanced section; `localStorage.clear()` per
+  block (remembered task defaults leak across tests otherwise); clone scroll
+  guarded for jsdom. AGY review (request-changes) caught 2 real blockers —
+  clone-branch clobber by the context fetch (fixed with a consume-once
+  preserve flag) and DepBadges links bubbling to the row nav — plus 5 nits
+  (ID link keyboard access, offset-aware `timeAgo`, prompt-cell keyboard,
+  clone pats/env, action coverage), all fixed.
+- **Suite totals now:** server **923 passed**, web **223 passed.**
+  No backend changes.
+
+- **PR #5 review fixes (server +7, web +1):** triaged the Jalebi review —
+  fixed M2/M3/M4/L1/L4/L6/L8 + C2, deliberately left M1 (product-level
+  capacity call; per-(task,run) 2000-row cap already bounds a single run),
+  L2 (bare-event semantics already in `docs/16-triggers.md`), L3 (replay
+  idempotency semantics), L5 (safe fallback beats a stale pin), L7 (review
+  premise wrong — `Run` has no `error` column; `steps_json` is the only
+  output store), C1/C3/C4 (churn/no-action).
+  - `test_api_data.py` (+4): restore 409 while a screening run is active
+    (dry-run `busy_screenings`), vacuum lock → 409, preview counts
+    legacy `run_id`-NULL events by `task_id`, `_chunked` unit test.
+  - `test_api_screening.py` (+1): rare-severity inbox fills `limit` from
+    deeper history (paged scan, 2000-run cap).
+  - `test_catalog_skills.py` (+1): unknown skill link logs a warning.
+  - `test_reliability.py` (+1): give-up note reports total attempts
+    (initial + recoveries).
+  - `Settings.test.tsx` (+1): restore button disabled + row shown while
+    screening runs are busy.
+- **Suite totals now:** server **930 passed**, web **224 passed.**
+  Ruff `src/` clean (one pre-existing I001 in `tests/test_api_catalog.py`
+  untouched); `tsc --noEmit`, production build clean (the Vite
+  large-chunk warning remains).

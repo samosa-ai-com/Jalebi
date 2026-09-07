@@ -1,6 +1,10 @@
 import type {
+  AgentUsage,
+  BackupInfo,
+  BackendsResponse,
   CatalogAgent,
   CatalogSkill,
+  DataUsage,
   EnvVar,
   EventDelivery,
   FileEntry,
@@ -8,15 +12,22 @@ import type {
   GithubRepo,
   Health,
   IdeDetectResponse,
+  LibrarySkill,
+  PrunePreview,
   PublishCheck,
   Repo,
+  ReplayResponse,
   Run,
   Screen,
+  ScreeningFinding,
   ScreeningRun,
   ScreenTemplate,
   SettingsMap,
+  SkillUsage,
   SseEvent,
   Task,
+  RestorePreview,
+  TimezoneList,
   TokensResponse,
   TriggerRule,
   WebhookStatus,
@@ -61,12 +72,15 @@ export interface CreateTaskInput {
 export const api = {
   getHealth: () => request<Health>("/api/health"),
   getSettings: () => request<SettingsMap>("/api/settings"),
+  getBackends: () => request<BackendsResponse>("/api/backends"),
+  getTimezones: () => request<TimezoneList>("/api/timezones"),
   getModels: (cli?: string) =>
     request<{ cli: string; models: string[] }>(
       cli ? `/api/models?cli=${encodeURIComponent(cli)}` : "/api/models"
     ),
   getAgents: (enabledOnly = false) =>
     request<CatalogAgent[]>(`/api/agents${enabledOnly ? "?enabled=1" : ""}`),
+  getAgent: (slug: string) => request<CatalogAgent>(`/api/agents/${encodeURIComponent(slug)}`),
   createAgent: (input: {
     id: string;
     name: string;
@@ -75,8 +89,11 @@ export const api = {
     model?: string | null;
     personality_md?: string;
     skills?: CatalogSkill[];
+    skill_ids?: string[];
     custom_instructions?: string;
     enabled?: boolean;
+    description?: string;
+    avatar?: string | null;
   }) => request<CatalogAgent>("/api/agents", { method: "POST", body: JSON.stringify(input) }),
   updateAgent: (
     slug: string,
@@ -87,8 +104,11 @@ export const api = {
       model?: string | null;
       personality_md?: string;
       skills?: CatalogSkill[];
+      skill_ids?: string[];
       custom_instructions?: string;
       enabled?: boolean;
+      description?: string;
+      avatar?: string | null;
     }
   ) =>
     request<CatalogAgent>(`/api/agents/${encodeURIComponent(slug)}`, {
@@ -99,6 +119,30 @@ export const api = {
     request<{ deleted: string }>(`/api/agents/${encodeURIComponent(slug)}`, {
       method: "DELETE",
     }),
+  getAgentUsage: (slug: string) =>
+    request<AgentUsage>(`/api/agents/${encodeURIComponent(slug)}/usage`),
+  getSkills: () => request<LibrarySkill[]>("/api/skills"),
+  createSkill: (input: {
+    id: string;
+    name: string;
+    description?: string;
+    content?: string;
+    tags?: string[];
+  }) => request<LibrarySkill>("/api/skills", { method: "POST", body: JSON.stringify(input) }),
+  updateSkill: (
+    slug: string,
+    input: { name?: string; description?: string; content?: string; tags?: string[] }
+  ) =>
+    request<LibrarySkill>(`/api/skills/${encodeURIComponent(slug)}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
+  deleteSkill: (slug: string) =>
+    request<{ deleted: string }>(`/api/skills/${encodeURIComponent(slug)}`, {
+      method: "DELETE",
+    }),
+  getSkillUsage: (slug: string) =>
+    request<SkillUsage>(`/api/skills/${encodeURIComponent(slug)}/usage`),
   getWebhookStatus: () => request<WebhookStatus>("/api/webhook/status"),
   getTriggerRules: (repoId?: number) =>
     request<TriggerRule[]>(`/api/triggers${repoId ? `?repo_id=${repoId}` : ""}`),
@@ -106,11 +150,11 @@ export const api = {
     repo_id: number;
     event: string;
     action: string;
-    branch_filter?: string;
+    branch_filter?: string | null;
     label_filter?: string[];
-    author_filter?: string;
+    author_filter?: string | null;
     agent_ids?: string[];
-    custom_instructions?: string;
+    custom_instructions?: string | null;
     enabled?: boolean;
   }) =>
     request<TriggerRule>("/api/triggers", {
@@ -138,7 +182,7 @@ export const api = {
     request<{ deleted: number }>(`/api/triggers/${id}`, { method: "DELETE" }),
   getDeliveries: () => request<EventDelivery[]>("/api/webhooks/deliveries"),
   replayDelivery: (id: number) =>
-    request<{ matched: number; results: unknown[] }>(`/api/webhooks/deliveries/${id}/replay`, {
+    request<ReplayResponse>(`/api/webhooks/deliveries/${id}/replay`, {
       method: "POST",
     }),
   getScreenTemplates: () => request<ScreenTemplate[]>("/api/screenings/templates"),
@@ -174,6 +218,14 @@ export const api = {
       method: "POST",
     }),
   getScreenRuns: (id: number) => request<ScreeningRun[]>(`/api/screenings/${id}/runs`),
+  getRecentFindings: (params?: { limit?: number; severity?: string; screen_id?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.limit !== undefined) q.set("limit", String(params.limit));
+    if (params?.severity) q.set("severity", params.severity);
+    if (params?.screen_id !== undefined) q.set("screen_id", String(params.screen_id));
+    const qs = q.toString();
+    return request<ScreeningFinding[]>(`/api/screenings/findings${qs ? `?${qs}` : ""}`);
+  },
   getRepoBranches: (repoId: number) =>
     request<{ full_name: string; branches: string[] }>(`/api/repos/${repoId}/branches`),
   registerWebhook: (repoId: number) =>
@@ -301,7 +353,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ reviewers }),
     }),
-  getRepos: () => request<Repo[]>("/api/repos"),
+  getRepos: (includeDisconnected = false) =>
+    request<Repo[]>(`/api/repos${includeDisconnected ? "?include_disconnected=1" : ""}`),
   connectRepo: (fullName: string, patName?: string) =>
     request<Repo>("/api/repos", {
       method: "POST",
@@ -309,21 +362,63 @@ export const api = {
     }),
   disconnectRepo: (id: number) =>
     request<{ disconnected: string }>(`/api/repos/${id}`, { method: "DELETE" }),
+  reconnectRepo: (id: number) => request<Repo>(`/api/repos/${id}/reconnect`, { method: "POST" }),
   updateRepo: (id: number, input: { check_runs_enabled?: boolean }) =>
     request<Repo>(`/api/repos/${id}`, { method: "PATCH", body: JSON.stringify(input) }),
   pruneRepos: () => request<{ removed: string[] }>("/api/repos/prune", { method: "POST" }),
+  getDataUsage: () => request<DataUsage>("/api/data/usage"),
+  getBackups: () => request<BackupInfo[]>("/api/data/backups"),
+  createBackup: () => request<BackupInfo>("/api/data/backups", { method: "POST" }),
+  deleteBackup: (name: string) =>
+    request<{ deleted: string }>(`/api/data/backups/${encodeURIComponent(name)}`, {
+      method: "DELETE",
+    }),
+  backupDownloadUrl: (name: string) => `/api/data/backups/${encodeURIComponent(name)}/download`,
+  restoreBackup: (name: string, input: { dry_run: boolean; confirm?: string }) =>
+    request<{
+      dry_run: boolean;
+      preview: RestorePreview;
+      restored?: string;
+      safety_backup?: string;
+    }>(`/api/data/backups/${encodeURIComponent(name)}/restore`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  vacuumData: () =>
+    request<{ before: number; after: number }>("/api/data/vacuum", { method: "POST" }),
+  pruneData: (input: {
+    older_than_days: number;
+    scopes: string[];
+    dry_run: boolean;
+    confirm?: string;
+  }) =>
+    request<{ dry_run: boolean; removed?: Record<string, number>; preview: PrunePreview }>(
+      "/api/data/prune",
+      { method: "POST", body: JSON.stringify(input) }
+    ),
   artifactUrl: (taskId: number, artifactId: number) =>
     `/api/tasks/${taskId}/artifacts/${artifactId}/download`,
   artifactContentUrl: (taskId: number, artifactId: number) =>
     `/api/tasks/${taskId}/artifacts/${artifactId}/content`,
 };
 
+/** Optional hooks for an SSE subscription (all no-ops by default). */
+export interface TaskEventsOptions {
+  /** Fired on every received frame (events, `connected`, and `ping`
+   * heartbeats) — use it to feed a stall watchdog. */
+  onActivity?: () => void;
+  /** Fired when the EventSource reports a fatal error (`readyState ===
+   * CLOSED`), where the browser will NOT auto-reconnect on its own. */
+  onConnectionLost?: () => void;
+}
+
 /** Subscribe to a task's live SSE stream. Returns an unsubscribe function. */
 export function taskEvents(
   taskId: number,
   onEvent: (event: SseEvent) => void,
   onEnd: () => void,
-  afterSeq?: number
+  afterSeq?: number,
+  opts?: TaskEventsOptions
 ): () => void {
   // Native EventSource cannot send custom headers: when JALEBI_PASSWORD is set,
   // this relies on the browser's cached Basic credentials (from the initial
@@ -338,15 +433,29 @@ export function taskEvents(
     try {
       event = JSON.parse(message.data) as SseEvent;
     } catch {
-      return; // ignore malformed/keepalive lines
+      return; // ignore malformed lines
     }
-    if (event.type === "connected") return;
+    // `connected` and `ping` (idle heartbeat) carry no timeline payload but
+    // prove the socket is alive — report them to the watchdog, not the UI.
+    if (event.type === "connected" || event.type === "ping") {
+      opts?.onActivity?.();
+      return;
+    }
     if (event.type === "stream_end") {
       source.close();
       onEnd();
       return;
     }
+    opts?.onActivity?.();
     onEvent(event);
+  };
+  source.onerror = () => {
+    // CONNECTING (0) = the browser is already retrying on its own (with
+    // Last-Event-ID, which the server honors). CLOSED (2) = it gave up
+    // (e.g. HTTP 4xx/5xx) and will never recover without a fresh subscribe.
+    if (source.readyState === EventSource.CLOSED) {
+      opts?.onConnectionLost?.();
+    }
   };
   // Transient errors: leave the EventSource open so the browser auto-reconnects
   // instead of killing the stream and losing buffered events.

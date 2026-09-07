@@ -78,6 +78,7 @@ export interface Task {
   issues: number[];
   prs: number[];
   env_vars: string[];
+  triggered_by?: { delivery_id: string; event: string; received_at: string } | null;
   created_at: string;
   updated_at: string;
   run: Run | null;
@@ -202,11 +203,14 @@ export interface RetryPolicy {
   continue_prompt?: string;
   timeout_multiplier?: number;
   max_timeout_minutes?: number;
+  max_attempts?: number;
+  non_retryable_patterns?: string[];
 }
 
 export interface SettingsMap {
   concurrency: number;
   auto_publish: boolean;
+  auto_nudge: boolean;
   ntfy_topic: string;
   default_timeout_minutes: number;
   retry_policy: RetryPolicy;
@@ -215,6 +219,8 @@ export interface SettingsMap {
   artifact_ttl_days: number;
   default_backend: string;
   default_model: string;
+  adapter_model_lists: Record<string, string[]>;
+  enabled_backends: string[];
   notify_on_done: boolean;
   notify_on_failed: boolean;
   notify_on_progress: boolean;
@@ -225,6 +231,50 @@ export interface SettingsMap {
   timezone: string;
   ide_command: string;
   ide_name: string;
+}
+
+export interface DataUsage {
+  sizes: Record<string, number>;
+  counts: Record<string, number>;
+  tasks_by_status: Record<string, number>;
+}
+
+export interface TimezoneList {
+  local: string;
+  common: string[];
+  all: string[];
+}
+
+export interface BackendsResponse {
+  backends: string[];
+  enabled: string[];
+  default: string;
+}
+
+export interface BackupInfo {
+  name: string;
+  size: number;
+  created_at: string;
+}
+
+export interface PrunePreview {
+  cutoff: string;
+  tasks: { task_ids: number[]; count: number };
+  runs: number;
+  task_events: number;
+  deliveries: number;
+  screening_runs: number;
+  orphan_worktrees: number[];
+  orphan_artifacts: number[];
+  old_logs: number;
+}
+
+export interface RestorePreview {
+  backup: string;
+  integrity_ok: boolean;
+  integrity_detail: string | null;
+  busy_tasks: number;
+  busy_screenings: number;
 }
 
 export interface DetectedIde {
@@ -253,6 +303,31 @@ export interface CatalogSkill {
   content: string;
 }
 
+export interface LibrarySkill {
+  id: string;
+  name: string;
+  description: string;
+  content: string;
+  tags: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SkillUsage {
+  agents: { id: string; name: string }[];
+}
+
+export interface AgentUsage {
+  task_count: number;
+  trigger_rules: {
+    id: number;
+    event: string;
+    action: string;
+    repo_id: number;
+    repo_full_name: string | null;
+  }[];
+}
+
 export interface CatalogAgent {
   id: string;
   name: string;
@@ -261,8 +336,11 @@ export interface CatalogAgent {
   model: string | null;
   personality_md: string;
   skills: CatalogSkill[];
+  skill_ids: string[];
   custom_instructions: string;
   enabled: boolean;
+  description: string;
+  avatar: string | null;
   created_at: string;
 }
 
@@ -280,6 +358,25 @@ export interface TriggerRule {
   created_at: string;
 }
 
+export interface DeliveryWorkItem {
+  type: string;
+  task_id?: number;
+  agent_id?: string;
+  error?: string;
+}
+
+export interface DeliveryRuleResult {
+  rule_id: number;
+  action: string;
+  work: DeliveryWorkItem[];
+  note?: string;
+}
+
+export interface ReplayResponse {
+  matched: number;
+  results: DeliveryRuleResult[];
+}
+
 export interface EventDelivery {
   id: number;
   github_delivery_id: string;
@@ -289,7 +386,7 @@ export interface EventDelivery {
   repo_full_name: string | null;
   received_at: string;
   status: string;
-  result: unknown;
+  result: { rules?: DeliveryRuleResult[]; reason?: string } | null;
 }
 
 export interface WebhookStatus {
@@ -325,6 +422,34 @@ export interface ScreeningRun {
   error: string | null;
 }
 
+export interface ScreeningRunSummary {
+  id: number;
+  screening_id: number;
+  head_sha: string | null;
+  status: "queued" | "running" | "done" | "failed";
+  started_at: string | null;
+  finished_at: string | null;
+  finding_counts: Record<string, number>;
+  finding_total: number;
+  error: string | null;
+}
+
+export interface ScreeningFinding {
+  screen_id: number;
+  screen_name: string;
+  repo_id: number;
+  repo_full_name: string | null;
+  run_id: number;
+  head_sha: string | null;
+  finished_at: string | null;
+  severity: string;
+  title: string;
+  file: string | null;
+  line: number | null;
+  detail: string | null;
+  recommendation: string | null;
+}
+
 export interface Screen {
   id: number;
   repo_id: number;
@@ -338,7 +463,7 @@ export interface Screen {
   notify_ntfy: boolean;
   created_at: string;
   updated_at: string;
-  latest_run?: ScreeningRun | null;
+  latest_run?: ScreeningRunSummary | null;
 }
 
 export interface ScreenTemplate {

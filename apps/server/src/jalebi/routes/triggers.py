@@ -60,9 +60,13 @@ def update_rule(rule_id: int) -> ResponseReturnValue:
     if not isinstance(payload, dict):
         return jsonify({"error": "expected a JSON object"}), 400
     session = db.get_session()
-    fields = _payload_fields(payload)
+    # Present-key semantics: only keys the caller sent are touched, and an
+    # explicit null clears an optional field (the UI sends null when the owner
+    # empties branch/author/instructions). Omitted keys are left alone.
+    fields = {
+        k: v for k, v in _payload_fields(payload).items() if k in payload
+    }
     fields.pop("repo_id", None)  # repo binding is immutable via this route
-    fields = {k: v for k, v in fields.items() if v is not None or k == "enabled"}
     try:
         rule = webhooks.update_rule(session, rule_id, **fields)
     except KeyError:

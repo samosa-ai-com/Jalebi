@@ -95,11 +95,13 @@ Queue items are tagged tuples: `("task", task_id)` or `("followup", task_id, bod
 ## 7. Retries & auto-recovery (PRD F16)
 
 - `rerun` reuses the same task row + worktree (`create_worktree` resumes an existing worktree); a fresh agent session runs (new `runs` row, new `seq`). `retry_count` counts **auto-recoveries only** — a manual rerun never touches it.
-- **Auto-recovery (`retry_policy`, ships ON):** a run that ends `failed` (incl. **stalled**) or `timed_out` is recovered automatically, for **every task type** (each task has an expected deliverable). Unbounded by design — every run is still bounded by its own (escalating) timeout and terminal/progress notifications keep the owner informed:
+- **Auto-recovery (`retry_policy`, ships ON):** a run that ends `failed` (incl. **stalled**) or `timed_out` is recovered automatically, for **every task type** (each task has an expected deliverable). **Bounded** — at most `max_attempts` (default 3) recoveries per task, then the task stays `failed` with a give-up timeline note; failures matching a `non_retryable_patterns` phrase (default covers wrong-model/auth/no-token/no-session) fail immediately with no recovery:
   - **timeout / other failure** → resumes the last session with `retry_policy.continue_prompt` (default `"continue"`);
   - **stall** (process hung, no output) → **fresh re-run** instead of resuming a session that may be wedged and would just hang again;
   - no resumable session → fresh re-run.
   - Each attempt **derives** an escalated timeout from `task.retry_count` (`base × timeout_multiplier^attempts`, capped at `retry_policy.max_timeout_minutes`) — `task.timeout_minutes` is never permanently mutated, and a `done` run **resets `retry_count`**, so a later manual rerun starts from the base timeout again.
+  - **Notification coalescing:** only the first failure and the final give-up/success notify — intermediate attempts are timeline-only. The give-up push quotes the give-up reason and respects the `notify_on_failed` toggle (off = silent give-up). A manual cancel while a recovery is queued stays cancelled (`_run_followup` bails on `cancelled`).
+- **Backend allow-list (`enabled_backends`, default all three):** every Backend picker offers only enabled backends (`GET /api/backends`); the default backend can't be disabled and at least one must stay on. A task/screen pinned to a backend disabled later falls back to the first enabled one at dispatch (`TaskQueue._enabled_cli`, logged) instead of failing.
   - Recovery resumes are tagged **auto** and are **not** recorded as user follow-ups (they aren't; the recovery step is on the failed run's timeline).
   - Applied in **all three run paths**: `_run_task` (normal + `pr_review`) and `_run_followup` (previously unretried). `task.retry_count` increments for observability; a timeline step notes "Auto-recovering — re-running with a longer timeout (Nm, attempt N)."
 - **Review worktrees re-sync on every run:** `create_review_worktree` re-fetches `refs/pull/<n>/head` and hard-resets the detached worktree to the **current** PR head (safe — review worktrees never hold agent-pushed work), so a follow-up/re-run review sees the latest code instead of the originally-checked-out head.
@@ -163,9 +165,14 @@ never fail the caller.
 
 `events.py` publishes every event to the in-memory ring buffer **and**
 to the durable `task_events` table (via `replay_from_db` on the SSE route
-after a restart). `prune_task_events` runs at startup **and** on a
-throttled publish-path sweep (every 250 persisted publishes, fresh
-session, in `TaskQueue._prune_task_events_throttled`) to cap rows at
-`PERSIST_CAP = 2000` per `(task_id, run_id)` even during long runs. The
+after a restart). Persistence runs on a **dedicated short-lived session per
+event**, never the worker's long-lived session: sharing it meant one locked
+flush (`database is locked` under concurrent reviewers) poisoned the worker
+into a `PendingRollbackError` cascade that froze the run at `running` (task
+63). A persistence failure now affects only that event. Timeline data is
+**never auto-deleted** (owner decision):
+no startup sweep, no publish-path trim — the table grows until pruned
+manually via Settings → Data management. `prune_task_events` remains only
+as a utility (covered by its unit test). The
 SSE route reads the DB replay first and subscribes the memory bus from
 the DB high-water mark, so reconnects never receive an event twice.

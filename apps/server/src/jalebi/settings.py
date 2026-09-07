@@ -29,16 +29,29 @@ DEFAULTS: dict[str, object] = {
     # ("https://ntfy.example.com/room"). ntfy_url was folded into this.
     "ntfy_topic": "",
     "default_timeout_minutes": 60,
-    # Auto-recovery on failed/timed_out/stalled runs. Unbounded by design: each
-    # run is bounded by its own (escalating) timeout and terminal/progress
-    # notifications keep the owner informed. Stall runs restart fresh (a wedged
-    # session re-hangs); timeouts/other failures resume the session with
-    # ``continue_prompt``.
+    # Auto-recovery on failed/timed_out runs. Bounded by max_attempts (a
+    # wrong-model/auth failure must not loop forever); each run is bounded
+    # by its own (escalating) timeout and only the first failure + the final
+    # give-up/success notify (intermediate attempts stay on the timeline).
+    # Stall runs restart fresh (a wedged session re-hangs); timeouts/other
+    # failures resume the session with ``continue_prompt``. Failures whose
+    # text matches ``non_retryable_patterns`` (case-insensitive substring)
+    # fail immediately with no recovery.
     "retry_policy": {
         "auto_retry": True,
         "continue_prompt": "continue",
         "timeout_multiplier": 2,
         "max_timeout_minutes": 180,
+        "max_attempts": 3,
+        "non_retryable_patterns": [
+            "model not found",
+            "invalid model",
+            "unknown model",
+            "authentication failed",
+            "unauthorized",
+            "no GitHub token",
+            "has no resumable session",
+        ],
     },
     # No-output threshold before a run is declared stalled (and auto-recovered).
     "stall_timeout_seconds": 600,
@@ -54,6 +67,11 @@ DEFAULTS: dict[str, object] = {
     # default is always configured.
     "default_backend": "opencode",
     "default_model": "",
+    # Backends the app may use. Every backend/model picker in the UI offers
+    # only these; runs pinned to a backend that was disabled later fall back
+    # to the first enabled one (logged). Never empty; always contains
+    # ``default_backend`` (both enforced on save).
+    "enabled_backends": ["opencode", "codex", "claude"],
     # Owner override of each adapter's curated model list: {cli: [model names]}.
     # Consumed by GET /api/models; lets the owner pin the task-form model dropdown
     # (e.g. for a custom provider) without touching adapter code. {} = adapters'

@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import { Link, NavLink, Route, Routes } from "react-router-dom";
+import { Link, NavLink, Route, Routes, useLocation } from "react-router-dom";
 import { api } from "./api/client";
 import Agents from "./pages/Agents";
 import Github from "./pages/Github";
 import Repos from "./pages/Repos";
-import Screenings from "./pages/Screenings";
+import Screenings, { SCREENS_SEEN_KEY } from "./pages/Screenings";
 import Settings from "./pages/Settings";
+import Skills from "./pages/Skills";
 import TaskDetail from "./pages/TaskDetail";
 import Tasks from "./pages/Tasks";
 import Triggers from "./pages/Triggers";
@@ -29,12 +30,45 @@ const NAV_ITEMS = [
   { to: "/repos", label: "Repos", end: false },
   { to: "/github", label: "GitHub", end: false },
   { to: "/agents", label: "Agents", end: false },
+  { to: "/skills", label: "Skills", end: false },
   { to: "/screenings", label: "Screenings", end: false },
   { to: "/triggers", label: "Triggers", end: false },
   { to: "/settings", label: "Settings", end: false },
 ];
 
 const SOON_ITEMS: { to: string; label: string }[] = [];
+
+function useScreeningsUnread(): number {
+  const [unread, setUnread] = useState(0);
+  const location = useLocation();
+  useEffect(() => {
+    let cancelled = false;
+    const check = async () => {
+      try {
+        const screens = await api.getScreens();
+        const seen = Number(localStorage.getItem(SCREENS_SEEN_KEY) || 0);
+        const n = screens.filter((s) => {
+          const lr = s.latest_run;
+          if (!lr || lr.status !== "done" || !lr.finding_total) return false;
+          const t = Date.parse(lr.finished_at || lr.started_at || "");
+          return !Number.isNaN(t) && t > seen;
+        }).length;
+        if (!cancelled) setUnread(n);
+      } catch {
+        // Badge is best-effort; a failed check keeps the previous count.
+      }
+    };
+    check();
+    const timer = setInterval(check, 60000);
+    // location.pathname in deps: visiting the tab sets the seen timestamp,
+    // and the badge must clear immediately rather than at the next poll.
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [location.pathname]);
+  return unread;
+}
 
 function navClass({ isActive }: { isActive: boolean }): string {
   return `relative rounded-lg px-3 py-1.5 text-sm transition-colors ${
@@ -63,13 +97,13 @@ function HealthDot() {
     };
   }, []);
 
-  const color =
-    up === null ? "bg-ink-600" : up ? "bg-green-400" : "bg-red-400";
+  const color = up === null ? "bg-ink-600" : up ? "bg-green-400" : "bg-red-400";
   const title = up === null ? "Checking API…" : up ? "API online" : "API unreachable";
   return <span className={`h-2 w-2 rounded-full ${color}`} title={title} />;
 }
 
 function App() {
+  const screeningsUnread = useScreeningsUnread();
   return (
     <div className="min-h-screen font-sans text-ink-200">
       <header className="sticky top-0 z-10 border-b border-ink-800/80 bg-ink-950/80 backdrop-blur-md">
@@ -83,6 +117,14 @@ function App() {
             {NAV_ITEMS.map((item) => (
               <NavLink key={item.to} to={item.to} end={item.end} className={navClass}>
                 {item.label}
+                {item.to === "/screenings" && screeningsUnread > 0 && (
+                  <span
+                    title={`${screeningsUnread} screen(s) with new findings`}
+                    className="ml-1.5 inline-flex min-h-5 min-w-5 items-center justify-center rounded-full bg-syrup-500 px-1 text-[11px] font-semibold text-ink-950"
+                  >
+                    {screeningsUnread}
+                  </span>
+                )}
               </NavLink>
             ))}
           </nav>
@@ -103,7 +145,9 @@ function App() {
             ))}
             <span className="ml-3 flex items-center gap-2 rounded-full border border-ink-800 px-3 py-1.5">
               <HealthDot />
-              <span className="font-mono text-[11px] text-ink-500">api:{window.location.port || "2052"}</span>
+              <span className="font-mono text-[11px] text-ink-500">
+                api:{window.location.port || "2052"}
+              </span>
             </span>
           </div>
         </div>
@@ -116,6 +160,7 @@ function App() {
           <Route path="/repos" element={<Repos />} />
           <Route path="/github" element={<Github />} />
           <Route path="/agents" element={<Agents />} />
+          <Route path="/skills" element={<Skills />} />
           <Route path="/screenings" element={<Screenings />} />
           <Route path="/triggers" element={<Triggers />} />
           <Route path="/settings" element={<Settings />} />

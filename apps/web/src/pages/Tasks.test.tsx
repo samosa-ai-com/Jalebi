@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Tasks from "./Tasks";
 
@@ -79,6 +79,7 @@ const DEFAULT_HANDLERS = {
 describe("Tasks", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    localStorage.clear();
   });
 
   it("lists tasks with status and repo", async () => {
@@ -131,7 +132,7 @@ describe("Tasks", () => {
     expect(await screen.findByText("running one")).toBeInTheDocument();
     expect(screen.getByText("done one")).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: "Running" }));
+    await userEvent.click(screen.getByRole("button", { name: /Running \(\d+\)/ }));
 
     expect(screen.getByText("running one")).toBeInTheDocument();
     expect(screen.queryByText("done one")).not.toBeInTheDocument();
@@ -321,6 +322,8 @@ describe("Tasks", () => {
       </MemoryRouter>
     );
     await screen.findByText("New task");
+    // Env vars live behind the Advanced toggle.
+    await userEvent.click(screen.getByRole("button", { name: /Advanced/ }));
 
     expect(await screen.findByText("DATABASE_URL")).toBeInTheDocument();
     await userEvent.click(screen.getByText("DATABASE_URL"));
@@ -355,8 +358,9 @@ describe("Tasks", () => {
     await waitFor(() => {
       expect(screen.getByText("codex · runs in a local worktree")).toBeInTheDocument();
     });
-    // The Backend select lets the user override per task; changing it updates
-    // the caption and the model list.
+    // The Backend select lives behind the Advanced toggle; changing it
+    // updates the caption and the model list.
+    await userEvent.click(screen.getByRole("button", { name: /Advanced/ }));
     await userEvent.selectOptions(screen.getByLabelText("Backend"), "claude");
     await waitFor(() => {
       expect(screen.getByText("claude · runs in a local worktree")).toBeInTheDocument();
@@ -394,8 +398,10 @@ describe("Tasks", () => {
     expect(screen.getByText("Loading defaults…")).toBeInTheDocument();
     const submit = screen.getByRole("button", { name: /Loading|Create/ });
     expect(submit).toBeDisabled();
-    // The Backend select is also disabled until defaults resolve — a user
-    // can't pick a backend that the form hasn't computed the model list for yet.
+    // The Backend select lives behind the Advanced toggle and is disabled
+    // until defaults resolve — a user can't pick a backend that the form
+    // hasn't computed the model list for yet.
+    await userEvent.click(screen.getByRole("button", { name: /Advanced/ }));
     expect(screen.getByLabelText("Backend")).toBeDisabled();
 
     // Resolve settings → the form comes alive.
@@ -437,10 +443,10 @@ describe("Tasks page (Phase 4 T3.1)", () => {
   it("shows the 'Needs you' filter chip and isolates needs_you rows", async () => {
     stubFetch({ "/api/tasks": TASKS });
     renderTasks();
-    expect(await screen.findByRole("button", { name: "Needs you" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /Needs you \(\d+\)/ })).toBeInTheDocument();
     // The needs_you row is visible by default.
     expect(screen.getByText("needs you")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Needs you" }));
+    await userEvent.click(screen.getByRole("button", { name: /Needs you \(\d+\)/ }));
     // The filtered list still shows the needs_you row.
     expect(screen.getByText("needs you")).toBeInTheDocument();
   });
@@ -448,11 +454,11 @@ describe("Tasks page (Phase 4 T3.1)", () => {
   it("renders the 'Needs you' stat card with the correct count", async () => {
     stubFetch({ "/api/tasks": TASKS });
     renderTasks();
-    await waitFor(() => expect(screen.getAllByText("Needs you").length).toBeGreaterThanOrEqual(2));
-    // The card itself is the second surface containing "Needs you".
-    const needsYouCards = screen.getAllByText("Needs you");
-    const cardSurface = needsYouCards.find((el) => el.classList?.contains("uppercase"));
-    expect(cardSurface).toBeTruthy();
+    // The pill carries its count; the stat card carries the bare label.
+    expect(await screen.findByRole("button", { name: "Needs you (1)" })).toBeInTheDocument();
+    const card = screen.getByTitle("Show needs you tasks");
+    expect(card).toBeInTheDocument();
+    expect(card.textContent).toContain("1");
   });
 
   it("renders the AttentionBadge next to the StatusBadge", async () => {
@@ -529,10 +535,7 @@ describe("Tasks page (Phase 4 T4.4)", () => {
     // One PR anchor per card (titles are unique to cards).
     for (let i = 1; i <= 6; i++) {
       const cardLink = screen.getByTitle(`PR #${10 + i} on owner/repo`);
-      expect(cardLink).toHaveAttribute(
-        "href",
-        `https://github.com/owner/repo/pull/${10 + i}`
-      );
+      expect(cardLink).toHaveAttribute("href", `https://github.com/owner/repo/pull/${10 + i}`);
     }
   });
 
@@ -568,5 +571,365 @@ describe("Tasks page (Phase 4 T5.3)", () => {
     const thead = table.querySelector("thead") as HTMLElement;
     expect(thead.className).toContain("sticky");
     expect(wrapper.contains(screen.getByText("do the thing"))).toBe(true);
+  });
+});
+
+// ---- Queue overhaul: attention pill, cancelled, repo filter, row nav ----
+describe("Tasks page (queue overhaul)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    localStorage.clear();
+  });
+  it("hides the attention pill for benign attention values", async () => {
+    stubFetch({
+      ...DEFAULT_HANDLERS,
+      "/api/tasks": [{ ...TASKS[0], status: "running", attention: "done" }],
+    });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    await screen.findByText("do the thing");
+    expect(screen.getAllByText("running").length).toBeGreaterThanOrEqual(1);
+    // The status pill says "running" and no stray "done" pill follows it.
+    expect(screen.queryByText("done")).not.toBeInTheDocument();
+    expect(screen.queryByText("working")).not.toBeInTheDocument();
+  });
+
+  it("isolates cancelled tasks under their own filter", async () => {
+    const mixed = [
+      { ...TASKS[0], id: 1, status: "done", prompt: "done one", attention: "done" },
+      { ...TASKS[0], id: 2, status: "cancelled", prompt: "cancelled one", attention: "done" },
+    ];
+    stubFetch({ ...DEFAULT_HANDLERS, "/api/tasks": mixed });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    expect(await screen.findByText("cancelled one")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Cancelled (1)" }));
+    expect(screen.getByText("cancelled one")).toBeInTheDocument();
+    expect(screen.queryByText("done one")).not.toBeInTheDocument();
+  });
+
+  it("filters rows by repository", async () => {
+    const mixed = [
+      { ...TASKS[0], id: 1, repo_full_name: "owner/repo", prompt: "first repo task" },
+      { ...TASKS[0], id: 2, repo_full_name: "owner/other", prompt: "second repo task" },
+    ];
+    stubFetch({ ...DEFAULT_HANDLERS, "/api/tasks": mixed });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    expect(await screen.findByText("first repo task")).toBeInTheDocument();
+    await userEvent.selectOptions(screen.getByLabelText("Filter by repository"), "owner/other");
+    expect(screen.getByText("second repo task")).toBeInTheDocument();
+    expect(screen.queryByText("first repo task")).not.toBeInTheDocument();
+  });
+
+  it("stat cards filter the list when clicked", async () => {
+    const mixed = [
+      { ...TASKS[0], id: 1, status: "running", prompt: "running one", attention: "done" },
+      { ...TASKS[0], id: 2, status: "done", prompt: "done one", attention: "done" },
+    ];
+    stubFetch({ ...DEFAULT_HANDLERS, "/api/tasks": mixed });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    expect(await screen.findByText("running one")).toBeInTheDocument();
+    await userEvent.click(screen.getByTitle("Show done tasks"));
+    expect(screen.getByText("done one")).toBeInTheDocument();
+    expect(screen.queryByText("running one")).not.toBeInTheDocument();
+  });
+
+  it("navigates to the detail page when a row is clicked", async () => {
+    stubFetch({ ...DEFAULT_HANDLERS });
+    render(
+      <MemoryRouter initialEntries={["/"]}>
+        <Routes>
+          <Route path="/" element={<Tasks />} />
+          <Route path="/tasks/:id" element={<div>detail page</div>} />
+        </Routes>
+      </MemoryRouter>
+    );
+    expect(await screen.findByText("do the thing")).toBeInTheDocument();
+    // Click the ID cell (the prompt cell toggles expand instead of nav, and
+    // the repo name also matches the repo-filter option).
+    await userEvent.click(screen.getByText("#1"));
+    expect(await screen.findByText("detail page")).toBeInTheDocument();
+  });
+
+  it("expands a truncated prompt on click", async () => {
+    stubFetch({ ...DEFAULT_HANDLERS });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    const prompt = await screen.findByText("do the thing");
+    const cell = prompt.closest("td") as HTMLElement;
+    expect(cell.className).toContain("truncate");
+    await userEvent.click(prompt);
+    expect(cell.className).not.toContain("truncate");
+    // Still on the list — the click didn't navigate away.
+    expect(screen.getByText("do the thing")).toBeInTheDocument();
+  });
+
+  it("clone pre-fills the form from the row", async () => {
+    stubFetch({ ...DEFAULT_HANDLERS });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    await screen.findByText("do the thing");
+    await userEvent.click(screen.getByTitle("Clone — pre-fill the form from this task"));
+    const box = screen.getByPlaceholderText("Instructions…") as HTMLTextAreaElement;
+    expect(box.value).toBe("do the thing");
+  });
+
+  it("clone preserves the row's custom branches instead of resetting to default", async () => {
+    stubFetch({
+      ...DEFAULT_HANDLERS,
+      "/api/tasks": [
+        {
+          ...TASKS[0],
+          source_branch: "dev",
+          target_branch: "dev",
+          prompt: "custom branch work",
+        },
+      ],
+      "/api/github/context": { issues: [], prs: [], branches: ["main", "dev"] },
+    });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    expect(await screen.findByText("custom branch work")).toBeInTheDocument();
+    await userEvent.click(screen.getByTitle("Clone — pre-fill the form from this task"));
+    // The clone remounts the form, which re-fires the context fetch. Wait
+    // for the "dev" options to render (proof the fetch RESOLVED, not just
+    // fired) plus a macrotask beat, so the check runs after the clobber
+    // window instead of passing vacuously on the pre-fetch render.
+    await screen.findAllByRole("option", { name: "dev" });
+    await new Promise((r) => setTimeout(r, 50));
+    expect((screen.getByLabelText("Source branch") as HTMLSelectElement).value).toBe("dev");
+    expect((screen.getByLabelText("Target branch (PR base)") as HTMLSelectElement).value).toBe(
+      "dev"
+    );
+  });
+
+  it("running-card Cancel calls the cancel endpoint and reloads", async () => {
+    const fetchMock = stubFetch({
+      ...DEFAULT_HANDLERS,
+      "/api/tasks": [{ ...TASKS[0], status: "running", prompt: "live job", attention: "done" }],
+    });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    expect(await screen.findByText("live job")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => {
+      const cancel = fetchMock.mock.calls.find(
+        (call) => String(call[0]).endsWith("/api/tasks/1/cancel") && call[1]?.method === "POST"
+      );
+      expect(cancel).toBeTruthy();
+    });
+  });
+
+  it("re-run button on a failed row calls the rerun endpoint", async () => {
+    const fetchMock = stubFetch({
+      ...DEFAULT_HANDLERS,
+      "/api/tasks": [{ ...TASKS[0], status: "failed", prompt: "broken job", attention: "done" }],
+    });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    expect(await screen.findByText("broken job")).toBeInTheDocument();
+    await userEvent.click(screen.getByTitle("Re-run this task"));
+    await waitFor(() => {
+      const rerun = fetchMock.mock.calls.find(
+        (call) => String(call[0]).endsWith("/api/tasks/1/rerun") && call[1]?.method === "POST"
+      );
+      expect(rerun).toBeTruthy();
+    });
+  });
+
+  it("bulk-dismiss clears attention on every selected row", async () => {
+    const fetchMock = stubFetch({ ...DEFAULT_HANDLERS });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    await screen.findByText("do the thing");
+    await userEvent.click(screen.getByLabelText("Select task #1"));
+    await userEvent.click(screen.getByRole("button", { name: "Dismiss attention" }));
+    await waitFor(() => {
+      const dismiss = fetchMock.mock.calls.find(
+        (call) =>
+          String(call[0]).endsWith("/api/tasks/1/dismiss-attention") && call[1]?.method === "POST"
+      );
+      expect(dismiss).toBeTruthy();
+    });
+  });
+
+  it("bulk-selects rows and deletes them", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const fetchMock = stubFetch({ ...DEFAULT_HANDLERS });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    await screen.findByText("do the thing");
+    await userEvent.click(screen.getByLabelText("Select task #1"));
+    expect(screen.getByText("1 selected")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await waitFor(() => {
+      const del = fetchMock.mock.calls.find(
+        (call) => String(call[0]).endsWith("/api/tasks/1") && call[1]?.method === "DELETE"
+      );
+      expect(del).toBeTruthy();
+    });
+    confirmSpy.mockRestore();
+  });
+
+  it("shows a Refresh button and an updated-ago stamp", async () => {
+    const fetchMock = stubFetch({ ...DEFAULT_HANDLERS });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    await screen.findByText("do the thing");
+    expect(screen.getByText(/updated just now/)).toBeInTheDocument();
+    const before = fetchMock.mock.calls.filter((c) => c[0] === "/api/tasks").length;
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => {
+      const after = fetchMock.mock.calls.filter((c) => c[0] === "/api/tasks").length;
+      expect(after).toBeGreaterThan(before);
+    });
+  });
+
+  it("collapses advanced options behind a toggle", async () => {
+    stubFetch({ ...DEFAULT_HANDLERS });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    await screen.findByText("New task");
+    expect(screen.queryByLabelText("Backend")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /Advanced/ }));
+    expect(screen.getByLabelText("Backend")).toBeInTheDocument();
+  });
+
+  it("selecting a PR auto-sets source to its head and target to its base", async () => {
+    stubFetch({
+      ...DEFAULT_HANDLERS,
+      "/api/github/context": {
+        issues: [],
+        prs: [
+          {
+            number: 3,
+            title: "Feature",
+            html_url: "u",
+            state: "open",
+            base: "dev",
+            head: "feature-x",
+            author: "me",
+          },
+        ],
+        branches: ["main", "dev", "feature-x"],
+      },
+    });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    await screen.findByText("New task");
+    const picker = await screen.findByLabelText("Link PR (optional)");
+    await userEvent.selectOptions(picker, "3");
+    expect((screen.getByLabelText("Source branch") as HTMLSelectElement).value).toBe("feature-x");
+    expect((screen.getByLabelText("Target branch (PR base)") as HTMLSelectElement).value).toBe(
+      "dev"
+    );
+  });
+
+  it("pr_review submits without instructions, sending a default prompt", async () => {
+    const fetchMock = stubFetch({
+      ...DEFAULT_HANDLERS,
+      "/api/github/context": {
+        issues: [],
+        prs: [
+          {
+            number: 4,
+            title: "Fix",
+            html_url: "u",
+            state: "open",
+            base: "main",
+            head: "fix",
+            author: "me",
+          },
+        ],
+        branches: ["main", "fix"],
+      },
+    });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    await screen.findByText("New task");
+    await userEvent.selectOptions(screen.getByLabelText("Task type"), "pr_review");
+    expect(screen.getByText(/optional — the reviewer already knows/)).toBeInTheDocument();
+    await userEvent.selectOptions(screen.getByLabelText("Pull request"), "4");
+    // No instructions typed — Create must still be enabled.
+    const create = screen.getByRole("button", { name: "Create" });
+    expect(create).not.toBeDisabled();
+    await userEvent.click(create);
+    await waitFor(() => {
+      const postCall = fetchMock.mock.calls.find(
+        (call) => call[0] === "/api/tasks" && call[1]?.method === "POST"
+      );
+      expect(postCall).toBeTruthy();
+      const body = JSON.parse(postCall![1]!.body as string) as Record<string, unknown>;
+      expect(body).toMatchObject({ type: "pr_review", pr_number: 4, prompt: "Review PR #4." });
+    });
+  });
+
+  it("shows a creation confirmation linking to the new task", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/tasks" && init?.method === "POST") {
+        return { ok: true, json: async () => ({ ...TASKS[0], id: 99 }) };
+      }
+      const handler = Object.entries(DEFAULT_HANDLERS).find(([n]) => url.includes(n));
+      const value = handler ? handler[1] : [];
+      return { ok: true, json: async () => value };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    await screen.findByText("New task");
+    await userEvent.type(screen.getByPlaceholderText("Instructions…"), "fresh work");
+    await userEvent.click(screen.getByRole("button", { name: "Create" }));
+    const link = await screen.findByRole("link", { name: "#99" });
+    expect(link).toHaveAttribute("href", "/tasks/99");
   });
 });

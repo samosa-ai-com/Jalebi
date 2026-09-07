@@ -12,6 +12,7 @@ from jalebi.catalog import agent_by_slug
 from jalebi.db import (
     TASK_TYPES,
     Artifact,
+    CheckRun,
     Followup,
     Repo,
     ReviewAssignment,
@@ -274,6 +275,7 @@ def task_to_dict(
         "issues": json.loads(task.issues_json) if task.issues_json else [],
         "prs": json.loads(task.prs_json) if task.prs_json else [],
         "env_vars": json.loads(task.env_vars_json) if task.env_vars_json else [],
+        "triggered_by": _triggered_by(task),
         "created_at": clock.to_iso(task.created_at),
         "updated_at": clock.to_iso(task.updated_at),
         "run": run_dict,
@@ -296,13 +298,52 @@ def task_to_dict(
     return data
 
 
+def _triggered_by(task) -> dict | None:
+    """The webhook event that started this task, if any (PRD F14).
+
+    Trigger dispatches stamp ``{"delivery_id", "event", "received_at"}`` into
+    the task context; corrupt/non-dict context degrades to None, never a 500.
+    """
+    if not task.context_json:
+        return None
+    try:
+        ctx = json.loads(task.context_json)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(ctx, dict):
+        return None
+    origin = ctx.get("triggered_by")
+    return origin if isinstance(origin, dict) else None
+
+
+def stamp_triggered_by(session: Session, task, trigger: dict) -> None:
+    """Stamp a webhook origin onto a task's context (additive; keeps the rest)."""
+    ctx: dict = {}
+    if task.context_json:
+        try:
+            parsed = json.loads(task.context_json)
+            if isinstance(parsed, dict):
+                ctx = parsed
+        except (TypeError, ValueError):
+            ctx = {}
+    ctx["triggered_by"] = trigger
+    task.context_json = json.dumps(ctx)
+    session.commit()
+
+
 def delete_tasks_cascade(session: Session, task_ids: list[int]) -> list[int]:
     """Delete tasks and everything tied to them (orphan-safe cascade).
 
     Order is FK-dependency order — children before parents:
 
     TaskDependency (Phase 4 T4.1) → Followup → ReviewAssignment →
-    Artifact → Run → Task
+    CheckRun → Artifact → Run → Task
+
+    CheckRun rows reference both ``tasks.id`` and ``runs.id`` with no
+    ``ON DELETE CASCADE`` (deliberate — the SQLite batch-rebuild hazard), so
+    they are deleted explicitly; otherwise deleting a task that ever reported
+    a commit status fails with an IntegrityError under ``PRAGMA
+    foreign_keys=ON``.
 
     TaskDependency edges are dropped first (FK ON DELETE CASCADE on both
     sides will normally do this automatically; the explicit delete is
@@ -316,27 +357,39 @@ def delete_tasks_cascade(session: Session, task_ids: list[int]) -> list[int]:
     wrap the cascade in its own transaction boundaries. ``_cleanup_partial``
     is the one caller that commits itself (to survive a rollbacked parent
     transaction on IntegrityError).
+
+    ``IN`` lists are chunked (SQLite caps bound variables per statement) so
+    pruning thousands of tasks can't 500 on the variable limit.
     """
 
     task_ids = list(task_ids)
     if not task_ids:
         return []
-    run_ids = list(
-        session.execute(select(Run.id).where(Run.task_id.in_(task_ids))).scalars()
-    )
-    # Phase 4 T4.1 — drop dep edges in both directions.
-    session.execute(
-        delete(TaskDependency).where(
-            TaskDependency.task_id.in_(task_ids)
-            | TaskDependency.depends_on_id.in_(task_ids)
+    # Local chunking (not importing data_mgmt — tasks is the lower layer).
+    chunks = [task_ids[i : i + 500] for i in range(0, len(task_ids), 500)]
+    run_ids: list[int] = []
+    for chunk in chunks:
+        run_ids.extend(
+            session.execute(select(Run.id).where(Run.task_id.in_(chunk))).scalars()
         )
-    )
-    session.execute(delete(Followup).where(Followup.task_id.in_(task_ids)))
-    session.execute(delete(ReviewAssignment).where(ReviewAssignment.task_id.in_(task_ids)))
+    # Phase 4 T4.1 — drop dep edges in both directions.
+    for chunk in chunks:
+        session.execute(
+            delete(TaskDependency).where(
+                TaskDependency.task_id.in_(chunk)
+                | TaskDependency.depends_on_id.in_(chunk)
+            )
+        )
+        session.execute(delete(Followup).where(Followup.task_id.in_(chunk)))
+        session.execute(delete(ReviewAssignment).where(ReviewAssignment.task_id.in_(chunk)))
+        session.execute(delete(CheckRun).where(CheckRun.task_id.in_(chunk)))
     if run_ids:
-        session.execute(delete(Artifact).where(Artifact.run_id.in_(run_ids)))
-        session.execute(delete(Run).where(Run.id.in_(run_ids)))
-    session.execute(delete(Task).where(Task.id.in_(task_ids)))
+        run_chunks = [run_ids[i : i + 500] for i in range(0, len(run_ids), 500)]
+        for chunk in run_chunks:
+            session.execute(delete(Artifact).where(Artifact.run_id.in_(chunk)))
+            session.execute(delete(Run).where(Run.id.in_(chunk)))
+    for chunk in chunks:
+        session.execute(delete(Task).where(Task.id.in_(chunk)))
     return run_ids
 
 
