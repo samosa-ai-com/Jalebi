@@ -284,7 +284,12 @@ export function BrewHouse({
 
         {findings.length > 0 ? (
           <div className="brew-ticker min-w-0 flex-1 overflow-hidden">
-            <div className="brew-ticker-track flex w-max gap-8">
+            <div
+              className="brew-ticker-track flex w-max gap-8"
+              style={{
+                animationDuration: `${Math.max(90, Math.min(8, findings.length) * 22)}s`,
+              }}
+            >
               {[...findings.slice(0, 8), ...findings.slice(0, 8)].map((f, i) =>
                 i < Math.min(8, findings.length) ? (
                   <Link

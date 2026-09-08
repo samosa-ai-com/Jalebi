@@ -174,10 +174,10 @@
   animation: brew-serve-drop 0.7s cubic-bezier(0.34, 1.56, 0.64, 1) both;
 }
 .brew-ticker-track {
-  animation: brew-ticker-drift 40s linear infinite;
+  animation: brew-ticker-drift 120s linear infinite;
 }
 .brew-ticker-fast-track {
-  animation: brew-ticker-drift 26s linear infinite;
+  animation: brew-ticker-drift 80s linear infinite;
 }
 .brew-ticker:hover .brew-ticker-track,
 .brew-ticker:hover .brew-ticker-fast-track {
