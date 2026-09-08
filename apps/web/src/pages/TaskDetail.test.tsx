@@ -1608,4 +1608,17 @@ describe("TaskDetail improvements", () => {
       vi.useRealTimers();
     }
   });
+
+  it("renders '← Back to Mission control' when arriving with from: mission", async () => {
+    stubFetchPlus(TASK);
+    vi.stubGlobal("EventSource", FakeEventSource);
+    render(
+      <MemoryRouter initialEntries={[{ pathname: "/tasks/7", state: { from: "mission" } }]}>
+        <Routes>
+          <Route path="/tasks/:id" element={<TaskDetail />} />
+        </Routes>
+      </MemoryRouter>
+    );
+    expect(await screen.findByRole("link", { name: /Back to Mission control/i })).toBeInTheDocument();
+  });
 });

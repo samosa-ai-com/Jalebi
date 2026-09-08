@@ -273,6 +273,7 @@ export function BrewHouse({
           />
           <Link
             to="/screenings"
+            state={{ from: "mission" }}
             className="font-mono text-[10px] font-semibold uppercase tracking-wider text-syrup-300 hover:text-syrup-200"
           >
             Audit radar
@@ -295,6 +296,7 @@ export function BrewHouse({
                   <Link
                     key={`${f.screen_id}-${f.title}-${i}`}
                     to="/screenings"
+                    state={{ from: "mission" }}
                     className="flex items-center gap-1.5 whitespace-nowrap font-mono text-[11px] text-ink-300 transition-colors hover:text-syrup-300"
                     title={`${f.screen_name}: ${f.title}`}
                   >
@@ -367,7 +369,7 @@ export function BrewHouse({
             menu={orderCounts}
             now={now}
             highlightedSlot={highlightedSlot}
-            onOpen={(id) => navigate(`/tasks/${id}`)}
+            onOpen={(id) => navigate(`/tasks/${id}`, { state: { from: "mission" } })}
             onOrder={() => onNewTask()}
             onNewTaskKind={(kind) => onNewTask(kind)}
             onCancel={onCancel}

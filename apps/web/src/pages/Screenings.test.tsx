@@ -704,4 +704,14 @@ describe("Screenings", () => {
     await userEvent.click(screen.getByRole("button", { name: "screens" }));
     expect(await screen.findByText("0 6 * * 1")).toBeInTheDocument();
   });
+
+  it("renders '← Back to Mission control' when navigating with from: mission", async () => {
+    vi.stubGlobal("fetch", makeFetchMock());
+    render(
+      <MemoryRouter initialEntries={[{ pathname: "/screenings", state: { from: "mission" } }]}>
+        <Screenings />
+      </MemoryRouter>
+    );
+    expect(await screen.findByRole("link", { name: /Back to Mission control/i })).toBeInTheDocument();
+  });
 });

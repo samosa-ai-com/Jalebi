@@ -74,6 +74,8 @@ const DEFAULT_HANDLERS = {
     ],
   },
   "/api/github/context": { issues: [], prs: [], branches: ["main", "dev"] },
+  "/api/backends": { enabled: ["opencode", "codex", "claude"], default: "opencode" },
+  "/api/screenings": [],
 };
 
 describe("Tasks", () => {
@@ -954,5 +956,18 @@ describe("Tasks page (queue overhaul)", () => {
     await userEvent.click(screen.getByRole("button", { name: "Create" }));
     const link = await screen.findByRole("link", { name: "#99" });
     expect(link).toHaveAttribute("href", "/tasks/99");
+  });
+
+  it("shows Back to Mission control banner and switches view when clicked", async () => {
+    stubFetch(DEFAULT_HANDLERS);
+    render(
+      <MemoryRouter initialEntries={[{ pathname: "/", search: "?view=queue&from=mission", state: { from: "mission" } }]}>
+        <Tasks />
+      </MemoryRouter>
+    );
+    const backBtn = await screen.findByRole("button", { name: /Back to Mission control/i });
+    expect(backBtn).toBeInTheDocument();
+    await userEvent.click(backBtn);
+    expect(screen.getByRole("heading", { name: "Halwai shop" })).toBeInTheDocument();
   });
 });

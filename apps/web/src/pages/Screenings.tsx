@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { api } from "../api/client";
 import { useBackends } from "../hooks/useBackends";
 import type {
@@ -977,6 +977,8 @@ function ScreenCard({
 }
 
 export default function Screenings() {
+  const location = useLocation();
+  const fromMission = (location.state as { from?: string } | null)?.from === "mission";
   const [screens, setScreens] = useState<Screen[]>([]);
   const [repos, setRepos] = useState<Repo[]>([]);
   const [templates, setTemplates] = useState<ScreenTemplate[]>([]);
@@ -1021,6 +1023,17 @@ export default function Screenings() {
 
   return (
     <div className="space-y-6">
+      {fromMission && (
+        <div className="animate-fade-up">
+          <Link
+            to="/?view=mission"
+            className="inline-flex items-center gap-1.5 text-sm text-ink-400 hover:text-syrup-300 transition-colors"
+          >
+            <span>←</span>
+            <span>Back to Mission control</span>
+          </Link>
+        </div>
+      )}
       <header className="flex items-start justify-between animate-fade-up">
         <div>
           <h1 className="text-3xl font-bold tracking-tight text-ink-100">Screenings</h1>

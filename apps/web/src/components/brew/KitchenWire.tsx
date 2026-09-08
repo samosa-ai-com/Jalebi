@@ -11,6 +11,8 @@ import type { Screen, ScreeningFinding, Task } from "../../types";
 import { lastMessageText } from "../../lib/runningCard";
 import { snackForType } from "./snacks";
 
+export type WireCategory = "all" | "live" | "alerts" | "served" | "spoiled";
+
 export interface WireEvent {
   id: string;
   time: string;
@@ -18,6 +20,7 @@ export interface WireEvent {
   tagColor: string;
   text: string;
   link?: string;
+  category: "live" | "alerts" | "served" | "spoiled";
 }
 
 function formatTime(isoOrMs: string | number | null | undefined): string {
@@ -38,7 +41,7 @@ export function KitchenWire({
   findings: ScreeningFinding[];
   now: number;
 }) {
-  const [filter, setFilter] = useState<"all" | "agents" | "ops">("all");
+  const [filter, setFilter] = useState<WireCategory>("all");
   const scrollRef = useRef<HTMLDivElement>(null);
   const [isPaused, setIsPaused] = useState(false);
 
@@ -64,6 +67,7 @@ export function KitchenWire({
             tagColor: "text-syrup-400",
             text: lastMsg,
             link: `/tasks/${t.id}`,
+            category: "live",
           });
         }
         list.push({
@@ -74,6 +78,7 @@ export function KitchenWire({
           tagColor: "text-syrup-300",
           text: `Frying ${snack}: "${t.prompt.length > 50 ? t.prompt.slice(0, 50) + "…" : t.prompt}"`,
           link: `/tasks/${t.id}`,
+          category: "live",
         });
       }
 
@@ -87,6 +92,7 @@ export function KitchenWire({
           tagColor: "text-amber-300 animate-pulse",
           text: `Cook needs confirmation: ${t.prompt.length > 40 ? t.prompt.slice(0, 40) + "…" : t.prompt}`,
           link: `/tasks/${t.id}`,
+          category: "alerts",
         });
       }
 
@@ -100,6 +106,7 @@ export function KitchenWire({
           tagColor: "text-ink-400",
           text: `Order ticket received: ${snack} (${t.repo_full_name ? t.repo_full_name.split("/")[1] ?? t.repo_full_name : "repo"})`,
           link: `/tasks/${t.id}`,
+          category: "live",
         });
       }
 
@@ -113,6 +120,7 @@ export function KitchenWire({
           tagColor: "text-green-400",
           text: `Golden ${snack} served${t.pr_number ? ` · PR #${t.pr_number} open` : ""}`,
           link: `/tasks/${t.id}`,
+          category: "served",
         });
       }
 
@@ -126,6 +134,7 @@ export function KitchenWire({
           tagColor: "text-red-400",
           text: `Dish spoiled: ${t.status}`,
           link: `/tasks/${t.id}`,
+          category: "spoiled",
         });
       }
     }
@@ -140,6 +149,7 @@ export function KitchenWire({
         tagColor: f.severity === "critical" || f.severity === "high" ? "text-red-400" : "text-amber-300",
         text: `${f.screen_name}: ${f.title}`,
         link: "/screenings",
+        category: "alerts",
       });
     }
 
@@ -152,6 +162,7 @@ export function KitchenWire({
         tagColor: "text-sky-400 animate-pulse",
         text: `Active audit running: ${s.name}`,
         link: "/screenings",
+        category: "alerts",
       });
     }
 
@@ -161,13 +172,8 @@ export function KitchenWire({
   }, [tasks, screens, findings, now]);
 
   const filtered = useMemo(() => {
-    if (filter === "agents") {
-      return events.filter((e) => e.tag.includes("agent") || e.tag.includes("cook") || e.tag.includes("#"));
-    }
-    if (filter === "ops") {
-      return events.filter((e) => e.tag.includes("AUDIT") || e.tag.includes("QUEUE") || e.tag.includes("SERVED"));
-    }
-    return events;
+    if (filter === "all") return events;
+    return events.filter((e) => e.category === filter);
   }, [events, filter]);
 
   // Auto-scroll when new items arrive if not hovered
@@ -184,7 +190,7 @@ export function KitchenWire({
       onMouseEnter={() => setIsPaused(true)}
       onMouseLeave={() => setIsPaused(false)}
     >
-      <div className="flex items-center justify-between border-b border-ink-800/60 pb-1.5">
+      <div className="flex flex-wrap items-center justify-between gap-1 border-b border-ink-800/60 pb-1.5">
         <div className="flex items-center gap-1.5">
           <span className="relative flex h-2 w-2">
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-syrup-400 opacity-75" />
@@ -193,34 +199,32 @@ export function KitchenWire({
           <h3 className="panel-title text-xs tracking-wider">Kitchen wire</h3>
         </div>
 
-        <div className="flex items-center gap-1 text-[10px] font-mono">
-          <button
-            type="button"
-            onClick={() => setFilter("all")}
-            className={`rounded px-1.5 py-0.5 transition-colors ${
-              filter === "all" ? "bg-syrup-500/20 text-syrup-300" : "text-ink-500 hover:text-ink-300"
-            }`}
-          >
-            all
-          </button>
-          <button
-            type="button"
-            onClick={() => setFilter("agents")}
-            className={`rounded px-1.5 py-0.5 transition-colors ${
-              filter === "agents" ? "bg-syrup-500/20 text-syrup-300" : "text-ink-500 hover:text-ink-300"
-            }`}
-          >
-            agents
-          </button>
-          <button
-            type="button"
-            onClick={() => setFilter("ops")}
-            className={`rounded px-1.5 py-0.5 transition-colors ${
-              filter === "ops" ? "bg-syrup-500/20 text-syrup-300" : "text-ink-500 hover:text-ink-300"
-            }`}
-          >
-            ops
-          </button>
+        <div className="flex flex-wrap items-center gap-1 text-[10px] font-mono">
+          {(["all", "live", "alerts", "served", "spoiled"] as const).map((cat) => {
+            const active = filter === cat;
+            return (
+              <button
+                key={cat}
+                type="button"
+                onClick={() => setFilter(cat)}
+                className={`rounded px-1.5 py-0.5 transition-colors ${
+                  active
+                    ? cat === "alerts"
+                      ? "bg-amber-500/25 text-amber-300 font-semibold"
+                      : cat === "live"
+                        ? "bg-sky-500/25 text-sky-300 font-semibold"
+                        : cat === "served"
+                          ? "bg-green-500/25 text-green-300 font-semibold"
+                          : cat === "spoiled"
+                            ? "bg-red-500/25 text-red-300 font-semibold"
+                            : "bg-syrup-500/25 text-syrup-300 font-semibold"
+                    : "text-ink-500 hover:text-ink-300"
+                }`}
+              >
+                {cat}
+              </button>
+            );
+          })}
         </div>
       </div>
 
@@ -229,28 +233,29 @@ export function KitchenWire({
         className="mt-2 min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-0.5 font-mono text-[11px]"
       >
         {filtered.length === 0 ? (
-          <p className="mt-4 text-center text-xs text-ink-600">
-            Frequencies quiet — standing by for orders.
-          </p>
+          <div className="flex h-24 items-center justify-center text-center text-xs text-ink-600">
+            No events recorded in this category yet.
+          </div>
         ) : (
-          filtered.map((ev) => (
+          filtered.map((e) => (
             <div
-              key={ev.id}
-              className="group flex items-baseline gap-1.5 rounded p-1 transition-colors hover:bg-ink-850/50"
+              key={e.id}
+              className="group flex items-baseline gap-2 rounded px-1.5 py-1 transition-colors hover:bg-ink-850/60"
             >
-              <span className="shrink-0 text-[9px] tabular-nums text-ink-600">{ev.time}</span>
-              <span className={`shrink-0 text-[10px] font-medium ${ev.tagColor}`}>{ev.tag}</span>
-              {ev.link ? (
+              <span className="shrink-0 text-[10px] tabular-nums text-ink-600">{e.time}</span>
+              <span className={`shrink-0 text-[10px] font-semibold ${e.tagColor}`}>{e.tag}</span>
+              {e.link ? (
                 <Link
-                  to={ev.link}
-                  className="min-w-0 flex-1 truncate text-ink-300 hover:text-syrup-300 hover:underline"
-                  title={ev.text}
+                  to={e.link}
+                  state={{ from: "mission" }}
+                  className="min-w-0 flex-1 truncate text-ink-300 transition-colors hover:text-syrup-300"
+                  title={e.text}
                 >
-                  {ev.text}
+                  {e.text}
                 </Link>
               ) : (
-                <span className="min-w-0 flex-1 truncate text-ink-400" title={ev.text}>
-                  {ev.text}
+                <span className="min-w-0 flex-1 truncate text-ink-400" title={e.text}>
+                  {e.text}
                 </span>
               )}
             </div>

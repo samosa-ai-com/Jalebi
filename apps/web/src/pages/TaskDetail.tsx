@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Link, useParams } from "react-router-dom";
+import { Link, useLocation, useParams } from "react-router-dom";
 import { api, taskEvents } from "../api/client";
 import { StatusBadge } from "../components/StatusBadge";
 import { AttentionBadge } from "../components/AttentionBadge";
@@ -1031,6 +1031,8 @@ function DiffSection({ taskId, run, isLatest }: { taskId: number; run: Run; isLa
 
 export default function TaskDetail() {
   const { id } = useParams();
+  const location = useLocation();
+  const fromMission = (location.state as { from?: string } | null)?.from === "mission";
   const taskId = Number(id);
   const [task, setTask] = useState<Task | null>(null);
   const [runs, setRuns] = useState<Run[]>([]);
@@ -1466,8 +1468,12 @@ export default function TaskDetail() {
     <div className="space-y-6 animate-fade-up">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-3">
-          <Link to="/" className="text-sm text-ink-500 transition-colors hover:text-syrup-300">
-            ← Tasks
+          <Link
+            to={fromMission ? "/?view=mission" : "/"}
+            state={fromMission ? { from: "mission" } : undefined}
+            className="text-sm text-ink-500 transition-colors hover:text-syrup-300 flex items-center gap-1"
+          >
+            {fromMission ? "← Back to Mission control" : "← Tasks"}
           </Link>
           <h1 className="text-2xl font-bold tracking-tight text-ink-100">Task #{task.id}</h1>
           <StatusBadge status={task.status} />

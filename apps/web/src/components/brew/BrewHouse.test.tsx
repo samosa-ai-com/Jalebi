@@ -551,7 +551,9 @@ describe("BrewHouse", () => {
     expect(within(wire).getByText("Kitchen wire")).toBeInTheDocument();
     expect(within(wire).getByText(/Frying jalebi/)).toBeInTheDocument();
     // Test filter toggle
-    await userEvent.click(within(wire).getByRole("button", { name: "agents" }));
+    await userEvent.click(within(wire).getByRole("button", { name: "live" }));
     expect(within(wire).getByText(/Frying jalebi/)).toBeInTheDocument();
+    await userEvent.click(within(wire).getByRole("button", { name: "alerts" }));
+    expect(within(wire).getByText(/Leaky token log/)).toBeInTheDocument();
   });
 });

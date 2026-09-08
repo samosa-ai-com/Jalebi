@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import { AttentionBadge } from "../components/AttentionBadge";
 import { BrewHouse } from "../components/brew/BrewHouse";
@@ -861,6 +861,14 @@ function GhLink({ repo, kind, number }: { repo: string; kind: "pull" | "issues";
 
 export default function Tasks() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const urlView = searchParams.get("view");
+  const fromMission =
+    (location.state as { from?: string } | null)?.from === "mission" ||
+    searchParams.get("from") === "mission" ||
+    searchParams.get("action") === "new";
+
   const [tasks, setTasks] = useState<Task[]>([]);
   const [repos, setRepos] = useState<Repo[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -878,13 +886,14 @@ export default function Tasks() {
   const [lastLoaded, setLastLoaded] = useState<Date | null>(null);
   const [prefill, setPrefill] = useState<TaskPrefill | null>(null);
   const [prefillNonce, setPrefillNonce] = useState(0);
-  const [view, setView] = useState<"queue" | "mission">(() => {
+  const view: "queue" | "mission" = (() => {
+    if (urlView === "mission" || urlView === "queue") return urlView;
     try {
       return localStorage.getItem("jalebi-tasks-view") === "mission" ? "mission" : "queue";
     } catch {
       return "queue";
     }
-  });
+  })();
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const load = useCallback(() => {
@@ -998,27 +1007,37 @@ export default function Tasks() {
   }
 
   function selectView(v: "queue" | "mission") {
-    setView(v);
     try {
       localStorage.setItem("jalebi-tasks-view", v);
     } catch {
       /* private-mode storage — non-fatal */
     }
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.set("view", v);
+        next.delete("from");
+        next.delete("action");
+        return next;
+      },
+      { replace: false }
+    );
   }
 
-  // Mission-control order buttons flip back to the queue, pre-select the
-  // task type matching the ordered snack, and land on the form.
+  // Mission-control order buttons flip to the queue, pre-select the
+  // task type matching the ordered snack, and push history without scrolling.
   function handleMissionOrder(kind?: SnackKind) {
     const type = kind === "samosa" ? "issue_fix" : kind === "pakora" ? "pr_review" : "freeform";
     setPrefill({ type });
     setPrefillNonce((n) => n + 1);
-    selectView("queue");
-    window.setTimeout(() => {
-      const form = document.getElementById("new-task-form");
-      if (form && typeof form.scrollIntoView === "function") {
-        form.scrollIntoView({ behavior: "smooth", block: "start" });
-      }
-    }, 60);
+    try {
+      localStorage.setItem("jalebi-tasks-view", "queue");
+    } catch {
+      /* ignore */
+    }
+    // Push new history entry with view=queue and from=mission
+    // Zero scrolling!
+    navigate("/?view=queue&from=mission", { state: { from: "mission" } });
   }
 
   function handleDismissAttention(taskId: number) {
@@ -1214,6 +1233,26 @@ export default function Tasks() {
             </div>
           )}
 
+          {fromMission && (
+            <div className="flex items-center justify-between rounded-xl border border-syrup-500/30 bg-syrup-950/20 px-4 py-2.5 text-xs text-syrup-300 animate-fade-up">
+              <span className="flex items-center gap-2">
+                <span className="h-1.5 w-1.5 rounded-full bg-syrup-400" />
+                <span>Ordering from Halwai Shop (Mission Control)</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  selectView("mission");
+                  navigate("/?view=mission");
+                }}
+                className="inline-flex items-center gap-1 font-semibold text-syrup-400 hover:text-syrup-200 transition-colors"
+              >
+                <span>←</span>
+                <span>Back to Mission control</span>
+              </button>
+            </div>
+          )}
+
           <CreateTask
             key={prefillNonce}
             repos={repos}
@@ -1224,20 +1263,36 @@ export default function Tasks() {
           />
 
           {flash != null && (
-            <p className="rounded-xl border border-green-500/30 bg-green-500/10 px-4 py-2.5 text-sm text-green-300">
-              Task{" "}
-              <Link to={`/tasks/${flash}`} className="font-mono underline underline-offset-2">
-                #{flash}
-              </Link>{" "}
-              created — it will pick up a worker shortly.
-              <button
-                type="button"
-                onClick={() => setFlash(null)}
-                className="ml-3 text-xs text-green-400/70 hover:text-green-300"
-              >
-                Dismiss
-              </button>
-            </p>
+            <div className="rounded-xl border border-green-500/30 bg-green-500/10 px-4 py-2.5 text-sm text-green-300 flex flex-wrap items-center justify-between gap-2">
+              <span>
+                Task{" "}
+                <Link to={`/tasks/${flash}`} className="font-mono underline underline-offset-2">
+                  #{flash}
+                </Link>{" "}
+                created — it will pick up a worker shortly.
+              </span>
+              <div className="flex items-center gap-3 text-xs">
+                {fromMission && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      selectView("mission");
+                      navigate("/?view=mission");
+                    }}
+                    className="font-medium text-green-300 hover:text-green-100 underline underline-offset-2"
+                  >
+                    Back to Mission control →
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setFlash(null)}
+                  className="text-xs text-green-400/70 hover:text-green-300"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
           )}
 
           {error && (

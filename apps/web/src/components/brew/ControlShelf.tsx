@@ -99,6 +99,7 @@ export function ControlShelf({
           <h3 className="panel-title truncate">Backends</h3>
           <Link
             to="/settings?section=agent"
+            state={{ from: "mission" }}
             title="Backend settings"
             aria-label="Backend settings"
             className="link shrink-0 whitespace-nowrap font-mono text-[11px]"
@@ -108,11 +109,11 @@ export function ControlShelf({
         </div>
         {backends === null ? (
           <p className="mt-3 text-xs text-ink-600">Loading…</p>
-        ) : backends.enabled.length === 0 ? (
+        ) : (backends.enabled ?? []).length === 0 ? (
           <p className="mt-3 text-xs text-ink-600">No backends enabled.</p>
         ) : (
           <ul className="mt-2 space-y-1.5">
-            {backends.enabled.map((b) => (
+            {(backends.enabled ?? []).map((b) => (
               <li
                 key={b}
                 className={compact ? "min-w-0 text-xs" : "flex items-center gap-2 text-xs"}
@@ -155,6 +156,7 @@ export function ControlShelf({
           <h3 className="panel-title truncate">Repos</h3>
           <Link
             to="/repos"
+            state={{ from: "mission" }}
             title={`${repos.length} connected — open repos`}
             aria-label={`${repos.length} connected — open repos`}
             className="link shrink-0 whitespace-nowrap font-mono text-[11px]"
@@ -200,6 +202,7 @@ export function ControlShelf({
           <h3 className="panel-title truncate">Screenings</h3>
           <Link
             to="/screenings"
+            state={{ from: "mission" }}
             title={`${screens.length} screens — open screenings`}
             aria-label={`${screens.length} screens — open screenings`}
             className="link shrink-0 whitespace-nowrap font-mono text-[11px]"
@@ -214,6 +217,7 @@ export function ControlShelf({
                 <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-syrup-400 brew-needs-you" />
                 <Link
                   to="/screenings"
+                  state={{ from: "mission" }}
                   className="min-w-0 flex-1 truncate text-ink-200 hover:text-syrup-300"
                 >
                   {s.name}
@@ -241,6 +245,7 @@ export function ControlShelf({
                   <Link
                     key={`${f.screen_id}-${f.title}-${i}`}
                     to="/screenings"
+                    state={{ from: "mission" }}
                     className="whitespace-nowrap font-mono text-[10px]"
                     title={`${f.screen_name}: ${f.title}`}
                   >

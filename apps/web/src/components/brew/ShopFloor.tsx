@@ -163,6 +163,7 @@ export function ShopFloor({
                 <li key={t.id}>
                   <Link
                     to={`/tasks/${t.id}`}
+                    state={{ from: "mission" }}
                     title={t.prompt}
                     className="inline-block rounded-full border border-ink-800 px-2 py-0.5 font-mono text-[11px] text-ink-300 transition-colors hover:border-syrup-500/60 hover:text-syrup-300"
                   >
@@ -180,6 +181,7 @@ export function ShopFloor({
                   <li key={t.id}>
                     <Link
                       to={`/tasks/${t.id}`}
+                      state={{ from: "mission" }}
                       title={t.prompt}
                       className="inline-block rounded-full border border-red-900/40 bg-red-950/20 px-2 py-0.5 font-mono text-[11px] text-red-300/80 transition-colors hover:border-red-500/60 hover:text-red-200"
                     >
