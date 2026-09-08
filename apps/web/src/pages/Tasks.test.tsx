@@ -1077,6 +1077,42 @@ describe("Tasks page (queue overhaul)", () => {
     expect(await screen.findByText(/could not be marked dealt/)).toBeInTheDocument();
   });
 
+  it("flips from Mission control to the queue so the handoff form is visible", async () => {
+    const prompt = "Fix this high finding from mission view.";
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/tasks" && init?.method === "POST") {
+        return { ok: true, json: async () => ({ ...TASKS[0], id: 99 }) };
+      }
+      const handler = Object.entries({ ...DEFAULT_HANDLERS, "/api/tasks": [] }).find(([n]) =>
+        url.includes(n)
+      );
+      const value = handler ? handler[1] : [];
+      return { ok: true, json: async () => value };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    localStorage.setItem("jalebi-tasks-view", "mission");
+    const router = createMemoryRouter([{ path: "/", element: <Tasks /> }], {
+      initialEntries: [
+        {
+          pathname: "/",
+          state: {
+            prefill: { repoId: 1, type: "freeform", prompt, publishMode: "manual" },
+            dealtFps: [],
+            screeningHandoffId: "test-handoff-3",
+            from: "screenings",
+          },
+        },
+      ],
+    });
+    render(<RouterProvider router={router} />);
+    // Despite the stored mission view, the New-task form shows the prompt…
+    expect(await screen.findByDisplayValue(prompt)).toBeInTheDocument();
+    // …and the URL carries the queue view.
+    await waitFor(() => {
+      expect(router.state.location.search).toContain("view=queue");
+    });
+  });
+
   it("normalizes a cloned screen_finding type to freeform", async () => {
     const legacy = { ...TASKS[0], id: 7, type: "screen_finding", prompt: "old audit fix" };
     stubFetch({ ...DEFAULT_HANDLERS, "/api/tasks": [legacy] });

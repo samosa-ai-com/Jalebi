@@ -954,8 +954,19 @@ export default function Tasks() {
     setPrefill({ ...pf, type: sanitizePrefillType(pf.type) });
     setPrefillNonce((n) => n + 1);
     setPendingDealtFps(fps);
+    // The form lives in the queue view only (mission renders BrewHouse
+    // instead) — flip to it, same as a mission-control order does. Replace
+    // keeps Back pointed at Screenings instead of a stale prefill entry.
+    try {
+      localStorage.setItem("jalebi-tasks-view", "queue");
+    } catch {
+      /* private-mode storage — non-fatal */
+    }
     const { prefill: _dropP, dealtFps: _dropD, screeningHandoffId: _dropI, ...rest } = raw;
-    navigate(".", { replace: true, state: Object.keys(rest).length > 0 ? rest : null });
+    navigate("/?view=queue", {
+      replace: true,
+      state: Object.keys(rest).length > 0 ? rest : null,
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.state]);
 
