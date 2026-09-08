@@ -65,10 +65,14 @@ export function ControlShelf({
 
   return (
     <div
-      className={compact ? "grid grid-cols-2 gap-3" : "grid gap-4 md:grid-cols-2 xl:grid-cols-4"}
+      className={
+        compact
+          ? "grid min-h-0 flex-1 grid-cols-2 content-between gap-3"
+          : "grid gap-4 md:grid-cols-2 xl:grid-cols-4"
+      }
     >
       <section
-        className={`surface flex ${compact ? "flex-col items-start gap-1 px-2.5 py-2" : "items-center gap-4 p-4"}`}
+        className={`surface flex ${compact ? "min-w-0 flex-col items-start gap-1 px-2.5 py-2" : "items-center gap-4 p-4"}`}
         aria-label="Worker load"
       >
         <Ring
@@ -94,7 +98,7 @@ export function ControlShelf({
       </section>
 
       <section
-        className={`surface ${compact ? "px-2.5 py-2" : "px-3 py-2.5"}`}
+        className={`surface ${compact ? "min-w-0 px-2.5 py-2" : "px-3 py-2.5"}`}
         aria-label="Configured backends"
       >
         <div className="flex items-baseline justify-between gap-1">
@@ -115,11 +119,16 @@ export function ControlShelf({
         ) : (
           <ul className="mt-2 space-y-1.5">
             {backends.enabled.map((b) => (
-              <li key={b} className="flex items-center gap-2 text-xs">
-                <span className="h-1.5 w-1.5 rounded-full bg-syrup-400" />
-                <span className="font-mono text-ink-200">{b}</span>
+              <li
+                key={b}
+                className={compact ? "min-w-0 text-xs" : "flex items-center gap-2 text-xs"}
+              >
+                <span className={compact ? "flex items-center gap-2" : "contents"}>
+                  <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-syrup-400" />
+                  <span className="truncate font-mono text-ink-200">{b}</span>
+                </span>
                 {b === backends.default && (
-                  <span className="rounded bg-syrup-500/10 px-1.5 py-0.5 font-mono text-[10px] text-syrup-300">
+                  <span className="mt-0.5 inline-block rounded bg-syrup-500/10 px-1.5 py-0.5 font-mono text-[10px] text-syrup-300">
                     default
                   </span>
                 )}
@@ -145,7 +154,7 @@ export function ControlShelf({
       </section>
 
       <section
-        className={`surface ${compact ? "px-2.5 py-2" : "px-3 py-2.5"}`}
+        className={`surface ${compact ? "min-w-0 px-2.5 py-2" : "px-3 py-2.5"}`}
         aria-label="Repositories"
       >
         <div className="flex items-baseline justify-between gap-1">
@@ -190,7 +199,7 @@ export function ControlShelf({
       </section>
 
       <section
-        className={`surface ${compact ? "px-2.5 py-2" : "px-3 py-2.5"}`}
+        className={`surface ${compact ? "min-w-0 px-2.5 py-2" : "px-3 py-2.5"}`}
         aria-label="Screenings"
       >
         <div className="flex items-baseline justify-between gap-1">

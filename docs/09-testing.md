@@ -458,3 +458,11 @@ After any code change, run the relevant tests and build before marking work done
   `min-h-40 flex-1` (karhais grow into the space); menu chips dropped
   the redundant `New →` (whole chip orders); rails 230/270 for cook
   names. Measured 227→871 of 900px, stoves 358px, docH ≈ vh.
+
+- **Whitespace + badge-overflow round (owner live screenshot):**
+  leftover space distributes between cards (ops grid `flex-1` +
+  `content-between`; floor section `flex-1` with `auto-rows-fr` stove
+  rows); `default` badge stacks under its backend in compact minis
+  (was bursting the card → page h-scrollbar); minis `min-w-0`;
+  columns sized `calc(100vh-260px)` to absorb main's pb-8 — measured
+  docH == vh, zero scrollbars either axis at 1600×900.

@@ -103,7 +103,7 @@ export function ShopFloor({
         </div>
       )}
 
-      <div className="mt-2 grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-y-auto pr-0.5 sm:grid-cols-2">
+      <div className="mt-2 grid min-h-0 flex-1 auto-rows-fr grid-cols-1 gap-3 overflow-y-auto pr-0.5 sm:grid-cols-2">
         {Array.from({ length: slots }, (_, i) => (
           <FryStation
             key={i}

@@ -184,7 +184,7 @@ export function FryStation({
         viewBox="0 0 120 138"
         aria-hidden="true"
         preserveAspectRatio="xMidYMid meet"
-        className="mx-auto min-h-40 w-auto flex-1"
+        className="mx-auto min-h-24 w-auto flex-1"
       >
         {brewing && (
           <ellipse

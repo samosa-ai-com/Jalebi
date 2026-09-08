@@ -75,11 +75,11 @@ export function StatsBoard({ tasks, now }: { tasks: Task[]; now: number }) {
       <h3 className="panel-title">Today</h3>
       <dl className="mt-1.5 grid grid-cols-4 gap-2">
         <div>
-          <dt className="font-mono text-[10px] uppercase tracking-wide text-ink-500">served</dt>
+          <dt className="font-mono text-[9px] uppercase tracking-wide text-ink-500">served</dt>
           <dd className="font-mono text-lg tabular-nums text-ink-100">{stats.doneToday}</dd>
         </div>
         <div>
-          <dt className="font-mono text-[10px] uppercase tracking-wide text-ink-500">needs you</dt>
+          <dt className="font-mono text-[9px] uppercase tracking-wide text-ink-500">needs you</dt>
           <dd
             className={`font-mono text-lg tabular-nums ${stats.needsYou > 0 ? "text-syrup-300" : "text-ink-100"}`}
           >
@@ -87,17 +87,17 @@ export function StatsBoard({ tasks, now }: { tasks: Task[]; now: number }) {
           </dd>
         </div>
         <div>
-          <dt className="font-mono text-[10px] uppercase tracking-wide text-ink-500">spoiled</dt>
+          <dt className="font-mono text-[9px] uppercase tracking-wide text-ink-500">spoiled</dt>
           <dd className="font-mono text-lg tabular-nums text-ink-100">{stats.failedToday}</dd>
         </div>
         <div>
-          <dt className="font-mono text-[10px] uppercase tracking-wide text-ink-500">avg fry</dt>
+          <dt className="font-mono text-[9px] uppercase tracking-wide text-ink-500">avg fry</dt>
           <dd className="whitespace-nowrap font-mono text-lg tabular-nums text-ink-100">
             {stats.avg === null ? "—" : formatMinutes(stats.avg)}
           </dd>
         </div>
       </dl>
-      <h4 className="mt-2 font-mono text-[10px] uppercase tracking-wide text-ink-500">
+      <h4 className="mt-2 font-mono text-[9px] uppercase tracking-wide text-ink-500">
         Served · last 7 days
       </h4>
       <div
