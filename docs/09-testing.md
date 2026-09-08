@@ -472,3 +472,25 @@ After any code change, run the relevant tests and build before marking work done
   floor section `justify-between` spreads leftover as gaps; grid keeps
   `min-h` + internal scroll fallback. Verified 1920×1080, 2 burners:
   docH == vh, no scrollbars.
+
+- **Screening batch + New-task handoff (web +5 net, Codex REJECT → fixed):**
+  `FindingTaskComposer` deleted; single/batch "New task" buttons navigate
+  to `/` with location-state `ScreeningHandoff` (prefill + dealt
+  fingerprints + id), consumed one-shot in `Tasks.tsx` (validate, nonce
+  remount, replace-clear; `from` preserved) with dealt marked only in
+  `handleCreated` after the POST succeeds. Tasks created as `freeform` +
+  explicit `publishMode: "manual"` (documented semantic change from
+  `screen_finding`; clone normalizes legacy `screen_finding`/`triggered`
+  to `freeform`). Batch gate requires one repo + one effective target
+  branch (`scope_branch || repo.default_branch`) with inline reasons;
+  selection keyed `run:screen:items-index` via a render-scope map, cleared
+  on refetch. Dealt helpers moved to `lib/screeningDealt.ts` (fingerprint
+  semantics unchanged). Codex blockers fixed: nonce/re-inject (#1),
+  dealt-at-navigation (#2, now dealt-on-success), freeform documentation
+  (#3), effective-branch gate (#4). `Screenings.test.tsx` +3 net (handoff
+  payload + no-POST, combined batch prompt, mixed-repo refusal, bulk
+  dealt), `Tasks.test.tsx` +2 (handoff prefill + dealt-on-create,
+  clone normalization).
+- **Suite totals now:** server untouched, web **270 passed** (no backend
+  changes; production DB never touched; `tsc`, eslint, prettier, build
+  clean — Vite large-chunk warning remains, pre-existing).

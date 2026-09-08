@@ -3,6 +3,14 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Screenings from "./Screenings";
+import { buildMultiFindingPrompt, MULTI_PROMPT_SOFT_CAP } from "../lib/screeningPrompt";
+
+const { navigateMock } = vi.hoisted(() => ({ navigateMock: vi.fn() }));
+
+vi.mock("react-router-dom", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("react-router-dom")>();
+  return { ...mod, useNavigate: () => navigateMock };
+});
 
 const REPOS = [{ id: 1, full_name: "owner/repo", default_branch: "main" }];
 
@@ -178,6 +186,7 @@ function makeFetchMock() {
 afterEach(() => {
   vi.restoreAllMocks();
   localStorage.clear();
+  navigateMock.mockClear();
 });
 
 function renderScreenings() {
@@ -259,7 +268,7 @@ describe("Screenings", () => {
     });
   });
 
-  it("shows run history with findings and creates a task after prompt review", async () => {
+  it("sends a history finding to the New-task form with the prompt injected", async () => {
     const fetchMock = makeFetchMock();
     vi.stubGlobal("fetch", fetchMock);
     renderScreenings();
@@ -268,27 +277,48 @@ describe("Screenings", () => {
     await userEvent.click(screen.getByRole("button", { name: "History" }));
     expect(await screen.findByText("Secret in config")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "New task from finding" }));
-    // The prompt is editable before anything is created (PRD false-positive rule).
-    const editor = await screen.findByDisplayValue(/Finding \(untrusted\): Secret in config/);
-    expect(editor).toBeInTheDocument();
+    // Handoff: exactly one navigation carrying the prefill — no direct POST.
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledTimes(1));
+    const [to, opts] = navigateMock.mock.calls[0] as [string, { state: Record<string, unknown> }];
+    expect(to).toBe("/");
+    const state = opts.state as {
+      prefill: Record<string, unknown>;
+      dealtFps: string[];
+      from: string;
+    };
+    expect(state.from).toBe("screenings");
+    expect(state.prefill).toMatchObject({
+      repoId: 1,
+      type: "freeform",
+      publishMode: "manual",
+    });
+    expect(state.prefill.prompt as string).toContain("UNTRUSTED input");
+    expect(state.prefill.prompt as string).toContain("Finding (untrusted): Secret in config");
+    expect(state.dealtFps).toHaveLength(1);
     expect(
       fetchMock.mock.calls.filter((c) => c[0] === "/api/tasks" && c[1]?.method === "POST")
     ).toHaveLength(0);
-    await userEvent.click(screen.getByRole("button", { name: "Create task" }));
-    await waitFor(() => {
-      const call = fetchMock.mock.calls.find(
-        (c) => c[0] === "/api/tasks" && c[1]?.method === "POST"
-      );
-      expect(call).toBeTruthy();
-      const body = JSON.parse(call?.[1]?.body as string);
-      expect(body.type).toBe("screen_finding");
-      // Finding text is piped into a fix-agent prompt as explicitly UNTRUSTED input.
-      expect(body.prompt).toContain("UNTRUSTED input");
-      expect(body.prompt).toContain("Finding (untrusted): Secret in config");
-    });
-    // Success links straight to the created task.
-    const link = await screen.findByRole("link", { name: /task #99/ });
-    expect(link.getAttribute("href")).toBe("/tasks/99");
+  });
+
+  it("opens one batched task from selected history findings", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    renderScreenings();
+    await goScreens();
+    await screen.findByText("Security posture");
+    await userEvent.click(screen.getByRole("button", { name: "History" }));
+    await screen.findByText("Secret in config");
+    await userEvent.click(screen.getByLabelText("Select finding Secret in config"));
+    expect(await screen.findByText("1 selected")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Open new task with finding" }));
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledTimes(1));
+    const [, opts] = navigateMock.mock.calls[0] as [string, { state: Record<string, unknown> }];
+    const state = opts.state as { prefill: Record<string, unknown>; dealtFps: string[] };
+    expect(state.prefill.prompt as string).toContain("Secret in config");
+    expect(state.dealtFps).toHaveLength(1);
+    expect(
+      fetchMock.mock.calls.filter((c) => c[0] === "/api/tasks" && c[1]?.method === "POST")
+    ).toHaveLength(0);
   });
 
   it("shows the selected starter template instead of the placeholder", async () => {
@@ -572,7 +602,7 @@ describe("Screenings", () => {
     expect(screen.getByText("Secret in config")).toBeInTheDocument();
   });
 
-  it("opens the task composer from an inbox finding", async () => {
+  it("opens the New-task form from an inbox finding without creating yet", async () => {
     const fetchMock = makeFetchMock();
     vi.stubGlobal("fetch", fetchMock);
     renderScreenings();
@@ -581,15 +611,70 @@ describe("Screenings", () => {
     await screen.findByText("Secret in config");
     await userEvent.click(screen.getByText("Secret in config"));
     await userEvent.click(screen.getAllByRole("button", { name: "New task from finding" })[0]);
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledTimes(1));
+    const [to, opts] = navigateMock.mock.calls[0] as [string, { state: Record<string, unknown> }];
+    expect(to).toBe("/");
+    const state = opts.state as { prefill: Record<string, unknown>; dealtFps: string[] };
+    expect(state.prefill).toMatchObject({ repoId: 1, type: "freeform", publishMode: "manual" });
+    expect(state.prefill.prompt as string).toContain("Finding (untrusted): Secret in config");
+    // Nothing is created (and nothing marked dealt) until the form submits.
     expect(
-      await screen.findByDisplayValue(/Finding \(untrusted\): Secret in config/)
-    ).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Create task" }));
-    await waitFor(() => {
-      expect(
-        fetchMock.mock.calls.some((c) => c[0] === "/api/tasks" && c[1]?.method === "POST")
-      ).toBe(true);
-    });
+      fetchMock.mock.calls.filter((c) => c[0] === "/api/tasks" && c[1]?.method === "POST")
+    ).toHaveLength(0);
+    expect(screen.getByText("Secret in config")).toBeInTheDocument();
+  });
+
+  it("opens one combined task from a batch of inbox findings", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    renderScreenings();
+    await screen.findByText("Security posture");
+    await userEvent.click(screen.getByRole("button", { name: "findings" }));
+    await screen.findByText("Stale comment");
+    await userEvent.click(screen.getByLabelText("Select all visible findings"));
+    expect(await screen.findByText("2 selected")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Open new task with 2 findings" }));
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledTimes(1));
+    const [, opts] = navigateMock.mock.calls[0] as [string, { state: Record<string, unknown> }];
+    const state = opts.state as { prefill: Record<string, unknown>; dealtFps: string[] };
+    const prompt = state.prefill.prompt as string;
+    expect(prompt).toContain("Fix these 2 findings");
+    expect(prompt).toContain("Secret in config");
+    expect(prompt).toContain("Stale comment");
+    expect(state.dealtFps).toHaveLength(2);
+    expect(
+      fetchMock.mock.calls.filter((c) => c[0] === "/api/tasks" && c[1]?.method === "POST")
+    ).toHaveLength(0);
+  });
+
+  it("refuses a batch spanning two repos with guidance", async () => {
+    const otherScreen = { ...SCREENS[0], id: 8, repo_id: 2, name: "Other screen" };
+    const mixed = [
+      ...FINDINGS,
+      { ...FINDINGS[0], screen_id: 8, screen_name: "Other screen", repo_id: 2 },
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        const u = url as string;
+        if (u === "/api/screenings/templates") return { ok: true, json: async () => TEMPLATES };
+        if (u === "/api/repos") return { ok: true, json: async () => REPOS };
+        if (u === "/api/screenings")
+          return { ok: true, json: async () => [SCREENS[0], otherScreen] };
+        if (u.startsWith("/api/screenings/findings")) return { ok: true, json: async () => mixed };
+        throw new Error(`unexpected fetch: ${u}`);
+      })
+    );
+    renderScreenings();
+    await screen.findByText("Security posture");
+    await userEvent.click(screen.getByRole("button", { name: "findings" }));
+    await screen.findByText("Stale comment");
+    await userEvent.click(screen.getByLabelText("Select all visible findings"));
+    expect(await screen.findByText("3 selected")).toBeInTheDocument();
+    const taskBtn = screen.getByRole("button", { name: "Open new task with 3 findings" });
+    expect(taskBtn).toBeDisabled();
+    expect(await screen.findByText(/span 2 repos/)).toBeInTheDocument();
+    expect(navigateMock).not.toHaveBeenCalled();
   });
 
   it("shows a health banner when a screen is failing", async () => {
@@ -659,20 +744,20 @@ describe("Screenings", () => {
     });
   });
 
-  it("hides dealt findings by default after task creation", async () => {
+  it("marks a batch dealt in one go and hides the findings", async () => {
     vi.stubGlobal("fetch", makeFetchMock());
     renderScreenings();
     await screen.findByText("Security posture");
     await screen.findByText("Secret in config");
-    await userEvent.click(screen.getByText("Secret in config"));
-    await userEvent.click(screen.getAllByRole("button", { name: "New task from finding" })[0]);
-    await userEvent.click(screen.getByRole("button", { name: "Create task" }));
-    // The created task marks the finding dealt → hidden, toggle shows the count.
+    await userEvent.click(screen.getByLabelText("Select all visible findings"));
+    expect(await screen.findByText("2 selected")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Mark dealt (2)" }));
+    // Both findings hide at once; the toggle shows the hidden count.
     await waitFor(() => {
       expect(screen.queryByText("Secret in config")).not.toBeInTheDocument();
     });
-    expect(screen.getByRole("button", { name: /Hide dealt \(1\)/ })).toBeInTheDocument();
-    expect(screen.getByText("Stale comment")).toBeInTheDocument();
+    expect(screen.queryByText("Stale comment")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Hide dealt \(2\)/ })).toBeInTheDocument();
   });
 
   it("reveals and reopens dealt findings via the toggle", async () => {
@@ -705,6 +790,27 @@ describe("Screenings", () => {
     expect(await screen.findByText("0 6 * * 1")).toBeInTheDocument();
   });
 
+  it("truncates an oversized batch prompt with a marker", async () => {
+    const screen = SCREENS[0] as unknown as Parameters<
+      typeof buildMultiFindingPrompt
+    >[0][number]["screen"];
+    const entries = Array.from({ length: 10 }, (_, i) => ({
+      screen,
+      finding: {
+        severity: "high" as const,
+        title: `Finding ${i}`,
+        file: "big.py",
+        line: i,
+        detail: "x".repeat(1500),
+        recommendation: "y".repeat(500),
+      },
+    }));
+    const prompt = buildMultiFindingPrompt(entries);
+    expect(prompt.length).toBeLessThanOrEqual(MULTI_PROMPT_SOFT_CAP + 200);
+    expect(prompt).toContain("Finding 1 of 10");
+    expect(prompt).toContain("truncated");
+  });
+
   it("renders '← Back to Mission control' when navigating with from: mission", async () => {
     vi.stubGlobal("fetch", makeFetchMock());
     render(
@@ -712,6 +818,8 @@ describe("Screenings", () => {
         <Screenings />
       </MemoryRouter>
     );
-    expect(await screen.findByRole("link", { name: /Back to Mission control/i })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("link", { name: /Back to Mission control/i })
+    ).toBeInTheDocument();
   });
 });

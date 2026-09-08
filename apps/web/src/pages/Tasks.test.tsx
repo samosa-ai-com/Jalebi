@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Tasks from "./Tasks";
 
@@ -961,7 +961,11 @@ describe("Tasks page (queue overhaul)", () => {
   it("shows Back to Mission control banner and switches view when clicked", async () => {
     stubFetch(DEFAULT_HANDLERS);
     render(
-      <MemoryRouter initialEntries={[{ pathname: "/", search: "?view=queue&from=mission", state: { from: "mission" } }]}>
+      <MemoryRouter
+        initialEntries={[
+          { pathname: "/", search: "?view=queue&from=mission", state: { from: "mission" } },
+        ]}
+      >
         <Tasks />
       </MemoryRouter>
     );
@@ -969,5 +973,74 @@ describe("Tasks page (queue overhaul)", () => {
     expect(backBtn).toBeInTheDocument();
     await userEvent.click(backBtn);
     expect(screen.getByRole("heading", { name: "Halwai shop" })).toBeInTheDocument();
+  });
+
+  it("applies a screening handoff prefill and marks findings dealt only on create", async () => {
+    const prompt = 'Fix this high finding from the "Security posture" screen.';
+    const fp = JSON.stringify([7, "Secret in config", "config.py", 3]);
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/tasks" && init?.method === "POST") {
+        return { ok: true, json: async () => ({ ...TASKS[0], id: 99 }) };
+      }
+      const handler = Object.entries({ ...DEFAULT_HANDLERS, "/api/tasks": [] }).find(([n]) =>
+        url.includes(n)
+      );
+      const value = handler ? handler[1] : [];
+      return { ok: true, json: async () => value };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const router = createMemoryRouter([{ path: "/", element: <Tasks /> }], {
+      initialEntries: [
+        {
+          pathname: "/",
+          state: {
+            prefill: { repoId: 1, type: "freeform", prompt, publishMode: "manual" },
+            dealtFps: [fp],
+            screeningHandoffId: "test-handoff-1",
+            from: "screenings",
+          },
+        },
+      ],
+    });
+    render(<RouterProvider router={router} />);
+    // The prompt is injected into the form for review before anything exists.
+    expect(await screen.findByDisplayValue(prompt)).toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.filter((call) => call[0] === "/api/tasks" && call[1]?.method === "POST")
+    ).toHaveLength(0);
+    expect(localStorage.getItem("jalebi-findings-dealt")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => {
+      const postCall = fetchMock.mock.calls.find(
+        (call) => call[0] === "/api/tasks" && call[1]?.method === "POST"
+      );
+      expect(postCall).toBeTruthy();
+      const body = JSON.parse(postCall![1]!.body as string) as Record<string, unknown>;
+      expect(body).toMatchObject({ repo_id: 1, type: "freeform", prompt });
+    });
+    // Only the successful create marks the finding dealt.
+    await waitFor(() => {
+      expect(localStorage.getItem("jalebi-findings-dealt")).toContain("Secret in config");
+    });
+    // The handoff entry is replace-cleared (no refresh re-inject) while
+    // unrelated keys like `from` survive.
+    await waitFor(() => {
+      expect(router.state.location.state).toEqual({ from: "screenings" });
+    });
+  });
+
+  it("normalizes a cloned screen_finding type to freeform", async () => {
+    const legacy = { ...TASKS[0], id: 7, type: "screen_finding", prompt: "old audit fix" };
+    stubFetch({ ...DEFAULT_HANDLERS, "/api/tasks": [legacy] });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    await screen.findByText("old audit fix");
+    await userEvent.click(screen.getByTitle(/Clone/));
+    await waitFor(() => {
+      expect((screen.getByLabelText("Task type") as HTMLSelectElement).value).toBe("freeform");
+    });
   });
 });

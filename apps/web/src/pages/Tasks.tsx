@@ -8,6 +8,7 @@ import { DepBadges } from "../components/DepBadges";
 import { RunningCard } from "../components/RunningCard";
 import { StatusBadge } from "../components/StatusBadge";
 import { useBackends } from "../hooks/useBackends";
+import { markFindingsDealt } from "../lib/screeningDealt";
 import type { Account, CatalogAgent, GithubContext, Repo, SettingsMap, Task } from "../types";
 
 function repoName(repos: Repo[], id: number): string {
@@ -79,6 +80,21 @@ function Select({
       </select>
     </label>
   );
+}
+
+/** Cross-page handoff from Screenings: prefill the New-task form. `dealtFps`
+ * are finding fingerprints marked dealt only after the create POST succeeds
+ * (see handleCreated) — never at navigation time, so abandoning the form
+ * leaves the inbox untouched. */
+export interface ScreeningHandoff {
+  prefill: TaskPrefill;
+  dealtFps?: string[];
+  screeningHandoffId?: string;
+}
+
+function sanitizePrefillType(type: string | undefined): string | undefined {
+  if (!type) return type;
+  return TASK_TYPES.some((t) => t.value === type) ? type : "freeform";
 }
 
 /** Fields a task row can push back into the form via the Clone button. */
@@ -266,8 +282,6 @@ function CreateTask({
       })
       .catch(() => {});
   }, []);
-
-
 
   useEffect(() => {
     let cancelled = false;
@@ -873,6 +887,13 @@ export default function Tasks() {
   const [lastLoaded, setLastLoaded] = useState<Date | null>(null);
   const [prefill, setPrefill] = useState<TaskPrefill | null>(null);
   const [prefillNonce, setPrefillNonce] = useState(0);
+  // Finding fingerprints carried by a screening handoff — marked dealt only
+  // after the new task's create POST succeeds (never at navigation time, so
+  // abandoning the form leaves the inbox untouched).
+  const [pendingDealtFps, setPendingDealtFps] = useState<string[]>([]);
+  // One-shot ids of consumed screening handoffs (guards re-apply on
+  // re-render; the state entry itself is cleared with a replace navigation).
+  const consumedHandoffs = useRef<Set<string>>(new Set());
   const view: "queue" | "mission" = (() => {
     if (urlView === "mission" || urlView === "queue") return urlView;
     try {
@@ -913,6 +934,30 @@ export default function Tasks() {
     },
     []
   );
+
+  // Screening → New-task handoff (one-shot). Applies even while Tasks stays
+  // mounted: setPrefill + nonce remount re-seeds the form (same mechanism as
+  // Clone/Mission-order). The entry is cleared with a replace navigation so
+  // refresh/back never re-injects a stale prompt; unrelated state keys (e.g.
+  // `from`) survive. A handoff id guards StrictMode double-effects.
+  useEffect(() => {
+    const raw = location.state as (Partial<ScreeningHandoff> & Record<string, unknown>) | null;
+    if (raw == null || typeof raw !== "object" || raw.prefill == null) return;
+    const pf = raw.prefill as TaskPrefill;
+    if (typeof pf !== "object" || (pf.prompt != null && typeof pf.prompt !== "string")) return;
+    const id = typeof raw.screeningHandoffId === "string" ? raw.screeningHandoffId : null;
+    if (id !== null && consumedHandoffs.current.has(id)) return;
+    if (id !== null) consumedHandoffs.current.add(id);
+    const fps = Array.isArray(raw.dealtFps)
+      ? raw.dealtFps.filter((x) => typeof x === "string")
+      : [];
+    setPrefill({ ...pf, type: sanitizePrefillType(pf.type) });
+    setPrefillNonce((n) => n + 1);
+    setPendingDealtFps(fps);
+    const { prefill: _dropP, dealtFps: _dropD, screeningHandoffId: _dropI, ...rest } = raw;
+    navigate(".", { replace: true, state: Object.keys(rest).length > 0 ? rest : null });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.state]);
 
   const stats = useMemo(() => {
     const running = tasks.filter((t) => t.status === "queued" || t.status === "running").length;
@@ -1023,6 +1068,7 @@ export default function Tasks() {
   function handleMissionOrder(kind?: SnackKind) {
     const type = kind === "samosa" ? "issue_fix" : kind === "pakora" ? "pr_review" : "freeform";
     setPrefill({ type });
+    setPendingDealtFps([]);
     setPrefillNonce((n) => n + 1);
     try {
       localStorage.setItem("jalebi-tasks-view", "queue");
@@ -1057,9 +1103,11 @@ export default function Tasks() {
   }
 
   function handleClone(t: Task) {
+    // Persisted types outside the manual dropdown (screen_finding,
+    // triggered) fall back to freeform so the type select stays valid.
     setPrefill({
       repoId: t.repo_id,
-      type: t.type,
+      type: sanitizePrefillType(t.type) ?? "freeform",
       prompt: t.prompt,
       sourceBranch: t.source_branch ?? undefined,
       targetBranch: t.target_branch ?? undefined,
@@ -1078,11 +1126,19 @@ export default function Tasks() {
       envVars: t.env_vars ?? undefined,
     });
     setPrefillNonce((n) => n + 1);
+    // A clone replaces any screening handoff in the form.
+    setPendingDealtFps([]);
   }
 
   function handleCreated(id?: number) {
     load();
     if (id === undefined) return;
+    // The screening handoff's findings become dealt only now — the create
+    // POST succeeded. Abandoning the form marks nothing.
+    if (pendingDealtFps.length > 0) {
+      markFindingsDealt(pendingDealtFps);
+      setPendingDealtFps([]);
+    }
     setFlash(id);
     if (flashTimer.current) clearTimeout(flashTimer.current);
     flashTimer.current = setTimeout(() => setFlash(null), 10000);
