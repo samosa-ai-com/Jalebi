@@ -167,3 +167,10 @@ stated.
   terminal event is the error signal. Deltas (`message_update`) are silent;
   `message_end` is authoritative; `thinking` silent. No diff event.
   `list_models` parses `pi --list-models` (provider/model table).
+- **kilo** (`kilo run --auto --format json`, 7.5.16): OpenCode fork — event
+  model mirrors opencode. `-m` needs the full `provider/model` id
+  (e.g. `kilo/kilo-auto/free`; bare `Auto Free` is rejected). Successful runs
+  end on `step_finish` (`reason:"stop"`) + exit 0; non-stop reasons map to
+  `error`. `file`-patch events map to `diff`. `list_models` reads
+  `kilo models`. Resume (`-s`/`--continue`) and tool-call shapes are
+  per-docs, not live-exercised.
