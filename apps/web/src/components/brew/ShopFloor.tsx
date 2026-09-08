@@ -62,7 +62,6 @@ export function ShopFloor({
             <span className="shrink-0 font-mono text-[9px] text-ink-500">
               {m.type} · {m.total}
             </span>
-            <span className="shrink-0 font-mono text-[10px] text-syrup-300">New →</span>
           </button>
         ))}
       </div>

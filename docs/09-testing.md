@@ -451,3 +451,10 @@ After any code change, run the relevant tests and build before marking work done
   wrap (compact links collapse to `→` with labels), menu chips share
   the strip (`flex-1` + truncate, tighter padding), rails narrowed to
   210/280 so all three chips fit. Verified 1600×900: no page scroll.
+
+- **Owner-screenshot round (live 2-burner view, big void below floor):
+  ** columns now fixed to `xl:h-[calc(100vh-16rem)]` so the floor fills
+  the viewport; `FryStation` is `flex h-full flex-col` with the SVG at
+  `min-h-40 flex-1` (karhais grow into the space); menu chips dropped
+  the redundant `New →` (whole chip orders); rails 230/270 for cook
+  names. Measured 227→871 of 900px, stoves 358px, docH ≈ vh.

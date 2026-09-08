@@ -928,7 +928,7 @@ describe("Tasks page (queue overhaul)", () => {
     );
     await screen.findByText("New task");
     await userEvent.click(screen.getByRole("button", { name: "Mission control" }));
-    await userEvent.click(await screen.findByRole("button", { name: /samosa.*issue_fix.*New/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /samosa.*issue_fix/ }));
     await waitFor(() => {
       expect((screen.getByLabelText("Task type") as HTMLSelectElement).value).toBe("issue_fix");
     });

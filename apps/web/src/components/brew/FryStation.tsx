@@ -176,11 +176,16 @@ export function FryStation({
           onOpen(station!.task.id);
         }
       }}
-      className={`surface group w-full px-2.5 pt-1.5 pb-1.5 text-left transition-colors ${
+      className={`surface group flex h-full w-full flex-col px-2.5 pt-1.5 pb-1.5 text-left transition-colors ${
         brewing ? "cursor-pointer hover:border-syrup-500/50" : ""
       }`}
     >
-      <svg viewBox="0 0 120 138" aria-hidden="true" className="mx-auto h-48 w-auto">
+      <svg
+        viewBox="0 0 120 138"
+        aria-hidden="true"
+        preserveAspectRatio="xMidYMid meet"
+        className="mx-auto min-h-40 w-auto flex-1"
+      >
         {brewing && (
           <ellipse
             cx="60"

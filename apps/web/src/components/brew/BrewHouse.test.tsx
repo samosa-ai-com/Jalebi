@@ -359,7 +359,7 @@ describe("BrewHouse", () => {
     );
     const menu = await screen.findByRole("group", { name: "Today's menu" });
     expect(within(menu).getByText("Today's menu")).toBeInTheDocument();
-    await userEvent.click(within(menu).getByRole("button", { name: /pakora.*pr_review.*New/ }));
+    await userEvent.click(within(menu).getByRole("button", { name: /pakora.*pr_review/ }));
     expect(onNewTask).toHaveBeenCalledTimes(1);
     expect(onNewTask).toHaveBeenCalledWith("pakora");
   });
