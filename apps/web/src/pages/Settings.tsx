@@ -513,7 +513,7 @@ function IDESettings({
   );
 }
 
-const AGENT_CLIS = ["opencode", "codex", "claude", "pi", "kilo"];
+const AGENT_CLIS = ["opencode", "codex", "claude", "pi", "kilo", "qwen"];
 
 // Common secret formats offered as one-click presets (plus free-form regex).
 const SECRET_PRESETS = [

@@ -11,6 +11,7 @@ from jalebi.adapters.codex import CodexAdapter
 from jalebi.adapters.kilo import KiloAdapter
 from jalebi.adapters.opencode import OpenCodeAdapter
 from jalebi.adapters.pi import PiAdapter
+from jalebi.adapters.qwen import QwenAdapter
 from jalebi.adapters.types import AgentAdapter
 
 ADAPTERS: dict[str, AgentAdapter] = {
@@ -19,6 +20,7 @@ ADAPTERS: dict[str, AgentAdapter] = {
     "claude": ClaudeAdapter(),
     "pi": PiAdapter(),
     "kilo": KiloAdapter(),
+    "qwen": QwenAdapter(),
 }
 
 

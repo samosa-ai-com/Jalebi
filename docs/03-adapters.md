@@ -174,3 +174,11 @@ stated.
   `error`. `file`-patch events map to `diff`. `list_models` reads
   `kilo models`. Resume (`-s`/`--continue`) and tool-call shapes are
   per-docs, not live-exercised.
+- **qwen** (`qwen -p … -o stream-json --yolo`, 0.23.1): handshake is
+  `system`/`init` (resume key `session_id`); terminal `result` line
+  (`is_error` discriminator, final text echoed). `-p` deprecated but works.
+  `--yolo` stderr warning silenced via `QWEN_CODE_SUPPRESS_YOLO_WARNING=1`.
+  `--max-wall-time 600s` bounds headless runs. `list_models` reads
+  `~/.qwen/settings.json` `modelProviders` ids (no live catalog call).
+  Resume (`-r`/`-c`), tool events and partial streaming are per-docs, not
+  live-exercised.
