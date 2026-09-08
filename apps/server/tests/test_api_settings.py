@@ -48,7 +48,19 @@ def test_ntfy_topic_accepts_topic_or_url(client: FlaskClient) -> None:
 def test_enabled_backends_validated_and_listed(client: FlaskClient) -> None:
     """enabled_backends: non-empty known subset; default must stay enabled."""
     body = client.get("/api/backends").get_json()
-    assert body["backends"] == ["opencode", "codex", "claude"]
+    assert body["backends"] == [
+        "opencode",
+        "codex",
+        "claude",
+        "pi",
+        "kilo",
+        "qwen",
+        "cline",
+        "goose",
+        "grok",
+        "commandcode",
+        "agy",
+    ]
     assert body["enabled"] == ["opencode", "codex", "claude"]
     assert body["default"] == "opencode"
 

@@ -602,8 +602,7 @@ describe("Settings (recovery + data)", () => {
     expect(screen.getByRole("button", { name: "Restore now" })).toBeDisabled();
   });
 
-  it("unchecking a backend saves the reduced enabled list", async () => {
-    const fetchMock = makeFetchMock();
+  it("unchecking a backend saves the reduced enabled list", async () => {    const fetchMock = makeFetchMock();
     vi.stubGlobal("fetch", fetchMock);
     render(<Settings />);
     await expand(/Agent defaults/);
@@ -622,6 +621,14 @@ describe("Settings (recovery + data)", () => {
         )
       ).toBe(true);
     });
+  });
+
+  it("shows the new-backends not-yet-tested notice", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Settings />);
+    await expand(/Agent defaults/);
+    expect(await screen.findByText(/haven't been tested from the app yet/)).toBeInTheDocument();
   });
 
   it("timezone dropdown saves the chosen zone", async () => {

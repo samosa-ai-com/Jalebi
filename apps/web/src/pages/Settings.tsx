@@ -515,6 +515,15 @@ function IDESettings({
 
 const AGENT_CLIS = ["opencode", "codex", "claude", "pi", "kilo", "qwen", "cline", "goose", "grok", "commandcode", "agy"];
 
+// Backends added Sep 2026: implemented against vendor docs + a one-prompt
+// smoke test each, but not yet live-tested from the app.
+const NEW_BACKENDS = ["pi", "kilo", "qwen", "cline", "goose", "grok", "commandcode", "agy"];
+
+const NEW_BACKENDS_NOTICE =
+  "New backends (pi, kilo, qwen, cline, goose, grok, commandcode, agy) should work " +
+  "according to their vendors' documentation, but they haven't been tested from the app " +
+  "yet — report issues before relying on them.";
+
 // Common secret formats offered as one-click presets (plus free-form regex).
 const SECRET_PRESETS = [
   { label: "AWS access keys", pattern: "AKIA[0-9A-Z]{16}" },
@@ -1663,6 +1672,7 @@ export default function Settings() {
             status={badge("enabled_backends")}
             error={fieldState["enabled_backends"]?.msg}
           >
+            <p className="mb-2 text-xs text-ink-500">{NEW_BACKENDS_NOTICE}</p>
             <div className="flex flex-wrap justify-end gap-2">
               {AGENT_CLIS.map((c) => {
                 const enabledList = settings.enabled_backends ?? [...AGENT_CLIS];
@@ -1678,7 +1688,7 @@ export default function Settings() {
                         ? "The default backend can't be switched off"
                         : isLast
                           ? "At least one backend must stay on"
-                          : `Include ${c}`
+                          : `Include ${c}${NEW_BACKENDS.includes(c) ? " (new — not yet tested from the app)" : ""}`
                     }
                     className={`flex cursor-pointer items-center gap-1.5 rounded border px-2 py-1.5 font-mono text-xs ${
                       enabled
