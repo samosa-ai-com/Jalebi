@@ -7,6 +7,7 @@ drives every cli allow-list so they can never drift from the implemented adapter
 """
 
 from jalebi.adapters.claude import ClaudeAdapter
+from jalebi.adapters.cline import ClineAdapter
 from jalebi.adapters.codex import CodexAdapter
 from jalebi.adapters.kilo import KiloAdapter
 from jalebi.adapters.opencode import OpenCodeAdapter
@@ -21,6 +22,7 @@ ADAPTERS: dict[str, AgentAdapter] = {
     "pi": PiAdapter(),
     "kilo": KiloAdapter(),
     "qwen": QwenAdapter(),
+    "cline": ClineAdapter(),
 }
 
 

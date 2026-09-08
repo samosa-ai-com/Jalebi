@@ -182,3 +182,11 @@ stated.
   `~/.qwen/settings.json` `modelProviders` ids (no live catalog call).
   Resume (`-r`/`-c`), tool events and partial streaming are per-docs, not
   live-exercised.
+- **cline** (`cline --json --yolo`, 3.0.61): wire schema is
+  `agent_event`/`run_result` (older `say`/`ask` docs are stale). `--yolo` is
+  a hidden `--auto-approve` alias; `-t` is seconds. `-m` needs the full
+  `modelType/model` id. No list-models command — curated free-tier ids
+  (same precedent as claude). **Session id is not in stdout** — the resume
+  key lives in `cline history --json`; streaming cannot capture it (follow-up
+  falls back to a fresh session until history lookup is added). Resume
+  (`--id`) and diff shapes per-docs, not live-exercised.
