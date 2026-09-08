@@ -208,3 +208,12 @@ stated.
   (`bypassPermissions`; `--always-approve` is the documented alias).
   `list_models` scrapes `grok models` (only `grok-4.6` at validation).
   SIGTERM → 143 with the session still resumable (verified live).
+- **commandcode** (`commandcode -p … --output-format json`, 1.50.1): vendor
+  CommandCodeAI. `run_start` carries the resume `sessionId`; deltas silent,
+  `message_end` authoritative, `thinking` silent; terminal `result` line
+  (`subtype` first: success/error/max_turns). `-m` takes full or short model
+  ids (`xiaomi/mimo-v2.5-pro`). `list_models` parses `--list-models`.
+  Resume (`--resume`/`--continue`), signal-kill and `tool_running` frames
+  per-docs, not live-exercised. Caveat: per docs `--yolo` is needed for
+  file-write/shell tools in headless (default blocks them) — UNVERIFIED, so
+  the adapter stays on the verified `--trust` argv.

@@ -9,6 +9,7 @@ drives every cli allow-list so they can never drift from the implemented adapter
 from jalebi.adapters.claude import ClaudeAdapter
 from jalebi.adapters.cline import ClineAdapter
 from jalebi.adapters.codex import CodexAdapter
+from jalebi.adapters.commandcode import CommandCodeAdapter
 from jalebi.adapters.goose import GooseAdapter
 from jalebi.adapters.grok import GrokAdapter
 from jalebi.adapters.kilo import KiloAdapter
@@ -27,6 +28,7 @@ ADAPTERS: dict[str, AgentAdapter] = {
     "cline": ClineAdapter(),
     "goose": GooseAdapter(),
     "grok": GrokAdapter(),
+    "commandcode": CommandCodeAdapter(),
 }
 
 
