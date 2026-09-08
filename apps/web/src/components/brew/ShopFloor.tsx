@@ -18,21 +18,28 @@ export function ShopFloor({
   stations,
   slots,
   served,
+  spoiled = [],
   menu,
   now,
+  highlightedSlot = null,
   onOpen,
   onOrder,
   onNewTaskKind,
+  onCancel,
 }: {
   stations: StationTask[];
   slots: number;
   /** Most recent done tasks (max 3) for the serving counter. */
   served: Task[];
+  /** Most recent failed/interrupted tasks (max 3) for the spoiled counter. */
+  spoiled?: Task[];
   menu: MenuRow[];
   now: number;
+  highlightedSlot?: number | null;
   onOpen: (id: number) => void;
   onOrder: () => void;
   onNewTaskKind: (kind: SnackKind) => void;
+  onCancel?: (taskId: number) => void;
 }) {
   const queued = stations.filter((s) => s.task.status === "queued");
   return (
@@ -84,21 +91,45 @@ export function ShopFloor({
           aria-label="Order tickets"
         >
           {queued.map((s) => (
-            <button
+            <div
               key={s.task.id}
-              type="button"
-              onClick={() => onOpen(s.task.id)}
-              title={s.task.prompt}
-              className="shrink-0 cursor-pointer rounded-lg border border-dashed border-ink-700 px-2 py-1 text-left transition-colors hover:border-syrup-500/60"
+              className="group relative flex shrink-0 items-center gap-1.5 rounded-lg border border-dashed border-ink-700 bg-ink-950/30 px-2 py-1 text-left transition-colors hover:border-syrup-500/60"
             >
-              <span className="font-mono text-[11px] text-syrup-400">#{s.task.id}</span>{" "}
-              <span className="font-mono text-[10px] text-ink-500">
-                {snackForType(s.task.type)}
-              </span>
-              <span className="block max-w-44 truncate text-[11px] text-ink-300">
-                {s.task.prompt}
-              </span>
-            </button>
+              <button
+                type="button"
+                onClick={() => onOpen(s.task.id)}
+                title={s.task.prompt}
+                className="cursor-pointer text-left"
+              >
+                <div className="flex items-center gap-1">
+                  <span className="font-mono text-[11px] text-syrup-400">#{s.task.id}</span>{" "}
+                  <span className="font-mono text-[10px] text-ink-500">
+                    {snackForType(s.task.type)}
+                  </span>
+                  {s.task.blocked && (
+                    <span className="rounded bg-chai-500/20 px-1 py-px font-mono text-[9px] text-chai-300">
+                      blocked
+                    </span>
+                  )}
+                </div>
+                <span className="block max-w-44 truncate text-[11px] text-ink-300">
+                  {s.task.prompt}
+                </span>
+              </button>
+              {onCancel && (
+                <button
+                  type="button"
+                  title="Cancel queued order"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onCancel(s.task.id);
+                  }}
+                  className="hidden group-hover:inline-flex cursor-pointer rounded px-1 py-0.5 font-mono text-[10px] text-ink-500 hover:bg-red-500/10 hover:text-red-300"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
           ))}
         </div>
       )}
@@ -111,32 +142,54 @@ export function ShopFloor({
             station={stations[i] ?? null}
             now={now}
             compact={slots > 2}
+            highlighted={highlightedSlot === i + 1}
             onOpen={onOpen}
             onOrder={onOrder}
+            onCancel={onCancel}
           />
         ))}
       </div>
 
-      {served.length > 0 && (
+      {(served.length > 0 || (spoiled && spoiled.length > 0)) && (
         <div
-          className="mt-2 border-t border-ink-800/60 pt-2"
+          className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-ink-800/60 pt-2"
           role="group"
           aria-label="Serving counter"
         >
-          <p className="font-mono text-[10px] uppercase tracking-wide text-ink-500">Served</p>
-          <ul className="mt-1 flex flex-wrap gap-1.5">
-            {served.map((t) => (
-              <li key={t.id}>
-                <Link
-                  to={`/tasks/${t.id}`}
-                  title={t.prompt}
-                  className="inline-block rounded-full border border-ink-800 px-2 py-0.5 font-mono text-[11px] text-ink-300 transition-colors hover:border-syrup-500/60 hover:text-syrup-300"
-                >
-                  <span className="text-syrup-400">#{t.id}</span> {snackForType(t.type)}
-                </Link>
-              </li>
-            ))}
-          </ul>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="font-mono text-[10px] uppercase tracking-wide text-ink-500">Served</span>
+            <ul className="flex flex-wrap gap-1.5">
+              {served.map((t) => (
+                <li key={t.id}>
+                  <Link
+                    to={`/tasks/${t.id}`}
+                    title={t.prompt}
+                    className="inline-block rounded-full border border-ink-800 px-2 py-0.5 font-mono text-[11px] text-ink-300 transition-colors hover:border-syrup-500/60 hover:text-syrup-300"
+                  >
+                    <span className="text-syrup-400">#{t.id}</span> {snackForType(t.type)}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </div>
+          {spoiled && spoiled.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="font-mono text-[10px] uppercase tracking-wide text-red-400/80">Spoiled</span>
+              <ul className="flex flex-wrap gap-1.5">
+                {spoiled.map((t) => (
+                  <li key={t.id}>
+                    <Link
+                      to={`/tasks/${t.id}`}
+                      title={t.prompt}
+                      className="inline-block rounded-full border border-red-900/40 bg-red-950/20 px-2 py-0.5 font-mono text-[11px] text-red-300/80 transition-colors hover:border-red-500/60 hover:text-red-200"
+                    >
+                      <span className="text-red-400">#{t.id}</span> {snackForType(t.type)}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
       )}
     </section>

@@ -24,7 +24,7 @@ import { StatusBadge } from "./StatusBadge";
 import { buildActivityBars, formatElapsed, lastMessageText } from "../lib/runningCard";
 import type { Run, Task } from "../types";
 
-function Sparkline({ bars }: { bars: number[] }) {
+export function Sparkline({ bars }: { bars: number[] }) {
   if (bars.every((b) => b === 0)) return null;
   const max = Math.max(...bars, 1);
   const w = 40;

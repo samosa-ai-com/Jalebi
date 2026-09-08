@@ -9,7 +9,11 @@
  * issue_fix → samosa triangle (bobbing + browning), pr_review → pakora
  * fritters. Fry color deepens with progress. Idle stations offer a "strike a match" order button.
  */
-import type { Task } from "../../types";
+import { useEffect, useState } from "react";
+import { taskEvents } from "../../api/client";
+import { buildActivityBars, lastMessageText } from "../../lib/runningCard";
+import { Sparkline } from "../RunningCard";
+import type { Step, Task } from "../../types";
 import { snackForType, type SnackKind } from "./snacks";
 
 export interface StationTask {
@@ -22,6 +26,7 @@ export interface StationTask {
   startedAtMs: number | null;
   timeoutMs: number | null;
   steps: number;
+  repoName?: string | null;
 }
 
 function formatElapsed(ms: number): string {
@@ -133,20 +138,25 @@ export function FryStation({
   station,
   now,
   compact = false,
+  highlighted = false,
   onOpen,
   onOrder,
+  onCancel,
 }: {
   slot: number;
   station: StationTask | null;
   now: number;
   /** Smaller pots when the floor holds many stoves. */
   compact?: boolean;
+  highlighted?: boolean;
   onOpen: (id: number) => void;
   onOrder: () => void;
+  onCancel?: (taskId: number) => void;
 }) {
   const brewing = station !== null;
   const needsYou = station?.task.attention === "needs_you";
   const queued = station?.task.status === "queued";
+  const isRunning = station?.task.status === "running";
   const heat = !brewing ? 0 : needsYou ? 3 : queued ? 1 : 2;
   const elapsedMs =
     station?.startedAtMs === null || station?.startedAtMs === undefined
@@ -161,6 +171,36 @@ export function FryStation({
   const clipId = `kadhai-oil-${slot}`;
   const jets = heat === 0 ? [52, 60, 68] : [44, 52, 60, 68, 76];
   const jetH = heat === 0 ? 7 : heat === 1 ? 11 : heat === 2 ? 16 : 20;
+
+  const [liveMsg, setLiveMsg] = useState<string | null>(null);
+  const [, setLiveTick] = useState(0);
+
+  const taskId = station?.task.id;
+  const runId = station?.task.run?.id;
+
+  // Live SSE listener while frying: updates live step message and activity
+  useEffect(() => {
+    if (!isRunning || !taskId || !runId) return;
+    const stop = taskEvents(
+      taskId,
+      (ev) => {
+        if (ev.text) {
+          const t = ev.text.replace(/\s+/g, " ").trim();
+          if (t) setLiveMsg(t.length > 90 ? `${t.slice(0, 90)}…` : t);
+        }
+        setLiveTick((t) => t + 1);
+      },
+      () => setLiveTick((t) => t + 1)
+    );
+    return () => stop();
+  }, [taskId, isRunning, runId]);
+
+  const runSteps = (station?.task.run?.steps ?? []) as Step[];
+  const lastMsg = (isRunning ? liveMsg : null) ?? lastMessageText(runSteps) ?? null;
+  const bars = buildActivityBars(runSteps);
+  const prNumber = station?.task.prs?.length
+    ? station.task.prs[0]
+    : (station?.task.pr_number ?? null);
 
   return (
     <div
@@ -179,8 +219,9 @@ export function FryStation({
           onOpen(station!.task.id);
         }
       }}
-      className={`surface group w-full px-2.5 pt-1.5 pb-1.5 text-left transition-colors ${brewing ? "cursor-pointer hover:border-syrup-500/50" : ""}
-      `}
+      className={`surface group w-full px-2.5 pt-1.5 pb-1.5 text-left transition-colors ${
+        brewing ? "cursor-pointer hover:border-syrup-500/50" : ""
+      } ${highlighted ? "ring-2 ring-syrup-500/60 border-syrup-500/80" : ""}`}
     >
       <svg
         viewBox="0 0 120 138"
@@ -305,10 +346,18 @@ export function FryStation({
         <span className="mt-1 block">
           <span className="flex items-center gap-1.5">
             {station.avatarUrl && (
-              <img src={station.avatarUrl} alt="" className="h-4 w-4 rounded-full" />
+              <img src={station.avatarUrl} alt="" className="h-4 w-4 shrink-0 rounded-full" />
             )}
             <span className="font-mono text-xs text-syrup-400">#{station.task.id}</span>
             <span className="font-mono text-[10px] text-ink-500">{snack}</span>
+            {station.repoName && (
+              <span
+                className="max-w-28 truncate font-mono text-[10px] text-ink-500"
+                title={station.repoName}
+              >
+                {station.repoName.split("/")[1] ?? station.repoName}
+              </span>
+            )}
             <span
               className={`ml-auto rounded-full px-1.5 py-px font-mono text-[10px] ${
                 needsYou
@@ -321,24 +370,87 @@ export function FryStation({
               {needsYou ? "needs you" : queued ? "warming up" : "frying"}
             </span>
           </span>
+
           <span
-            className="mt-0.5 block truncate text-[11px] text-ink-300"
+            className="mt-1 block truncate text-[11px] font-medium text-ink-200"
             title={station.task.prompt}
           >
-            {station.agentName ?? station.task.cli ?? station.task.status}
+            {station.task.prompt}
           </span>
-          {station.skillNames.length > 0 && (
+
+          <span className="mt-0.5 flex items-center justify-between gap-1 text-[10px] text-ink-400">
+            <span className="truncate">
+              {station.agentName ?? station.task.cli ?? station.task.status}
+              {station.skillNames.length > 0 && (
+                <span
+                  className="font-mono text-[10px] text-ink-500 ml-1"
+                  title={station.skillNames.join(", ")}
+                >
+                  +{station.skillNames.slice(0, 2).join(", ")}
+                  {station.skillNames.length > 2 ? ` +${station.skillNames.length - 2}` : ""}
+                </span>
+              )}
+            </span>
+            <span className="shrink-0 font-mono text-[10px] tabular-nums text-ink-500">
+              {formatElapsed(elapsedMs)}
+              {station.steps > 0 ? ` · ${station.steps} steps` : ""}
+            </span>
+          </span>
+
+          {lastMsg && (
             <span
-              className="block truncate font-mono text-[10px] text-ink-500"
-              title={station.skillNames.join(", ")}
+              className="mt-1 flex items-center gap-1.5 rounded bg-ink-950/60 px-1.5 py-0.5 font-mono text-[10px] text-syrup-300/90 border border-ink-850/80"
+              title={lastMsg}
             >
-              + {station.skillNames.slice(0, 2).join(", ")}
-              {station.skillNames.length > 2 ? ` +${station.skillNames.length - 2}` : ""}
+              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-syrup-400 animate-pulse" />
+              <span className="truncate">{lastMsg}</span>
             </span>
           )}
-          <span className="font-mono text-[10px] tabular-nums text-ink-500">
-            {formatElapsed(elapsedMs)}
-            {station.steps > 0 ? ` · ${station.steps} steps` : ""}
+
+          <span className="mt-1.5 flex items-center justify-between gap-1 pt-1 border-t border-ink-800/40">
+            <span className="flex items-center gap-1.5">
+              {bars.length > 0 && <Sparkline bars={bars} />}
+              {prNumber != null && station.repoName && (
+                <a
+                  href={`https://github.com/${station.repoName}/pull/${prNumber}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  className="font-mono text-[10px] text-syrup-400 hover:text-syrup-300 hover:underline"
+                  title={`Open PR #${prNumber}`}
+                >
+                  PR #{prNumber} ↗
+                </a>
+              )}
+            </span>
+
+            <span className="flex items-center gap-1">
+              {needsYou && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onOpen(station.task.id);
+                  }}
+                  className="cursor-pointer rounded bg-syrup-500/20 px-1.5 py-0.5 font-mono text-[10px] text-syrup-300 hover:bg-syrup-500/30"
+                >
+                  respond →
+                </button>
+              )}
+              {onCancel && (queued || isRunning) && (
+                <button
+                  type="button"
+                  title="Cancel task"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onCancel(station.task.id);
+                  }}
+                  className="cursor-pointer rounded px-1.5 py-0.5 font-mono text-[10px] text-ink-500 ring-1 ring-ink-800 transition-colors hover:bg-red-500/10 hover:text-red-300 hover:ring-red-500/30"
+                >
+                  cancel
+                </button>
+              )}
+            </span>
           </span>
         </span>
       ) : (

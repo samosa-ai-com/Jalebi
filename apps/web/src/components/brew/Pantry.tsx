@@ -11,6 +11,8 @@ export interface PantryIngredient {
   uses: number;
   /** True while a frying task's cook uses this ingredient. */
   inPlay: boolean;
+  /** Stove numbers (1-based) where this ingredient is currently in the karhai. */
+  stoveSlots?: number[];
 }
 
 const DOT_COLORS = [
@@ -28,7 +30,13 @@ function dotFor(id: string): string {
   return DOT_COLORS[h % DOT_COLORS.length];
 }
 
-export function Pantry({ ingredients }: { ingredients: PantryIngredient[] }) {
+export function Pantry({
+  ingredients,
+  onHoverStove,
+}: {
+  ingredients: PantryIngredient[];
+  onHoverStove?: (slot: number | null) => void;
+}) {
   return (
     <section className="surface flex min-h-0 flex-col px-3 py-2.5" aria-label="Ingredients">
       <h3 className="panel-title">Ingredients</h3>
@@ -37,13 +45,15 @@ export function Pantry({ ingredients }: { ingredients: PantryIngredient[] }) {
         <p className="mt-3 text-xs text-ink-600">No skills in the library yet.</p>
       ) : (
         <ul className="mt-2 min-h-0 space-y-1.5 overflow-y-auto pr-0.5">
-          {ingredients.map(({ skill, uses, inPlay }) => (
+          {ingredients.map(({ skill, uses, inPlay, stoveSlots }) => (
             <li
               key={skill.id}
-              className={`flex items-center gap-2 rounded-lg border px-2 py-1.5 ${
+              onMouseEnter={() => stoveSlots?.[0] && onHoverStove?.(stoveSlots[0])}
+              onMouseLeave={() => onHoverStove?.(null)}
+              className={`flex items-center gap-2 rounded-lg border px-2 py-1.5 transition-colors ${
                 inPlay
-                  ? "brew-ingredient-live border-syrup-500/50 bg-syrup-500/5"
-                  : "border-ink-800/60"
+                  ? "brew-ingredient-live border-syrup-500/50 bg-syrup-500/5 hover:border-syrup-500/80 cursor-pointer"
+                  : "border-ink-800/60 hover:border-ink-700"
               }`}
             >
               <span className={`h-2 w-2 shrink-0 rounded-full ${dotFor(skill.id)}`} />

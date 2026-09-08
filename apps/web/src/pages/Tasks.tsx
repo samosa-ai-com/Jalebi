@@ -1163,7 +1163,12 @@ export default function Tasks() {
       </header>
 
       {view === "mission" ? (
-        <BrewHouse tasks={tasks} repos={repos} onNewTask={handleMissionOrder} />
+        <BrewHouse
+          tasks={tasks}
+          repos={repos}
+          onNewTask={handleMissionOrder}
+          onCancel={handleCancel}
+        />
       ) : (
         <>
           <div

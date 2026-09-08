@@ -10,7 +10,7 @@
  * via props).
  */
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { api } from "../../api/client";
 import { avatarFor, avatarUrl } from "../../lib/agentAvatars";
 import type {
@@ -26,11 +26,12 @@ import type {
 import "./brew.css";
 import { ControlShelf } from "./ControlShelf";
 import { CooksRail, type CookSlot } from "./CooksRail";
+import { KitchenWire } from "./KitchenWire";
 import { Pantry, type PantryIngredient } from "./Pantry";
 import { ShopFloor } from "./ShopFloor";
 import { StatsBoard } from "./StatsBoard";
 import type { StationTask } from "./FryStation";
-import type { SnackKind } from "./snacks";
+import { SEV_COLOR, type SnackKind } from "./snacks";
 
 function parseTime(iso: string | null): number | null {
   if (!iso) return null;
@@ -47,13 +48,16 @@ export function BrewHouse({
   tasks,
   repos,
   onNewTask,
+  onCancel,
 }: {
   tasks: Task[];
   repos: Repo[];
   onNewTask: (kind?: SnackKind) => void;
+  onCancel?: (taskId: number) => void;
 }) {
   const navigate = useNavigate();
   const [now, setNow] = useState(() => Date.now());
+  const [highlightedSlot, setHighlightedSlot] = useState<number | null>(null);
   const [agents, setAgents] = useState<CatalogAgent[]>([]);
   const [skills, setSkills] = useState<LibrarySkill[]>([]);
   const [backends, setBackends] = useState<BackendsResponse | null>(null);
@@ -129,6 +133,7 @@ export function BrewHouse({
 
   const agentById = useMemo(() => new Map(agents.map((a) => [a.id, a])), [agents]);
   const skillById = useMemo(() => new Map(skills.map((s) => [s.id, s])), [skills]);
+  const repoById = useMemo(() => new Map(repos.map((r) => [r.id, r.full_name])), [repos]);
 
   const stations = useMemo<StationTask[]>(() => {
     const active = tasks
@@ -155,25 +160,31 @@ export function BrewHouse({
         startedAtMs: parseTime(task.run?.started_at ?? null),
         timeoutMs: task.timeout_minutes > 0 ? task.timeout_minutes * 60_000 : null,
         steps: task.run?.steps?.length ?? 0,
+        repoName: task.repo_full_name ?? repoById.get(task.repo_id) ?? null,
       };
     });
     // NOTE: no `now` dep — elapsed ticks live in FryStation so the
     // catalog derivations below stay state-driven.
-  }, [tasks, agentById, skillById]);
+  }, [tasks, agentById, skillById, repoById]);
 
   const slots = Math.max(concurrency, stations.length, 1);
 
   const ingredients = useMemo<PantryIngredient[]>(() => {
-    const inPlay = new Set<string>();
-    for (const s of stations) {
+    const slotsBySkill = new Map<string, number[]>();
+    stations.forEach((s, idx) => {
       const agent = s.task.agent_id ? agentById.get(s.task.agent_id) : undefined;
-      for (const id of agent?.skill_ids ?? []) inPlay.add(id);
-    }
+      for (const id of agent?.skill_ids ?? []) {
+        const list = slotsBySkill.get(id) ?? [];
+        list.push(idx + 1);
+        slotsBySkill.set(id, list);
+      }
+    });
     return skills
       .map((skill) => ({
         skill,
         uses: agents.filter((a) => a.skill_ids?.includes(skill.id) ?? false).length,
-        inPlay: inPlay.has(skill.id),
+        inPlay: slotsBySkill.has(skill.id),
+        stoveSlots: slotsBySkill.get(skill.id) ?? [],
       }))
       .sort((a, b) => Number(b.inPlay) - Number(a.inPlay) || b.uses - a.uses);
   }, [skills, agents, stations, agentById]);
@@ -200,6 +211,14 @@ export function BrewHouse({
     const done = tasks.filter((t) => t.status === "done");
     done.sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""));
     return done.slice(0, 3);
+  }, [tasks]);
+
+  const spoiled = useMemo(() => {
+    const failed = tasks.filter(
+      (t) => t.status === "failed" || t.status === "timed_out" || t.status === "interrupted"
+    );
+    failed.sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""));
+    return failed.slice(0, 3);
   }, [tasks]);
 
   const needsYou = tasks.filter((t) => t.attention === "needs_you").length;
@@ -238,32 +257,119 @@ export function BrewHouse({
         <span className="ml-auto font-mono text-xs tabular-nums text-ink-400">{clock}</span>
       </div>
 
+      {/* Full-width panoramic screening / audit radar marquee */}
+      <div
+        className="surface flex items-center gap-3 overflow-hidden px-3 py-1.5"
+        role="group"
+        aria-label="Audit radar"
+      >
+        <div className="flex shrink-0 items-center gap-1.5 border-r border-ink-800 pr-3">
+          <span
+            className={`h-2 w-2 rounded-full ${
+              screens.some((s) => s.latest_run?.status === "running")
+                ? "bg-amber-400 animate-ping"
+                : "bg-syrup-400"
+            }`}
+          />
+          <Link
+            to="/screenings"
+            className="font-mono text-[10px] font-semibold uppercase tracking-wider text-syrup-300 hover:text-syrup-200"
+          >
+            Audit radar
+          </Link>
+          <span className="font-mono text-[9px] text-ink-500">
+            {screens.length} screen{screens.length === 1 ? "" : "s"}
+          </span>
+        </div>
+
+        {findings.length > 0 ? (
+          <div className="brew-ticker min-w-0 flex-1 overflow-hidden">
+            <div className="brew-ticker-track flex w-max gap-8">
+              {[...findings.slice(0, 8), ...findings.slice(0, 8)].map((f, i) =>
+                i < Math.min(8, findings.length) ? (
+                  <Link
+                    key={`${f.screen_id}-${f.title}-${i}`}
+                    to="/screenings"
+                    className="flex items-center gap-1.5 whitespace-nowrap font-mono text-[11px] text-ink-300 transition-colors hover:text-syrup-300"
+                    title={`${f.screen_name}: ${f.title}`}
+                  >
+                    <span className={SEV_COLOR[f.severity] ?? "text-ink-400"}>
+                      [{f.severity.toUpperCase()}]
+                    </span>
+                    <span className="text-ink-200">{f.title}</span>
+                    <span className="text-ink-500">
+                      ({f.screen_name}
+                      {f.repo_full_name
+                        ? ` · ${f.repo_full_name.split("/")[1] ?? f.repo_full_name}`
+                        : ""}
+                      )
+                    </span>
+                  </Link>
+                ) : (
+                  <span
+                    key={`${f.screen_id}-${f.title}-${i}`}
+                    aria-hidden="true"
+                    className="flex items-center gap-1.5 whitespace-nowrap font-mono text-[11px] text-ink-300"
+                  >
+                    <span className={SEV_COLOR[f.severity] ?? "text-ink-400"}>
+                      [{f.severity.toUpperCase()}]
+                    </span>
+                    <span className="text-ink-200">{f.title}</span>
+                    <span className="text-ink-500">
+                      ({f.screen_name}
+                      {f.repo_full_name
+                        ? ` · ${f.repo_full_name.split("/")[1] ?? f.repo_full_name}`
+                        : ""}
+                      )
+                    </span>
+                  </span>
+                )
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="flex-1 truncate font-mono text-[11px] text-ink-500">
+            All quiet — no security or health findings detected across connected repositories.
+          </div>
+        )}
+      </div>
+
       {/* Single-viewport mission grid on wide screens: side rails scroll
           internally, the page itself stays put. Stacks below xl. */}
       <div className="grid gap-3 xl:grid-cols-[230px_minmax(0,1fr)_270px] xl:overflow-hidden">
-        <div className="flex min-h-0 flex-col gap-3 xl:h-[calc(100vh-260px)] xl:min-h-[480px]">
+        <div className="flex min-h-0 flex-col gap-3 xl:h-[calc(100vh-290px)] xl:min-h-[480px]">
           <div className="flex min-h-0 flex-1 flex-col [&>section]:flex-1">
-            <CooksRail cooks={cooks} />
+            <CooksRail
+              cooks={cooks}
+              hoveredSlot={highlightedSlot}
+              onHoverCook={setHighlightedSlot}
+            />
           </div>
           <div className="flex min-h-0 flex-1 flex-col [&>section]:flex-1">
-            <Pantry ingredients={ingredients} />
+            <Pantry
+              ingredients={ingredients}
+              onHoverStove={setHighlightedSlot}
+            />
           </div>
         </div>
 
-        <div className="flex min-h-0 flex-col xl:h-[calc(100vh-260px)] xl:min-h-[480px] [&>section]:flex-1">
+        <div className="flex min-h-0 flex-col xl:h-[calc(100vh-290px)] xl:min-h-[480px] [&>section]:flex-1">
           <ShopFloor
             stations={stations}
             slots={slots}
             served={served}
+            spoiled={spoiled}
             menu={orderCounts}
             now={now}
+            highlightedSlot={highlightedSlot}
             onOpen={(id) => navigate(`/tasks/${id}`)}
             onOrder={() => onNewTask()}
             onNewTaskKind={(kind) => onNewTask(kind)}
+            onCancel={onCancel}
           />
         </div>
 
-        <div className="flex min-h-0 flex-col gap-3 xl:h-[calc(100vh-260px)] xl:min-h-[480px] xl:overflow-y-auto xl:pr-0.5">
+        <div className="flex min-h-0 flex-col gap-2.5 xl:h-[calc(100vh-290px)] xl:min-h-[480px] xl:overflow-hidden">
           <StatsBoard tasks={tasks} now={now} />
 
           <ControlShelf
@@ -274,6 +380,13 @@ export function BrewHouse({
             backends={backends}
             concurrency={concurrency}
             compact
+          />
+
+          <KitchenWire
+            tasks={tasks}
+            screens={screens}
+            findings={findings}
+            now={now}
           />
         </div>
       </div>

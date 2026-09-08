@@ -4,6 +4,7 @@
  */
 import { Link } from "react-router-dom";
 import type { BackendsResponse, Repo, Screen, ScreeningFinding, Task } from "../../types";
+import { SEV_COLOR } from "./snacks";
 
 function Ring({ fraction, label }: { fraction: number; label: string }) {
   const r = 26;
@@ -26,13 +27,6 @@ function Ring({ fraction, label }: { fraction: number; label: string }) {
     </svg>
   );
 }
-
-const SEV_COLOR: Record<string, string> = {
-  critical: "text-red-300",
-  high: "text-syrup-300",
-  medium: "text-chai-300",
-  low: "text-ink-400",
-};
 
 export function ControlShelf({
   tasks,
@@ -67,7 +61,7 @@ export function ControlShelf({
     <div
       className={
         compact
-          ? "grid min-h-0 flex-1 grid-cols-2 content-between gap-3"
+          ? "grid shrink-0 grid-cols-2 gap-2"
           : "grid gap-4 md:grid-cols-2 xl:grid-cols-4"
       }
     >
@@ -233,7 +227,7 @@ export function ControlShelf({
             {screens.length === 0 ? "No screens configured." : "All quiet — no audit running."}
           </p>
         )}
-        {findings.length > 0 && (
+        {findings.length > 0 && !compact && (
           <div
             className="brew-ticker mt-2 overflow-hidden"
             role="group"

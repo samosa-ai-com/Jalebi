@@ -62,6 +62,7 @@ const TASK = {
   issues: [],
   prs: [],
   publish_mode: null,
+  check_run_id: null,
   env_vars: [],
   created_at: "2026-09-07T00:00:00",
   updated_at: "2026-09-07T00:01:00",
@@ -427,5 +428,130 @@ describe("BrewHouse", () => {
     const stats = await screen.findByRole("region", { name: "Shop stats" });
     expect(within(stats).getByText("spoiled")).toBeInTheDocument();
     expect(within(stats).getByText("—")).toBeInTheDocument();
+  });
+
+  it("displays task prompt, repo name, and live step message on frying station", async () => {
+    stubFetch({ ...HANDLERS });
+    const taskWithTelemetry = {
+      ...TASK,
+      id: 1,
+      prompt: "Add mission control enhancements",
+      run: {
+        id: 11,
+        started_at: "2026-09-07T00:00:30",
+        steps: [
+          { type: "message", text: "Analyzing mission control UI", ts: "2026-09-07T00:01:00Z" },
+          { type: "tool_call", text: "view_file", ts: "2026-09-07T00:01:10Z" },
+        ],
+      },
+    };
+    render(
+      <MemoryRouter>
+        <BrewHouse tasks={[taskWithTelemetry] as never} repos={REPOS as never} onNewTask={() => {}} />
+      </MemoryRouter>
+    );
+    const stove = await screen.findByRole("button", { name: /Open task 1/ });
+    expect(within(stove).getByText("Add mission control enhancements")).toBeInTheDocument();
+    expect(within(stove).getByText("repo")).toBeInTheDocument();
+    expect(within(stove).getByText("Analyzing mission control UI")).toBeInTheDocument();
+    expect(within(stove).getByRole("img", { name: "tool-call activity" })).toBeInTheDocument();
+  });
+
+  it("allows cancelling in-flight task directly from the station", async () => {
+    stubFetch({ ...HANDLERS });
+    const onCancel = vi.fn();
+    render(
+      <MemoryRouter>
+        <BrewHouse
+          tasks={[TASK] as never}
+          repos={REPOS as never}
+          onNewTask={() => {}}
+          onCancel={onCancel}
+        />
+      </MemoryRouter>
+    );
+    const cancelBtn = await screen.findByRole("button", { name: "cancel" });
+    expect(cancelBtn).toBeInTheDocument();
+    await userEvent.click(cancelBtn);
+    expect(onCancel).toHaveBeenCalledWith(1);
+  });
+
+  it("displays spoiled tasks on the serving counter and allows inspection", async () => {
+    stubFetch({ ...HANDLERS });
+    const doneTask = { ...TASK, id: 8, status: "done", prompt: "clean build" };
+    const failedTask = { ...TASK, id: 9, status: "failed", prompt: "test failed" };
+    render(
+      <MemoryRouter>
+        <BrewHouse
+          tasks={[doneTask, failedTask] as never}
+          repos={REPOS as never}
+          onNewTask={() => {}}
+        />
+      </MemoryRouter>
+    );
+    const counter = await screen.findByRole("group", { name: "Serving counter" });
+    expect(within(counter).getByText("Served")).toBeInTheDocument();
+    expect(within(counter).getByText("Spoiled")).toBeInTheDocument();
+    expect(within(counter).getByRole("link", { name: /#8/ })).toHaveAttribute("href", "/tasks/8");
+    expect(within(counter).getByRole("link", { name: /#9/ })).toHaveAttribute("href", "/tasks/9");
+  });
+
+  it("displays PR link on station when PR is created", async () => {
+    stubFetch({ ...HANDLERS });
+    const taskWithPr = {
+      ...TASK,
+      pr_number: 42,
+    };
+    render(
+      <MemoryRouter>
+        <BrewHouse tasks={[taskWithPr] as never} repos={REPOS as never} onNewTask={() => {}} />
+      </MemoryRouter>
+    );
+    const prLink = await screen.findByRole("link", { name: /PR #42/ });
+    expect(prLink).toHaveAttribute("href", "https://github.com/owner/repo/pull/42");
+  });
+
+  it("highlights stove when hovering an active cook", async () => {
+    stubFetch({ ...HANDLERS });
+    const { container } = render(
+      <MemoryRouter>
+        <BrewHouse tasks={[TASK] as never} repos={REPOS as never} onNewTask={() => {}} />
+      </MemoryRouter>
+    );
+    const cooks = await screen.findByRole("region", { name: "Cooks" });
+    const cookCard = within(cooks).getByText("Fixer").closest("li")!;
+    await userEvent.hover(cookCard);
+    // Stove 1 gets the highlighted ring
+    expect(container.querySelector(".ring-2.ring-syrup-500\\/60")).not.toBeNull();
+    await userEvent.unhover(cookCard);
+    expect(container.querySelector(".ring-2.ring-syrup-500\\/60")).toBeNull();
+  });
+
+  it("renders the full-width panoramic audit radar marquee", async () => {
+    stubFetch({ ...HANDLERS });
+    render(
+      <MemoryRouter>
+        <BrewHouse tasks={[TASK] as never} repos={REPOS as never} onNewTask={() => {}} />
+      </MemoryRouter>
+    );
+    const radar = await screen.findByRole("group", { name: "Audit radar" });
+    expect(within(radar).getByText("Audit radar")).toBeInTheDocument();
+    expect(within(radar).getByText("1 screen")).toBeInTheDocument();
+    expect(within(radar).getAllByText("Leaky token log").length).toBe(2);
+  });
+
+  it("renders the kitchen wire comms log with filtering", async () => {
+    stubFetch({ ...HANDLERS });
+    render(
+      <MemoryRouter>
+        <BrewHouse tasks={[TASK] as never} repos={REPOS as never} onNewTask={() => {}} />
+      </MemoryRouter>
+    );
+    const wire = await screen.findByRole("region", { name: "Kitchen wire" });
+    expect(within(wire).getByText("Kitchen wire")).toBeInTheDocument();
+    expect(within(wire).getByText(/Frying jalebi/)).toBeInTheDocument();
+    // Test filter toggle
+    await userEvent.click(within(wire).getByRole("button", { name: "agents" }));
+    expect(within(wire).getByText(/Frying jalebi/)).toBeInTheDocument();
   });
 });

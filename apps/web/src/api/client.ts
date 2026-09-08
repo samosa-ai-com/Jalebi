@@ -427,6 +427,9 @@ export function taskEvents(
   const url = `/api/tasks/${taskId}/events${
     typeof afterSeq === "number" ? `?after_seq=${afterSeq}` : ""
   }`;
+  if (typeof EventSource === "undefined") {
+    return () => {};
+  }
   const source = new EventSource(url);
   source.onmessage = (message) => {
     let event: SseEvent;

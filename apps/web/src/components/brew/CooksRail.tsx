@@ -13,7 +13,15 @@ export interface CookSlot {
   stoveSlot: number | null;
 }
 
-export function CooksRail({ cooks }: { cooks: CookSlot[] }) {
+export function CooksRail({
+  cooks,
+  hoveredSlot = null,
+  onHoverCook,
+}: {
+  cooks: CookSlot[];
+  hoveredSlot?: number | null;
+  onHoverCook?: (slot: number | null) => void;
+}) {
   return (
     <section className="surface flex min-h-0 flex-col px-3 py-2.5" aria-label="Cooks">
       <h3 className="panel-title">Cooks</h3>
@@ -24,12 +32,19 @@ export function CooksRail({ cooks }: { cooks: CookSlot[] }) {
         <ul className="mt-2 min-h-0 space-y-1.5 overflow-y-auto pr-0.5">
           {cooks.map(({ agent, activeTasks, stoveSlot }) => {
             const busy = activeTasks > 0;
+            const isHighlighted = stoveSlot != null && hoveredSlot === stoveSlot;
             return (
               <li
                 key={agent.id}
-                className={`flex items-center gap-2 rounded-lg border px-2 py-1.5 ${
-                  busy ? "border-syrup-500/40 bg-syrup-500/5" : "border-ink-800/60"
-                }`}
+                onMouseEnter={() => stoveSlot && onHoverCook?.(stoveSlot)}
+                onMouseLeave={() => onHoverCook?.(null)}
+                className={`flex items-center gap-2 rounded-lg border px-2 py-1.5 transition-colors ${
+                  isHighlighted
+                    ? "border-syrup-500 bg-syrup-500/15"
+                    : busy
+                      ? "border-syrup-500/40 bg-syrup-500/5 hover:border-syrup-500/70"
+                      : "border-ink-800/60 hover:border-ink-700"
+                } ${busy ? "cursor-pointer" : ""}`}
               >
                 <img
                   src={
