@@ -116,13 +116,11 @@ function CreateTask({
   accounts,
   onCreated,
   prefill,
-  prefillNonce,
 }: {
   repos: Repo[];
   accounts: Account[];
   onCreated: (id?: number) => void;
   prefill: TaskPrefill | null;
-  prefillNonce: number;
 }) {
   const stored = useMemo(() => loadTaskDefaults(), []);
   const [repoId, setRepoId] = useState<number>(prefill?.repoId ?? 0);
@@ -143,10 +141,7 @@ function CreateTask({
   const [agentCli, setAgentCli] = useState<string | null>(prefill?.cli ?? stored.cli ?? null);
   const [settings, setSettings] = useState<SettingsMap | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const formRef = useRef<HTMLFormElement>(null);
-  // Clone remounts the form (parent keys on prefillNonce) with the
-  // prefill baked into the initial state above — scroll it into view once.
-  const scrollOnMount = useRef(prefillNonce > 0);
+
   // Clone remounts with branches baked into the initial state — the context
   // fetch must not clobber them back to the repo default on arrival. The
   // flag is consumed by the first context load; picking another repo clears
@@ -272,14 +267,7 @@ function CreateTask({
       .catch(() => {});
   }, []);
 
-  // After a clone remount, bring the form into view (no state is set here).
-  useEffect(() => {
-    if (!scrollOnMount.current) return;
-    const formEl = formRef.current;
-    if (formEl && typeof formEl.scrollIntoView === "function") {
-      formEl.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
-  }, []);
+
 
   useEffect(() => {
     let cancelled = false;
@@ -430,9 +418,8 @@ function CreateTask({
   return (
     <form
       onSubmit={submit}
-      ref={formRef}
       id="new-task-form"
-      className="surface space-y-4 scroll-mt-4 p-6 animate-fade-up"
+      className="surface space-y-4 p-6 animate-fade-up"
       style={{ animationDelay: "0.05s" }}
     >
       <div className="flex items-baseline justify-between">
@@ -1022,6 +1009,13 @@ export default function Tasks() {
       },
       { replace: false }
     );
+    try {
+      if (typeof window !== "undefined") {
+        window.scrollTo({ top: 0, behavior: "instant" as ScrollBehavior });
+      }
+    } catch {
+      /* ignore */
+    }
   }
 
   // Mission-control order buttons flip to the queue, pre-select the
@@ -1038,6 +1032,13 @@ export default function Tasks() {
     // Push new history entry with view=queue and from=mission
     // Zero scrolling!
     navigate("/?view=queue&from=mission", { state: { from: "mission" } });
+    try {
+      if (typeof window !== "undefined") {
+        window.scrollTo({ top: 0, behavior: "instant" as ScrollBehavior });
+      }
+    } catch {
+      /* ignore */
+    }
   }
 
   function handleDismissAttention(taskId: number) {
@@ -1259,7 +1260,6 @@ export default function Tasks() {
             accounts={accounts}
             onCreated={handleCreated}
             prefill={prefill}
-            prefillNonce={prefillNonce}
           />
 
           {flash != null && (
