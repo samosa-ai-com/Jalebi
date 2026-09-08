@@ -498,3 +498,23 @@ After any code change, run the relevant tests and build before marking work done
   `BrewHouse.test.tsx` ticker assertion; no backend changes; production DB
   never touched; `tsc`, eslint, prettier, build clean — Vite large-chunk
   warning remains, pre-existing).
+
+- **Open-findings rerun context (server +13, web +2):** `screening_dealt`
+  table (migration `e7f8a9b0c1d2`, verified upgrade→downgrade→upgrade on a
+  scratch DB, single head) + dealt endpoints + engine known-open context
+  (repo-wide, current screen first, 20-item/400-char caps, fenced UNTRUSTED
+  section, delimiter sanitization) + dealt-filtered ntfy. AGY
+  APPROVE-WITH-CHANGES, all adopted except repo-wide scoping (owner chose
+  repo-wide over same-screen-only; current-screen-first ordering is the
+  compromise): canonical fingerprint column (SQLite NULL-UNIQUE trap),
+  ntfy filter, delimiter escaping, async flash/rollback/import-flag,
+  explicit catch on handoff mark, POST-reopen. `test_screening_dealt.py`
+  (13: fingerprint parity, validation, idempotent mark/reopen, cascade,
+  assembly incl. cross-screen dedupe + caps + omitted, fencing, prompt
+  omission, end-to-end prompt capture, notify skip, full API roundtrip).
+  Web: `lib/screeningDealt.ts` API-backed (legacy import-once + cache),
+  dealt endpoints in `client.ts`, optimistic UI with rollback in inbox +
+  history, handoff marks via API with visible error; tests for import,
+  rollback, and handoff-mark-via-API.
+- **Suite totals now:** server **944 passed**, web **274 passed**
+  (273 + 1 handoff-mark-failure path). Production DB never touched; scratch DB only.

@@ -1,14 +1,14 @@
-/** Dealt-state for screening findings (per-browser localStorage).
+/** Dealt-state for screening findings — server-authoritative, cached locally.
  *
- * A finding counts as dealt once a task has been successfully created from
- * it, or when marked dealt manually. Fingerprints are semantic
- * (screen + title + file + line) — deliberately unchanged so this refactor
- * does not alter existing hide/show behavior. Moved here from
- * pages/Screenings.tsx so the Tasks page can mark handoff findings dealt
- * only after its create POST succeeds.
+ * The backend owns dealt state (`screening_dealt` table) so audit reruns can
+ * see it. Fingerprints are semantic (screen + title + file + line), computed
+ * byte-identically to the backend canonical form. The legacy per-browser
+ * localStorage set is only an import source (one-time migration) and an
+ * instant initial cache to avoid a dealt flash before the API resolves.
  */
 
 export const FINDINGS_DEALT_KEY = "jalebi-findings-dealt";
+const DEALT_IMPORTED_KEY = "jalebi-dealt-imported";
 
 export function findingFp(
   screenId: number,
@@ -18,10 +18,24 @@ export function findingFp(
     line: number | null;
   }
 ): string {
-  return JSON.stringify([screenId, f.title ?? "", f.file ?? "", f.line ?? null]);
+  // Matches the backend canonical form exactly (null title → "(untitled)",
+  // null file → "", non-int line → null).
+  return JSON.stringify([screenId, f.title ?? "(untitled)", f.file ?? "", f.line ?? null]);
 }
 
-export function loadDealt(): Set<string> {
+/** The screen id encoded in a fingerprint, or null when unparseable. */
+export function screenIdOfFp(fp: string): number | null {
+  try {
+    const parsed: unknown = JSON.parse(fp);
+    if (Array.isArray(parsed) && typeof parsed[0] === "number") return parsed[0];
+  } catch {
+    // Not a fingerprint — ignored.
+  }
+  return null;
+}
+
+/** Legacy browser-local set: initial cache + one-time import source. */
+export function readLegacyDealt(): Set<string> {
   try {
     const raw = localStorage.getItem(FINDINGS_DEALT_KEY);
     const parsed: unknown = raw ? JSON.parse(raw) : [];
@@ -32,17 +46,39 @@ export function loadDealt(): Set<string> {
   return new Set();
 }
 
-export function storeDealt(dealt: Set<string>): void {
+export function clearLegacyDealt(): void {
   try {
-    localStorage.setItem(FINDINGS_DEALT_KEY, JSON.stringify([...dealt]));
+    localStorage.removeItem(FINDINGS_DEALT_KEY);
   } catch {
-    // Private mode etc. — dealt state simply doesn't persist.
+    // Private mode etc. — nothing to clear.
   }
 }
 
-export function markFindingsDealt(fps: string[]): void {
-  if (fps.length === 0) return;
-  const dealt = loadDealt();
-  for (const fp of fps) dealt.add(fp);
-  storeDealt(dealt);
+export function isDealtImported(): boolean {
+  try {
+    return localStorage.getItem(DEALT_IMPORTED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function setDealtImported(): void {
+  try {
+    localStorage.setItem(DEALT_IMPORTED_KEY, "1");
+  } catch {
+    // Private mode etc. — import simply retries next mount.
+  }
+}
+
+/** Group fingerprints by their encoded screen id (unknown screens dropped). */
+export function groupFpsByScreen(fps: Iterable<string>): Map<number, string[]> {
+  const byScreen = new Map<number, string[]>();
+  for (const fp of fps) {
+    const sid = screenIdOfFp(fp);
+    if (sid === null) continue;
+    const list = byScreen.get(sid);
+    if (list) list.push(fp);
+    else byScreen.set(sid, [fp]);
+  }
+  return byScreen;
 }

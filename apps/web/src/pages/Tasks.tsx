@@ -8,7 +8,7 @@ import { DepBadges } from "../components/DepBadges";
 import { RunningCard } from "../components/RunningCard";
 import { StatusBadge } from "../components/StatusBadge";
 import { useBackends } from "../hooks/useBackends";
-import { markFindingsDealt } from "../lib/screeningDealt";
+import { groupFpsByScreen } from "../lib/screeningDealt";
 import type { Account, CatalogAgent, GithubContext, Repo, SettingsMap, Task } from "../types";
 
 function repoName(repos: Repo[], id: number): string {
@@ -1132,12 +1132,20 @@ export default function Tasks() {
 
   function handleCreated(id?: number) {
     load();
+    setError(null);
     if (id === undefined) return;
     // The screening handoff's findings become dealt only now — the create
-    // POST succeeded. Abandoning the form marks nothing.
+    // POST succeeded. Best-effort: a mark failure never blocks the task;
+    // the error tells the owner to mark from Screenings instead.
     if (pendingDealtFps.length > 0) {
-      markFindingsDealt(pendingDealtFps);
+      const fps = pendingDealtFps;
       setPendingDealtFps([]);
+      const byScreen = groupFpsByScreen(fps);
+      Promise.all([...byScreen].map(([sid, list]) => api.markDealt(sid, list))).catch(() => {
+        setError(
+          "Task created, but its findings could not be marked dealt — mark them from Screenings."
+        );
+      });
     }
     setFlash(id);
     if (flashTimer.current) clearTimeout(flashTimer.current);

@@ -2,7 +2,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { useBackends } from "../hooks/useBackends";
-import { findingFp, loadDealt, markFindingsDealt, storeDealt } from "../lib/screeningDealt";
+import {
+  clearLegacyDealt,
+  findingFp,
+  groupFpsByScreen,
+  isDealtImported,
+  readLegacyDealt,
+  setDealtImported,
+} from "../lib/screeningDealt";
 import {
   buildFindingPrompt,
   buildMultiFindingPrompt,
@@ -401,6 +408,7 @@ function RunHistory({
   const [showAll, setShowAll] = useState(false);
   // Batch selection across the visible runs: `${run.id}:${index}`.
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [historyDealtError, setHistoryDealtError] = useState<string | null>(null);
   const mounted = useRef(true);
   const prevStatuses = useRef<string>("");
 
@@ -471,8 +479,15 @@ function RunHistory({
   }
 
   function markSelectedDealt() {
-    markFindingsDealt(selectedEntries().map(({ finding }) => findingFp(screen.id, finding)));
+    const fps = selectedEntries().map(({ finding }) => findingFp(screen.id, finding));
+    if (fps.length === 0) return;
+    // Optimistic: clear selection now; revert nothing on failure (the rows
+    // stay visible, and the error explains the retry).
     setSelected(new Set());
+    setHistoryDealtError(null);
+    api.markDealt(screen.id, fps).catch(() => {
+      setHistoryDealtError("Could not mark dealt — retry from the Findings tab.");
+    });
   }
 
   return (
@@ -505,6 +520,7 @@ function RunHistory({
           </button>
         </div>
       )}
+      {historyDealtError && <p className="text-xs text-red-400">{historyDealtError}</p>}
       {visible.map((run) => {
         const active = run.status === "running" || run.status === "queued";
         return (
@@ -622,11 +638,46 @@ function FindingsInbox({ screens, repos }: { screens: Screen[]; repos: Repo[] })
   const [query, setQuery] = useState("");
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [hideDealt, setHideDealt] = useState(true);
-  const [dealt, setDealt] = useState<Set<string>>(() => loadDealt());
+  // Server-authoritative dealt set, seeded instantly from the legacy
+  // browser cache (no dealt flash) and revalidated from the API below.
+  const [dealt, setDealt] = useState<Set<string>>(() => readLegacyDealt());
+  const [dealtError, setDealtError] = useState<string | null>(null);
   // Batch selection: keys are `${run_id}:${screen_id}:${items-index}`.
   // Resolved through entryByKey (rebuilt every render) so keys stay exact
   // even with duplicate findings; cleared on refetch.
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
+
+  // One-time migration of the legacy browser-local dealt set, then server
+  // revalidation. The imported flag is set only after every screen's import
+  // POST succeeds, so a failure retries on the next mount instead of losing
+  // state. Unknown (deleted) screens are skipped — their findings are gone.
+  useEffect(() => {
+    if (screens.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const legacy = readLegacyDealt();
+        if (legacy.size > 0 && !isDealtImported()) {
+          const known = new Set(screens.map((s) => s.id));
+          const targets = [...groupFpsByScreen(legacy)].filter(([sid]) => known.has(sid));
+          await Promise.all(targets.map(([sid, fps]) => api.importDealt(sid, fps)));
+          if (!cancelled) {
+            setDealtImported();
+            clearLegacyDealt();
+          }
+        }
+        const perScreen = await Promise.all(
+          screens.map((s) => api.getDealt(s.id).catch(() => ({ fingerprints: [] as string[] })))
+        );
+        if (!cancelled) setDealt(new Set(perScreen.flatMap((r) => r.fingerprints)));
+      } catch {
+        // Offline/server error: keep the cached set; dealt actions retry.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [screens]);
 
   useEffect(() => {
     let cancelled = false;
@@ -659,13 +710,26 @@ function FindingsInbox({ screens, repos }: { screens: Screen[]; repos: Repo[] })
   const fpOf = (f: ScreeningFinding) =>
     findingFp(f.screen_id, { title: f.title, file: f.file, line: f.line });
 
-  function toggleDealt(fp: string) {
+  function toggleDealt(fp: string, screenId: number) {
+    const reopen = dealt.has(fp);
+    // Optimistic update with rollback: the row hides/shows instantly, and a
+    // failed POST restores the previous set plus an inline error.
     setDealt((prev) => {
       const next = new Set(prev);
-      if (next.has(fp)) next.delete(fp);
+      if (reopen) next.delete(fp);
       else next.add(fp);
-      storeDealt(next);
       return next;
+    });
+    setDealtError(null);
+    const call = reopen ? api.reopenDealt(screenId, [fp]) : api.markDealt(screenId, [fp]);
+    call.catch(() => {
+      setDealt((prev) => {
+        const next = new Set(prev);
+        if (reopen) next.add(fp);
+        else next.delete(fp);
+        return next;
+      });
+      setDealtError("Could not update dealt state — retry.");
     });
   }
 
@@ -724,9 +788,20 @@ function FindingsInbox({ screens, repos }: { screens: Screen[]; repos: Repo[] })
       const f = entryByKey.get(key);
       return f ? [fpOf(f)] : [];
     });
-    markFindingsDealt(fps);
-    setDealt(loadDealt());
+    if (fps.length === 0) return;
+    const byScreen = groupFpsByScreen(fps);
+    // Optimistic: hide now, clear selection; rollback + error on failure.
+    setDealt((prev) => new Set([...prev, ...fps]));
     setSelected(new Set());
+    setDealtError(null);
+    Promise.all([...byScreen].map(([sid, list]) => api.markDealt(sid, list))).catch(() => {
+      setDealt((prev) => {
+        const next = new Set(prev);
+        for (const fp of fps) next.delete(fp);
+        return next;
+      });
+      setDealtError("Could not mark dealt — retry.");
+    });
   }
 
   function toggleSelectVisible() {
@@ -860,6 +935,7 @@ function FindingsInbox({ screens, repos }: { screens: Screen[]; repos: Repo[] })
           )}
         </div>
       )}
+      {dealtError && <p className="text-xs text-red-400">{dealtError}</p>}
       {batchEntries === null && selectedVisible.length > 0 && (
         <p className="text-xs text-amber-400">
           A selected finding&apos;s screen is no longer loaded — deselect it to create a task.
@@ -945,7 +1021,7 @@ function FindingsInbox({ screens, repos }: { screens: Screen[]; repos: Repo[] })
                       <button
                         type="button"
                         className="btn-ghost !px-2 !py-1 text-xs"
-                        onClick={() => toggleDealt(fp)}
+                        onClick={() => toggleDealt(fp, f.screen_id)}
                       >
                         {isDealt ? "Reopen" : "Mark dealt"}
                       </button>

@@ -453,6 +453,36 @@ class ScreeningRun(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class ScreeningDealt(Base):
+    """Owner-handled screening findings (Phase 4 batch work + rerun context).
+
+    One row = "this finding is dealt with" (task created from it, accepted
+    risk, or manually dismissed). Keyed by the canonical fingerprint
+    ``[screening_id, title, file, line]`` serialized exactly like the
+    frontend ``findingFp`` (``file`` NULL coerces to ``""``, ``line`` NULL
+    stays ``null``) and stored as a NOT NULL string — SQLite treats NULLs as
+    distinct in UNIQUE constraints, so the raw columns cannot be the key.
+    ``title``/``file``/``line`` are kept as nullable auxiliary columns for
+    inspection only. Deleting a screen cascades its dealt rows.
+    """
+
+    __tablename__ = "screening_dealt"
+    __table_args__ = (
+        UniqueConstraint("screening_id", "fingerprint", name="uq_screening_dealt_fp"),
+        Index("ix_screening_dealt_screening_id", "screening_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    screening_id: Mapped[int] = mapped_column(
+        ForeignKey("screenings.id", ondelete="CASCADE"), nullable=False
+    )
+    fingerprint: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    file: Mapped[str | None] = mapped_column(Text, nullable=True)
+    line: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now)
+
+
 class CheckRun(Base):
     """Jalebi's registry of the commit statuses it set (PRD F15).
 

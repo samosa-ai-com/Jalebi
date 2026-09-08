@@ -262,6 +262,76 @@ def recent_findings_route() -> ResponseReturnValue:
     )
 
 
+@bp.get("/dealt")
+def dealt_list_route() -> ResponseReturnValue:
+    """Dealt fingerprints for a screen (drives inbox hide/show)."""
+    session = db.get_session()
+    if "screen_id" not in request.args:
+        return jsonify({"error": "screen_id is required"}), 400
+    screen_id = request.args.get("screen_id", type=int)
+    if screen_id is None:
+        return jsonify({"error": "screen_id must be an integer"}), 400
+    if screening.get_screen(session, screen_id) is None:
+        return jsonify({"error": "screen not found"}), 404
+    fps = sorted(screening.get_dealt_fingerprints(session, screen_id))
+    return jsonify({"screen_id": screen_id, "fingerprints": fps})
+
+
+def _dealt_body() -> tuple[tuple[int, list[str]] | None, ResponseReturnValue | None]:
+    """Validate a {screen_id, fps} dealt body.
+
+    Returns ``((screen_id, fps), None)`` on success, ``(None, error)`` to
+    return directly on failure.
+    """
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return None, (jsonify({"error": "JSON body is required"}), 400)
+    screen_id = payload.get("screen_id")
+    if isinstance(screen_id, bool) or not isinstance(screen_id, int):
+        return None, (jsonify({"error": "screen_id must be an integer"}), 400)
+    try:
+        fps = screening.validate_fingerprints(payload.get("fps"))
+    except screening.ScreeningError as exc:
+        return None, (jsonify({"error": str(exc)}), 400)
+    return (screen_id, fps), None
+
+
+@bp.post("/dealt")
+def dealt_mark_route() -> ResponseReturnValue:
+    """Mark findings dealt (idempotent; also serves the one-time import)."""
+    parsed, error = _dealt_body()
+    if error is not None:
+        return error
+    assert parsed is not None
+    screen_id, fps = parsed
+    session = db.get_session()
+    if screening.get_screen(session, screen_id) is None:
+        return jsonify({"error": "screen not found"}), 404
+    marked = screening.mark_findings_dealt(session, screen_id, fps)
+    return jsonify({"screen_id": screen_id, "marked": marked})
+
+
+@bp.post("/dealt/reopen")
+def dealt_reopen_route() -> ResponseReturnValue:
+    """Reopen dealt findings (POST, not DELETE-with-body: proxies may strip it)."""
+    parsed, error = _dealt_body()
+    if error is not None:
+        return error
+    assert parsed is not None
+    screen_id, fps = parsed
+    session = db.get_session()
+    if screening.get_screen(session, screen_id) is None:
+        return jsonify({"error": "screen not found"}), 404
+    reopened = screening.reopen_findings_dealt(session, screen_id, fps)
+    return jsonify({"screen_id": screen_id, "reopened": reopened})
+
+
+@bp.post("/dealt/import")
+def dealt_import_route() -> ResponseReturnValue:
+    """One-time browser-localStorage migration: identical to mark (idempotent)."""
+    return dealt_mark_route()
+
+
 @bp.post("/<int:screen_id>/run")
 def run_screen_route(screen_id: int) -> ResponseReturnValue:
     """Manually run a screen now (ignores baseline dedup), asynchronously."""

@@ -1008,7 +1008,11 @@ describe("Tasks page (queue overhaul)", () => {
     expect(
       fetchMock.mock.calls.filter((call) => call[0] === "/api/tasks" && call[1]?.method === "POST")
     ).toHaveLength(0);
-    expect(localStorage.getItem("jalebi-findings-dealt")).toBeNull();
+    expect(
+      fetchMock.mock.calls.filter(
+        (call) => String(call[0]).startsWith("/api/screenings/dealt") && call[1]?.method === "POST"
+      )
+    ).toHaveLength(0);
     await userEvent.click(screen.getByRole("button", { name: "Create" }));
     await waitFor(() => {
       const postCall = fetchMock.mock.calls.find(
@@ -1018,15 +1022,59 @@ describe("Tasks page (queue overhaul)", () => {
       const body = JSON.parse(postCall![1]!.body as string) as Record<string, unknown>;
       expect(body).toMatchObject({ repo_id: 1, type: "freeform", prompt });
     });
-    // Only the successful create marks the finding dealt.
+    // Only the successful create marks the finding dealt — via the API.
     await waitFor(() => {
-      expect(localStorage.getItem("jalebi-findings-dealt")).toContain("Secret in config");
+      const markCall = fetchMock.mock.calls.find(
+        (call) => call[0] === "/api/screenings/dealt" && call[1]?.method === "POST"
+      );
+      expect(markCall).toBeTruthy();
+      const body = JSON.parse(markCall![1]!.body as string) as Record<string, unknown>;
+      expect(body).toMatchObject({ screen_id: 7, fps: [fp] });
     });
     // The handoff entry is replace-cleared (no refresh re-inject) while
     // unrelated keys like `from` survive.
     await waitFor(() => {
       expect(router.state.location.state).toEqual({ from: "screenings" });
     });
+  });
+
+  it("still creates the task when the handoff dealt-mark fails, showing an error", async () => {
+    const prompt = "Fix this high finding.";
+    const fp = JSON.stringify([7, "Secret in config", "config.py", 3]);
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/tasks" && init?.method === "POST") {
+        return { ok: true, json: async () => ({ ...TASKS[0], id: 99 }) };
+      }
+      if (String(url).startsWith("/api/screenings/dealt") && init?.method === "POST") {
+        return { ok: false, json: async () => ({ error: "db locked" }) };
+      }
+      const handler = Object.entries({ ...DEFAULT_HANDLERS, "/api/tasks": [] }).find(([n]) =>
+        url.includes(n)
+      );
+      const value = handler ? handler[1] : [];
+      return { ok: true, json: async () => value };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const router = createMemoryRouter([{ path: "/", element: <Tasks /> }], {
+      initialEntries: [
+        {
+          pathname: "/",
+          state: {
+            prefill: { repoId: 1, type: "freeform", prompt, publishMode: "manual" },
+            dealtFps: [fp],
+            screeningHandoffId: "test-handoff-2",
+            from: "screenings",
+          },
+        },
+      ],
+    });
+    render(<RouterProvider router={router} />);
+    expect(await screen.findByDisplayValue(prompt)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Create" }));
+    // The task itself is created…
+    expect(await screen.findByRole("link", { name: "#99" })).toHaveAttribute("href", "/tasks/99");
+    // …and the failed mark surfaces without blocking it.
+    expect(await screen.findByText(/could not be marked dealt/)).toBeInTheDocument();
   });
 
   it("normalizes a cloned screen_finding type to freeform", async () => {

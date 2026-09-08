@@ -218,6 +218,25 @@ export const api = {
       method: "POST",
     }),
   getScreenRuns: (id: number) => request<ScreeningRun[]>(`/api/screenings/${id}/runs`),
+  getDealt: (screenId: number) =>
+    request<{ screen_id: number; fingerprints: string[] }>(
+      `/api/screenings/dealt?screen_id=${screenId}`
+    ),
+  markDealt: (screenId: number, fps: string[]) =>
+    request<{ screen_id: number; marked: number }>(`/api/screenings/dealt`, {
+      method: "POST",
+      body: JSON.stringify({ screen_id: screenId, fps }),
+    }),
+  reopenDealt: (screenId: number, fps: string[]) =>
+    request<{ screen_id: number; reopened: number }>(`/api/screenings/dealt/reopen`, {
+      method: "POST",
+      body: JSON.stringify({ screen_id: screenId, fps }),
+    }),
+  importDealt: (screenId: number, fps: string[]) =>
+    request<{ screen_id: number; marked: number }>(`/api/screenings/dealt/import`, {
+      method: "POST",
+      body: JSON.stringify({ screen_id: screenId, fps }),
+    }),
   getRecentFindings: (params?: { limit?: number; severity?: string; screen_id?: number }) => {
     const q = new URLSearchParams();
     if (params?.limit !== undefined) q.set("limit", String(params.limit));

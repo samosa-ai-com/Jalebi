@@ -216,6 +216,26 @@ the owner converts findings into `screen_finding` tasks. See `docs/07`.
 Index: `screening_id`. A screen skips a tick when its last terminal run
 (`done`/`failed`) audited the same `head_sha` (baseline dedup).
 
+### `screening_dealt` (Phase 4 — rerun context)
+
+Owner-handled findings. One row = dealt (task created, accepted risk, or
+manually dismissed). The key is the canonical `fingerprint`
+`[screening_id, title, file, line]` (compact JSON, `file` NULL → `""`),
+stored — never recomputed from nullable columns (SQLite treats NULLs as
+distinct in UNIQUE constraints).
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | int PK | |
+| `screening_id` | int FK → screenings (CASCADE) | |
+| `fingerprint` | text, NOT NULL | canonical key; `UNIQUE(screening_id, fingerprint)` |
+| `title` / `file` / `line` | text / text / int, null | auxiliary, inspection only |
+| `created_at` | datetime | |
+
+Index: `screening_id`. Powers two behaviors: the audit prompt's known-open
+context (`get_open_findings`) and dealt filtering in ntfy notifications.
+Migration: `e7f8a9b0c1d2` (head). See `docs/07`.
+
 ### `check_runs` (Phase 2 — PRD F15)
 
 Jalebi's **registry of the commit statuses it set** (commit statuses, not GitHub check runs — the check-runs API is GitHub-App only). One row per `(task_id, head_sha, context)`.

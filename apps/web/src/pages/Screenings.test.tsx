@@ -179,6 +179,10 @@ function makeFetchMock() {
     if (u === "/api/tasks" && method === "POST") {
       return { ok: true, json: async () => ({ id: 99 }) };
     }
+    if (u.startsWith("/api/screenings/dealt")) {
+      if (method === "GET") return { ok: true, json: async () => ({ fingerprints: [] }) };
+      return { ok: true, json: async () => ({ marked: 1, reopened: 1 }) };
+    }
     throw new Error(`unexpected fetch: ${method} ${u}`);
   });
 }
@@ -769,19 +773,86 @@ describe("Screenings", () => {
   });
 
   it("marks a batch dealt in one go and hides the findings", async () => {
-    vi.stubGlobal("fetch", makeFetchMock());
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
     renderScreenings();
     await screen.findByText("owner/repo · Security posture");
     await screen.findByText("Secret in config");
     await userEvent.click(screen.getByLabelText("Select all visible findings"));
     expect(await screen.findByText("2 selected")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Mark dealt (2)" }));
-    // Both findings hide at once; the toggle shows the hidden count.
+    // The batch marks via one API call per screen, then both hide at once.
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(
+          (c) => c[0] === "/api/screenings/dealt" && c[1]?.method === "POST"
+        )
+      ).toBe(true);
+    });
     await waitFor(() => {
       expect(screen.queryByText("Secret in config")).not.toBeInTheDocument();
     });
     expect(screen.queryByText("Stale comment")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Hide dealt \(2\)/ })).toBeInTheDocument();
+  });
+
+  it("imports the legacy browser dealt set once, then clears it", async () => {
+    const legacy = JSON.stringify([JSON.stringify([7, "Secret in config", "config.py", 3])]);
+    localStorage.setItem("jalebi-findings-dealt", legacy);
+    const serverDealt = new Set<string>();
+    const base = makeFetchMock();
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      if (typeof url === "string" && url.startsWith("/api/screenings/dealt")) {
+        if (method === "GET") {
+          return { ok: true, json: async () => ({ fingerprints: [...serverDealt] }) };
+        }
+        const body = JSON.parse((init?.body as string) ?? "{}") as { fps?: string[] };
+        for (const fp of body.fps ?? []) serverDealt.add(fp);
+        return { ok: true, json: async () => ({ marked: 1, reopened: 1 }) };
+      }
+      return base(url, init);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderScreenings();
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(
+          (c) => c[0] === "/api/screenings/dealt/import" && c[1]?.method === "POST"
+        )
+      ).toBe(true);
+    });
+    expect(localStorage.getItem("jalebi-dealt-imported")).toBe("1");
+    expect(localStorage.getItem("jalebi-findings-dealt")).toBeNull();
+    // The imported finding hides once the server set revalidates.
+    await waitFor(() => {
+      expect(screen.queryByText("Secret in config")).not.toBeInTheDocument();
+    });
+  });
+
+  it("rolls back an optimistic mark when the API fails", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (
+          typeof url === "string" &&
+          url.startsWith("/api/screenings/dealt") &&
+          init?.method === "POST"
+        ) {
+          return { ok: false, json: async () => ({ error: "db locked" }) };
+        }
+        return fetchMock(url, init);
+      })
+    );
+    renderScreenings();
+    await screen.findByText("owner/repo · Security posture");
+    await screen.findByText("Secret in config");
+    await userEvent.click(screen.getByText("Stale comment"));
+    await userEvent.click(screen.getAllByRole("button", { name: "Mark dealt" })[0]);
+    expect(await screen.findByText("Could not update dealt state — retry.")).toBeInTheDocument();
+    // Rolled back: the finding stays visible.
+    expect(screen.getByText("Stale comment")).toBeInTheDocument();
   });
 
   it("reveals and reopens dealt findings via the toggle", async () => {
