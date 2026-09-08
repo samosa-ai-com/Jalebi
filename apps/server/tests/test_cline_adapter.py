@@ -3,7 +3,8 @@
 
 import io
 
-from jalebi.adapters.cline import CLINE_CURATED, ClineAdapter
+from jalebi.adapters import cline as cline_module
+from jalebi.adapters.cline import CLINE_CURATED, ClineAdapter, _harvest_bundle_models
 
 adapter = ClineAdapter()
 
@@ -108,3 +109,41 @@ def test_parse_non_json_verbatim() -> None:
 def test_curated_models_use_full_ids() -> None:
     assert "z-ai/glm-5.3-flash" in CLINE_CURATED
     assert all("/" in m for m in CLINE_CURATED)
+
+
+def _write_bundle(path, chunks: list[bytes]) -> None:
+    with open(path, "wb") as fh:
+        for chunk in chunks:
+            fh.write(chunk)
+
+
+def test_harvest_picks_largest_dense_map(tmp_path, monkeypatch) -> None:
+    bundle = tmp_path / ".cline"
+    _write_bundle(
+        bundle,
+        [
+            b'noise "z-ai/small":{id:"z-ai/small",name:"S"} tail',
+            b"x" * 6000,
+            b'"openai/big-a":{id:"openai/big-a"} mid "openai/big-b":{id:"openai/big-b"}',
+        ],
+    )
+    assert _harvest_bundle_models(bundle) == ["openai/big-a", "openai/big-b"]
+
+
+def test_harvest_missing_bundle_returns_empty(tmp_path) -> None:
+    assert _harvest_bundle_models(tmp_path / ".cline") == []
+
+
+def test_list_models_curated_first_then_harvested(tmp_path, monkeypatch) -> None:
+    bundle = tmp_path / ".cline"
+    _write_bundle(bundle, [b'"openai/big-a":{id:"openai/big-a"}'])
+    monkeypatch.setattr(cline_module, "_bundle_path", lambda: bundle)
+    cline_module._bundle_cache.clear()
+    models = adapter.list_models()
+    assert models[: len(CLINE_CURATED)] == CLINE_CURATED
+    assert "openai/big-a" in models
+
+
+def test_list_models_falls_back_to_curated_without_bundle(monkeypatch) -> None:
+    monkeypatch.setattr(cline_module, "_bundle_path", lambda: None)
+    assert adapter.list_models() == CLINE_CURATED

@@ -185,9 +185,12 @@ stated.
 - **cline** (`cline --json --yolo`, 3.0.61): wire schema is
   `agent_event`/`run_result` (older `say`/`ask` docs are stale). `--yolo` is
   a hidden `--auto-approve` alias; `-t` is seconds. `-m` needs the full
-  `modelType/model` id. No list-models command — curated free-tier ids
-  (same precedent as claude). **Session id is not in stdout** — the resume
-  key lives in `cline history --json`; streaming cannot capture it (follow-up
+  `modelType/model` id. No list-models command and `config --json` needs a
+  TTY, so `list_models` harvests the installed bundle's largest embedded
+  model map (cached by mtime; curated verified ids first, curated-only on
+  any bundle problem). Harvested ids are unattributed (the bundle holds many
+  providers' catalogs) — a dud fails clean with exit 1. **Session id is not
+  in stdout** — the resume key lives in `cline history --json`; streaming cannot capture it (follow-up
   falls back to a fresh session until history lookup is added). Resume
   (`--id`) and diff shapes per-docs, not live-exercised.
 - **goose** (`goose run -t … --output-format stream-json`, 1.49.0): terminal

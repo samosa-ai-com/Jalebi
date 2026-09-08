@@ -11,9 +11,10 @@ Verified facts:
   ``-t/--timeout`` is in **seconds**. ``-c/--cwd`` sets the workdir.
 - ``-m`` needs the full ``modelType/model`` id (e.g. ``z-ai/glm-5.3-flash``;
   the display name ``GLM-5.3-Flash`` is rejected with exit 1). No
-  ``--list-models``/``models`` subcommand exists — the adapter returns a
-  curated free-tier list (ids verified present in the installed bundle),
-  same precedent as ``CLAUDE_CURATED``.
+  ``--list-models``/``models`` subcommand exists and ``config --json`` needs
+  a TTY, so the catalog is harvested from the installed bundle's embedded
+  model maps (cached by mtime; curated verified ids first, curated-only on
+  any bundle problem).
 - Terminal line is ``run_result`` (``finishReason:"completed"`` + exit 0, or
   ``"error"`` + exit 1). `done` events carry reason/text/iterations.
 - **Session id is NOT in the stdout stream** — the resume key lives in
@@ -26,6 +27,7 @@ Verified facts:
 
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -34,13 +36,77 @@ from pathlib import Path
 from jalebi.adapters.types import AgentAdapter, AgentEvent, RunHandle
 
 # Curated free-tier ids — verified present in the installed 3.0.61 bundle.
-# Overridable via the `adapter_model_lists` setting (same precedent as claude).
+# Listed first by list_models(); the rest of the bundle catalog follows.
 CLINE_CURATED = [
     "z-ai/glm-5.3-flash",
     "z-ai/glm-5.3-free",
     "z-ai/glm-5.2-free",
     "z-ai/glm-4.7-flash-free",
 ]
+
+# Catalog entries in the installed bundle look like
+# `"z-ai/glm-5.3-flash":{id:"z-ai/glm-5.3-flash",name:"GLM-5.3-Flash",…}` and
+# sit in dense per-provider maps (dual ESM/CJS builds embed the same map
+# twice — verified identical). Entries > _MAP_GAP bytes apart start a new map.
+_CATALOG_ENTRY_RE = re.compile(rb'"([A-Za-z0-9_.-]+/[A-Za-z0-9_.:-]+)":\{id:"')
+_MAP_GAP = 5000
+
+# Bundle path → (mtime, harvested ids). The scan runs only when the installed
+# bundle changes (install/upgrade), not on every /api/models call.
+_bundle_cache: dict[str, tuple[float, list[str]]] = {}
+
+
+def _bundle_path() -> Path | None:
+    which = shutil.which("cline")
+    if not which:
+        return None
+    try:
+        candidate = Path(which).resolve().parent / ".cline"
+    except OSError:
+        return None
+    return candidate if candidate.is_file() else None
+
+
+def _harvest_bundle_models(bundle: Path) -> list[str]:
+    """Ids of the largest dense catalog map in the bundle file."""
+    try:
+        data = bundle.read_bytes()
+    except OSError:
+        return []
+    maps: list[list[str]] = []
+    current: list[str] = []
+    prev: int | None = None
+    for match in _CATALOG_ENTRY_RE.finditer(data):
+        pos = match.start()
+        if prev is not None and pos - prev > _MAP_GAP:
+            if current:
+                maps.append(current)
+            current = []
+        mid = match.group(1).decode()
+        if mid not in current:
+            current.append(mid)
+        prev = pos
+    if current:
+        maps.append(current)
+    if not maps:
+        return []
+    return max(maps, key=len)
+
+
+def _bundle_models() -> list[str]:
+    bundle = _bundle_path()
+    if bundle is None:
+        return []
+    try:
+        mtime = bundle.stat().st_mtime
+    except OSError:
+        return []
+    cached = _bundle_cache.get(str(bundle))
+    if cached is not None and cached[0] == mtime:
+        return cached[1]
+    models = _harvest_bundle_models(bundle)
+    _bundle_cache[str(bundle)] = (mtime, models)
+    return models
 
 
 def _binary() -> str:
@@ -112,9 +178,18 @@ class ClineAdapter(AgentAdapter):
     name = "cline"
 
     def list_models(self) -> list[str]:
-        # No list command — curated ids (verified in-bundle), same precedent
-        # as claude's CLAUDE_CURATED.
-        return list(CLINE_CURATED)
+        # No list command and `config --json` needs a TTY, so the catalog
+        # comes from the installed bundle (cached by mtime): curated ids
+        # first (verified working), then the largest catalog map. Harvested
+        # entries are unattributed — the bundle holds many providers'
+        # catalogs, so an id may fail under the configured provider (clean
+        # exit-1 model error, never silent corruption). Any bundle problem
+        # falls back to the curated list; `adapter_model_lists` still wins.
+        models = list(CLINE_CURATED)
+        for mid in _bundle_models():
+            if mid not in models:
+                models.append(mid)
+        return models
 
     def start(
         self,
