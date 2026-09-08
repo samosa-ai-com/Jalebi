@@ -217,3 +217,12 @@ stated.
   per-docs, not live-exercised. Caveat: per docs `--yolo` is needed for
   file-write/shell tools in headless (default blocks them) — UNVERIFIED, so
   the adapter stays on the verified `--trust` argv.
+- **agy** (`agy -p … --output-format stream-json`, 1.1.27): `init` carries
+  the resume `conversation_id`; `step_update` (`user_input`/`agent_response`
+  with `text_delta`/`tool_call`) streams; terminal `result`
+  (`status:"SUCCESS"` → silent, exit 0 → done). The non-TTY stdout-drop bug
+  does NOT reproduce on 1.1.27. Owner OAuth login is reused headlessly.
+  Default model `gemini-3.8-flash-low` is passed explicitly (never the CLI
+  default). Resume (`--conversation`), kill-during-run and non-default
+  `--model` execution per-flags, not live-exercised. `list_models` parses
+  `agy models`.

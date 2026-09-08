@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
 
-const FALLBACK = ["opencode", "codex", "claude", "pi", "kilo", "qwen", "cline", "goose", "grok", "commandcode"];
+const FALLBACK = ["opencode", "codex", "claude", "pi", "kilo", "qwen", "cline", "goose", "grok", "commandcode", "agy"];
 
 /** Backends the app may use (owner-configured in Settings → Agent defaults).
  * Falls back to the full registry list when the endpoint is unreachable. */

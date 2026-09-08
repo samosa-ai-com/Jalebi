@@ -6,6 +6,7 @@ registry is the single source of truth for available backends — ``available_ad
 drives every cli allow-list so they can never drift from the implemented adapters.
 """
 
+from jalebi.adapters.agy import AgyAdapter
 from jalebi.adapters.claude import ClaudeAdapter
 from jalebi.adapters.cline import ClineAdapter
 from jalebi.adapters.codex import CodexAdapter
@@ -29,6 +30,7 @@ ADAPTERS: dict[str, AgentAdapter] = {
     "goose": GooseAdapter(),
     "grok": GrokAdapter(),
     "commandcode": CommandCodeAdapter(),
+    "agy": AgyAdapter(),
 }
 
 
