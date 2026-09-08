@@ -112,6 +112,7 @@ export interface TaskPrefill {
   issueNumber?: string;
   patName?: string;
   envVars?: string[];
+  addressReviews?: boolean;
 }
 
 const TASK_DEFAULTS_KEY = "jalebi-task-defaults";
@@ -149,6 +150,11 @@ function CreateTask({
   const [patName, setPatName] = useState(prefill?.patName ?? "");
   const [issueNumber, setIssueNumber] = useState(prefill?.issueNumber ?? "");
   const [prNumber, setPrNumber] = useState(prefill?.prNumber ?? "");
+  // Creation-time "address the review comments on the linked PR" (freeform
+  // only). Defaults to checked as soon as a PR is linked unless the user (or
+  // a prefill) explicitly chose otherwise.
+  const [addressReviews, setAddressReviews] = useState(prefill?.addressReviews ?? false);
+  const [addressTouched, setAddressTouched] = useState(prefill?.addressReviews !== undefined);
   const [publishMode, setPublishMode] = useState<"auto" | "manual" | "">(
     prefill?.publishMode ?? stored.publishMode ?? ""
   );
@@ -246,6 +252,9 @@ function CreateTask({
 
   function selectPr(num: string) {
     setPrNumber(num);
+    // Recommended default: linking a PR opts into addressing its review
+    // comments — unless the user already toggled the checkbox explicitly.
+    if (!addressTouched) setAddressReviews(!!num);
     // Intuitive default: picking a PR bases the work on its head branch and
     // targets its base branch — but only when those branches exist on
     // origin. A fork head missing from origin keeps the current base; the
@@ -336,6 +345,17 @@ function CreateTask({
               : c.branches[0];
           setSourceBranch(def);
           setTargetBranch(def);
+          // Prefilled PR link (e.g. the Address-reviewers handoff, which
+          // carries no explicit branches): base the work on the PR exactly
+          // like a manual pick would — selectPr only runs on dropdown change.
+          // Same origin-only rule (fork heads keep the default + hint).
+          if (type === "freeform" && prNumber) {
+            const pr = c.prs.find((p) => p.number === Number(prNumber)) ?? null;
+            if (pr) {
+              if (pr.head && c.branches.includes(pr.head)) setSourceBranch(pr.head);
+              if (pr.base && c.branches.includes(pr.base)) setTargetBranch(pr.base);
+            }
+          }
         }
         preserveBranches.current = false;
       })
@@ -380,6 +400,7 @@ function CreateTask({
         pat_name: effectivePatName || undefined,
         issue_number: issueNumber ? Number(issueNumber) : undefined,
         pr_number: prNumber ? Number(prNumber) : undefined,
+        address_reviews: type === "freeform" && prNumber ? addressReviews : undefined,
         publish_mode: publishMode === "" ? undefined : publishMode,
         reviewers: reviewers.length > 0 ? reviewers : undefined,
         env_vars: envVars,
@@ -403,6 +424,8 @@ function CreateTask({
       setPrompt("");
       setIssueNumber("");
       setPrNumber("");
+      setAddressReviews(false);
+      setAddressTouched(false);
       setEnvVars([]);
       setAgentId("");
       setReviewers([]);
@@ -510,6 +533,23 @@ function CreateTask({
             </Select>
           )}
         </div>
+      )}
+      {type === "freeform" && prNumber && (
+        <label className="flex cursor-pointer items-start gap-2 text-xs text-ink-400">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={addressReviews}
+            onChange={(e) => {
+              setAddressReviews(e.target.checked);
+              setAddressTouched(true);
+            }}
+          />
+          <span>
+            Address the review comments on this PR — the agent fixes what reviewers said (current
+            comments are embedded; newer ones are fetched live).
+          </span>
+        </label>
       )}
 
       {type === "issue_fix" ? (
@@ -1126,6 +1166,7 @@ export default function Tasks() {
       cli: t.cli ?? undefined,
       model: t.model ?? undefined,
       publishMode: (t.publish_mode as "auto" | "manual" | "") ?? "",
+      addressReviews: t.address_reviews ?? undefined,
       prNumber:
         t.prs?.[0] != null
           ? String(t.prs[0])

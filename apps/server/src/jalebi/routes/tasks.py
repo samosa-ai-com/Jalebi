@@ -268,6 +268,17 @@ def create_task() -> ResponseReturnValue:
     if publish_mode is None:
         publish_mode = "auto" if type_ == "issue_fix" else "manual"
 
+    # Creation-time "address the review comments on the linked PR" (freeform
+    # only): guarantees the address-reviews instruction in the run prompt even
+    # when no reviews were fetched at creation time.
+    address_reviews = payload.get("address_reviews", False)
+    if not isinstance(address_reviews, bool):
+        return jsonify({"error": "address_reviews must be a boolean"}), 400
+    if address_reviews and type_ != "freeform":
+        return jsonify({"error": "address_reviews is only valid for freeform tasks"}), 400
+    if address_reviews and pr_number is None:
+        return jsonify({"error": "address_reviews requires a linked pr_number"}), 400
+
     pat_name = payload.get("pat_name")
     if pat_name is not None and not _valid_pat(config, pat_name):
         return jsonify({"error": f"unknown PAT: {pat_name}"}), 400
@@ -358,6 +369,7 @@ def create_task() -> ResponseReturnValue:
             env_vars=env_vars,
             timeout_minutes=timeout_minutes,
             publish_mode=publish_mode,
+            address_reviews=address_reviews,
             masker=masker,
         )
     except ValueError as exc:

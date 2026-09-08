@@ -147,6 +147,12 @@ class Task(Base):
     # "auto" | "manual" | None (None → fall back to the global auto_publish setting).
     # issue_fix defaults to "auto"; freeform/screen_finding/triggered default to "manual".
     publish_mode: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Creation-time "address the review comments on the linked PR" (freeform
+    # only): the run prompt always carries the address-reviews instruction,
+    # even when no reviews were fetched at creation time.
+    address_reviews: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=sa.text("0")
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now)
 

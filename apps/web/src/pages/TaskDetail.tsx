@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Link, useLocation, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { api, taskEvents } from "../api/client";
 import { StatusBadge } from "../components/StatusBadge";
 import { AttentionBadge } from "../components/AttentionBadge";
@@ -564,26 +564,26 @@ function FollowUpComposer({
     }
   }
 
-  async function addressReviewers() {
-    if (busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      // "Address the reviewers": resume the fixer with the PR's review comments
-      // fetched + embedded by the server (F7.6).
-      await api.postFollowup(task.id, "Address the reviewers' comments.", {
-        include_reviews: true,
-        pat_name: patName || undefined,
-        model: model || undefined,
-        cli: cli || undefined,
-      });
-      setText("");
-      onSent();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "failed to send follow-up");
-    } finally {
-      setBusy(false);
-    }
+  const navigate = useNavigate();
+
+  function addressReviewers() {
+    // Handoff, not a follow-up: open the New-task form prefilled so a fresh
+    // freeform task addresses the PR's review comments (creation-time flag).
+    // The follow-up path (include_reviews) stays available server-side.
+    const pr = task.prs?.[0] ?? task.pr_number ?? null;
+    if (pr == null) return;
+    navigate("/?view=queue", {
+      state: {
+        prefill: {
+          repoId: task.repo_id,
+          type: "freeform",
+          prNumber: String(pr),
+          prompt: `Address the review comments on PR #${pr}.`,
+          addressReviews: true,
+        },
+        from: "task-detail",
+      },
+    });
   }
 
   return (
@@ -639,7 +639,7 @@ function FollowUpComposer({
           value={text}
           onChange={(e) => setText(e.target.value)}
           rows={3}
-          placeholder="e.g. Address the reviewer comments, then update the README…"
+          placeholder="e.g. Add a regression test, then update the README…"
           className="field resize-y"
         />
         <p className="text-[11px] leading-relaxed text-ink-600">
@@ -651,12 +651,11 @@ function FollowUpComposer({
           {showAddressReviewers && (
             <button
               type="button"
-              disabled={busy}
               onClick={addressReviewers}
               className="btn-ghost text-xs"
-              title="Resume the fixer with the PR's current review comments (fetched + embedded)"
+              title="Open the New-task form to address this PR's review comments in a fresh task"
             >
-              {busy ? "Sending…" : "Address reviewers"}
+              Address reviewers
             </button>
           )}
           <button type="submit" disabled={busy || !text.trim()} className="btn-primary">

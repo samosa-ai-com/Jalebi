@@ -12,6 +12,7 @@ def _task(
     issues: list[int] | None = None,
     prs: list[int] | None = None,
     context: dict | None = None,
+    address_reviews: bool = False,
 ) -> tasks.Task:
     return tasks.create_task(
         session,
@@ -21,6 +22,7 @@ def _task(
         issues=issues,
         prs=prs,
         context=context,
+        address_reviews=address_reviews,
     )
 
 
@@ -97,8 +99,30 @@ def test_agent_md_pr_review_embeds_pr(session) -> None:
     assert "review comments to address" not in md
 
 
+def _pr_context() -> dict:
+    return {
+        "prs": [
+            {
+                "number": 7,
+                "title": "Feature",
+                "body": "Adds x",
+                "html_url": "u",
+                "base": "main",
+                "head": "feature/x",
+                "state": "open",
+                "author": "bob",
+                "reviews": [
+                    {"author": "carol", "body": "needs tests"},
+                    {"author": "dave", "body": "secret-value-123 in a comment"},
+                ],
+            }
+        ]
+    }
+
+
 def test_agent_md_freeform_linked_pr_embeds_pr_and_reviews(session) -> None:
-    """A freeform task that links a PR gets the PR + review comments in AGENTS.md."""
+    """A freeform task created with address_reviews gets the PR + review
+    comments in AGENTS.md."""
     repo = Repo(
         full_name="owner/repo",
         default_branch="main",
@@ -112,24 +136,8 @@ def test_agent_md_freeform_linked_pr_embeds_pr_and_reviews(session) -> None:
         repo,
         type_="freeform",
         prs=[7],
-        context={
-            "prs": [
-                {
-                    "number": 7,
-                    "title": "Feature",
-                    "body": "Adds x",
-                    "html_url": "u",
-                    "base": "main",
-                    "head": "feature/x",
-                    "state": "open",
-                    "author": "bob",
-                    "reviews": [
-                        {"author": "carol", "body": "needs tests"},
-                        {"author": "dave", "body": "secret-value-123 in a comment"},
-                    ],
-                }
-            ]
-        },
+        context=_pr_context(),
+        address_reviews=True,
     )
     md = prompts.build_agent_md(task, repo)
     assert "## Linked pull request" in md
@@ -141,6 +149,25 @@ def test_agent_md_freeform_linked_pr_embeds_pr_and_reviews(session) -> None:
     assert "### Review 2 — dave" in md
     assert "BEGIN UNTRUSTED DATA: PR review comment" in md
     assert "pr.md" in md  # freeform still gets the PR-description note
+
+
+def test_agent_md_linked_pr_without_flag_is_context_only(session) -> None:
+    """The checkbox is authoritative: without address_reviews the linked PR is
+    background context (description only) — never an order to address."""
+    repo = Repo(
+        full_name="owner/repo",
+        default_branch="main",
+        clone_url="https://github.com/owner/repo.git",
+        pat_name="test",
+    )
+    session.add(repo)
+    session.commit()
+    task = _task(session, repo, type_="freeform", prs=[7], context=_pr_context())
+    md = prompts.build_agent_md(task, repo)
+    assert "## Linked pull request" in md
+    assert "PR #7 — Feature" in md
+    assert "review comments to address" not in md
+    assert "needs tests" not in md
 
 
 def test_agent_md_freeform_linked_pr_fallback_mentions_pr_and_curl(session) -> None:

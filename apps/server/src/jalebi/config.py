@@ -22,14 +22,16 @@ def _parse_base(candidate: str) -> tuple[str, str] | None:
     if not candidate:
         return None
     base = candidate if "://" in candidate else "http://" + candidate
-    base = base.rstrip("/")
     try:
-        host = urlsplit(base).hostname
+        parts = urlsplit(base)
+        host = parts.hostname
     except ValueError:
         return None
     if not host:
         return None
-    return host, base
+    # A query/fragment on the base would corrupt every appended path (ntfy
+    # tap-links), so only scheme + host + path survive.
+    return host, f"{parts.scheme}://{parts.netloc}{parts.path}".rstrip("/")
 
 
 def parse_public_urls(raw: str) -> list[tuple[str, str]]:
@@ -100,6 +102,8 @@ class Config:
 
     def primary_link(self, path: str) -> str:
         """Tap-to-open URL: first configured public URL, else loopback."""
+        if not path.startswith("/"):
+            path = "/" + path
         links = self.public_links()
         base = links[0][1] if links else f"http://127.0.0.1:{self.port}"
         return base + path
@@ -111,6 +115,8 @@ class Config:
         label (payloads unchanged from before). Multiple URLs → one button per
         URL (``Open (<label>)``), capped at 3 — the most ntfy renders.
         """
+        if not path.startswith("/"):
+            path = "/" + path
         links = self.public_links()
         if len(links) <= 1:
             base = links[0][1] if links else f"http://127.0.0.1:{self.port}"

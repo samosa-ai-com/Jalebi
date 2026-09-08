@@ -57,6 +57,7 @@
 | `retry_count` | int, default 0 | |
 | `pr_number` | int null | |
 | `publish_mode` | text null | `'auto'` \| `'manual'` \| NULL (fall back to the global `auto_publish` setting). `issue_fix` defaults to `auto`; freeform/manual types to `manual`. |
+| `address_reviews` | bool, default false | creation-time "address the review comments on the linked PR" (freeform only; 400 otherwise or without `pr_number`). Guarantees the address-reviews instruction in the run prompt even when no reviews were fetched at creation (agent self-fetches). |
 | `check_run_id` | int null | **no FK yet**; check_runs table arrives in Phase 2 |
 | `created_at` | datetime | naive local (app timezone, see `jalebi/clock.py`) |
 | `updated_at` | datetime | naive local (app timezone, see `jalebi/clock.py`) |

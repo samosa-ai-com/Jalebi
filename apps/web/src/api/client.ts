@@ -64,6 +64,7 @@ export interface CreateTaskInput {
   pat_name?: string;
   issue_number?: number;
   pr_number?: number;
+  address_reviews?: boolean;
   publish_mode?: "auto" | "manual";
   reviewers?: string[];
   env_vars?: string[];

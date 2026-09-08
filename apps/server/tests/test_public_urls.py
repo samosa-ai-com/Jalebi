@@ -25,9 +25,10 @@ def test_parse_normalizes_scheme_and_trailing_slash() -> None:
     ]
 
 
-def test_parse_bare_url_with_query_string_kept_intact() -> None:
-    links = parse_public_urls("https://example.com/tunnel?token=abc")
-    assert links == [("example.com", "https://example.com/tunnel?token=abc")]
+def test_parse_bare_url_with_query_string_drops_query() -> None:
+    # A query on the base would corrupt every appended tap-link path.
+    links = parse_public_urls("https://example.com/tunnel?token=abc#frag")
+    assert links == [("example.com", "https://example.com/tunnel")]
 
 
 def test_parse_skips_junk_and_empties() -> None:

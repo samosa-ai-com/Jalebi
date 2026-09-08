@@ -1,6 +1,6 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import TaskDetail from "./TaskDetail";
 
@@ -184,7 +184,7 @@ describe("TaskDetail", () => {
     expect(await screen.findByText("Follow-up")).toBeInTheDocument();
     expect(screen.getByText(/Resume refreshes remote refs first/)).toBeInTheDocument();
 
-    await userEvent.type(screen.getByPlaceholderText(/Address the reviewer comments/), "do more");
+    await userEvent.type(screen.getByPlaceholderText(/Add a regression test/), "do more");
     await userEvent.click(screen.getByRole("button", { name: "Send follow-up" }));
 
     await waitFor(() => {
@@ -217,10 +217,7 @@ describe("TaskDetail", () => {
     await userEvent.selectOptions(backend, "codex");
     expect(screen.getByText(/fresh session/)).toBeInTheDocument();
 
-    await userEvent.type(
-      screen.getByPlaceholderText(/Address the reviewer comments/),
-      "switch backend"
-    );
+    await userEvent.type(screen.getByPlaceholderText(/Add a regression test/), "switch backend");
     await userEvent.click(screen.getByRole("button", { name: "Send follow-up" }));
 
     await waitFor(() => {
@@ -520,7 +517,7 @@ describe("TaskDetail", () => {
 
     renderDetail();
     await screen.findByText("Follow-up");
-    await userEvent.type(screen.getByPlaceholderText(/Address the reviewer comments/), "do more");
+    await userEvent.type(screen.getByPlaceholderText(/Add a regression test/), "do more");
     await userEvent.click(screen.getByRole("button", { name: "Send follow-up" }));
 
     await waitFor(() => expect(screen.getByText("running")).toBeInTheDocument(), { timeout: 5000 });
@@ -634,6 +631,57 @@ describe("TaskDetail", () => {
     expect(await screen.findByRole("button", { name: "Address reviewers" })).toBeInTheDocument();
   });
 
+  it("Address reviewers opens the New-task form prefilled (no follow-up POST)", async () => {
+    const fixTask = {
+      ...TASK,
+      type: "issue_fix",
+      repo_id: 1,
+      pr_number: 9,
+      prs: [9],
+      status: "done",
+      run: { ...RUN, status: "done" },
+      reviewers: [],
+    };
+    const fetchMock = stubFetch(fixTask);
+    vi.stubGlobal("EventSource", FakeEventSource);
+
+    const captured: {
+      current: { pathname: string; search: string; state: unknown } | null;
+    } = { current: null };
+    function Probe() {
+      const loc = useLocation();
+      captured.current = { pathname: loc.pathname, search: loc.search, state: loc.state };
+      return null;
+    }
+    render(
+      <MemoryRouter initialEntries={["/tasks/7"]}>
+        <Routes>
+          <Route path="/tasks/:id" element={<TaskDetail />} />
+          <Route path="/" element={<Probe />} />
+        </Routes>
+      </MemoryRouter>
+    );
+    await screen.findByText("Follow-up");
+    await userEvent.click(await screen.findByRole("button", { name: "Address reviewers" }));
+
+    await waitFor(() => expect(captured.current?.pathname).toBe("/"));
+    expect(captured.current?.search).toBe("?view=queue");
+    const state = captured.current?.state as {
+      prefill: Record<string, unknown>;
+      from: string;
+    };
+    expect(state.from).toBe("task-detail");
+    expect(state.prefill).toMatchObject({
+      repoId: 1,
+      type: "freeform",
+      prNumber: "9",
+      addressReviews: true,
+    });
+    expect(String(state.prefill.prompt)).toContain("PR #9");
+    // Handoff only — nothing is posted until the user submits the new form.
+    expect(fetchMock.mock.calls.filter((c) => c[1]?.method === "POST")).toEqual([]);
+  });
+
   it("shows the waiting card for a waiting_input run", async () => {
     const waitingTask = {
       ...TASK,
@@ -705,9 +753,7 @@ describe("TaskDetail", () => {
     await screen.findByText("Agent is waiting for your input");
     await userEvent.click(screen.getByRole("button", { name: "Reply in follow-up" }));
 
-    const textarea = screen.getByPlaceholderText(
-      /Address the reviewer comments/
-    ) as HTMLTextAreaElement;
+    const textarea = screen.getByPlaceholderText(/Add a regression test/) as HTMLTextAreaElement;
     expect(textarea.value.startsWith("> ")).toBe(true);
   });
 
@@ -1619,6 +1665,8 @@ describe("TaskDetail improvements", () => {
         </Routes>
       </MemoryRouter>
     );
-    expect(await screen.findByRole("link", { name: /Back to Mission control/i })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("link", { name: /Back to Mission control/i })
+    ).toBeInTheDocument();
   });
 });

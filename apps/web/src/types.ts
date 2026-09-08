@@ -73,6 +73,7 @@ export interface Task {
   timeout_minutes: number;
   retry_count: number;
   pr_number: number | null;
+  address_reviews?: boolean;
   publish_mode: "auto" | "manual" | null;
   check_run_id: number | null;
   issues: number[];

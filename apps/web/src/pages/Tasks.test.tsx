@@ -238,6 +238,102 @@ describe("Tasks", () => {
     expect(picker).toHaveValue("1");
   });
 
+  it("linking a PR defaults the address-reviews checkbox to checked and sends it", async () => {
+    const fetchMock = stubFetch({
+      ...DEFAULT_HANDLERS,
+      "/api/github/context": {
+        issues: [],
+        prs: [
+          {
+            number: 1,
+            title: "Phase 1",
+            html_url: "u",
+            state: "open",
+            base: "main",
+            head: "phase-1",
+            author: "me",
+          },
+        ],
+        branches: ["main", "dev"],
+      },
+    });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+
+    await screen.findByText("New task");
+    // No linked PR yet → no checkbox.
+    expect(screen.queryByLabelText(/Address the review comments/)).toBeNull();
+
+    const picker = await screen.findByLabelText("Link PR (optional)");
+    await userEvent.selectOptions(picker, "1");
+    const box = (await screen.findByLabelText(/Address the review comments/)) as HTMLInputElement;
+    expect(box.checked).toBe(true);
+
+    await userEvent.type(screen.getByPlaceholderText("Instructions…"), "fix it");
+    await userEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      const postCall = fetchMock.mock.calls.find(
+        (call) => call[0] === "/api/tasks" && call[1]?.method === "POST"
+      );
+      expect(postCall).toBeTruthy();
+      expect(JSON.parse(postCall![1]!.body as string)).toMatchObject({
+        pr_number: 1,
+        address_reviews: true,
+      });
+    });
+  });
+
+  it("unchecking address-reviews sends false", async () => {
+    const fetchMock = stubFetch({
+      ...DEFAULT_HANDLERS,
+      "/api/github/context": {
+        issues: [],
+        prs: [
+          {
+            number: 2,
+            title: "Phase 2",
+            html_url: "u",
+            state: "open",
+            base: "main",
+            head: "phase-2",
+            author: "me",
+          },
+        ],
+        branches: ["main", "dev"],
+      },
+    });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+
+    await screen.findByText("New task");
+    const picker = await screen.findByLabelText("Link PR (optional)");
+    await userEvent.selectOptions(picker, "2");
+    const box = (await screen.findByLabelText(/Address the review comments/)) as HTMLInputElement;
+    await userEvent.click(box);
+    expect(box.checked).toBe(false);
+
+    await userEvent.type(screen.getByPlaceholderText("Instructions…"), "fix it");
+    await userEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      const postCall = fetchMock.mock.calls.find(
+        (call) => call[0] === "/api/tasks" && call[1]?.method === "POST"
+      );
+      expect(postCall).toBeTruthy();
+      expect(JSON.parse(postCall![1]!.body as string)).toMatchObject({
+        pr_number: 2,
+        address_reviews: false,
+      });
+    });
+  });
+
   it("fork PR offers a PR-head worktree base and sends the sentinel on create", async () => {
     const fetchMock = stubFetch({
       ...DEFAULT_HANDLERS,
@@ -293,6 +389,58 @@ describe("Tasks", () => {
         target_branch: "main",
       });
     });
+  });
+
+  it("task-detail handoff prefill bases branches on the linked PR", async () => {
+    stubFetch({
+      ...DEFAULT_HANDLERS,
+      "/api/github/context": {
+        issues: [],
+        prs: [
+          {
+            number: 9,
+            title: "Fix",
+            html_url: "u",
+            state: "open",
+            base: "main",
+            head: "dev",
+            author: "me",
+          },
+        ],
+        branches: ["main", "dev"],
+      },
+    });
+    const router = createMemoryRouter([{ path: "/", element: <Tasks /> }], {
+      initialEntries: [
+        {
+          pathname: "/",
+          search: "?view=queue",
+          state: {
+            prefill: {
+              repoId: 1,
+              type: "freeform",
+              prNumber: "9",
+              prompt: "Address the review comments on PR #9.",
+              addressReviews: true,
+            },
+            from: "task-detail",
+          },
+        },
+      ],
+    });
+    render(<RouterProvider router={router} />);
+
+    await screen.findByText("New task");
+    // The handoff carries no branches — context load must base the work on
+    // the PR (head/base), not the repo default.
+    const source = (await screen.findByLabelText("Source branch")) as HTMLSelectElement;
+    await waitFor(() => expect(source.value).toBe("dev"));
+    expect(
+      (screen.getByLabelText("Target branch (PR base)") as HTMLSelectElement).value
+    ).toBe("main");
+    expect(
+      (screen.getByLabelText(/Address the review comments/) as HTMLInputElement).checked
+    ).toBe(true);
   });
 
   it("shows env-var chips and sends selected env_vars on create", async () => {
