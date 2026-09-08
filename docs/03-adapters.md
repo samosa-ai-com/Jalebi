@@ -152,3 +152,18 @@ Top-level JSON `type` values (one object per line, `--verbose` required) and the
 - `_spawn` builds the subprocess env **from the passed env dict** (not `os.environ.copy()` + overlay), so a key the queue deliberately removed can never leak back in from the server's environment.
 - `resume` now forwards `env` too (previously dropped it) — follow-ups get the same credentials/guards as the original run.
 - **`ANTHROPIC_*` is deliberately passed through** (claude auth: `ANTHROPIC_AUTH_TOKEN` → `ANTHROPIC_API_KEY` → OAuth; the CLI reads `~/.claude.json` too). Jalebi never sets or strips it — the owner's own claude configuration authenticates claude runs, exactly as codex reuses `~/.codex/auth.json`. `GH_*`/`GIT_*`/`JALEBI_GITHUB_TOKEN` stripping is unchanged and applies to every adapter.
+
+## 10. New backends (Sep 2026)
+
+Validated live Sep 2026 (one trivial prompt each, free-tier models) + local
+`--help`. Resume follow-ups and tool-call/diff event shapes are per-docs and
+structurally confirmed unless noted; live resume was exercised only where
+stated.
+
+- **pi** (`pi --print --mode json --approve`, 0.80.2): resume via
+  `--session <id>` (`--resume` is a TUI picker — never use headlessly).
+  `--model provider/id`; `openrouter/free` is a re-resolving pattern, not a
+  fixed model. **Model failures exit 0** — `stopReason:"error"` on the
+  terminal event is the error signal. Deltas (`message_update`) are silent;
+  `message_end` is authoritative; `thinking` silent. No diff event.
+  `list_models` parses `pi --list-models` (provider/model table).

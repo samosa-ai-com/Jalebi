@@ -9,12 +9,14 @@ drives every cli allow-list so they can never drift from the implemented adapter
 from jalebi.adapters.claude import ClaudeAdapter
 from jalebi.adapters.codex import CodexAdapter
 from jalebi.adapters.opencode import OpenCodeAdapter
+from jalebi.adapters.pi import PiAdapter
 from jalebi.adapters.types import AgentAdapter
 
 ADAPTERS: dict[str, AgentAdapter] = {
     "opencode": OpenCodeAdapter(),
     "codex": CodexAdapter(),
     "claude": ClaudeAdapter(),
+    "pi": PiAdapter(),
 }
 
 
