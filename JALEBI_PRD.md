@@ -387,12 +387,12 @@ Branch selection is **per task type** (shipped behavior; supersedes the earlier 
 
 ### F13. Security & privacy
 
-- Bind server to **127.0.0.1** by default. Optional UI password (env `JALEBI_PASSWORD` or `OPENCODE_SERVER_PASSWORD` reuse) gates the API + SPA behind Basic auth when tunnel-exposed.
+- Bind server to **0.0.0.0** by default for LAN access (configurable via `JALEBI_HOST`). A UI password (env `JALEBI_PASSWORD` or `OPENCODE_SERVER_PASSWORD` reuse) is **required at startup** — the server refuses to start without it — and gates the API + SPA behind Basic auth.
 - **Failed-login alerts:** a wrong password pushes a throttled (1/60 s per client) ntfy alert — masks any token-like username; the alert is best-effort and never delays the 401.
 - Named PATs stored with `0600`; never logged, never sent to the browser, never passed to agent prompts. All PAT values are masked at ingest (see §F17).
 - **Agent sandboxing / `gh` guard:** each child process is scoped to its own worktree (cwd). The per-worktree `opencode.json` **denies `gh`** via opencode permission rules and denies external-directory access; the agent env carries an empty `GH_CONFIG_DIR` and stripped `GH_TOKEN`/`GITHUB_TOKEN`, and the `gh` CLI is banned project-wide (§17.2). A settings toggle can add a sandbox wrapper (e.g. `bwrap`/`firejail`) later.
 - Publishing is idempotent; follow-ups only ever touch the task's own branch.
-- If the app is ever exposed (tunnel), require the UI password and document the risk. Webhook deliveries are HMAC-verified when a secret is configured; the `/webhook` listener is exempt from the Basic-auth gate (GitHub doesn't send credentials).
+- The UI password is always required (the server binds 0.0.0.0 for LAN use). Webhook deliveries are HMAC-verified when a secret is configured; the `/webhook` listener is exempt from the Basic-auth gate (GitHub doesn't send credentials).
 
 ### F14. Event-driven triggers (webhooks)
 

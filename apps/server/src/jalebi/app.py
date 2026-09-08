@@ -582,8 +582,15 @@ def create_app(config: Config | None = None) -> Flask:
 
 
 def main() -> None:
-    """Run the development server, bound to localhost only."""
+    """Run the development server on the configured host (0.0.0.0 by default)."""
     config = load_config()
+    if not config.password:
+        logger.error(
+            "JALEBI_PASSWORD (or OPENCODE_SERVER_PASSWORD) is required — "
+            "refusing to start without a UI password on %s",
+            config.host,
+        )
+        raise SystemExit(2)
     app = create_app(config)
     queue = app.config["JALEBI_QUEUE"]
     with app.app_context():
