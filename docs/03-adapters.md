@@ -190,3 +190,10 @@ stated.
   key lives in `cline history --json`; streaming cannot capture it (follow-up
   falls back to a fresh session until history lookup is added). Resume
   (`--id`) and diff shapes per-docs, not live-exercised.
+- **goose** (`goose run -t … --output-format stream-json`, 1.49.0): terminal
+  event is `complete` (+ exit 0); CLI errors go to stderr with exit 1.
+  Stdout starts with a non-JSON banner (blank lines dropped, rest verbatim).
+  Sessions are **named** (`-n`) in one global SQLite DB — the adapter derives
+  `jalebi-<worktree>` per worktree so same-name resumes can't cross tasks.
+  Resume (`-r -n`) and tool/diff shapes per binary vocabulary, not
+  live-exercised. No list-models command (`list_models` → `[]`).
