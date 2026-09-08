@@ -70,8 +70,9 @@ def load_config() -> Config:
         host=os.environ.get("JALEBI_HOST", "0.0.0.0"),
         port=port,
         data_dir=Path(os.environ.get("JALEBI_DATA_DIR") or Path.home() / ".jalebi"),
-        # Optional UI password (PRD §F13): gate the API + SPA behind Basic auth
-        # when the app might be exposed via a tunnel. Localhost-only default: off.
+        # Mandatory UI password (PRD §F13): gates the API + SPA behind Basic auth.
+        # The server binds to 0.0.0.0 by default for LAN access, so a password
+        # is required at startup — main() refuses to start when this is empty.
         password=os.environ.get("JALEBI_PASSWORD")
         or os.environ.get("OPENCODE_SERVER_PASSWORD")
         or "",
