@@ -466,3 +466,9 @@ After any code change, run the relevant tests and build before marking work done
   (was bursting the card → page h-scrollbar); minis `min-w-0`;
   columns sized `calc(100vh-260px)` to absorb main's pb-8 — measured
   docH == vh, zero scrollbars either axis at 1600×900.
+
+- **Giant-stove round (stretch without a cap cropped the pots):
+  ** stoves back to fixed sizes (`h-48`, `h-36` compact past 2 slots);
+  floor section `justify-between` spreads leftover as gaps; grid keeps
+  `min-h` + internal scroll fallback. Verified 1920×1080, 2 burners:
+  docH == vh, no scrollbars.

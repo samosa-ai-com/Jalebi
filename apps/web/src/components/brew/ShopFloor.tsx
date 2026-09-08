@@ -37,7 +37,7 @@ export function ShopFloor({
   const queued = stations.filter((s) => s.task.status === "queued");
   return (
     <section
-      className="surface flex min-h-0 flex-col px-4 py-3"
+      className="surface flex min-h-0 flex-col justify-between px-4 py-3"
       aria-label="Karhais (cooking pots)"
     >
       <div
@@ -103,13 +103,14 @@ export function ShopFloor({
         </div>
       )}
 
-      <div className="mt-2 grid min-h-0 flex-1 auto-rows-fr grid-cols-1 gap-3 overflow-y-auto pr-0.5 sm:grid-cols-2">
+      <div className="mt-2 grid min-h-[120px] shrink grid-cols-1 gap-3 overflow-y-auto pr-0.5 sm:grid-cols-2">
         {Array.from({ length: slots }, (_, i) => (
           <FryStation
             key={i}
             slot={i + 1}
             station={stations[i] ?? null}
             now={now}
+            compact={slots > 2}
             onOpen={onOpen}
             onOrder={onOrder}
           />

@@ -132,12 +132,15 @@ export function FryStation({
   slot,
   station,
   now,
+  compact = false,
   onOpen,
   onOrder,
 }: {
   slot: number;
   station: StationTask | null;
   now: number;
+  /** Smaller pots when the floor holds many stoves. */
+  compact?: boolean;
   onOpen: (id: number) => void;
   onOrder: () => void;
 }) {
@@ -176,15 +179,14 @@ export function FryStation({
           onOpen(station!.task.id);
         }
       }}
-      className={`surface group flex h-full w-full flex-col px-2.5 pt-1.5 pb-1.5 text-left transition-colors ${
-        brewing ? "cursor-pointer hover:border-syrup-500/50" : ""
-      }`}
+      className={`surface group w-full px-2.5 pt-1.5 pb-1.5 text-left transition-colors ${brewing ? "cursor-pointer hover:border-syrup-500/50" : ""}
+      `}
     >
       <svg
         viewBox="0 0 120 138"
         aria-hidden="true"
         preserveAspectRatio="xMidYMid meet"
-        className="mx-auto min-h-24 w-auto flex-1"
+        className={`mx-auto w-auto ${compact ? "h-36" : "h-48"}`}
       >
         {brewing && (
           <ellipse
