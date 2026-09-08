@@ -197,3 +197,14 @@ stated.
   `jalebi-<worktree>` per worktree so same-name resumes can't cross tasks.
   Resume (`-r -n`) and tool/diff shapes per binary vocabulary, not
   live-exercised. No list-models command (`list_models` → `[]`).
+- **grok** (`grok -p … --output-format streaming-json`, 1.0.13): first line
+  `available_commands` is the init signal; `thought` silent, `text` chunks
+  emit per-chunk messages, `tool_call` → tool_call, `tool_call_update` →
+  step, `usage` silent. `end` is always last and carries the resume
+  `sessionId` (maps to step so RunHandle captures it; exit 0 → done);
+  non-`end_turn` stops map to `error`. **`-s/--session-id` is create-only**
+  (reusing an id errors) — resume is `-r <id>` only; sessions are
+  cwd-scoped (`--cwd` must match). `--yolo` hidden but valid
+  (`bypassPermissions`; `--always-approve` is the documented alias).
+  `list_models` scrapes `grok models` (only `grok-4.6` at validation).
+  SIGTERM → 143 with the session still resumable (verified live).
