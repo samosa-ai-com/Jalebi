@@ -4,6 +4,7 @@
  */
 import { Link } from "react-router-dom";
 import type { BackendsResponse, Repo, Screen, ScreeningFinding, Task } from "../../types";
+import { qualifiedScreenName } from "../../lib/screeningPrompt";
 import { SEV_COLOR } from "./snacks";
 
 function Ring({ fraction, label }: { fraction: number; label: string }) {
@@ -60,9 +61,7 @@ export function ControlShelf({
   return (
     <div
       className={
-        compact
-          ? "grid shrink-0 grid-cols-2 gap-2"
-          : "grid gap-4 md:grid-cols-2 xl:grid-cols-4"
+        compact ? "grid shrink-0 grid-cols-2 gap-2" : "grid gap-4 md:grid-cols-2 xl:grid-cols-4"
       }
     >
       <section
@@ -218,9 +217,13 @@ export function ControlShelf({
                 <Link
                   to="/screenings"
                   state={{ from: "mission" }}
+                  title={qualifiedScreenName(
+                    s.name,
+                    repos.find((r) => r.id === s.repo_id)?.full_name
+                  )}
                   className="min-w-0 flex-1 truncate text-ink-200 hover:text-syrup-300"
                 >
-                  {s.name}
+                  {qualifiedScreenName(s.name, repos.find((r) => r.id === s.repo_id)?.full_name)}
                 </Link>
                 <span className="font-mono text-[10px] text-ink-500">{s.latest_run?.status}</span>
               </li>
@@ -247,7 +250,7 @@ export function ControlShelf({
                     to="/screenings"
                     state={{ from: "mission" }}
                     className="whitespace-nowrap font-mono text-[10px]"
-                    title={`${f.screen_name}: ${f.title}`}
+                    title={`${qualifiedScreenName(f.screen_name, f.repo_full_name)}: ${f.title}`}
                   >
                     <span className={SEV_COLOR[f.severity] ?? "text-ink-400"}>[{f.severity}]</span>{" "}
                     <span className="text-ink-400">{f.title}</span>

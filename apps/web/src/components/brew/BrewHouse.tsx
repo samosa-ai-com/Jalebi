@@ -13,6 +13,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../../api/client";
 import { avatarFor, avatarUrl } from "../../lib/agentAvatars";
+import { qualifiedScreenName } from "../../lib/screeningPrompt";
 import type {
   BackendsResponse,
   CatalogAgent,
@@ -298,18 +299,14 @@ export function BrewHouse({
                     to="/screenings"
                     state={{ from: "mission" }}
                     className="flex items-center gap-1.5 whitespace-nowrap font-mono text-[11px] text-ink-300 transition-colors hover:text-syrup-300"
-                    title={`${f.screen_name}: ${f.title}`}
+                    title={`${qualifiedScreenName(f.screen_name, f.repo_full_name)}: ${f.title}`}
                   >
                     <span className={SEV_COLOR[f.severity] ?? "text-ink-400"}>
                       [{f.severity.toUpperCase()}]
                     </span>
                     <span className="text-ink-200">{f.title}</span>
                     <span className="text-ink-500">
-                      ({f.screen_name}
-                      {f.repo_full_name
-                        ? ` · ${f.repo_full_name.split("/")[1] ?? f.repo_full_name}`
-                        : ""}
-                      )
+                      ({qualifiedScreenName(f.screen_name, f.repo_full_name)})
                     </span>
                   </Link>
                 ) : (
@@ -323,11 +320,7 @@ export function BrewHouse({
                     </span>
                     <span className="text-ink-200">{f.title}</span>
                     <span className="text-ink-500">
-                      ({f.screen_name}
-                      {f.repo_full_name
-                        ? ` · ${f.repo_full_name.split("/")[1] ?? f.repo_full_name}`
-                        : ""}
-                      )
+                      ({qualifiedScreenName(f.screen_name, f.repo_full_name)})
                     </span>
                   </span>
                 )
@@ -353,10 +346,7 @@ export function BrewHouse({
             />
           </div>
           <div className="flex min-h-0 flex-1 flex-col [&>section]:flex-1">
-            <Pantry
-              ingredients={ingredients}
-              onHoverStove={setHighlightedSlot}
-            />
+            <Pantry ingredients={ingredients} onHoverStove={setHighlightedSlot} />
           </div>
         </div>
 
@@ -394,6 +384,7 @@ export function BrewHouse({
             screens={screens}
             findings={findings}
             now={now}
+            repos={repos}
           />
         </div>
       </div>

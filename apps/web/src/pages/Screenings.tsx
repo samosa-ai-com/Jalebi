@@ -7,6 +7,7 @@ import {
   buildFindingPrompt,
   buildMultiFindingPrompt,
   gateBatch,
+  qualifiedScreenName,
   type BatchGate,
   type FindingEntry,
 } from "../lib/screeningPrompt";
@@ -359,7 +360,7 @@ function ScreenForm({
 function batchPrefill(entries: FindingEntry[], gate: BatchGate): TaskPrefill {
   const prompt =
     entries.length === 1
-      ? buildFindingPrompt(entries[0].screen, entries[0].finding)
+      ? buildFindingPrompt(entries[0].screen, entries[0].finding, entries[0].repoFullName)
       : buildMultiFindingPrompt(entries);
   return {
     repoId: gate.repoId,
@@ -385,7 +386,15 @@ function sendToNewTask(
   navigate("/", { state: { ...handoff, from: "screenings" } });
 }
 
-function RunHistory({ screen, onChanged }: { screen: Screen; onChanged: () => void }) {
+function RunHistory({
+  screen,
+  repos,
+  onChanged,
+}: {
+  screen: Screen;
+  repos: Repo[];
+  onChanged: () => void;
+}) {
   const navigate = useNavigate();
   const [runs, setRuns] = useState<ScreeningRun[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -455,8 +464,9 @@ function RunHistory({ screen, onChanged }: { screen: Screen; onChanged: () => vo
   }
 
   function openBatchTask() {
-    const entries = selectedEntries().map(({ finding }) => ({ screen, finding }));
-    sendToNewTask(navigate, entries, gateBatch(entries, []));
+    const repoFullName = repos.find((r) => r.id === screen.repo_id)?.full_name;
+    const entries = selectedEntries().map(({ finding }) => ({ screen, finding, repoFullName }));
+    sendToNewTask(navigate, entries, gateBatch(entries, repos));
     setSelected(new Set());
   }
 
@@ -551,13 +561,13 @@ function RunHistory({ screen, onChanged }: { screen: Screen; onChanged: () => vo
                       <button
                         type="button"
                         className="btn-ghost mt-1 w-fit !px-2 !py-1 text-xs"
-                        onClick={() =>
-                          sendToNewTask(
-                            navigate,
-                            [{ screen, finding: f }],
-                            gateBatch([{ screen, finding: f }], [])
-                          )
-                        }
+                        onClick={() => {
+                          const repoFullName = repos.find(
+                            (r) => r.id === screen.repo_id
+                          )?.full_name;
+                          const entry = { screen, finding: f, repoFullName };
+                          sendToNewTask(navigate, [entry], gateBatch([entry], repos));
+                        }}
                       >
                         New task from finding
                       </button>
@@ -695,7 +705,7 @@ function FindingsInbox({ screens, repos }: { screens: Screen[]; repos: Repo[] })
       if (!f) continue;
       const screen = screenById(f.screen_id);
       if (!screen) return null;
-      out.push({ screen, finding: toFinding(f) });
+      out.push({ screen, finding: toFinding(f), repoFullName: f.repo_full_name });
     }
     return out;
   }
@@ -773,7 +783,7 @@ function FindingsInbox({ screens, repos }: { screens: Screen[]; repos: Repo[] })
           <option value="all">all screens</option>
           {screens.map((s) => (
             <option key={s.id} value={s.id}>
-              {s.name}
+              {qualifiedScreenName(s.name, repos.find((r) => r.id === s.repo_id)?.full_name)}
             </option>
           ))}
         </select>
@@ -896,7 +906,7 @@ function FindingsInbox({ screens, repos }: { screens: Screen[]; repos: Repo[] })
                       </span>
                     )}
                     <span className="ml-auto font-mono text-[11px] text-ink-600">
-                      {f.screen_name} ·{" "}
+                      {qualifiedScreenName(f.screen_name, f.repo_full_name)} ·{" "}
                       {f.finished_at ? new Date(f.finished_at).toLocaleString() : "—"}
                     </span>
                     <span className="text-ink-600">{open ? "▾" : "▸"}</span>
@@ -916,13 +926,14 @@ function FindingsInbox({ screens, repos }: { screens: Screen[]; repos: Repo[] })
                           type="button"
                           className="btn-ghost !px-2 !py-1 text-xs"
                           title="Open the New-task form with this finding's prompt injected"
-                          onClick={() =>
-                            sendToNewTask(
-                              navigate,
-                              [{ screen, finding: toFinding(f) }],
-                              gateBatch([{ screen, finding: toFinding(f) }], repos)
-                            )
-                          }
+                          onClick={() => {
+                            const entry = {
+                              screen,
+                              finding: toFinding(f),
+                              repoFullName: f.repo_full_name,
+                            };
+                            sendToNewTask(navigate, [entry], gateBatch([entry], repos));
+                          }}
                         >
                           New task from finding
                         </button>
@@ -1005,7 +1016,8 @@ function ScreenCard({
   }
 
   async function remove() {
-    if (!window.confirm(`Delete screen "${screen.name}"?`)) return;
+    if (!window.confirm(`Delete screen "${qualifiedScreenName(screen.name, repo?.full_name)}"?`))
+      return;
     setActionError(null);
     try {
       await api.deleteScreen(screen.id);
@@ -1019,7 +1031,9 @@ function ScreenCard({
     <div className="surface p-5">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h3 className="text-base font-semibold text-ink-100">{screen.name}</h3>
+          <h3 className="text-base font-semibold text-ink-100">
+            {qualifiedScreenName(screen.name, repo?.full_name)}
+          </h3>
           <p className="mt-0.5 text-xs text-ink-500">
             {repo?.full_name ?? `repo #${screen.repo_id}`}
             {screen.scope_branch ? ` · ${screen.scope_branch}` : " · default"}
@@ -1191,13 +1205,24 @@ export default function Screenings() {
               {failing.length > 0 && (
                 <span className="text-red-400">
                   {failing.length} of {screens.length} screen{failing.length > 1 ? "s" : ""} failing
-                  ({failing.map((s) => s.name).join(", ")}) — open History for the error.{" "}
+                  (
+                  {failing
+                    .map((s) =>
+                      qualifiedScreenName(s.name, repos.find((r) => r.id === s.repo_id)?.full_name)
+                    )
+                    .join(", ")}
+                  ) — open History for the error.{" "}
                 </span>
               )}
               {disabled.length > 0 && (
                 <span className="text-ink-500">
-                  {disabled.length} disabled ({disabled.map((s) => s.name).join(", ")}) —
-                  off-schedule until re-enabled.
+                  {disabled.length} disabled (
+                  {disabled
+                    .map((s) =>
+                      qualifiedScreenName(s.name, repos.find((r) => r.id === s.repo_id)?.full_name)
+                    )
+                    .join(", ")}
+                  ) — off-schedule until re-enabled.
                 </span>
               )}
             </p>
@@ -1282,7 +1307,7 @@ export default function Screenings() {
               />
               {openRuns === s.id && (
                 <div className="mt-2 rounded-lg border border-ink-800 p-4 animate-fade-up">
-                  <RunHistory screen={s} onChanged={load} />
+                  <RunHistory screen={s} repos={repos} onChanged={load} />
                 </div>
               )}
             </div>

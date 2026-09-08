@@ -262,7 +262,8 @@ describe("BrewHouse", () => {
   it("shows live screening runs and the findings ticker", async () => {
     stubFetch({ ...HANDLERS });
     renderHouse();
-    expect(await screen.findByText("Nightly audit")).toBeInTheDocument();
+    // Screen names render repo-qualified so identical names stay distinguishable.
+    expect(await screen.findByText("owner/repo · Nightly audit")).toBeInTheDocument();
     // The ticker loops its items for the marquee, so the title appears twice.
     expect(screen.getAllByText("Leaky token log").length).toBe(2);
   });
@@ -447,7 +448,11 @@ describe("BrewHouse", () => {
     };
     render(
       <MemoryRouter>
-        <BrewHouse tasks={[taskWithTelemetry] as never} repos={REPOS as never} onNewTask={() => {}} />
+        <BrewHouse
+          tasks={[taskWithTelemetry] as never}
+          repos={REPOS as never}
+          onNewTask={() => {}}
+        />
       </MemoryRouter>
     );
     const stove = await screen.findByRole("button", { name: /Open task 1/ });

@@ -491,6 +491,10 @@ After any code change, run the relevant tests and build before marking work done
   payload + no-POST, combined batch prompt, mixed-repo refusal, bulk
   dealt), `Tasks.test.tsx` +2 (handoff prefill + dealt-on-create,
   clone normalization).
-- **Suite totals now:** server untouched, web **270 passed** (no backend
-  changes; production DB never touched; `tsc`, eslint, prettier, build
-  clean — Vite large-chunk warning remains, pre-existing).
+- **Suite totals now:** server untouched, web **271 passed** (repo-qualified
+  screen names: `qualifiedScreenName` in `lib/screeningPrompt.ts` + batch
+  prompt headers; dropdown/rows/cards/banner/delete/tickers qualified;
+  `Screenings.test.tsx` syncs + same-name-two-repos dropdown test,
+  `BrewHouse.test.tsx` ticker assertion; no backend changes; production DB
+  never touched; `tsc`, eslint, prettier, build clean — Vite large-chunk
+  warning remains, pre-existing).

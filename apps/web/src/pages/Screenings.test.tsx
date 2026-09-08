@@ -206,7 +206,7 @@ describe("Screenings", () => {
     vi.stubGlobal("fetch", makeFetchMock());
     renderScreenings();
     await goScreens();
-    expect(await screen.findByText("Security posture")).toBeInTheDocument();
+    expect(await screen.findByText("owner/repo · Security posture")).toBeInTheDocument();
     expect(screen.getByText("0 6 * * 1")).toBeInTheDocument();
   });
 
@@ -225,7 +225,7 @@ describe("Screenings", () => {
     vi.stubGlobal("fetch", makeFetchMock());
     renderScreenings();
     await goScreens();
-    await screen.findByText("Security posture");
+    await screen.findByText("owner/repo · Security posture");
     expect(screen.getByText("done")).toBeInTheDocument();
     expect(screen.getByText("1 finding")).toBeInTheDocument();
     expect(screen.queryByText("Never run.")).not.toBeInTheDocument();
@@ -236,7 +236,7 @@ describe("Screenings", () => {
     vi.stubGlobal("fetch", fetchMock);
     renderScreenings();
     await goScreens();
-    await screen.findByText("Security posture");
+    await screen.findByText("owner/repo · Security posture");
     await userEvent.click(screen.getByRole("button", { name: "New screen" }));
     await userEvent.selectOptions(
       screen.getByDisplayValue("Pick a starter screen…"),
@@ -258,7 +258,7 @@ describe("Screenings", () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
     renderScreenings();
     await goScreens();
-    await screen.findByText("Security posture");
+    await screen.findByText("owner/repo · Security posture");
     await userEvent.click(screen.getByRole("button", { name: "Delete" }));
     await waitFor(() => {
       const call = fetchMock.mock.calls.find(
@@ -273,7 +273,7 @@ describe("Screenings", () => {
     vi.stubGlobal("fetch", fetchMock);
     renderScreenings();
     await goScreens();
-    await screen.findByText("Security posture");
+    await screen.findByText("owner/repo · Security posture");
     await userEvent.click(screen.getByRole("button", { name: "History" }));
     expect(await screen.findByText("Secret in config")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "New task from finding" }));
@@ -305,7 +305,7 @@ describe("Screenings", () => {
     vi.stubGlobal("fetch", fetchMock);
     renderScreenings();
     await goScreens();
-    await screen.findByText("Security posture");
+    await screen.findByText("owner/repo · Security posture");
     await userEvent.click(screen.getByRole("button", { name: "History" }));
     await screen.findByText("Secret in config");
     await userEvent.click(screen.getByLabelText("Select finding Secret in config"));
@@ -326,7 +326,7 @@ describe("Screenings", () => {
     vi.stubGlobal("fetch", fetchMock);
     renderScreenings();
     await goScreens();
-    await screen.findByText("Security posture");
+    await screen.findByText("owner/repo · Security posture");
     await userEvent.click(screen.getByRole("button", { name: "New screen" }));
     const tplSelect = screen.getByDisplayValue("Pick a starter screen…") as HTMLSelectElement;
     await userEvent.selectOptions(tplSelect, "Security posture");
@@ -338,7 +338,7 @@ describe("Screenings", () => {
     vi.stubGlobal("fetch", fetchMock);
     renderScreenings();
     await goScreens();
-    await screen.findByText("Security posture");
+    await screen.findByText("owner/repo · Security posture");
     await userEvent.click(screen.getByRole("button", { name: "New screen" }));
     await userEvent.selectOptions(screen.getByLabelText("Repo"), "1");
     await waitFor(() => {
@@ -354,7 +354,7 @@ describe("Screenings", () => {
     vi.stubGlobal("fetch", fetchMock);
     renderScreenings();
     await goScreens();
-    await screen.findByText("Security posture");
+    await screen.findByText("owner/repo · Security posture");
     await userEvent.click(screen.getByRole("button", { name: "Edit" }));
     expect(await screen.findByText("Edit screen — Security posture")).toBeInTheDocument();
     await userEvent.clear(screen.getByLabelText("Name"));
@@ -383,7 +383,7 @@ describe("Screenings", () => {
     vi.stubGlobal("fetch", fetchMock);
     renderScreenings();
     await goScreens();
-    await screen.findByText("Security posture");
+    await screen.findByText("owner/repo · Security posture");
     await userEvent.click(screen.getByRole("button", { name: "History" }));
     expect(await screen.findByText(/Running…/)).toBeInTheDocument();
     expect(screen.queryByText("No findings.")).not.toBeInTheDocument();
@@ -394,7 +394,7 @@ describe("Screenings", () => {
     vi.stubGlobal("fetch", fetchMock);
     renderScreenings();
     await goScreens();
-    await screen.findByText("Security posture");
+    await screen.findByText("owner/repo · Security posture");
     await userEvent.click(screen.getByRole("button", { name: "New screen" }));
 
     const backend = screen.getByLabelText("Backend") as HTMLSelectElement;
@@ -409,7 +409,7 @@ describe("Screenings", () => {
     vi.stubGlobal("fetch", fetchMock);
     renderScreenings();
     await goScreens();
-    await screen.findByText("Security posture");
+    await screen.findByText("owner/repo · Security posture");
     await userEvent.click(screen.getByRole("button", { name: "New screen" }));
 
     const model = screen.getByLabelText("Model") as HTMLSelectElement;
@@ -446,7 +446,7 @@ describe("Screenings", () => {
     vi.stubGlobal("fetch", fetchMock);
     renderScreenings();
     await goScreens();
-    await screen.findByText("Security posture");
+    await screen.findByText("owner/repo · Security posture");
     await userEvent.click(screen.getByRole("button", { name: "Run now" }));
     // Correct endpoint (the old mock used /api/screenings/7) + inline error, no alert.
     await waitFor(() => {
@@ -483,7 +483,7 @@ describe("Screenings", () => {
     );
     renderScreenings();
     await goScreens();
-    await screen.findByText("Security posture");
+    await screen.findByText("owner/repo · Security posture");
     expect(screen.getByRole("button", { name: "Delete" })).toBeDisabled();
   });
 
@@ -491,7 +491,7 @@ describe("Screenings", () => {
     vi.stubGlobal("fetch", makeFetchMock());
     renderScreenings();
     await goScreens();
-    await screen.findByText("Security posture");
+    await screen.findByText("owner/repo · Security posture");
     await userEvent.click(screen.getByRole("button", { name: "New screen" }));
 
     const model = screen.getByLabelText("Model") as HTMLSelectElement;
@@ -516,7 +516,7 @@ describe("Screenings", () => {
     );
     renderScreenings();
     await goScreens();
-    await screen.findByText("Security posture");
+    await screen.findByText("owner/repo · Security posture");
     await userEvent.click(screen.getByRole("button", { name: "New screen" }));
     await userEvent.selectOptions(screen.getByLabelText("Repo"), "1");
     expect(await screen.findByText(/Branch list failed to load/)).toBeInTheDocument();
@@ -536,7 +536,7 @@ describe("Screenings", () => {
     );
     renderScreenings();
     await goScreens();
-    await screen.findByText("Security posture");
+    await screen.findByText("owner/repo · Security posture");
     await userEvent.click(screen.getByRole("button", { name: "History" }));
     expect(await screen.findByText(/history boom/)).toBeInTheDocument();
     expect(screen.queryByText("No runs yet.")).not.toBeInTheDocument();
@@ -577,7 +577,7 @@ describe("Screenings", () => {
     );
     renderScreenings();
     await goScreens();
-    await screen.findByText("Security posture");
+    await screen.findByText("owner/repo · Security posture");
     expect(screen.getByText("Never run.")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Run now" }));
     // The waiter polls until the new row shows, then refreshes the card.
@@ -593,7 +593,7 @@ describe("Screenings", () => {
   it("shows a unified findings inbox with severity filter", async () => {
     vi.stubGlobal("fetch", makeFetchMock());
     renderScreenings();
-    await screen.findByText("Security posture");
+    await screen.findByText("owner/repo · Security posture");
     await userEvent.click(screen.getByRole("button", { name: "findings" }));
     expect(await screen.findByText("Stale comment")).toBeInTheDocument();
     expect(screen.getByText("Secret in config")).toBeInTheDocument();
@@ -606,7 +606,7 @@ describe("Screenings", () => {
     const fetchMock = makeFetchMock();
     vi.stubGlobal("fetch", fetchMock);
     renderScreenings();
-    await screen.findByText("Security posture");
+    await screen.findByText("owner/repo · Security posture");
     await userEvent.click(screen.getByRole("button", { name: "findings" }));
     await screen.findByText("Secret in config");
     await userEvent.click(screen.getByText("Secret in config"));
@@ -628,7 +628,7 @@ describe("Screenings", () => {
     const fetchMock = makeFetchMock();
     vi.stubGlobal("fetch", fetchMock);
     renderScreenings();
-    await screen.findByText("Security posture");
+    await screen.findByText("owner/repo · Security posture");
     await userEvent.click(screen.getByRole("button", { name: "findings" }));
     await screen.findByText("Stale comment");
     await userEvent.click(screen.getByLabelText("Select all visible findings"));
@@ -645,6 +645,30 @@ describe("Screenings", () => {
     expect(
       fetchMock.mock.calls.filter((c) => c[0] === "/api/tasks" && c[1]?.method === "POST")
     ).toHaveLength(0);
+  });
+
+  it("disambiguates identical screen names by repo in the filter dropdown", async () => {
+    const twin = { ...SCREENS[0], id: 8, repo_id: 2, name: "Security posture" };
+    const twinRepos = [...REPOS, { id: 2, full_name: "other/repo", default_branch: "main" }];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        const u = url as string;
+        if (u === "/api/screenings/templates") return { ok: true, json: async () => TEMPLATES };
+        if (u === "/api/repos") return { ok: true, json: async () => twinRepos };
+        if (u === "/api/screenings") return { ok: true, json: async () => [SCREENS[0], twin] };
+        if (u.startsWith("/api/screenings/findings"))
+          return { ok: true, json: async () => FINDINGS };
+        throw new Error(`unexpected fetch: ${u}`);
+      })
+    );
+    renderScreenings();
+    await screen.findByText("owner/repo · Security posture");
+    const options = [...screen.getByLabelText("Filter by screen").querySelectorAll("option")].map(
+      (o) => o.textContent
+    );
+    expect(options).toContain("owner/repo · Security posture");
+    expect(options).toContain("other/repo · Security posture");
   });
 
   it("refuses a batch spanning two repos with guidance", async () => {
@@ -666,7 +690,7 @@ describe("Screenings", () => {
       })
     );
     renderScreenings();
-    await screen.findByText("Security posture");
+    await screen.findByText("owner/repo · Security posture");
     await userEvent.click(screen.getByRole("button", { name: "findings" }));
     await screen.findByText("Stale comment");
     await userEvent.click(screen.getByLabelText("Select all visible findings"));
@@ -701,7 +725,7 @@ describe("Screenings", () => {
   it("filters the inbox by text and shows the empty state", async () => {
     vi.stubGlobal("fetch", makeFetchMock());
     renderScreenings();
-    await screen.findByText("Security posture");
+    await screen.findByText("owner/repo · Security posture");
     await userEvent.click(screen.getByRole("button", { name: "findings" }));
     await screen.findByText("Secret in config");
     await userEvent.type(screen.getByLabelText("Filter findings"), "stale");
@@ -726,7 +750,7 @@ describe("Screenings", () => {
     );
     renderScreenings();
     await goScreens();
-    await screen.findByText("Security posture");
+    await screen.findByText("owner/repo · Security posture");
     await userEvent.click(screen.getByRole("button", { name: "findings" }));
     expect(await screen.findByText(/Clean audits, quiet inbox/)).toBeInTheDocument();
   });
@@ -735,7 +759,7 @@ describe("Screenings", () => {
     const fetchMock = makeFetchMock();
     vi.stubGlobal("fetch", fetchMock);
     renderScreenings();
-    await screen.findByText("Security posture");
+    await screen.findByText("owner/repo · Security posture");
     await userEvent.click(screen.getByRole("button", { name: "findings" }));
     await screen.findByText("Secret in config");
     await userEvent.selectOptions(screen.getByLabelText("Filter by screen"), "7");
@@ -747,7 +771,7 @@ describe("Screenings", () => {
   it("marks a batch dealt in one go and hides the findings", async () => {
     vi.stubGlobal("fetch", makeFetchMock());
     renderScreenings();
-    await screen.findByText("Security posture");
+    await screen.findByText("owner/repo · Security posture");
     await screen.findByText("Secret in config");
     await userEvent.click(screen.getByLabelText("Select all visible findings"));
     expect(await screen.findByText("2 selected")).toBeInTheDocument();
@@ -763,7 +787,7 @@ describe("Screenings", () => {
   it("reveals and reopens dealt findings via the toggle", async () => {
     vi.stubGlobal("fetch", makeFetchMock());
     renderScreenings();
-    await screen.findByText("Security posture");
+    await screen.findByText("owner/repo · Security posture");
     await screen.findByText("Secret in config");
     await userEvent.click(screen.getByText("Stale comment"));
     await userEvent.click(screen.getAllByRole("button", { name: "Mark dealt" })[0]);

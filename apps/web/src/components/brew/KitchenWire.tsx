@@ -7,8 +7,9 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import type { Screen, ScreeningFinding, Task } from "../../types";
+import type { Repo, Screen, ScreeningFinding, Task } from "../../types";
 import { lastMessageText } from "../../lib/runningCard";
+import { qualifiedScreenName } from "../../lib/screeningPrompt";
 import { snackForType } from "./snacks";
 
 export type WireCategory = "all" | "live" | "alerts" | "served" | "spoiled";
@@ -24,9 +25,19 @@ export interface WireEvent {
 }
 
 function formatTime(isoOrMs: string | number | null | undefined): string {
-  if (!isoOrMs) return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  if (!isoOrMs)
+    return new Date().toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
   const d = new Date(isoOrMs);
-  if (Number.isNaN(d.getTime())) return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  if (Number.isNaN(d.getTime()))
+    return new Date().toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
@@ -35,11 +46,13 @@ export function KitchenWire({
   screens,
   findings,
   now,
+  repos = [],
 }: {
   tasks: Task[];
   screens: Screen[];
   findings: ScreeningFinding[];
   now: number;
+  repos?: Repo[];
 }) {
   const [filter, setFilter] = useState<WireCategory>("all");
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -104,7 +117,7 @@ export function KitchenWire({
           time: formatTime(createdEpoch),
           tag: `#${t.id} QUEUE`,
           tagColor: "text-ink-400",
-          text: `Order ticket received: ${snack} (${t.repo_full_name ? t.repo_full_name.split("/")[1] ?? t.repo_full_name : "repo"})`,
+          text: `Order ticket received: ${snack} (${t.repo_full_name ? (t.repo_full_name.split("/")[1] ?? t.repo_full_name) : "repo"})`,
           link: `/tasks/${t.id}`,
           category: "live",
         });
@@ -146,8 +159,9 @@ export function KitchenWire({
         epoch: f.finished_at ? new Date(f.finished_at).getTime() : now - 30_000,
         time: formatTime(f.finished_at ?? now),
         tag: `[${f.severity.toUpperCase()}]`,
-        tagColor: f.severity === "critical" || f.severity === "high" ? "text-red-400" : "text-amber-300",
-        text: `${f.screen_name}: ${f.title}`,
+        tagColor:
+          f.severity === "critical" || f.severity === "high" ? "text-red-400" : "text-amber-300",
+        text: `${qualifiedScreenName(f.screen_name, f.repo_full_name)}: ${f.title}`,
         link: "/screenings",
         category: "alerts",
       });
@@ -160,7 +174,10 @@ export function KitchenWire({
         time: formatTime(now),
         tag: "AUDIT RADAR",
         tagColor: "text-sky-400 animate-pulse",
-        text: `Active audit running: ${s.name}`,
+        text: `Active audit running: ${qualifiedScreenName(
+          s.name,
+          repos.find((r) => r.id === s.repo_id)?.full_name
+        )}`,
         link: "/screenings",
         category: "alerts",
       });
@@ -169,7 +186,7 @@ export function KitchenWire({
     // Sort newest first
     list.sort((a, b) => b.epoch - a.epoch);
     return list.slice(0, 25);
-  }, [tasks, screens, findings, now]);
+  }, [tasks, screens, findings, now, repos]);
 
   const filtered = useMemo(() => {
     if (filter === "all") return events;
