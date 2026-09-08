@@ -7,7 +7,7 @@
 ## 1. High-level diagram (current implementation)
 
 ```
-┌────────────────────────── Your machine (127.0.0.1:2052) ──────────────────────────┐
+┌────────────────────────── Your machine (0.0.0.0:2052, LAN-ready) ───────────────────┐
 │                    ▲ GitHub webhook events (via tunnel/proxy)                      │
 │                    │                                                               │
 │  ┌─────────────────┼──────┐  HTTP (REST + SSE)   ┌───────────────────────────────┐ │
@@ -105,4 +105,4 @@ Python 3.13 + Flask + SQLAlchemy 2 (SQLite) + Alembic migrations + httpx (GitHub
 
 - **Backend-agnostic:** the entire system depends on the `AgentAdapter` interface; only the adapters know the CLI name. The backend is chosen per action (task/follow-up/screen/agent form selects); the Settings `default_backend` is the fallback (PRD §F4).
 - **Simplicity (PRD Goal #10):** no event-bus frameworks, no complex state machines, no distributed abstractions. Borrow only small, specific snippets from reference projects and re-write them in Jalebi's own style.
-- **Localhost-only:** server binds to 127.0.0.1 (one port, 2052); optional UI password if exposed via tunnel (PRD §F13).
+- **LAN-ready:** server binds to 0.0.0.0 (one port, 2052); the UI password is mandatory at startup (PRD §F13). Notification tap-links follow `JALEBI_PUBLIC_URLS` (see `docs/10-security.md` §1).

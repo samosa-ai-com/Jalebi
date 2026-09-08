@@ -1222,7 +1222,7 @@ class TaskQueue:
                 message=self._notify_message(task, repo_full_name, state),
                 tags=self._notify_tags(task.status),
                 click=self._notify_click(task.id),
-                actions=[self._notify_open_action(task.id)],
+                actions=self.config.open_actions(f"/tasks/{task.id}", "Open task"),
                 masker=masker,
             )
         except Exception:
@@ -1230,15 +1230,7 @@ class TaskQueue:
 
     def _notify_click(self, task_id: int) -> str:
         """The URL to open when the notification is tapped (the Jalebi task page)."""
-        return f"http://127.0.0.1:{self.config.port}/tasks/{task_id}"
-
-    def _notify_open_action(self, task_id: int) -> dict[str, object]:
-        """A 'view' action button that opens the Jalebi task page."""
-        return {
-            "action": "view",
-            "label": "Open task",
-            "url": f"http://127.0.0.1:{self.config.port}/tasks/{task_id}",
-        }
+        return self.config.primary_link(f"/tasks/{task_id}")
 
     @staticmethod
     def _notify_message(task: Task, repo_full_name: str, state: _RunState) -> str:
@@ -2102,7 +2094,7 @@ class TaskQueue:
                             ),
                             tags=notify.TAGS_CLOCK,
                             click=self._notify_click(task.id),
-                            actions=[self._notify_open_action(task.id)],
+                            actions=self.config.open_actions(f"/tasks/{task.id}", "Open task"),
                             masker=masker,
                         )
                     except Exception:

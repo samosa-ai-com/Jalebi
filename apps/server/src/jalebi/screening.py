@@ -1208,7 +1208,10 @@ class ScreeningEngine:
                 f"**{n}** finding(s):\n\n{lines}"
             ),
             tags="warning",
-            click=f"http://127.0.0.1:{self.config.port}/screenings",
+            click=self.config.primary_link("/screenings"),
+            actions=self.config.open_actions("/screenings", "Open screenings")
+            if len(self.config.public_links()) > 1
+            else None,
             masker=masker,
         )
 

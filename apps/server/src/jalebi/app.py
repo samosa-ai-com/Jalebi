@@ -301,7 +301,10 @@ def _notify_failed_login() -> None:
                     detail,
                     tags="warning",
                     priority=3,
-                    click=f"http://127.0.0.1:{config.port}/",
+                    click=config.primary_link("/"),
+                    actions=config.open_actions("/", "Open Jalebi")
+                    if len(config.public_links()) > 1
+                    else None,
                     masker=masker,
                 )
             except Exception:
@@ -507,14 +510,8 @@ def create_app(config: Config | None = None) -> Flask:
             "**If you can read this**, your ntfy configuration works.\n\n"
             "Markdown, priorities, tags and a tap-action are enabled.",
             tags=notify.TAGS_OK,
-            click=f"http://127.0.0.1:{config.port}/",
-            actions=[
-                {
-                    "action": "view",
-                    "label": "Open Jalebi",
-                    "url": f"http://127.0.0.1:{config.port}/",
-                }
-            ],
+            click=config.primary_link("/"),
+            actions=config.open_actions("/", "Open Jalebi"),
             masker=masker,
         )
         if not ok:
