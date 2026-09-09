@@ -130,3 +130,27 @@ def test_runhandle_captures_session_id_from_init() -> None:
     handle = RunHandle(proc=FakeProc(out=INIT + "\n"), parse=adapter.parse, name="qwen")
     list(handle.events())
     assert handle.session_id == SESSION_ID
+
+
+def _capture_spawn(monkeypatch):
+    """Replace qwen._spawn with a recorder; returns the captured argv list."""
+    import jalebi.adapters.qwen as qwen_module
+
+    captured: list[list[str]] = []
+    monkeypatch.setattr(
+        qwen_module, "_spawn", lambda args, cwd, env=None: captured.append(args) or FakeProc()
+    )
+    monkeypatch.setattr(qwen_module, "_binary", lambda: "qwen")
+    return captured
+
+
+def test_argv_has_no_cli_wall_clock_cap(monkeypatch) -> None:
+    # The queue's per-task timeout + stall watchdog own the deadline — the
+    # adapter must not impose its own (previously a fixed 600s).
+    captured = _capture_spawn(monkeypatch)
+    adapter.start("/tmp/ws/t1", "go")
+    assert captured, "start must spawn"
+    assert "--max-wall-time" not in captured[0]
+    adapter.resume("/tmp/ws/t1", SESSION_ID, "go")
+    assert "--max-wall-time" not in captured[1]
+    assert captured[1][-4:-2] == ["-r", SESSION_ID] or "-r" in captured[1]

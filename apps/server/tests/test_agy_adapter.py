@@ -87,3 +87,27 @@ def test_runhandle_captures_conversation_id_from_init() -> None:
     handle = RunHandle(proc=FakeProc(out=INIT + "\n"), parse=adapter.parse, name="agy")
     list(handle.events())
     assert handle.session_id == CONV_ID
+
+
+def _capture_spawn(monkeypatch):
+    """Replace agy._spawn with a recorder; returns the captured argv lists."""
+    import jalebi.adapters.agy as agy_module
+
+    captured: list[list[str]] = []
+    monkeypatch.setattr(
+        agy_module, "_spawn", lambda args, cwd, env=None: captured.append(args) or FakeProc()
+    )
+    monkeypatch.setattr(agy_module, "_binary", lambda: "agy")
+    return captured
+
+
+def test_argv_has_no_cli_print_timeout(monkeypatch) -> None:
+    # The queue's per-task timeout + stall watchdog own the deadline — the
+    # adapter must not impose its own (previously a fixed 10m print timeout).
+    captured = _capture_spawn(monkeypatch)
+    adapter.start("/tmp/ws/t1", "go")
+    assert captured, "start must spawn"
+    assert "--print-timeout" not in captured[0]
+    adapter.resume("/tmp/ws/t1", CONV_ID, "go")
+    assert "--print-timeout" not in captured[1]
+    assert "--conversation" in captured[1] and CONV_ID in captured[1]

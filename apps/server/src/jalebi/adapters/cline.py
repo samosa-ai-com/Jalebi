@@ -18,9 +18,8 @@ Verified facts:
 - Terminal line is ``run_result`` (``finishReason:"completed"`` + exit 0, or
   ``"error"`` + exit 1). `done` events carry reason/text/iterations.
 - **Session id is NOT in the stdout stream** — the resume key lives in
-  ``cline history --json`` (latest entry). The adapter therefore cannot
-  capture it during streaming; follow-ups should resolve the id from history
-  (future improvement), else they fall back to a fresh session.
+  ``cline history --json`` (latest entry). ``resolve_session`` performs that
+  post-run lookup so the queue can persist the id and follow-ups can resume.
 - Live resume (``--id`` + prompt) and diff shapes were NOT live-exercised —
   mapped per docs, marked UNVERIFIED.
 """
@@ -109,6 +108,48 @@ def _bundle_models() -> list[str]:
     return models
 
 
+def _latest_history_session(cwd: str) -> str | None:
+    """Latest session id from ``cline history --json`` (resume key lookup).
+
+    The session id is not carried on the stdout stream, so after a run
+    finishes we ask the CLI's history (newest entry first) for it. Shape is
+    parsed defensively (list of entries, or a dict wrapping them) because the
+    history wire format was not live-verified. Returns None on any problem —
+    the follow-up route then falls back to its own no-session handling.
+    """
+    try:
+        proc = subprocess.run(
+            [_binary(), "history", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=cwd,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        parsed = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(parsed, dict):
+        for key in ("history", "sessions", "entries"):
+            if isinstance(parsed.get(key), list):
+                parsed = parsed[key]
+                break
+    if not isinstance(parsed, list):
+        return None
+    for entry in parsed:
+        if not isinstance(entry, dict):
+            continue
+        for key in ("id", "sessionId", "session_id"):
+            sid = entry.get(key)
+            if isinstance(sid, str) and sid:
+                return sid
+    return None
+
+
 def _binary() -> str:
     binary = shutil.which("cline")
     if binary is None:
@@ -191,6 +232,11 @@ class ClineAdapter(AgentAdapter):
                 models.append(mid)
         return models
 
+    def resolve_session(self, cwd: str) -> str | None:
+        # Session id is NOT in the stdout stream — resolve it from
+        # `cline history --json` after the run (see module docstring).
+        return _latest_history_session(cwd)
+
     def start(
         self,
         cwd: str,
@@ -198,7 +244,9 @@ class ClineAdapter(AgentAdapter):
         model: str | None = None,
         env: dict[str, str | None] | None = None,
     ) -> RunHandle:
-        args = [_binary(), "--json", "--yolo", "--cwd", str(cwd), "--timeout", "600"]
+        # No wall-clock cap: the queue's per-task timeout + stall watchdog own
+        # the deadline (60 min default, escalated retries).
+        args = [_binary(), "--json", "--yolo", "--cwd", str(cwd)]
         if model:
             args += ["--model", model]
         args.append(prompt)
@@ -213,8 +261,9 @@ class ClineAdapter(AgentAdapter):
         env: dict[str, str | None] | None = None,
     ) -> RunHandle:
         # Resume shape per --help/docs; live follow-up UNVERIFIED (see module
-        # docstring). Mirrors start argv + session pick.
-        args = [_binary(), "--json", "--yolo", "--cwd", str(cwd), "--timeout", "600",
+        # docstring). Mirrors start argv + session pick. No wall-clock cap: the
+        # queue's per-task timeout owns the deadline.
+        args = [_binary(), "--json", "--yolo", "--cwd", str(cwd),
                 "--id", session_id]
         if model:
             args += ["--model", model]

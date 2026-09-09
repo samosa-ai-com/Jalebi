@@ -143,11 +143,15 @@ class GooseAdapter(AgentAdapter):
         model: str | None = None,
         env: dict[str, str | None] | None = None,
     ) -> RunHandle:
-        return RunHandle(
+        handle = RunHandle(
             proc=_spawn(self._base_args(cwd, prompt, model), cwd, env),
             parse=self.parse,
             name=self.name,
         )
+        # The `-n` name is deterministic per worktree and IS the resume key
+        # (used verbatim by resume()); persist it so follow-ups work.
+        handle.session_id = _session_name(cwd)
+        return handle
 
     def resume(
         self,
@@ -160,10 +164,11 @@ class GooseAdapter(AgentAdapter):
         # ``session_id`` is the ``-n`` name (recomputed identically). Resume
         # shape per docs; live resumed inference UNVERIFIED (see module
         # docstring). Mirrors start argv + resume flag.
-        _ = session_id  # name is re-derived from cwd; kept for signature parity
         args = self._base_args(cwd, prompt, model)
         args[1:1] = ["-r"]
-        return RunHandle(proc=_spawn(args, cwd, env), parse=self.parse, name=self.name)
+        handle = RunHandle(proc=_spawn(args, cwd, env), parse=self.parse, name=self.name)
+        handle.session_id = _session_name(cwd)
+        return handle
 
     def parse(self, line: str) -> list[AgentEvent]:
         if not line.strip():

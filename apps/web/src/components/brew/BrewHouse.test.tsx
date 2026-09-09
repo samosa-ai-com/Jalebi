@@ -207,7 +207,11 @@ describe("BrewHouse", () => {
     stubFetch({ ...HANDLERS });
     const { container } = renderHouse([{ ...TASK, attention: "needs_you" }]);
     await screen.findByRole("button", { name: /Open task 1/ });
-    const stove = screen.getByRole("button", { name: /Open task 1/ });
+    // The card is a non-interactive container (no nested button semantics);
+    // scope to it via the station surface.
+    const stove = screen
+      .getByRole("button", { name: /Open task 1/ })
+      .closest(".surface") as HTMLElement;
     expect(within(stove).getByText("needs you")).toBeInTheDocument();
     expect(container.querySelector(".brew-needs-you")).not.toBeNull();
   });
@@ -455,7 +459,9 @@ describe("BrewHouse", () => {
         />
       </MemoryRouter>
     );
-    const stove = await screen.findByRole("button", { name: /Open task 1/ });
+    const stove = (
+      await screen.findByRole("button", { name: /Open task 1/ })
+    ).closest(".surface") as HTMLElement;
     expect(within(stove).getByText("Add mission control enhancements")).toBeInTheDocument();
     expect(within(stove).getByText("repo")).toBeInTheDocument();
     expect(within(stove).getByText("Analyzing mission control UI")).toBeInTheDocument();

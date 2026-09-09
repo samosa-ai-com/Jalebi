@@ -195,12 +195,13 @@ def _serve_spa(web_dist: Path, filename: str) -> ResponseReturnValue:
 
 
 def _basic_auth_gate() -> ResponseReturnValue | None:
-    """Require Basic auth on everything except /api/health when a password is set.
+    """Require Basic auth on everything except /api/health.
 
-    PRD §F13: an optional UI password (``JALEBI_PASSWORD``) protects the app if it
-    is ever exposed via a tunnel. Localhost-only installs leave it unset → no gate.
-    The username is ignored (any user with the password passes); the password is
-    compared in constant time to avoid a timing side channel.
+    Since the mandatory-password hardening, ``main()`` refuses to start the
+    server at all without ``JALEBI_PASSWORD`` (no unauthenticated install is
+    possible, even on localhost-only binds). The username is ignored (any
+    user with the password passes); the password is compared in constant time
+    to avoid a timing side channel.
 
     Wrong-password attempts are pushed to the configured ntfy topic (throttled
     per client so a brute-force scan can't flood the channel).

@@ -204,23 +204,9 @@ export function FryStation({
 
   return (
     <div
-      onClick={() => station && onOpen(station.task.id)}
-      title={station ? `Open task #${station.task.id}` : `Stove ${slot}: pilot light on`}
-      role={brewing ? "button" : undefined}
-      tabIndex={brewing ? 0 : undefined}
-      aria-label={
-        station
-          ? `Open task ${station.task.id} — ${needsYou ? "needs you" : queued ? "warming up" : "frying"}`
-          : undefined
-      }
-      onKeyDown={(e) => {
-        if (brewing && (e.key === "Enter" || e.key === " ")) {
-          e.preventDefault();
-          onOpen(station!.task.id);
-        }
-      }}
+      title={station ? `Task #${station.task.id}` : `Stove ${slot}: pilot light on`}
       className={`surface group w-full px-2.5 pt-1.5 pb-1.5 text-left transition-colors ${
-        brewing ? "cursor-pointer hover:border-syrup-500/50" : ""
+        brewing ? "hover:border-syrup-500/50" : ""
       } ${highlighted ? "ring-2 ring-syrup-500/60 border-syrup-500/80" : ""}`}
     >
       <svg
@@ -425,16 +411,14 @@ export function FryStation({
             </span>
 
             <span className="flex items-center gap-1">
-              {needsYou && (
+              {station && (
                 <button
                   type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onOpen(station.task.id);
-                  }}
+                  aria-label={`Open task ${station.task.id}`}
+                  onClick={() => onOpen(station.task.id)}
                   className="cursor-pointer rounded bg-syrup-500/20 px-1.5 py-0.5 font-mono text-[10px] text-syrup-300 hover:bg-syrup-500/30"
                 >
-                  respond →
+                  {needsYou ? "respond →" : "open →"}
                 </button>
               )}
               {onCancel && (queued || isRunning) && (

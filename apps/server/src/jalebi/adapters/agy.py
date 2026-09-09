@@ -108,8 +108,6 @@ class AgyAdapter(AgentAdapter):
             "--output-format",
             "stream-json",
             "--dangerously-skip-permissions",
-            "--print-timeout",
-            "10m",
             "--model",
             model or AGY_DEFAULT_MODEL,
         ]

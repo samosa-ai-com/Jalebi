@@ -1958,3 +1958,56 @@ def test_review_assignment_failed_on_non_done_run(
     assignment = reviews.assignment_by_task(session, task.id)
     assert assignment is not None
     assert assignment.status == "failed"
+
+
+def test_history_resolved_session_persists_and_followup_resumes(
+    q, session, repo_row, monkeypatch
+) -> None:
+    """Backends whose stdout carries no session id (e.g. cline) still get a
+    resumable session: the adapter's post-run resolve_session result is
+    persisted, and the follow-up then resumes with it instead of 409ing."""
+    _no_publish(session)
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
+
+    class NoSidHandle(FakeHandle):
+        def __init__(self):
+            super().__init__([AgentEvent(type="done")], session_id=None)
+
+    class ResolvingAdapter:
+        def __init__(self):
+            self.resolve_calls: list[str] = []
+
+        def start(self, cwd, prompt, model=None, env=None):
+            return NoSidHandle()
+
+        def resume(self, cwd, session_id, prompt, model=None, env=None):
+            self.resumed = session_id
+            return FakeHandle([AgentEvent(type="done")])
+
+        def list_models(self):
+            return []
+
+        def resolve_session(self, cwd):
+            self.resolve_calls.append(cwd)
+            return "hist_ses_1"
+
+    adapter = ResolvingAdapter()
+    monkeypatch.setattr("jalebi.queue.get_adapter", lambda cli: adapter)
+
+    q._run_task(task.id)
+    session.expire_all()
+    run = _latest_run(session, task.id)
+    assert run.status == "done"
+    assert run.session_id == "hist_ses_1"
+    assert len(adapter.resolve_calls) == 1
+
+    # Follow-up now finds a resumable session (would 409 before the fix).
+    q._run_followup(task.id, "again")
+    session.expire_all()
+    runs = tasks.runs_for_task(session, task.id)
+    assert len(runs) == 2
+    assert runs[1].status == "done"
+    # The resumed run records the fake handle's session (ses_fake) — any
+    # non-null session proves the follow-up found a resumable session instead
+    # of dying on "no resumable session".
+    assert runs[1].session_id

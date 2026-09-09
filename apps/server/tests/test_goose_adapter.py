@@ -90,3 +90,36 @@ def test_runhandle_completes_on_exit_zero() -> None:
     )
     events = list(handle.events())
     assert events[-1].type == "done"
+
+
+def _capture_spawn(monkeypatch):
+    """Replace goose._spawn with a recorder; returns the captured argv lists."""
+    import jalebi.adapters.goose as goose_module
+
+    captured: list[list[str]] = []
+    monkeypatch.setattr(
+        goose_module,
+        "_spawn",
+        lambda args, cwd, env=None: captured.append(args) or FakeProc(),
+    )
+    monkeypatch.setattr(goose_module, "_binary", lambda: "goose")
+    return captured
+
+
+def test_start_persists_derived_session_name(monkeypatch) -> None:
+    # The `-n` name is the resume key (sessions.db keyed by name) — it must be
+    # persisted so the queue can offer follow-ups for this backend.
+    captured = _capture_spawn(monkeypatch)
+    handle = adapter.start("/tmp/ws/task-9", "go")
+    assert handle.session_id == _session_name("/tmp/ws/task-9")
+    assert captured[0][captured[0].index("-n") + 1] == handle.session_id
+
+
+def test_resume_reuses_session_name(monkeypatch) -> None:
+    captured = _capture_spawn(monkeypatch)
+    name = _session_name("/tmp/ws/task-9")
+    handle = adapter.resume("/tmp/ws/task-9", name, "again")
+    assert handle.session_id == name
+    args = captured[0]
+    assert "-r" in args
+    assert args[args.index("-n") + 1] == name

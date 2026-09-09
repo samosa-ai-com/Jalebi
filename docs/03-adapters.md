@@ -178,7 +178,8 @@ stated.
   `system`/`init` (resume key `session_id`); terminal `result` line
   (`is_error` discriminator, final text echoed). `-p` deprecated but works.
   `--yolo` stderr warning silenced via `QWEN_CODE_SUPPRESS_YOLO_WARNING=1`.
-  `--max-wall-time 600s` bounds headless runs. `list_models` reads
+  No wall-clock cap: the queue's per-task timeout + stall watchdog own the
+  deadline. `list_models` reads
   `~/.qwen/settings.json` `modelProviders` ids (no live catalog call).
   Resume (`-r`/`-c`), tool events and partial streaming are per-docs, not
   live-exercised.
@@ -190,14 +191,17 @@ stated.
   model map (cached by mtime; curated verified ids first, curated-only on
   any bundle problem). Harvested ids are unattributed (the bundle holds many
   providers' catalogs) — a dud fails clean with exit 1. **Session id is not
-  in stdout** — the resume key lives in `cline history --json`; streaming cannot capture it (follow-up
-  falls back to a fresh session until history lookup is added). Resume
+  in stdout** — `resolve_session` reads the resume key from
+  `cline history --json` after the run, so the queue persists it and
+  follow-ups resume via `--id`. Resume
   (`--id`) and diff shapes per-docs, not live-exercised.
 - **goose** (`goose run -t … --output-format stream-json`, 1.49.0): terminal
   event is `complete` (+ exit 0); CLI errors go to stderr with exit 1.
   Stdout starts with a non-JSON banner (blank lines dropped, rest verbatim).
   Sessions are **named** (`-n`) in one global SQLite DB — the adapter derives
-  `jalebi-<worktree>` per worktree so same-name resumes can't cross tasks.
+  `jalebi-<worktree>` per worktree so same-name resumes can't cross tasks,
+  and persists that name as the run's `session_id` so follow-ups resume
+  (`-r -n <name>`).
   Resume (`-r -n`) and tool/diff shapes per binary vocabulary, not
   live-exercised. No list-models command (`list_models` → `[]`).
 - **grok** (`grok -p … --output-format streaming-json`, 1.0.13): first line

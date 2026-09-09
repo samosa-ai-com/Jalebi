@@ -30,7 +30,7 @@ from jalebi import (
     worktree_bootstrap,
 )
 from jalebi.adapters import get_adapter
-from jalebi.adapters.types import AgentEvent
+from jalebi.adapters.types import AgentAdapter, AgentEvent
 from jalebi.config import Config
 from jalebi.db import CatalogAgent, Repo, Run, Session, Task, now
 from jalebi.events import TaskEvents
@@ -500,6 +500,7 @@ class TaskQueue:
         *,
         publish: bool = True,
         worktree: Path | None = None,
+        adapter: AgentAdapter | None = None,
     ) -> None:
         """Stream a handle's events to the SSE bus, then finalize run + task."""
         steps: list[dict[str, object]] = []
@@ -553,6 +554,13 @@ class TaskQueue:
             )
 
         run.session_id = handle.session_id
+        # Backends whose stdout does not carry the session id (e.g. cline)
+        # get a best-effort post-run lookup so follow-ups can resume.
+        if run.session_id is None and adapter is not None and worktree is not None:
+            try:
+                run.session_id = adapter.resolve_session(str(worktree))
+            except Exception:
+                logger.debug("resolve_session failed for task %s", task.id)
         run.finished_at = now()
         run.steps_json = json.dumps(steps[-MAX_STEPS:])
         # T1.6: capture HEAD at run end (with -dirty suffix when the agent left
@@ -906,7 +914,8 @@ class TaskQueue:
                 _kill_proc(state.handle.proc)
 
             self._stream_and_finish(
-                session, task, repo, run, git, token, masker, state.handle, state
+                session, task, repo, run, git, token, masker, state.handle, state,
+                worktree=wt, adapter=adapter,
             )
             session.commit()
             self._complete_status(session, task, repo, run, git, token)
@@ -1031,6 +1040,7 @@ class TaskQueue:
                 state,
                 publish=False,
                 worktree=wt,
+                adapter=adapter,
             )
             session.commit()
 
@@ -1489,6 +1499,7 @@ class TaskQueue:
                 state,
                 publish=task.type != "pr_review",
                 worktree=wt,
+                adapter=adapter,
             )
             if task.type == "pr_review":
                 pr_number = self._task_pr_number(task)

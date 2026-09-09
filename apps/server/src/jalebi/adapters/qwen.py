@@ -155,7 +155,10 @@ class QwenAdapter(AgentAdapter):
         return _settings_model_ids()
 
     def _base_args(self, model: str | None) -> list[str]:
-        args = [_binary(), "-o", "stream-json", "--yolo", "--max-wall-time", "600s"]
+        # No wall-clock cap: the queue's per-task timeout + stall watchdog own
+        # the deadline (60 min default, escalated retries), so the agent never
+        # dies early on a long task.
+        args = [_binary(), "-o", "stream-json", "--yolo"]
         if model:
             args += ["--model", model]
         return args

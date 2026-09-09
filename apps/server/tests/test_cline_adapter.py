@@ -147,3 +147,67 @@ def test_list_models_curated_first_then_harvested(tmp_path, monkeypatch) -> None
 def test_list_models_falls_back_to_curated_without_bundle(monkeypatch) -> None:
     monkeypatch.setattr(cline_module, "_bundle_path", lambda: None)
     assert adapter.list_models() == CLINE_CURATED
+
+
+def _capture_spawn(monkeypatch):
+    captured: list[list[str]] = []
+    monkeypatch.setattr(
+        cline_module,
+        "_spawn",
+        lambda args, cwd, env=None: captured.append(args) or FakeProc(),
+    )
+    monkeypatch.setattr(cline_module, "_binary", lambda: "cline")
+    return captured
+
+
+def test_argv_has_no_cli_timeout_cap(monkeypatch) -> None:
+    # The queue's per-task timeout + stall watchdog own the deadline — the
+    # adapter must not impose its own (previously a fixed 600s `--timeout`).
+    captured = _capture_spawn(monkeypatch)
+    adapter.start("/tmp/ws/t1", "go")
+    assert captured, "start must spawn"
+    assert "--timeout" not in captured[0]
+    adapter.resume("/tmp/ws/t1", "ses_1", "go")
+    assert "--timeout" not in captured[1]
+    assert "--id" in captured[1] and "ses_1" in captured[1]
+
+
+def test_resolve_session_reads_history(monkeypatch) -> None:
+    class FakeRun:
+        def __init__(self, stdout: str, returncode: int = 0):
+            self.stdout = stdout
+            self.returncode = returncode
+            self.cwd: str | None = None
+
+    calls: list[FakeRun] = []
+
+    def fake_run(args, capture_output, text, timeout, cwd):
+        proc = FakeRun('[{"id": "ses_hist_1", "ts": "2026-09-08"}]')
+        proc.cwd = cwd
+        calls.append(proc)
+        return proc
+
+    monkeypatch.setattr(cline_module.subprocess, "run", fake_run)
+    assert adapter.resolve_session("/tmp/ws/t1") == "ses_hist_1"
+    assert calls[0].cwd == "/tmp/ws/t1"
+
+
+def test_resolve_session_handles_wrapped_and_bad_payloads(monkeypatch) -> None:
+    class FakeRun:
+        def __init__(self, stdout: str, returncode: int = 0):
+            self.stdout = stdout
+            self.returncode = returncode
+
+    def run_with(stdout, returncode=0):
+        return lambda *a, **k: FakeRun(stdout, returncode)
+
+    monkeypatch.setattr(cline_module.subprocess, "run", run_with('{"sessions": [{"id": "s2"}]}'))
+    assert adapter.resolve_session("/tmp/ws/t1") == "s2"
+    monkeypatch.setattr(cline_module.subprocess, "run", run_with("not json"))
+    assert adapter.resolve_session("/tmp/ws/t1") is None
+    monkeypatch.setattr(cline_module.subprocess, "run", run_with("[]"))
+    assert adapter.resolve_session("/tmp/ws/t1") is None
+    monkeypatch.setattr(cline_module.subprocess, "run", run_with("{}", returncode=1))
+    assert adapter.resolve_session("/tmp/ws/t1") is None
+    monkeypatch.setattr(cline_module.subprocess, "run", run_with("[]", returncode=1))
+    assert adapter.resolve_session("/tmp/ws/t1") is None

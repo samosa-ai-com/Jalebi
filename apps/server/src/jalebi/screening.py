@@ -28,7 +28,7 @@ import time
 from datetime import datetime
 
 from sqlalchemy import select
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from jalebi import clock, masking, notify, secrets, settings, worktree_bootstrap
@@ -307,7 +307,13 @@ def get_dealt_fingerprints(
 def mark_findings_dealt(
     session: Session, screening_id: int, fingerprints: list[str]
 ) -> int:
-    """Idempotently mark fingerprints dealt; returns the newly-added count."""
+    """Idempotently mark fingerprints dealt; returns the newly-added count.
+
+    Concurrent requests (two tabs) can race past the read-then-insert check;
+    the loser hits the unique constraint on commit, which is still a
+    successful idempotent mark — rollback and report zero newly-marked rows
+    instead of surfacing a 500.
+    """
     existing = get_dealt_fingerprints(session, screening_id)
     added = 0
     for fp in dict.fromkeys(fingerprints):
@@ -316,7 +322,11 @@ def mark_findings_dealt(
         session.add(ScreeningDealt(screening_id=screening_id, fingerprint=fp))
         existing.add(fp)
         added += 1
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        return 0
     return added
 
 
@@ -457,10 +467,19 @@ def render_known_findings_section(
     ]
     for it in items:
         title = _sanitize_untrusted(str(it.get("title", "")))
-        loc = f" in {it['file']}:{it['line']}" if it["file"] else ""
+        # Every untrusted rendered field passes through the sanitizer here —
+        # the render boundary is the ONLY place a smuggled fence closer can
+        # be neutered, and `file`/`screen_name` come from prior untrusted
+        # audits just like title/detail do.
+        loc = (
+            f" in {_sanitize_untrusted(str(it['file']))}:{it['line']}"
+            if it["file"]
+            else ""
+        )
+        screen_name = _sanitize_untrusted(str(it["screen_name"]))
         lines.append(
             f"- [{it['severity']}] \"{title}\"{loc} "
-            f"(from \"{it['screen_name']}\" screen)"
+            f"(from \"{screen_name}\" screen)"
         )
         if it["detail"]:
             lines.append(f"  Detail: {_sanitize_untrusted(str(it['detail']))}")
