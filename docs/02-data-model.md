@@ -95,6 +95,7 @@ Index: `task_id`.
 | `body` | text | |
 | `pat_name` | text null | account override for the resume |
 | `model` | text null | model override for the resume |
+| `cli` | text null | backend override for the resume (NULL = task backend reused) |
 | `created_at` | datetime | |
 
 Index: `task_id`.

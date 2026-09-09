@@ -170,9 +170,12 @@ stated.
 - **kilo** (`kilo run --auto --format json`, 7.5.16): OpenCode fork — event
   model mirrors opencode. `-m` needs the full `provider/model` id
   (e.g. `kilo/kilo-auto/free`; bare `Auto Free` is rejected). Successful runs
-  end on `step_finish` (`reason:"stop"`) + exit 0; non-stop reasons map to
-  `error`. `file`-patch events map to `diff`. `list_models` reads
-  `kilo models`. Resume (`-s`/`--continue`) and tool-call shapes are
+  end on `step_finish` (`reason:"stop"`) + exit 0; other non-stop reasons map
+  to `error`, except `reason:"tool-calls"` (model stopped with tool calls
+  pending — a step marker; the process exit decides done vs failed).
+  `tool_use` events (live shape: `part.type == "tool"` with
+  `callID`/state) map to `tool_call`. `file`-patch events map to `diff`.
+  `list_models` reads `kilo models`. Resume (`-s`/`--continue`) is
   per-docs, not live-exercised.
 - **qwen** (`qwen -p … -o stream-json --yolo`, 0.23.1): handshake is
   `system`/`init` (resume key `session_id`); terminal `result` line
@@ -192,12 +195,17 @@ stated.
   any bundle problem). Harvested ids are unattributed (the bundle holds many
   providers' catalogs) — a dud fails clean with exit 1. **Session id is not
   in stdout** — `resolve_session` reads the resume key from
-  `cline history --json` after the run, so the queue persists it and
-  follow-ups resume via `--id`. Resume
+  `cline   history --json` after the run, so the queue persists it and
+  follow-ups resume via `--id`. `content_update` tool pings with an empty
+  chunk are silent; non-empty stdout/stderr chunks become messages. Resume
   (`--id`) and diff shapes per-docs, not live-exercised.
 - **goose** (`goose run -t … --output-format stream-json`, 1.49.0): terminal
   event is `complete` (+ exit 0); CLI errors go to stderr with exit 1.
-  Stdout starts with a non-JSON banner (blank lines dropped, rest verbatim).
+  Stdout starts with a non-JSON banner (blank lines dropped, banner lines are
+  step markers — visible but not run content, so a banner-only run fails the
+  queue's empty-run guard instead of a false `done`). `--model` is passed
+  without `--provider` (always the configured default provider — a foreign
+  model id is silently mismatched, so prefer the configured model).
   Sessions are **named** (`-n`) in one global SQLite DB — the adapter derives
   `jalebi-<worktree>` per worktree so same-name resumes can't cross tasks,
   and persists that name as the run's `session_id` so follow-ups resume

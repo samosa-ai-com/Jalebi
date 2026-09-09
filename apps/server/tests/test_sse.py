@@ -296,9 +296,10 @@ def test_sse_after_seq_backfills_events_published_before_subscribe(
             payloads.append(json.loads(line[6:]))
     texts = [(p.get("type"), p.get("text"), p.get("seq")) for p in payloads]
     assert texts[0][0] == "connected"
-    # The pre-subscribe event was replayed from the buffer (seq 1), then live.
-    assert ("message", "early", 1) in texts
-    assert ("message", "working", 2) in texts
+    # The pre-subscribe events were replayed from the buffer (seq 1), then
+    # live. Consecutive messages merge into one step, so "early"+"working"
+    # arrive as a single payload.
+    assert ("message", "earlyworking", 1) in texts
     assert texts[-1] == ("stream_end", None, None)
 
 

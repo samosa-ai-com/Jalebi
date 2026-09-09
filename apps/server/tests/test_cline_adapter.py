@@ -45,6 +45,19 @@ RUN_RESULT_ERROR = (
     '{"ts":"2026-09-08T19:07:13.303Z","type":"run_result","finishReason":"error",'
     '"text":"invalid model format. Expected format: modelType/model"}'
 )
+# Live shapes from a task-69 run: tool progress pings.
+CONTENT_UPDATE_TOOL_EMPTY = (
+    '{"type":"agent_event",'
+    '"event":{"type":"content_update","contentType":"tool","toolName":"run_commands",'
+    '"toolCallId":"call_1","update":{"stream":"stdout","chunk":"",'
+    '"executionId":"ex_1","detachable":false}}}'
+)
+CONTENT_UPDATE_TOOL_CHUNK = (
+    '{"type":"agent_event",'
+    '"event":{"type":"content_update","contentType":"tool","toolName":"run_commands",'
+    '"toolCallId":"call_1","update":{"stream":"stdout","chunk":"0dee548 fix",'
+    '"executionId":"ex_1","detachable":false}}}'
+)
 
 
 class FakeProc:
@@ -93,6 +106,17 @@ def test_parse_agent_error() -> None:
     events = adapter.parse(AGENT_ERROR)
     assert events[0].type == "error"
     assert "invalid model format" in (events[0].text or "")
+
+
+def test_parse_content_update_empty_chunk_is_silent() -> None:
+    assert adapter.parse(CONTENT_UPDATE_TOOL_EMPTY) == []
+
+
+def test_parse_content_update_chunk_is_message() -> None:
+    events = adapter.parse(CONTENT_UPDATE_TOOL_CHUNK)
+    assert len(events) == 1
+    assert events[0].type == "message"
+    assert events[0].text == "0dee548 fix"
 
 
 def test_parse_run_result_terminal() -> None:

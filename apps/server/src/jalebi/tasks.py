@@ -183,9 +183,12 @@ def add_followup(
     body: str,
     pat_name: str | None = None,
     model: str | None = None,
+    cli: str | None = None,
 ) -> Followup:
     """Persist a follow-up against ``run_id`` (the run it resumes)."""
-    row = Followup(task_id=task_id, run_id=run_id, body=body, pat_name=pat_name, model=model)
+    row = Followup(
+        task_id=task_id, run_id=run_id, body=body, pat_name=pat_name, model=model, cli=cli
+    )
     session.add(row)
     session.commit()
     session.refresh(row)
@@ -296,6 +299,7 @@ def task_to_dict(
                 "body": f.body,
                 "pat_name": f.pat_name,
                 "model": f.model,
+                "cli": f.cli,
                 "created_at": clock.to_iso(f.created_at),
             }
             for f in (followups or [])

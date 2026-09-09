@@ -50,10 +50,13 @@ def test_session_name_unique_per_worktree() -> None:
     assert _session_name("/tmp/ws/weird name!") == "jalebi-weird-name"
 
 
-def test_parse_banner_blank_dropped_others_verbatim() -> None:
+def test_parse_banner_blank_dropped_others_are_steps() -> None:
+    # Banner chrome is visible but not agent output (a banner-only run must
+    # fail the empty-run guard, not read as a success).
     assert adapter.parse(BANNER_BLANK) == []
     events = adapter.parse(BANNER_LINE)
-    assert events[0].type == "message"
+    assert events[0].type == "step"
+    assert events[0].text == BANNER_LINE
 
 
 def test_parse_thinking_silent_text_emitted() -> None:

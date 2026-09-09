@@ -191,6 +191,7 @@ class Followup(Base):
     body: Mapped[str] = mapped_column(Text, nullable=False)
     pat_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cli: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now)
 
 

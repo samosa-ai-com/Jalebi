@@ -205,6 +205,22 @@ def _agent_event(event: dict) -> list[AgentEvent]:
         if isinstance(text, str) and text:
             return [AgentEvent(type="message", text=text)]
         return []
+    if etype == "content_update":
+        # Tool progress pings (live shape from a task-69 run): empty chunks
+        # (stream-open/detachable notices) are noise; real stdout/stderr
+        # chunks become messages (the queue merges consecutive ones).
+        if event.get("contentType") == "tool":
+            update = event.get("update")
+            if not isinstance(update, dict):
+                update = {}
+            chunk = update.get("chunk")
+            if isinstance(chunk, str) and chunk:
+                return [AgentEvent(type="message", text=chunk)]
+            return []
+        text = event.get("text")
+        if isinstance(text, str) and text:
+            return [AgentEvent(type="message", text=text)]
+        return []
     if etype == "done":
         return []  # terminal success → RunHandle yields done on exit 0
     if etype == "error":

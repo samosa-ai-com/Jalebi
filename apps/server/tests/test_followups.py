@@ -320,6 +320,90 @@ def test_followup_resumes_session_in_same_worktree(q, session, repo_row, monkeyp
     assert fups[0].run_id == runs[0].id
 
 
+def test_failed_followup_still_records_row(q, session, repo_row, monkeypatch) -> None:
+    """A follow-up that dies by exception (after its run row exists) records
+    its row anyway — otherwise the attempt leaves no trace."""
+    settings.set_setting(session, "auto_publish", False)
+    settings.set_setting(session, "retry_policy", {"auto_retry": False})
+    task = _done_task_with_session(session, repo_row.id, session_id="ses_orig")
+
+    class ExplodingAdapter(ResumeAdapter):
+        def start(self, *args, **kwargs):
+            raise RuntimeError("spawn blew up")
+
+    monkeypatch.setattr(
+        "jalebi.queue.get_adapter", lambda cli: ExplodingAdapter(FakeHandle([]))
+    )
+
+    q._run_followup(task.id, "doomed attempt", cli="kilo")
+
+    session.expire_all()
+    runs = tasks.runs_for_task(session, task.id)
+    assert runs[-1].status == "failed"
+    fups = tasks.list_followups(session, task.id)
+    assert len(fups) == 1
+    assert fups[0].body == "doomed attempt"
+    assert fups[0].run_id == runs[-1].id
+    assert fups[0].cli == "kilo"
+
+
+def test_followup_row_records_cli_override(q, session, repo_row, monkeypatch) -> None:
+    """A successful backend-switch follow-up records the requested backend."""
+    settings.set_setting(session, "auto_publish", False)
+    task = _done_task_with_session(session, repo_row.id, session_id="ses_orig")
+    run = tasks.latest_run(session, task.id)
+    assert run is not None
+    run.cli = "opencode"
+    session.commit()
+    handle = FakeHandle([AgentEvent(type="done")], session_id="ses_new")
+    adapter = ResumeAdapter(handle)
+    monkeypatch.setattr("jalebi.queue.get_adapter", lambda cli: adapter)
+
+    q._run_followup(task.id, "switch backend", cli="codex")
+
+    session.expire_all()
+    fups = tasks.list_followups(session, task.id)
+    assert len(fups) == 1
+    assert fups[0].cli == "codex"
+
+
+def test_followup_row_body_excludes_agent_instructions(
+    q, session, repo_row, monkeypatch
+) -> None:
+    """Catalog custom_instructions join the prompt but must not pollute the
+    stored follow-up body (which should read as what the user typed)."""
+    from jalebi import catalog
+
+    catalog.create_agent(
+        session,
+        id="instructor",
+        name="Instructor",
+        kind="general",
+        cli="opencode",
+        personality_md="Teach.",
+        custom_instructions="Always explain like I'm five.",
+        enabled=True,
+    )
+    settings.set_setting(session, "auto_publish", False)
+    task = _done_task_with_session(session, repo_row.id, session_id="ses_orig")
+    task.agent_id = "instructor"
+    session.commit()
+    handle = FakeHandle(
+        [AgentEvent(type="message", text="ok"), AgentEvent(type="done")],
+        session_id="ses_orig",
+    )
+    adapter = ResumeAdapter(handle)
+    monkeypatch.setattr("jalebi.queue.get_adapter", lambda cli: adapter)
+
+    q._run_followup(task.id, "do more")
+
+    assert "like I'm five" in str(adapter.resume_calls[0]["prompt"])
+    session.expire_all()
+    fups = tasks.list_followups(session, task.id)
+    assert len(fups) == 1
+    assert fups[0].body == "do more"
+
+
 def test_followup_auto_publishes_when_ahead(q, session, repo_row, monkeypatch) -> None:
     settings.set_setting(session, "auto_publish", True)
     task = _done_task_with_session(session, repo_row.id, session_id="ses_orig")

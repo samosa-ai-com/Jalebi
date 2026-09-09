@@ -51,6 +51,20 @@ DEFAULTS: dict[str, object] = {
             "unauthorized",
             "no GitHub token",
             "has no resumable session",
+            # Provider quota/limit failures never clear on retry (a grok free
+            # plan burned 4 attempts re-running into the same usage wall).
+            "usage limit",
+            "rate limit",
+            "too many requests",
+            "quota",
+            "429",
+            "insufficient",
+            "credit",
+            "payment required",
+            "try again later",
+            # The queue's own empty-run marker (exit-0 with zero agent
+            # output): re-running the same prompt reproduces it.
+            "without producing any agent output",
         ],
     },
     # No-output threshold before a run is declared stalled (and auto-recovered).
@@ -121,6 +135,34 @@ def seed_defaults(session: Session) -> int:
             session.add(Setting(key=key, value=json.dumps(value)))
             added += 1
     if added:
+        session.commit()
+    # Sub-key backfill: a dict-valued default seeded before a sub-key existed
+    # (e.g. retry_policy gained non_retryable_patterns and quota entries long
+    # after the row was created) keeps its stored row but gains the missing
+    # sub-keys. Stored sub-keys are never overwritten, so owner edits survive.
+    backfilled = False
+    for key, value in DEFAULTS.items():
+        if not isinstance(value, dict):
+            continue
+        row = session.execute(select(Setting).where(Setting.key == key)).scalar_one_or_none()
+        if row is None:
+            continue
+        try:
+            stored = json.loads(row.value)
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(stored, dict):
+            continue
+        missing = {
+            sub: json.loads(json.dumps(subval))
+            for sub, subval in value.items()
+            if sub not in stored
+        }
+        if missing:
+            stored.update(missing)
+            row.value = json.dumps(stored)
+            backfilled = True
+    if backfilled:
         session.commit()
     return added
 

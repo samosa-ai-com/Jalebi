@@ -9,8 +9,9 @@ Verified facts:
   is ``complete`` (token/cost summary) + exit 0. CLI-level errors go to
   **stderr** with exit 1 (e.g. ``--session-id`` without ``--resume``).
 - Stdout starts with a **non-JSON banner** (blank + 3 art/status lines)
-  before the event payload — blank lines are dropped, other non-JSON lines
-  surface verbatim per the house convention.
+  before the event payload — blank lines are dropped, banner lines surface
+  as `step` markers (visible, but not run content, so a banner-only run
+  fails the queue's empty-run guard instead of a false `done`).
 - Sessions are **named** (``-n``) and stored in a single global SQLite DB
   (``~/.local/share/goose/sessions/sessions.db``) recording the run cwd — a
   same-name resume from another worktree attaches to the same session, so the
@@ -176,9 +177,13 @@ class GooseAdapter(AgentAdapter):
         try:
             payload = json.loads(line)
         except json.JSONDecodeError:
-            return [AgentEvent(type="message", text=line)]
+            # Non-JSON stdout lines are the startup banner (blank + 3 art /
+            # status lines) — CLI chrome, not agent output, so they surface
+            # as steps: still visible on the timeline, but not counted as
+            # run content (a banner-only run must fail the empty-run guard).
+            return [AgentEvent(type="step", phase="step", text=line)]
         if not isinstance(payload, dict):
-            return [AgentEvent(type="message", text=line)]
+            return [AgentEvent(type="step", phase="step", text=line)]
 
         event_type = payload.get("type")
         if event_type == "message":

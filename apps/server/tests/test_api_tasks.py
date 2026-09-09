@@ -140,6 +140,22 @@ def test_rerun(client: FlaskClient, repo_id: int) -> None:
     assert body["retry_count"] == 0
 
 
+def test_rerun_resets_exhausted_retry_budget(
+    client: FlaskClient, repo_id: int, session
+) -> None:
+    """A task that hit the attempt cap gets a fresh recovery budget on rerun —
+    otherwise its next failure gives up immediately with zero auto-recovery."""
+    task_id = client.post("/api/tasks", json={"repo_id": repo_id, "prompt": "x"}).get_json()["id"]
+    from jalebi import tasks as tasks_svc
+    task = tasks_svc.get_task(session, task_id)
+    task.status = "failed"
+    task.retry_count = 3
+    session.commit()
+    resp = client.post(f"/api/tasks/{task_id}/rerun")
+    assert resp.status_code == 200
+    assert resp.get_json()["retry_count"] == 0
+
+
 def test_rerun_with_cli_override(client: FlaskClient, repo_id: int, session) -> None:
     """Rerun can override the task's backend CLI."""
     task_id = client.post(
@@ -1471,4 +1487,34 @@ def test_prepare_run_rearms_dismissed_attention(
     task_resp = client.get(f"/api/tasks/{task.id}")
     # Running with no PR facts → working (NOT stuck at dismissed done).
     assert task_resp.get_json()["attention"] == "working"
+
+
+def test_create_rejects_non_string_model(client: FlaskClient, repo_id: int) -> None:
+    """A non-string model (e.g. a stale object from a form bug) is a 400."""
+    resp = client.post("/api/tasks", json={"repo_id": repo_id, "prompt": "x", "model": 5})
+    assert resp.status_code == 400
+
+
+def test_followup_rejects_non_string_model(client: FlaskClient, repo_id: int, session) -> None:
+    """Follow-up model overrides must be strings."""
+    task_id = client.post("/api/tasks", json={"repo_id": repo_id, "prompt": "x"}).get_json()["id"]
+    from jalebi import tasks as tasks_svc
+    task = tasks_svc.get_task(session, task_id)
+    task.status = "failed"
+    session.commit()
+    resp = client.post(f"/api/tasks/{task_id}/followup", json={"prompt": "y", "model": []})
+    assert resp.status_code == 400
+
+
+def test_rerun_rejects_non_string_model(client: FlaskClient, repo_id: int, session) -> None:
+    """Rerun model overrides must be strings (explicit null still clears)."""
+    task_id = client.post("/api/tasks", json={"repo_id": repo_id, "prompt": "x"}).get_json()["id"]
+    from jalebi import tasks as tasks_svc
+    task = tasks_svc.get_task(session, task_id)
+    task.status = "failed"
+    session.commit()
+    resp = client.post(f"/api/tasks/{task_id}/rerun", json={"model": {}})
+    assert resp.status_code == 400
+    resp = client.post(f"/api/tasks/{task_id}/rerun", json={"model": None})
+    assert resp.status_code == 200
 

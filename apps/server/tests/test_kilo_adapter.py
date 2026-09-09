@@ -26,6 +26,17 @@ STEP_FINISH_ABORT = (
     '{"type":"step_finish","timestamp":1788894002,"sessionID":"' + SESSION_ID + '",'
     '"part":{"type":"step-finish","reason":"aborted"}}'
 )
+STEP_FINISH_TOOL_CALLS = (
+    '{"type":"step_finish","timestamp":1788927339546,"sessionID":"' + SESSION_ID + '",'
+    '"part":{"type":"step-finish","reason":"tool-calls"}}'
+)
+# Live shape from a task-75 run: part.type == "tool" with callID + state.
+TOOL_USE_LINE = (
+    '{"type":"tool_use","timestamp":1788927338750,"sessionID":"' + SESSION_ID + '",'
+    '"part":{"id":"prt_1","sessionID":"' + SESSION_ID + '","messageID":"msg_1",'
+    '"type":"tool","callID":"call-1","tool":"read",'
+    '"state":{"status":"completed","input":{"filePath":"x"},"output":"y"}}}'
+)
 ERROR_LINE = (
     '{"type":"error","sessionID":"' + SESSION_ID + '",'
     '"error":{"name":"UnknownError","data":{"message":"boom"}}}'
@@ -73,6 +84,27 @@ def test_parse_step_finish_non_stop_is_error() -> None:
     events = adapter.parse(STEP_FINISH_ABORT)
     assert events[0].type == "error"
     assert "aborted" in (events[0].text or "")
+
+
+def test_parse_step_finish_tool_calls_is_step_not_error() -> None:
+    # The model stopping with tool calls pending is not a failure by itself
+    # (a task-75 run ended this way mid-fix); the exit code decides.
+    events = adapter.parse(STEP_FINISH_TOOL_CALLS)
+    assert len(events) == 1
+    assert events[0].type == "step"
+    assert events[0].session_id == SESSION_ID
+
+
+def test_parse_tool_use_maps_to_tool_call() -> None:
+    events = adapter.parse(TOOL_USE_LINE)
+    assert len(events) == 1
+    assert events[0].type == "tool_call"
+    assert events[0].data is not None
+    assert events[0].data["tool"] == "read"
+    assert events[0].data["tool_use_id"] == "call-1"
+    assert events[0].data["input"] == {"filePath": "x"}
+    assert events[0].data["output"] == "y"
+    assert events[0].session_id == SESSION_ID
 
 
 def test_parse_error_line() -> None:

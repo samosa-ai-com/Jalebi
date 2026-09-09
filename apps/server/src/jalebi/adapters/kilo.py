@@ -133,6 +133,24 @@ class KiloAdapter(AgentAdapter):
                     }
                 )
             return [AgentEvent(type="tool_call", data=tool_data)]
+        if event_type == "tool_use":
+            # Live shape (task-75 run): ``part.type == "tool"`` carrying
+            # ``callID``/``tool``/``state{status,input,output}``.
+            tool_data = {"session_id": session_id} if session_id else {}
+            if isinstance(part, dict):
+                state = part.get("state")
+                if not isinstance(state, dict):
+                    state = {}
+                tool_data.update(
+                    {
+                        "tool": part.get("tool"),
+                        "tool_use_id": part.get("callID") or part.get("id"),
+                        "input": state.get("input"),
+                        "output": state.get("output"),
+                        "status": state.get("status"),
+                    }
+                )
+            return [AgentEvent(type="tool_call", data=tool_data)]
         if event_type == "file":
             # File-patch event (UNVERIFIED live) → normalized diff event.
             diff_data = {"session_id": session_id} if session_id else {}
@@ -141,8 +159,13 @@ class KiloAdapter(AgentAdapter):
             return [AgentEvent(type="diff", data=diff_data)]
         if event_type == "step_finish":
             reason = part.get("reason") if isinstance(part, dict) else None
-            if reason is not None and reason != "stop":
+            if reason is not None and reason not in ("stop", "tool-calls"):
                 return [AgentEvent(type="error", text=f"kilo run finished: {reason}", data=data)]
+            if reason == "tool-calls":
+                # The model stopped with tool calls pending — not a failure by
+                # itself (a task-75 run ended this way mid-fix). Mark activity
+                # and let the process exit code decide done vs failed.
+                return [AgentEvent(type="step", phase="step", data=data)]
             return []  # terminal success → RunHandle yields done on exit 0
         if event_type == "error":
             err = payload.get("error") or {}

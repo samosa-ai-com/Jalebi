@@ -42,6 +42,11 @@ logger = logging.getLogger(__name__)
 
 MAX_STEPS = 500
 MAX_STEP_TEXT = 2000
+# Consecutive `message` events merge into one timeline step once the buffer
+# reaches this many chars (word-streaming backends like grok would otherwise
+# produce one step per word). The remainder flushes on a non-message event
+# or at stream end, so no text is ever held back past the run.
+_MESSAGE_FLUSH_CHARS = 500
 MAX_DIFF_BYTES = 512 * 1024
 KILL_GRACE_SECONDS = 5
 DEFAULT_TIMEOUT_MINUTES = 60
@@ -366,6 +371,23 @@ class TaskQueue:
         """PR number when the task is based on a PR head sentinel, else None."""
         return tasks.pr_head_source_number(task.source_branch)
 
+    @staticmethod
+    def _task_own_base(task: Task) -> str:
+        """Base for "did the agent commit anything" checks.
+
+        The no-op publish gates must compare the task branch against the
+        branch the worktree was created from — not always the target. A
+        freeform task based on ``source_branch=development`` with
+        ``target_branch=main`` is dozens of commits ahead of ``origin/main``
+        with zero agent commits (this shipped a whole development branch as
+        PR #8 once). PR-head sentinels aren't fetchable refs, so those tasks
+        keep the target comparison (their ``update_pr`` push is a content
+        no-op without agent commits anyway).
+        """
+        if TaskQueue._pr_head_number(task) is not None:
+            return task.target_branch or "main"
+        return TaskQueue._worktree_base(task)
+
     def _ensure_task_worktree(
         self, git: GitWorkspace, task: Task, repo: Repo, token: str | None
     ):
@@ -506,6 +528,37 @@ class TaskQueue:
         """Stream a handle's events to the SSE bus, then finalize run + task."""
         steps: list[dict[str, object]] = []
         last_event_type: str | None = None
+        # Terminal-outcome tracking (see the status computation below).
+        seen_any_event = False
+        seen_content = False
+        saw_error = False
+        # Coalescing buffer: backends like grok emit one `message` event per
+        # word/token. Buffer consecutive message texts and flush a single
+        # merged step (same entry to SSE + steps_json, so the durable timeline
+        # and the run cache never diverge). Flush on a non-message event,
+        # when the buffer reaches _MESSAGE_FLUSH_CHARS, or at stream end.
+        pending_text = ""
+        pending_phase: str | None = None
+
+        def flush_pending() -> None:
+            nonlocal pending_text, pending_phase, last_event_type, seen_content
+            if not pending_text:
+                return
+            # Cap BEFORE masking (same rationale as _step_from_event: bound
+            # the masker's regex work on pathological input).
+            entry = {
+                "type": "message",
+                "phase": pending_phase,
+                "text": masker(pending_text[:MAX_STEP_TEXT]),
+                "ts": clock.to_iso(now()),
+            }
+            self.events.publish(task.id, entry, run_id=run.id)
+            steps.append(entry)
+            last_event_type = "message"
+            seen_content = True
+            pending_text = ""
+            pending_phase = None
+
         for event in handle.events():
             state.last_event = time.monotonic()
             if state.reason == "cancelled" and event.type == "error":
@@ -513,7 +566,22 @@ class TaskQueue:
                 # with a clean cancellation marker so the timeline never shows a
                 # scary error for an intentional cancel.
                 event = AgentEvent(type="message", text="Run cancelled by user.")
+            if event.type == "message" and event.text:
+                pending_text += event.text[:MAX_STEP_TEXT]
+                if event.phase is not None:
+                    pending_phase = event.phase
+                state.last_step_text = event.text[:MAX_STEP_TEXT]
+                state.last_phase = event.phase
+                if len(pending_text) >= _MESSAGE_FLUSH_CHARS:
+                    flush_pending()
+                continue
+            flush_pending()
             if event.type in ("step", "message", "tool_call", "done", "error"):
+                if event.type in ("step", "message", "tool_call"):
+                    # Activity that isn't the terminal marker: a stream with
+                    # only a bare `done` keeps the old verdict (this is also
+                    # the shape every synthetic test handle uses).
+                    seen_any_event = True
                 entry = self._step_from_event(event, masker)
                 # Phase 4 T4.3 — durable SSE timeline. events.publish persists
                 # each event on its own short-lived session (never this worker
@@ -523,13 +591,26 @@ class TaskQueue:
                 steps.append(entry)
                 if event.type in ("step", "message", "done", "error"):
                     last_event_type = event.type
+                if event.type == "error":
+                    # Don't break: keep draining so the child is reaped and a
+                    # non-zero exit still surfaces its stderr tail (the
+                    # generator ends after proc.wait()). The stall/timeout
+                    # watchdogs bound a process that never exits. An error
+                    # anywhere in the stream still fails the run (saw_error).
+                    saw_error = True
+                if event.type in ("message", "tool_call", "diff", "done") and entry.get("text"):
+                    seen_content = True
                 # Track the latest message text/phase for progress notifications.
                 if event.type in ("message", "tool_call") and entry.get("text"):
                     state.last_step_text = str(entry["text"])
                     phase = entry.get("phase")
                     state.last_phase = str(phase) if phase is not None else None
-            if event.type in ("done", "error"):
+            if event.type == "done" and not saw_error:
+                # A clean terminal event with nothing more to drain for: stop
+                # reading, but the generator already reaped the child
+                # (proc.wait() runs before the synthetic done is yielded).
                 break
+        flush_pending()
 
         with self._running_lock:
             self._running.pop(task.id, None)
@@ -563,6 +644,27 @@ class TaskQueue:
             except Exception:
                 logger.debug("resolve_session failed for task %s", task.id)
         run.finished_at = now()
+
+        empty_done = (
+            last_event_type == "done" and seen_any_event and not seen_content
+        )
+        if empty_done:
+            # The process exited 0 but the agent produced no observable output
+            # (e.g. a goose banner-only run): that is a failure, not a
+            # success. The marker phrase doubles as a non-retryable pattern
+            # (see settings.DEFAULTS) so auto-recovery doesn't loop on it.
+            # Appended BEFORE the steps_json dump below so it persists.
+            steps.append(
+                {
+                    "type": "error",
+                    "phase": None,
+                    "text": (
+                        "Agent exited without producing any agent output — "
+                        "marking the run failed instead of done."
+                    ),
+                    "ts": clock.to_iso(now()),
+                }
+            )
         run.steps_json = json.dumps(steps[-MAX_STEPS:])
         # T1.6: capture HEAD at run end (with -dirty suffix when the agent left
         # uncommitted material). Best-effort — never block on a transient git issue.
@@ -572,11 +674,16 @@ class TaskQueue:
         except Exception:
             logger.debug("git_sha_end capture failed for task %s", task.id)
 
+        empty_done = (
+            last_event_type == "done" and seen_any_event and not seen_content
+        )
         final_status: str = (
             "timed_out"
             if state.reason == "timeout"
             else "cancelled"
             if state.reason == "cancelled"
+            else "failed"
+            if saw_error or empty_done
             else "done"
             if last_event_type == "done"
             else "failed"
@@ -1370,12 +1477,19 @@ class TaskQueue:
         its session format), so it starts a **fresh run seeded with the prior
         conversation** instead.
         """
+        # The user's verbatim text. The agent's custom_instructions are
+        # appended to ``body`` below for the prompt, but the follow-ups row
+        # records what the user actually typed.
+        request_body = body
         session = Session()
         run: Run | None = None
         # Plain-int snapshot for the except handler (see _run_review): reading
         # run.id on a poisoned/expired session can raise, which would skip the
         # run-failed marking and freeze the run at `running`.
         run_id: int | None = None
+        # The resolved model for the follow-ups row when the run fails before
+        # reaching the resolution below (stays None → recorded as NULL).
+        effective_model: str | None = None
         state: _RunState | None = None
         repo: Repo | None = None
         token: str | None = None
@@ -1543,9 +1657,10 @@ class TaskQueue:
                     session,
                     task.id,
                     prev.id,
-                    body,
+                    request_body,
                     pat_name=pat_name or task.pat_name,
                     model=effective_model,
+                    cli=cli_param,
                 )
             session.commit()
             self._maybe_recover(session, task, run, repo, state, masker)
@@ -1571,6 +1686,23 @@ class TaskQueue:
                 if run is not None:
                     run.status = "failed"
                     run.finished_at = now()
+            if run_id is not None and not auto:
+                # A failed user follow-up still records its row — otherwise
+                # the attempt leaves no trace in the follow-ups list.
+                try:
+                    tasks.add_followup(
+                        session,
+                        task_id,
+                        run_id,
+                        request_body,
+                        pat_name=pat_name,
+                        model=effective_model,
+                        cli=cli_param,
+                    )
+                except Exception:
+                    logger.debug(
+                        "could not record failed follow-up for task %s", task_id
+                    )
             session.commit()
             # Best-effort: close out the pending status on a failed follow-up too
             # (never raise out of the handler).
@@ -1630,18 +1762,22 @@ class TaskQueue:
             patterns = [str(p) for p in raw_patterns] if isinstance(raw_patterns, list) else []
             masker = masking.build_masker(secrets.all_token_values(self.config) + [token], patterns)
             git = GitWorkspace(self.config)
-            # No-op gate: a branch with zero commits ahead of the target has
-            # nothing to publish — refuse instead of pushing an empty PR. A
-            # missing worktree (never ran / no commits) counts as nothing ahead.
+            # No-op gate: the branch must hold the task's OWN commits — compare
+            # against the worktree base, not the target. A task based on
+            # source_branch=development targeting main is a whole branch ahead
+            # of origin/main with zero agent commits (this once shipped a full
+            # development branch as a task PR). A missing worktree (never ran /
+            # no commits) counts as nothing ahead.
             worktree = GitWorkspace.worktree_path(self.config.data_dir, task.id)
+            own_base = self._task_own_base(task)
             try:
-                ahead = git.commits_ahead(worktree, task.target_branch or "main")
+                ahead = git.commits_ahead(worktree, own_base)
             except Exception:
                 ahead = 0
             if ahead <= 0:
                 raise PublishError(
-                    "the task branch has no commits ahead of the target branch — "
-                    "nothing to publish"
+                    "the task branch has no commits ahead of its base "
+                    f"({own_base}) — nothing to publish"
                 )
             # Mode-specific validation (route catches ValueError → 400).
             if mode not in ("new_pr", "update_pr", "push_branch"):
@@ -2166,7 +2302,7 @@ class TaskQueue:
     def _branch_ahead(self, task: Task, git: GitWorkspace) -> bool:
         worktree = GitWorkspace.worktree_path(self.config.data_dir, task.id)
         try:
-            return git.commits_ahead(worktree, task.target_branch) > 0
+            return git.commits_ahead(worktree, self._task_own_base(task)) > 0
         except Exception:
             return False
 

@@ -26,6 +26,16 @@ def test_defaults_returned_when_unset(session: OrmSession) -> None:
             "unauthorized",
             "no GitHub token",
             "has no resumable session",
+            "usage limit",
+            "rate limit",
+            "too many requests",
+            "quota",
+            "429",
+            "insufficient",
+            "credit",
+            "payment required",
+            "try again later",
+            "without producing any agent output",
         ],
     }
     assert get_setting(session, "stall_timeout_seconds") == 600
@@ -93,6 +103,21 @@ def test_seed_defaults_never_overwrites_user_values(session: OrmSession) -> None
     # All other keys were seeded too.
     stored = {row.key for row in session.execute(select(Setting)).scalars()}
     assert set(DEFAULTS) <= stored
+
+
+def test_seed_defaults_backfills_missing_subkeys(session: OrmSession) -> None:
+    """A dict-valued row seeded before a sub-key existed (e.g. an old
+    retry_policy without non_retryable_patterns) gains the missing sub-keys
+    on the next seed — owner-edited sub-keys are never overwritten."""
+    set_setting(session, "retry_policy", {"auto_retry": False, "max_attempts": 1})
+    seed_defaults(session)
+    policy = get_setting(session, "retry_policy")
+    assert isinstance(policy, dict)
+    assert policy["auto_retry"] is False
+    assert policy["max_attempts"] == 1
+    assert "non_retryable_patterns" in policy
+    assert "usage limit" in policy["non_retryable_patterns"]
+    assert "continue_prompt" in policy
 
 
 def test_all_settings_survive_full_restart(session: OrmSession) -> None:
