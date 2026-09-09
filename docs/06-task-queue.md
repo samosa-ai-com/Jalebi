@@ -18,7 +18,7 @@ Jalebi runs a **task queue** with a **worker pool** (threading). Tasks are persi
 | `GET /api/tasks` | List tasks (newest first) with latest run summary. |
 | `GET /api/tasks/:id` | Task detail incl. latest run + steps + followups + artifacts. |
 | `POST /api/tasks/:id/cancel` | Queued → `cancelled` immediately; running → kill child → `cancelled`; terminal → 409. |
-| `POST /api/tasks/:id/rerun` | Terminal task → back to `queued` and enqueued. 409 if queued/running. Does **not** bump `retry_count` (that counter tracks auto-retries only, so a manual rerun never consumes the auto-retry budget). |
+| `POST /api/tasks/:id/rerun` | Terminal task → back to `queued` and enqueued. Optional body `{cli?, model?}` may override the task's pinned backend/model for the new run; omitted fields keep the existing pin, while an explicit `null` clears that pin back to the Settings default. 409 if queued/running. Does **not** bump `retry_count` (that counter tracks auto-retries only, so a manual rerun never consumes the auto-retry budget). |
 | `POST /api/tasks/:id/publish` | Manual publish. JSON body `{mode, branch?, pr_number?}` (all optional). `mode` ∈ `{new_pr, update_pr, push_branch}`; defaults to `new_pr` for backwards compat (empty body still works). |
 | `POST /api/tasks/:id/followup` | Resume the task's last session (PRD F11). |
 

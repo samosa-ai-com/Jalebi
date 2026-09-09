@@ -447,15 +447,21 @@ def rerun_task(task_id: int) -> ResponseReturnValue:
             ),
             409,
         )
-    payload = request.get_json(silent=True) or {}
-    cli = payload.get("cli")
-    if cli is not None:
-        if cli not in available_adapters():
+    payload = request.get_json(silent=True)
+    if payload is None:
+        payload = {}
+    if not isinstance(payload, dict):
+        return jsonify({"error": "expected a JSON object"}), 400
+    if "cli" in payload:
+        cli = payload.get("cli")
+        if cli in (None, ""):
+            task.cli = None
+        elif cli not in available_adapters():
             return jsonify({"error": f"unsupported agent cli: {cli}"}), 400
-        task.cli = cli
-    model = payload.get("model")
-    if model is not None:
-        task.model = model
+        else:
+            task.cli = cli
+    if "model" in payload:
+        task.model = payload.get("model") or None
     task.status = "queued"
     task.updated_at = now()
     session.commit()

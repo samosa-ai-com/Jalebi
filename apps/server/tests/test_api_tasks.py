@@ -171,6 +171,46 @@ def test_rerun_with_model_override(client: FlaskClient, repo_id: int, session) -
     assert body["model"] == "m2"
 
 
+def test_rerun_with_model_clear(client: FlaskClient, repo_id: int, session) -> None:
+    """An explicit null model clears a previously pinned model back to default."""
+    task_id = client.post(
+        "/api/tasks", json={"repo_id": repo_id, "prompt": "x", "model": "m1"}
+    ).get_json()["id"]
+    from jalebi import tasks as tasks_svc
+    task = tasks_svc.get_task(session, task_id)
+    task.status = "failed"
+    session.commit()
+    resp = client.post(f"/api/tasks/{task_id}/rerun", json={"model": None})
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["model"] is None
+
+
+def test_rerun_backend_change_can_clear_incompatible_model(
+    client: FlaskClient, repo_id: int, session
+) -> None:
+    """Changing backend while leaving model at default clears the old pin."""
+    task_id = client.post(
+        "/api/tasks",
+        json={
+            "repo_id": repo_id,
+            "prompt": "x",
+            "cli": "opencode",
+            "model": "anthropic/claude-3-7-sonnet",
+        },
+    ).get_json()["id"]
+    from jalebi import tasks as tasks_svc
+    task = tasks_svc.get_task(session, task_id)
+    task.status = "failed"
+    session.commit()
+    resp = client.post(f"/api/tasks/{task_id}/rerun", json={"cli": "codex", "model": None})
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["status"] == "queued"
+    assert body["cli"] == "codex"
+    assert body["model"] is None
+
+
 def test_rerun_with_invalid_cli(client: FlaskClient, repo_id: int, session) -> None:
     """Rerun rejects an unsupported CLI with a 400."""
     task_id = client.post(
@@ -183,6 +223,21 @@ def test_rerun_with_invalid_cli(client: FlaskClient, repo_id: int, session) -> N
     resp = client.post(f"/api/tasks/{task_id}/rerun", json={"cli": "nonexistent"})
     assert resp.status_code == 400
     assert "unsupported agent cli" in resp.get_json()["error"]
+
+
+def test_rerun_with_cli_clear(client: FlaskClient, repo_id: int, session) -> None:
+    """An explicit null cli clears a pinned backend back to the default."""
+    task_id = client.post(
+        "/api/tasks", json={"repo_id": repo_id, "prompt": "x", "cli": "opencode"}
+    ).get_json()["id"]
+    from jalebi import tasks as tasks_svc
+    task = tasks_svc.get_task(session, task_id)
+    task.status = "failed"
+    session.commit()
+    resp = client.post(f"/api/tasks/{task_id}/rerun", json={"cli": None})
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["cli"] is None
 
 
 def test_rerun_running_conflict(client: FlaskClient, repo_id: int) -> None:

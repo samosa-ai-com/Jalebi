@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -434,6 +434,107 @@ describe("TaskDetail", () => {
     stubFetch(cancelledTask);
     renderDetail();
     expect(await screen.findByRole("button", { name: "Re-run" })).toBeInTheDocument();
+  });
+
+  it("initializes rerun dialog from the task's current backend and model", async () => {
+    const failedTask = {
+      ...TASK,
+      status: "failed",
+      cli: "codex",
+      model: "gpt-4o",
+      run: { ...RUN, status: "failed", cli: "codex", model: "gpt-4o" },
+    };
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/runs")) {
+        return { ok: true, json: async () => [failedTask.run] };
+      }
+      if (url.includes("/api/tasks")) {
+        return { ok: true, json: async () => failedTask };
+      }
+      if (url.includes("/api/models?cli=codex")) {
+        return { ok: true, json: async () => ({ cli: "codex", models: ["gpt-5", "o3"] }) };
+      }
+      if (url.includes("/api/models")) {
+        return { ok: true, json: async () => ({ cli: "opencode", models: ["m1"] }) };
+      }
+      if (url.includes("/api/github/tokens")) {
+        return { ok: true, json: async () => ({ accounts: [] }) };
+      }
+      return { ok: true, json: async () => REPOS };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderDetail();
+    await userEvent.click(await screen.findByRole("button", { name: "Re-run" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect((within(dialog).getByLabelText("Backend") as HTMLSelectElement).value).toBe("codex");
+    expect((within(dialog).getByLabelText("Model") as HTMLSelectElement).value).toBe("gpt-4o");
+    expect(within(dialog).getByRole("option", { name: "gpt-4o" })).toBeInTheDocument();
+  });
+
+  it("rerun reloads the page state and clears the model when switching backend", async () => {
+    const failedTask = {
+      ...TASK,
+      status: "failed",
+      cli: "opencode",
+      model: "anthropic/claude-3-7-sonnet",
+      run: {
+        ...RUN,
+        status: "failed",
+        cli: "opencode",
+        model: "anthropic/claude-3-7-sonnet",
+      },
+    };
+    const queuedTask = {
+      ...failedTask,
+      status: "queued",
+      cli: "codex",
+      model: null,
+      updated_at: "2026-08-06T10:03:00",
+    };
+    let taskReads = 0;
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/runs")) {
+        return { ok: true, json: async () => [failedTask.run] };
+      }
+      if (url === "/api/tasks/7/rerun" && init?.method === "POST") {
+        return { ok: true, json: async () => queuedTask };
+      }
+      if (url === "/api/tasks/7") {
+        taskReads += 1;
+        return { ok: true, json: async () => (taskReads >= 2 ? queuedTask : failedTask) };
+      }
+      if (url.includes("/api/models?cli=codex")) {
+        return { ok: true, json: async () => ({ cli: "codex", models: ["gpt-5", "o3"] }) };
+      }
+      if (url.includes("/api/models")) {
+        return { ok: true, json: async () => ({ cli: "opencode", models: ["m1"] }) };
+      }
+      if (url.includes("/api/github/tokens")) {
+        return { ok: true, json: async () => ({ accounts: [] }) };
+      }
+      return { ok: true, json: async () => REPOS };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderDetail();
+    await userEvent.click(await screen.findByRole("button", { name: "Re-run" }));
+
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.selectOptions(within(dialog).getByLabelText("Backend"), "codex");
+    await userEvent.selectOptions(within(dialog).getByLabelText("Model"), "");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Re-run" }));
+
+    await waitFor(() => {
+      const rerun = fetchMock.mock.calls.find(
+        (call) => call[0] === "/api/tasks/7/rerun" && call[1]?.method === "POST"
+      );
+      expect(rerun).toBeTruthy();
+      expect(JSON.parse(rerun![1]!.body as string)).toEqual({ cli: "codex", model: null });
+    });
+    await waitFor(() => expect(screen.getAllByText("queued").length).toBeGreaterThan(0));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("surfaces a publish error inline instead of swallowing it", async () => {

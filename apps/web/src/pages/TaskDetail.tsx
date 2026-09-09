@@ -1034,6 +1034,7 @@ function RerunDialog({
   task,
   open,
   onClose,
+  onRerun,
   cli,
   model,
   models,
@@ -1044,6 +1045,7 @@ function RerunDialog({
   task: Task;
   open: boolean;
   onClose: () => void;
+  onRerun: (updated: Task) => void;
   cli: string;
   model: string;
   models: string[];
@@ -1054,15 +1056,20 @@ function RerunDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const resolvedTaskCli = task.cli ?? "opencode";
+  const modelOptions =
+    model && !models.includes(model)
+      ? [model, ...models.filter((candidate) => candidate !== model)]
+      : models;
 
   async function handleRerun() {
     setBusy(true);
     setError(null);
     try {
-      await api.rerunTask(taskId, {
-        cli: cli || undefined,
-        model: model || undefined,
+      const updated = await api.rerunTask(taskId, {
+        cli: cli || null,
+        model: model || null,
       });
+      onRerun(updated);
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : "rerun failed");
@@ -1117,7 +1124,7 @@ function RerunDialog({
               className="field"
             >
               <option value="">Default</option>
-              {models.map((m) => (
+              {modelOptions.map((m) => (
                 <option key={m} value={m}>
                   {m}
                 </option>
@@ -1873,7 +1880,7 @@ export default function TaskDetail() {
           <Action
             onClick={() => {
               setRerunCli(task.cli ?? "");
-              setRerunModel("");
+              setRerunModel(task.model ?? "");
               setRerunModels([]);
               setRerunDialogOpen(true);
             }}
@@ -2158,6 +2165,10 @@ export default function TaskDetail() {
           task={task}
           open={rerunDialogOpen}
           onClose={() => setRerunDialogOpen(false)}
+          onRerun={(updated) => {
+            setTask(updated);
+            load();
+          }}
           cli={rerunCli}
           model={rerunModel}
           models={rerunModels}
