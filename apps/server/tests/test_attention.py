@@ -55,9 +55,18 @@ PHRASES = (
     "let me know",
     "need your",
     "your approval",
+    "please approve",
+    "approval needed",
     "should i",
+    "shall i proceed",
+    "should i proceed",
+    "may i proceed",
     "do you want",
     "want me to",
+    "go-ahead",
+    "go ahead",
+    "ready to proceed",
+    "waiting on your",
     "approval",
 )
 
@@ -92,6 +101,17 @@ def test_looks_great_false() -> None:
 
 def test_approve_is_not_approval() -> None:
     assert attention.is_waiting_message("I'll approve the merge when the checks pass.") is False
+
+
+def test_codex_plan_approval_ask_is_waiting() -> None:
+    # Task 68 (codex): plan-first run ending in an approval ask with no
+    # question mark — previously missed, so no needs_you ever fired.
+    assert (
+        attention.is_waiting_message(
+            "Please approve the review plan above, and I'll begin."
+        )
+        is True
+    )
 
 
 def test_empty_and_whitespace_false() -> None:

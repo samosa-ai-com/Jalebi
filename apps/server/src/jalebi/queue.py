@@ -15,6 +15,7 @@ from sqlalchemy import func, select
 
 from jalebi import (
     artifacts,
+    attention,
     catalog,
     checkruns,
     clock,
@@ -596,7 +597,9 @@ class TaskQueue:
         ):
             if self._branch_ahead(task, git):
                 try:
-                    task.pr_number = self._publish(task, repo, token, git, masker=masker)
+                    task.pr_number = self._publish(
+                        task, repo, token, git, masker=masker, session=session
+                    )
                     self._publish_status(session, task, repo, git, token)
                     session.commit()
                 except Exception as exc:
@@ -1119,6 +1122,16 @@ class TaskQueue:
 
         review_text = self._read_review(worktree)
         if not review_text:
+            if self._is_approval_wait(session, task.id):
+                # Plan-first run awaiting owner approval: post NOTHING to the
+                # PR and leave the assignment running — the approval ask stays
+                # in the timeline; the UI shows needs_you and ntfy pushes
+                # notify_on_needs_approval. The follow-up approval produces
+                # the real review, posted (and reconciled) then.
+                logger.info(
+                    "review for task %s awaiting approval; skipping PR post", task.id
+                )
+                return
             review_text = self._last_message(session, task.id)
         if not review_text:
             # A done run with no review content has nothing to post. Flip the run
@@ -1212,6 +1225,18 @@ class TaskQueue:
             if step.get("type") == "message" and step.get("text"):
                 return step["text"]
         return ""
+
+    @staticmethod
+    def _is_approval_wait(session, task_id: int) -> bool:
+        """True when the latest run ended asking the owner for approval.
+
+        Plan-first agents (e.g. codex obeying a repo AGENTS.md) finish with a
+        plan + approval ask instead of a deliverable. All GitHub posts must
+        stay silent until the owner approves via follow-up — the approval
+        surfaces in the UI as ``needs_you`` (attention branch 1) + the ntfy
+        ``notify_on_needs_approval`` push instead.
+        """
+        return attention.is_waiting_message(TaskQueue._last_message(session, task_id))
 
     def _notify_enabled(self, session, key: str) -> bool:
         """Whether notifications are configured AND this event type is on."""
@@ -1642,6 +1667,7 @@ class TaskQueue:
                 mode=mode,
                 target_branch=target_branch,
                 pr_number=pr_number,
+                session=session,
             )
             # ``push_branch`` returns 0 (no PR interaction); leave the existing
             # ``task.pr_number`` untouched in that case. For ``new_pr`` /
@@ -2201,6 +2227,7 @@ class TaskQueue:
         mode: str = "new_pr",
         target_branch: str | None = None,
         pr_number: int | None = None,
+        session=None,
     ) -> int:
         # Refuse to push when the worktree HEAD is not on jalebi/<id> (T1.5).
         self._guard_publish_branch(git, task.id)
@@ -2214,7 +2241,7 @@ class TaskQueue:
             return self._publish_push_branch(task, repo, token, git, target_branch)
         if mode != "new_pr":
             raise PublishError(f"unknown publish mode: {mode!r}")
-        return self._publish_new_pr(task, repo, token, git, masker=masker)
+        return self._publish_new_pr(task, repo, token, git, masker=masker, session=session)
 
     def _publish_new_pr(
         self,
@@ -2223,6 +2250,8 @@ class TaskQueue:
         token: str,
         git: GitWorkspace,
         masker=None,
+        *,
+        session=None,
     ) -> int:
         # Ensure the worktree exists (it may have been cleaned for old tasks);
         # _ensure_task_worktree reuses the existing jalebi/<taskId> branch if
@@ -2281,7 +2310,9 @@ class TaskQueue:
                 )
                 # Only a NEWLY created PR gets the issue link comments — reusing
                 # an existing open PR (follow-up pushes) must stay silent.
-                self._comment_on_issues(client, repo.full_name, task, pr_number)
+                self._comment_on_issues(
+                    client, repo.full_name, task, pr_number, session=session
+                )
             return pr_number
         finally:
             client.close()
@@ -2457,9 +2488,28 @@ class TaskQueue:
         return 0
 
     def _comment_on_issues(
-        self, client: GitHubClient, full_name: str, task: Task, pr_number: int
+        self,
+        client: GitHubClient,
+        full_name: str,
+        task: Task,
+        pr_number: int,
+        *,
+        session=None,
     ) -> None:
-        """Comment on each referenced issue that the task opened a PR for it."""
+        """Comment on each referenced issue that the task opened a PR for it.
+
+        Skipped (push + PR still happen) when the run ended asking the owner
+        for approval — an approval ask is not a deliverable to announce.
+        """
+        if task.type != "issue_fix":
+            return
+        if session is not None and self._is_approval_wait(session, task.id):
+            logger.info(
+                "task %s awaiting approval; skipping issue link comments for PR #%s",
+                task.id,
+                pr_number,
+            )
+            return
         if task.type != "issue_fix":
             return
         try:

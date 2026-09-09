@@ -107,9 +107,18 @@ _PHRASES = (
     "let me know",
     "need your",
     "your approval",
+    "please approve",
+    "approval needed",
     "should i",
+    "shall i proceed",
+    "should i proceed",
+    "may i proceed",
     "do you want",
     "want me to",
+    "go-ahead",
+    "go ahead",
+    "ready to proceed",
+    "waiting on your",
     "approval",
 )
 

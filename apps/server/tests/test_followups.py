@@ -544,6 +544,121 @@ def test_pr_review_followup_without_review_marks_failed(
     assert assignment.run_id == run.id
 
 
+PLAN_ONLY_STEPS = json.dumps(
+    [
+        {"type": "step", "text": None, "phase": None, "ts": "t"},
+        {"type": "message", "text": "Plan: read the diff, run checks.", "phase": None, "ts": "t"},
+        {
+            "type": "message",
+            "text": "Please approve the review plan above, and I'll begin.",
+            "phase": None,
+            "ts": "t",
+        },
+    ]
+)
+
+
+def test_pr_review_plan_only_run_posts_nothing(
+    q, session, repo_row, monkeypatch, tmp_path
+) -> None:
+    """Task 68 regression: a done run ending in an approval ask with no
+    review.md posts NOTHING to the PR (previously the plan went out via the
+    _last_message fallback). Run/task stay done; assignment stays running."""
+    from jalebi import reviews as reviews_service
+
+    task = _review_task_with_resumable_session(session, repo_row.id, prs=[3])
+    _with_assignment(session, task)
+    reviews_service.set_assignment_status(session, task.id, "running")
+    run = tasks.latest_run(session, task.id)
+    assert run is not None
+    run.steps_json = PLAN_ONLY_STEPS
+    session.commit()
+
+    wt = tmp_path / "review-wt"
+    wt.mkdir(parents=True)  # no .jalebi/review.md
+    recording = RecordingGitHub("ghp_test")
+    monkeypatch.setattr("jalebi.queue.GitHubClient", lambda token: recording)
+
+    q._post_review(session, task, repo_row, 3, wt, run, "tok", lambda s: s)
+
+    assert recording.posted == []
+    session.expire_all()
+    fresh_run = tasks.latest_run(session, task.id)
+    assert fresh_run is not None
+    assert fresh_run.status == "done"
+    fresh_task = tasks.get_task(session, task.id)
+    assert fresh_task is not None
+    assert fresh_task.status == "done"
+    assignment = reviews_service.assignment_by_task(session, task.id)
+    assert assignment is not None
+    assert assignment.status == "running"
+
+
+def test_pr_review_fallback_still_posts_non_approval_message(
+    q, session, repo_row, monkeypatch, tmp_path
+) -> None:
+    """Guard the gate: a real final message (no approval ask) with no
+    review.md still posts via the _last_message fallback."""
+    task = _review_task_with_resumable_session(session, repo_row.id, prs=[3])
+    _with_assignment(session, task)
+    run = tasks.latest_run(session, task.id)
+    assert run is not None
+    run.steps_json = json.dumps(
+        [{"type": "message", "text": "Verdict: looks good, merge it.", "phase": None, "ts": "t"}]
+    )
+    session.commit()
+
+    wt = tmp_path / "review-wt"
+    wt.mkdir(parents=True)  # no .jalebi/review.md
+    recording = RecordingGitHub("ghp_test")
+    monkeypatch.setattr("jalebi.queue.GitHubClient", lambda token: recording)
+
+    q._post_review(session, task, repo_row, 3, wt, run, "tok", lambda s: s)
+
+    assert len(recording.posted) == 1
+    assert "Verdict: looks good" in recording.posted[0][2]
+
+
+class RecordingIssueClient:
+    def __init__(self):
+        self.comments: list[tuple[str, int, str]] = []
+
+    def comment_on_issue(self, full_name, number, body):
+        self.comments.append((full_name, number, body))
+
+
+def test_publish_issue_comments_skipped_on_approval_wait(q, session, repo_row) -> None:
+    """Publish-time issue link comments stay silent when the run ended asking
+    for approval (the push/PR itself is unaffected — only the comment)."""
+    task = tasks.create_task(
+        session, type_="issue_fix", repo_id=repo_row.id, prompt="fix it", issues=[12]
+    )
+    run = Run(
+        task_id=task.id,
+        seq=1,
+        session_id="ses_1",
+        status="done",
+        started_at=now(),
+        finished_at=now(),
+    )
+    run.steps_json = PLAN_ONLY_STEPS
+    session.add(run)
+    session.commit()
+
+    recording = RecordingIssueClient()
+    q._comment_on_issues(recording, FULL_NAME, task, 77, session=session)
+    assert recording.comments == []
+
+    # Control: a normal final message still gets its issue comment.
+    run.steps_json = json.dumps(
+        [{"type": "message", "text": "Fixed and pushed.", "phase": None, "ts": "t"}]
+    )
+    session.commit()
+    q._comment_on_issues(recording, FULL_NAME, task, 77, session=session)
+    assert len(recording.comments) == 1
+    assert recording.comments[0][:2] == (FULL_NAME, 12)
+
+
 def test_followup_forwards_model_override(q, session, repo_row, monkeypatch) -> None:
     settings.set_setting(session, "auto_publish", False)
     task = _done_task_with_session(session, repo_row.id, session_id="ses_orig")
