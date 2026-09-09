@@ -127,8 +127,22 @@
 - [ ] **Dismissal re-arm:** dismiss attention, then rerun/follow-up → the
       new run's attention is live again (not stuck `done`).
 
-## 9. Known limitations (do NOT expect these yet)
+## 8b. Backend-reliability + searchable-dropdowns QA (tasks 68–75 follow-ups)
 
+- [ ] Every dropdown filters as you type (models, backends, repos, branches,
+      screens, skills, timezones); keyboard Up/Down/Enter/Escape works.
+- [ ] Switching backend in any form clears the model picker; a model id that
+      is not in the new backend's list shows a warning instead of submitting
+      silently (goose offers custom-value entry).
+- [ ] A grok-style word stream shows a handful of merged message steps, not
+      hundreds; collapsed tool calls show `tool — summary` one-liners.
+- [ ] Rerun dialog with a different backend/model actually runs the new
+      backend (run row carries it); a rerun after attempt-cap exhaustion
+      still auto-recovers once.
+- [ ] Follow-up with a backend switch shows the backend badge on its row;
+      a failed follow-up still appears in the follow-ups list.
+
+## 9. Known limitations (do NOT expect these yet)
 - `test_check_runs.py:331` may flake under full-suite load (isolated green).
 - Fork push needs maintainer-edit permission; otherwise `new_pr` fallback.
 - Claude Code adapter: unit-tested only (no live auth on dev machine).
