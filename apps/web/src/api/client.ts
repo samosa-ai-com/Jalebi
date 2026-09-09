@@ -336,7 +336,13 @@ export const api = {
     request<{ status: string }>(`/api/tasks/${id}/cancel`, { method: "POST" }),
   dismissAttention: (id: number) =>
     request<Task>(`/api/tasks/${id}/dismiss-attention`, { method: "POST" }),
-  rerunTask: (id: number) => request<Task>(`/api/tasks/${id}/rerun`, { method: "POST" }),
+  rerunTask: (id: number, opts?: { cli?: string; model?: string }) =>
+    request<Task>(`/api/tasks/${id}/rerun`, {
+      method: "POST",
+      body: Object.keys(opts ?? {}).length
+        ? JSON.stringify(opts)
+        : undefined,
+    }),
   deleteTask: (id: number) =>
     request<{ deleted: number }>(`/api/tasks/${id}`, { method: "DELETE" }),
   publishTask: (

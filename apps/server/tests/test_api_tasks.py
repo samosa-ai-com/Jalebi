@@ -140,6 +140,51 @@ def test_rerun(client: FlaskClient, repo_id: int) -> None:
     assert body["retry_count"] == 0
 
 
+def test_rerun_with_cli_override(client: FlaskClient, repo_id: int, session) -> None:
+    """Rerun can override the task's backend CLI."""
+    task_id = client.post(
+        "/api/tasks", json={"repo_id": repo_id, "prompt": "x", "cli": "opencode"}
+    ).get_json()["id"]
+    from jalebi import tasks as tasks_svc
+    task = tasks_svc.get_task(session, task_id)
+    task.status = "failed"
+    session.commit()
+    resp = client.post(f"/api/tasks/{task_id}/rerun", json={"cli": "codex"})
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["status"] == "queued"
+    assert body["cli"] == "codex"
+
+
+def test_rerun_with_model_override(client: FlaskClient, repo_id: int, session) -> None:
+    """Rerun can override the task's model."""
+    task_id = client.post(
+        "/api/tasks", json={"repo_id": repo_id, "prompt": "x", "model": "m1"}
+    ).get_json()["id"]
+    from jalebi import tasks as tasks_svc
+    task = tasks_svc.get_task(session, task_id)
+    task.status = "failed"
+    session.commit()
+    resp = client.post(f"/api/tasks/{task_id}/rerun", json={"model": "m2"})
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["model"] == "m2"
+
+
+def test_rerun_with_invalid_cli(client: FlaskClient, repo_id: int, session) -> None:
+    """Rerun rejects an unsupported CLI with a 400."""
+    task_id = client.post(
+        "/api/tasks", json={"repo_id": repo_id, "prompt": "x"}
+    ).get_json()["id"]
+    from jalebi import tasks as tasks_svc
+    task = tasks_svc.get_task(session, task_id)
+    task.status = "failed"
+    session.commit()
+    resp = client.post(f"/api/tasks/{task_id}/rerun", json={"cli": "nonexistent"})
+    assert resp.status_code == 400
+    assert "unsupported agent cli" in resp.get_json()["error"]
+
+
 def test_rerun_running_conflict(client: FlaskClient, repo_id: int) -> None:
     task_id = client.post("/api/tasks", json={"repo_id": repo_id, "prompt": "x"}).get_json()["id"]
     resp = client.post(f"/api/tasks/{task_id}/rerun")

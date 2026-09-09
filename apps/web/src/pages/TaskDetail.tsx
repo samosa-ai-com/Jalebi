@@ -1028,6 +1028,130 @@ function DiffSection({ taskId, run, isLatest }: { taskId: number; run: Run; isLa
   );
 }
 
+/** Rerun dialog: lets the user override the backend/model when re-running a task. */
+function RerunDialog({
+  taskId,
+  task,
+  open,
+  onClose,
+  cli,
+  model,
+  models,
+  setCli,
+  setModel,
+}: {
+  taskId: number;
+  task: Task;
+  open: boolean;
+  onClose: () => void;
+  cli: string;
+  model: string;
+  models: string[];
+  setCli: (v: string) => void;
+  setModel: (v: string) => void;
+}) {
+  const backendOptions = useBackends();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const resolvedTaskCli = task.cli ?? "opencode";
+
+  async function handleRerun() {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.rerunTask(taskId, {
+        cli: cli || undefined,
+        model: model || undefined,
+      });
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "rerun failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!open) return null;
+  return createPortal(
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="surface w-full max-w-md space-y-4 p-5 animate-fade-up">
+        <div>
+          <h2 className="text-sm font-semibold text-ink-100">Re-run task</h2>
+          <p className="mt-1 text-xs text-ink-400">
+            Rerun this task. Optionally switch the backend or model to
+            address model-specific failures (e.g. rate limits).
+          </p>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="block">
+            <span className="mb-1.5 block text-xs font-medium text-ink-400">Backend</span>
+            <select
+              value={cli}
+              onChange={(e) => {
+                setCli(e.target.value);
+                setModel("");
+              }}
+              className="field"
+            >
+              <option value="">Default ({resolvedTaskCli})</option>
+              {backendOptions.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="mb-1.5 block text-xs font-medium text-ink-400">Model</span>
+            <select
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              className="field"
+            >
+              <option value="">Default</option>
+              {models.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        {error && <p className="text-xs text-red-400">{error}</p>}
+
+        <div className="flex justify-end gap-2">
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={onClose}
+            disabled={busy}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn-primary disabled:opacity-40"
+            onClick={handleRerun}
+            disabled={busy}
+          >
+            {busy ? "Re-running…" : "Re-run"}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
 export default function TaskDetail() {
   const { id } = useParams();
   const location = useLocation();
@@ -1055,6 +1179,11 @@ export default function TaskDetail() {
     branch?: string;
     pr_number?: number;
   } | null>(null);
+  // Rerun dialog: backend/model override for re-runs.
+  const [rerunDialogOpen, setRerunDialogOpen] = useState(false);
+  const [rerunCli, setRerunCli] = useState("");
+  const [rerunModel, setRerunModel] = useState("");
+  const [rerunModels, setRerunModels] = useState<string[]>([]);
   // Agent chip (avatar + name for task.agent_id; best-effort, hidden otherwise).
   const [agentName, setAgentName] = useState<string | null>(null);
   const [agentAvatar, setAgentAvatar] = useState<string | null>(null);
@@ -1136,6 +1265,20 @@ export default function TaskDetail() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Fetch models when the rerun backend selector changes.
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getModels(rerunCli || undefined)
+      .then((m) => {
+        if (!cancelled) setRerunModels(m.models ?? []);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [rerunCli]);
 
   // Cancel / Re-run / Publish: serialized, with errors surfaced inline instead of
   // silently swallowed (D-4). The ref check is synchronous so two clicks in the
@@ -1727,7 +1870,15 @@ export default function TaskDetail() {
           </Action>
         )}
         {TERMINAL.has(task.status) && task.status !== "needs_approval" && (
-          <Action onClick={() => runAction(() => api.rerunTask(task.id))} disabled={actionBusy}>
+          <Action
+            onClick={() => {
+              setRerunCli(task.cli ?? "");
+              setRerunModel("");
+              setRerunModels([]);
+              setRerunDialogOpen(true);
+            }}
+            disabled={actionBusy}
+          >
             Re-run
           </Action>
         )}
@@ -1999,6 +2150,19 @@ export default function TaskDetail() {
               await api.getTask(task.id).then((t) => setTask(t));
             });
           }}
+        />
+      )}
+      {rerunDialogOpen && task && (
+        <RerunDialog
+          taskId={task.id}
+          task={task}
+          open={rerunDialogOpen}
+          onClose={() => setRerunDialogOpen(false)}
+          cli={rerunCli}
+          model={rerunModel}
+          models={rerunModels}
+          setCli={setRerunCli}
+          setModel={setRerunModel}
         />
       )}
     </div>

@@ -447,6 +447,15 @@ def rerun_task(task_id: int) -> ResponseReturnValue:
             ),
             409,
         )
+    payload = request.get_json(silent=True) or {}
+    cli = payload.get("cli")
+    if cli is not None:
+        if cli not in available_adapters():
+            return jsonify({"error": f"unsupported agent cli: {cli}"}), 400
+        task.cli = cli
+    model = payload.get("model")
+    if model is not None:
+        task.model = model
     task.status = "queued"
     task.updated_at = now()
     session.commit()
