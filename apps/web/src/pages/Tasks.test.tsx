@@ -78,6 +78,13 @@ const DEFAULT_HANDLERS = {
   "/api/screenings": [],
 };
 
+/** Pick an option in a SearchableSelect: open it by label, search, click. */
+async function pick(label: string | RegExp, search: string, option: string | RegExp) {
+  await userEvent.click(await screen.findByLabelText(label));
+  await userEvent.type(screen.getByRole("combobox"), search);
+  await userEvent.click(await screen.findByRole("option", { name: option }));
+}
+
 describe("Tasks", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -92,7 +99,7 @@ describe("Tasks", () => {
       </MemoryRouter>
     );
     expect(await screen.findByText("do the thing")).toBeInTheDocument();
-    expect(screen.getAllByText("owner/repo").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/owner\/repo/).length).toBeGreaterThan(0);
     expect(screen.getByText("done")).toBeInTheDocument();
   });
 
@@ -168,7 +175,7 @@ describe("Tasks", () => {
     );
 
     await screen.findByText("New task");
-    await userEvent.selectOptions(screen.getByLabelText("Task type"), "issue_fix");
+    await pick("Task type", "issue", "Issue fix");
     expect(
       await screen.findByLabelText("Target branch (worktree base / PR base)")
     ).toBeInTheDocument();
@@ -184,7 +191,7 @@ describe("Tasks", () => {
     );
 
     await screen.findByText("New task");
-    await userEvent.selectOptions(screen.getByLabelText("Task type"), "pr_review");
+    await pick("Task type", "review", "Review PR");
     expect(screen.queryByLabelText("Source branch")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Target branch (PR base)")).not.toBeInTheDocument();
     expect(
@@ -231,11 +238,11 @@ describe("Tasks", () => {
     );
 
     await screen.findByText("New task");
-    const picker = await screen.findByLabelText("Link PR (optional)");
+    await userEvent.click(await screen.findByLabelText("Link PR (optional)"));
     expect(screen.getByRole("option", { name: /#1 — Phase 1/ })).toBeInTheDocument();
 
-    await userEvent.selectOptions(picker, "1");
-    expect(picker).toHaveValue("1");
+    await userEvent.click(screen.getByRole("option", { name: /#1 — Phase 1/ }));
+    expect(screen.getByLabelText("Link PR (optional)")).toHaveTextContent(/#1/);
   });
 
   it("linking a PR defaults the address-reviews checkbox to checked and sends it", async () => {
@@ -267,8 +274,7 @@ describe("Tasks", () => {
     // No linked PR yet → no checkbox.
     expect(screen.queryByLabelText(/Address the review comments/)).toBeNull();
 
-    const picker = await screen.findByLabelText("Link PR (optional)");
-    await userEvent.selectOptions(picker, "1");
+    await pick("Link PR (optional)", "#1", /#1/);
     const box = (await screen.findByLabelText(/Address the review comments/)) as HTMLInputElement;
     expect(box.checked).toBe(true);
 
@@ -313,8 +319,7 @@ describe("Tasks", () => {
     );
 
     await screen.findByText("New task");
-    const picker = await screen.findByLabelText("Link PR (optional)");
-    await userEvent.selectOptions(picker, "2");
+    await pick("Link PR (optional)", "#2", /#2/);
     const box = (await screen.findByLabelText(/Address the review comments/)) as HTMLInputElement;
     await userEvent.click(box);
     expect(box.checked).toBe(false);
@@ -362,16 +367,16 @@ describe("Tasks", () => {
     );
 
     await screen.findByText("New task");
-    const picker = await screen.findByLabelText("Link PR (optional)");
-    await userEvent.selectOptions(picker, "7");
+    await pick("Link PR (optional)", "#7", /#7/);
 
     const useHead = await screen.findByRole("button", {
       name: /Base the worktree on PR #7 head/,
     });
     await userEvent.click(useHead);
 
-    const source = screen.getByLabelText("Source branch") as HTMLSelectElement;
-    expect(source.value).toBe("pr/7/head");
+    const sourceBtn = screen.getByLabelText("Source branch");
+    expect(sourceBtn).toHaveTextContent(/PR #7 head/);
+    await userEvent.click(sourceBtn);
     expect(screen.getByRole("option", { name: /PR #7 head/ })).toBeInTheDocument();
 
     await userEvent.type(screen.getByPlaceholderText("Instructions…"), "address reviews");
@@ -433,11 +438,10 @@ describe("Tasks", () => {
     await screen.findByText("New task");
     // The handoff carries no branches — context load must base the work on
     // the PR (head/base), not the repo default.
-    const source = (await screen.findByLabelText("Source branch")) as HTMLSelectElement;
-    await waitFor(() => expect(source.value).toBe("dev"));
-    expect(
-      (screen.getByLabelText("Target branch (PR base)") as HTMLSelectElement).value
-    ).toBe("main");
+    await waitFor(() => {
+      expect(screen.getByLabelText("Source branch")).toHaveTextContent("dev");
+    });
+    expect(screen.getByLabelText("Target branch (PR base)")).toHaveTextContent("main");
     expect(
       (screen.getByLabelText(/Address the review comments/) as HTMLInputElement).checked
     ).toBe(true);
@@ -511,7 +515,7 @@ describe("Tasks", () => {
     // The Backend select lives behind the Advanced toggle; changing it
     // updates the caption and the model list.
     await userEvent.click(screen.getByRole("button", { name: /Advanced/ }));
-    await userEvent.selectOptions(screen.getByLabelText("Backend"), "claude");
+    await pick("Backend", "claude", "claude");
     await waitFor(() => {
       expect(screen.getByText("claude · runs in a local worktree")).toBeInTheDocument();
     });
@@ -572,10 +576,9 @@ describe("Tasks", () => {
       </MemoryRouter>
     );
     await screen.findByText("New task");
-    const typeSelect = screen.getByLabelText("Task type") as HTMLSelectElement;
-    const values = [...typeSelect.options].map((o) => o.value);
-    expect(values).toContain("freeform");
-    expect(values).not.toContain("screen_finding");
+    await userEvent.click(screen.getByLabelText("Task type"));
+    expect(screen.getByRole("option", { name: "Freeform" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "screen_finding" })).not.toBeInTheDocument();
   });
 });
 
@@ -776,7 +779,7 @@ describe("Tasks page (queue overhaul)", () => {
       </MemoryRouter>
     );
     expect(await screen.findByText("first repo task")).toBeInTheDocument();
-    await userEvent.selectOptions(screen.getByLabelText("Filter by repository"), "owner/other");
+    await pick("Filter by repository", "owner/other", "owner/other");
     expect(screen.getByText("second repo task")).toBeInTheDocument();
     expect(screen.queryByText("first repo task")).not.toBeInTheDocument();
   });
@@ -864,16 +867,15 @@ describe("Tasks page (queue overhaul)", () => {
     );
     expect(await screen.findByText("custom branch work")).toBeInTheDocument();
     await userEvent.click(screen.getByTitle("Clone — pre-fill the form from this task"));
-    // The clone remounts the form, which re-fires the context fetch. Wait
-    // for the "dev" options to render (proof the fetch RESOLVED, not just
-    // fired) plus a macrotask beat, so the check runs after the clobber
-    // window instead of passing vacuously on the pre-fetch render.
+    // The clone remounts the form, which re-fires the context fetch. Open the
+    // source picker and wait for the "dev" option (proof the fetch RESOLVED,
+    // not just fired) plus a macrotask beat, so the check runs after the
+    // clobber window instead of passing vacuously on the pre-fetch render.
+    await userEvent.click(await screen.findByLabelText("Source branch"));
     await screen.findAllByRole("option", { name: "dev" });
     await new Promise((r) => setTimeout(r, 50));
-    expect((screen.getByLabelText("Source branch") as HTMLSelectElement).value).toBe("dev");
-    expect((screen.getByLabelText("Target branch (PR base)") as HTMLSelectElement).value).toBe(
-      "dev"
-    );
+    expect(screen.getByLabelText("Source branch")).toHaveTextContent("dev");
+    expect(screen.getByLabelText("Target branch (PR base)")).toHaveTextContent("dev");
   });
 
   it("running-card Cancel calls the cancel endpoint and reloads", async () => {
@@ -1011,12 +1013,9 @@ describe("Tasks page (queue overhaul)", () => {
       </MemoryRouter>
     );
     await screen.findByText("New task");
-    const picker = await screen.findByLabelText("Link PR (optional)");
-    await userEvent.selectOptions(picker, "3");
-    expect((screen.getByLabelText("Source branch") as HTMLSelectElement).value).toBe("feature-x");
-    expect((screen.getByLabelText("Target branch (PR base)") as HTMLSelectElement).value).toBe(
-      "dev"
-    );
+    await pick("Link PR (optional)", "#3", /#3/);
+    expect(screen.getByLabelText("Source branch")).toHaveTextContent("feature-x");
+    expect(screen.getByLabelText("Target branch (PR base)")).toHaveTextContent("dev");
   });
 
   it("pr_review submits without instructions, sending a default prompt", async () => {
@@ -1044,9 +1043,9 @@ describe("Tasks page (queue overhaul)", () => {
       </MemoryRouter>
     );
     await screen.findByText("New task");
-    await userEvent.selectOptions(screen.getByLabelText("Task type"), "pr_review");
+    await pick("Task type", "review", "Review PR");
     expect(screen.getByText(/optional — the reviewer already knows/)).toBeInTheDocument();
-    await userEvent.selectOptions(screen.getByLabelText("Pull request"), "4");
+    await pick("Pull request", "#4", /#4/);
     // No instructions typed — Create must still be enabled.
     const create = screen.getByRole("button", { name: "Create" });
     expect(create).not.toBeDisabled();
@@ -1080,7 +1079,7 @@ describe("Tasks page (queue overhaul)", () => {
     await userEvent.click(screen.getByRole("button", { name: "Mission control" }));
     await userEvent.click(await screen.findByRole("button", { name: /samosa.*issue_fix/ }));
     await waitFor(() => {
-      expect((screen.getByLabelText("Task type") as HTMLSelectElement).value).toBe("issue_fix");
+      expect(screen.getByLabelText("Task type")).toHaveTextContent("Issue fix");
     });
   });
 
@@ -1272,7 +1271,7 @@ describe("Tasks page (queue overhaul)", () => {
     await screen.findByText("old audit fix");
     await userEvent.click(screen.getByTitle(/Clone/));
     await waitFor(() => {
-      expect((screen.getByLabelText("Task type") as HTMLSelectElement).value).toBe("freeform");
+      expect(screen.getByLabelText("Task type")).toHaveTextContent("Freeform");
     });
   });
 });

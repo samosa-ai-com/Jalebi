@@ -6,6 +6,7 @@ import { BrewHouse } from "../components/brew/BrewHouse";
 import type { SnackKind } from "../components/brew/snacks";
 import { DepBadges } from "../components/DepBadges";
 import { RunningCard } from "../components/RunningCard";
+import SearchableSelect from "../components/SearchableSelect";
 import { StatusBadge } from "../components/StatusBadge";
 import { useBackends } from "../hooks/useBackends";
 import { groupFpsByScreen } from "../lib/screeningDealt";
@@ -50,37 +51,6 @@ const TASK_TYPES = [
   { value: "issue_fix", label: "Issue fix" },
   { value: "pr_review", label: "Review PR" },
 ];
-
-function Select({
-  label,
-  value,
-  onChange,
-  children,
-  placeholder,
-  disabled,
-}: {
-  label: string;
-  value: string | number;
-  onChange: (v: string) => void;
-  children: React.ReactNode;
-  placeholder?: string;
-  disabled?: boolean;
-}) {
-  return (
-    <label className="block">
-      <span className="mb-1.5 block text-xs font-medium text-ink-400">{label}</span>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="field disabled:opacity-50"
-        disabled={disabled}
-      >
-        {placeholder !== undefined && <option value="">{placeholder}</option>}
-        {children}
-      </select>
-    </label>
-  );
-}
 
 /** Cross-page handoff from Screenings: prefill the New-task form. `dealtFps`
  * are finding fingerprints marked dealt only after the create POST succeeds
@@ -467,70 +437,48 @@ function CreateTask({
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <label className="block">
-          <span className="mb-1.5 block text-xs font-medium text-ink-400">Repository</span>
-          <select
-            value={effectiveRepoId}
-            onChange={(e) => selectRepo(Number(e.target.value))}
-            className="field"
-          >
-            {(() => {
-              const groups = new Map<string, Repo[]>();
-              for (const r of repos) {
-                const key = r.pat_name ?? "";
-                if (!groups.has(key)) groups.set(key, []);
-                groups.get(key)!.push(r);
-              }
-              return [...groups.entries()].map(([key, list]) => (
-                <optgroup key={key} label={accountLabel(key || null)}>
-                  {list.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {r.full_name}
-                    </option>
-                  ))}
-                </optgroup>
-              ));
-            })()}
-          </select>
-        </label>
-        <Select label="Task type" value={type} onChange={setType}>
-          {TASK_TYPES.map((t) => (
-            <option key={t.value} value={t.value}>
-              {t.label}
-            </option>
-          ))}
-        </Select>
+        <SearchableSelect
+          label="Repository"
+          value={effectiveRepoId}
+          onChange={(v) => selectRepo(Number(v))}
+          options={repos.map((r) => ({
+            value: String(r.id),
+            label: `${accountLabel(r.pat_name)} / ${r.full_name}`,
+          }))}
+        />
+        <SearchableSelect
+          label="Task type"
+          value={type}
+          onChange={(v) => setType(v as typeof type)}
+          options={TASK_TYPES}
+        />
       </div>
 
       {(type === "issue_fix" || type === "pr_review" || type === "freeform") && context && (
         <div className="grid gap-4 sm:grid-cols-2">
           {type === "issue_fix" && (
-            <Select
+            <SearchableSelect
               label="Issue"
               value={issueNumber}
               onChange={setIssueNumber}
               placeholder={context.issues.length ? "Select an issue…" : "No open issues"}
-            >
-              {context.issues.map((i) => (
-                <option key={i.number} value={i.number}>
-                  #{i.number} — {i.title}
-                </option>
-              ))}
-            </Select>
+              options={context.issues.map((i) => ({
+                value: String(i.number),
+                label: `#${i.number} — ${i.title}`,
+              }))}
+            />
           )}
           {type !== "issue_fix" && (
-            <Select
+            <SearchableSelect
               label={type === "pr_review" ? "Pull request" : "Link PR (optional)"}
               value={prNumber}
               onChange={selectPr}
               placeholder={context.prs.length ? "Select a PR…" : "No open PRs"}
-            >
-              {context.prs.map((p) => (
-                <option key={p.number} value={p.number}>
-                  #{p.number} — {p.title}
-                </option>
-              ))}
-            </Select>
+              options={context.prs.map((p) => ({
+                value: String(p.number),
+                label: `#${p.number} — ${p.title}`,
+              }))}
+            />
           )}
         </div>
       )}
@@ -554,60 +502,53 @@ function CreateTask({
 
       {type === "issue_fix" ? (
         <div className="grid gap-4 sm:grid-cols-2">
-          <Select
+          <SearchableSelect
             label="Target branch (worktree base / PR base)"
             value={targetBranch}
             onChange={setTargetBranch}
             placeholder={
               context ? (context.branches.length ? "default" : "no branches") : "loading…"
             }
-          >
-            {(context?.branches ?? []).map((b) => (
-              <option key={b} value={b}>
-                {b}
-              </option>
-            ))}
-          </Select>
+            options={context?.branches ?? []}
+          />
         </div>
       ) : type === "pr_review" ? null : (
         <div className="space-y-3">
           <div className="grid gap-4 sm:grid-cols-2">
-            <Select
+            <SearchableSelect
               label="Source branch"
               value={sourceBranch}
               onChange={setSourceBranch}
               placeholder={
                 context ? (context.branches.length ? "default" : "no branches") : "loading…"
               }
-            >
-              {(context?.branches ?? []).map((b) => (
-                <option key={b} value={b}>
-                  {b}
-                </option>
-              ))}
-              {(showPrHeadOption || isPrHeadSelected) && selectedPr && (
-                <option value={prHeadValue}>
-                  PR #{selectedPr.number} head
-                  {selectedPr.head_repo
-                    ? ` (${selectedPr.head_repo}:${selectedPr.head})`
-                    : ` (${selectedPr.head})`}
-                </option>
-              )}
-            </Select>
-            <Select
+              options={[
+                ...(context?.branches ?? []),
+                ...(showPrHeadOption || isPrHeadSelected
+                  ? selectedPr
+                    ? [
+                        {
+                          value: prHeadValue,
+                          label:
+                            `PR #${selectedPr.number} head` +
+                            (selectedPr.head_repo
+                              ? ` (${selectedPr.head_repo}:${selectedPr.head})`
+                              : ` (${selectedPr.head})`),
+                        },
+                      ]
+                    : []
+                  : []),
+              ]}
+            />
+            <SearchableSelect
               label="Target branch (PR base)"
               value={targetBranch}
               onChange={setTargetBranch}
               placeholder={
                 context ? (context.branches.length ? "default" : "no branches") : "loading…"
               }
-            >
-              {(context?.branches ?? []).map((b) => (
-                <option key={b} value={b}>
-                  {b}
-                </option>
-              ))}
-            </Select>
+              options={context?.branches ?? []}
+            />
           </div>
           {showPrHeadOption && selectedPr && !isPrHeadSelected && (
             <p className="text-[11px] leading-relaxed text-ink-500">
@@ -694,58 +635,54 @@ function CreateTask({
         {showAdvanced && (
           <div className="space-y-4 px-4 pb-4">
             <div className="grid gap-4 sm:grid-cols-4">
-              <Select
+              <SearchableSelect
                 label="Agent"
                 value={agentId}
                 onChange={setAgentId}
                 placeholder="Default build agent"
-              >
-                {agents.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name} ({a.id})
-                  </option>
-                ))}
-              </Select>
-              <Select
+                options={agents.map((a) => ({ value: a.id, label: `${a.name} (${a.id})` }))}
+              />
+              <SearchableSelect
                 label="Backend"
                 value={agentCli ?? ""}
-                onChange={setAgentCli}
+                onChange={(v) => {
+                  setAgentCli(v);
+                  // A new backend means a new model list — drop the old pick
+                  // so a stale id from another backend is never submitted.
+                  setModel("");
+                }}
                 disabled={settingsLoading}
-              >
-                {backendOptions.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-              </Select>
-              <Select label="Model" value={model} onChange={setModel} placeholder="default model">
-                {models.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-              </Select>
-              <Select
+                options={backendOptions}
+              />
+              <SearchableSelect
+                label="Model"
+                value={model}
+                onChange={setModel}
+                placeholder="default model"
+                options={models}
+                allowCustom
+                staleHint="Not in this backend's known list — will be sent as-is."
+              />
+              <SearchableSelect
                 label="Credentials"
                 value={patName}
                 onChange={setPatName}
                 placeholder="Inherit repo account"
-              >
-                {accounts.map((a) => (
-                  <option key={a.name} value={a.name}>
-                    {a.login ?? a.name} ({a.masked})
-                  </option>
-                ))}
-              </Select>
-              <Select
+                options={accounts.map((a) => ({
+                  value: a.name,
+                  label: `${a.login ?? a.name} (${a.masked})`,
+                }))}
+              />
+              <SearchableSelect
                 label="Publish mode"
                 value={publishMode}
                 onChange={(v) => setPublishMode(v as "auto" | "manual" | "")}
                 placeholder="Auto (by type)"
-              >
-                <option value="auto">Auto — publish when done</option>
-                <option value="manual">Manual — I publish</option>
-              </Select>
+                options={[
+                  { value: "auto", label: "Auto — publish when done" },
+                  { value: "manual", label: "Manual — I publish" },
+                ]}
+              />
             </div>
 
             {availableEnvVars.length > 0 && (
@@ -1435,22 +1372,16 @@ export default function Tasks() {
                   {f.label} ({filterCounts[f.id]})
                 </button>
               ))}
-              <select
+              <SearchableSelect
+                label="Filter by repository"
                 value={repoFilter}
-                onChange={(e) => {
-                  setRepoFilter(e.target.value);
+                onChange={(v) => {
+                  setRepoFilter(v);
                   setPage(0);
                 }}
-                aria-label="Filter by repository"
-                className="field !w-auto !py-1 text-sm"
-              >
-                <option value="">All repos</option>
-                {repoNames.map((n) => (
-                  <option key={n} value={n}>
-                    {n}
-                  </option>
-                ))}
-              </select>
+                placeholder="All repos"
+                options={repoNames}
+              />
               <input
                 value={query}
                 onChange={(e) => {

@@ -1,5 +1,6 @@
 import { Children, isValidElement, useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
+import SearchableSelect from "../components/SearchableSelect";
 import type {
   BackupInfo,
   DataUsage,
@@ -879,19 +880,14 @@ function EnvVarsSection({
           className="field font-mono sm:col-span-2"
         />
         <div className="flex gap-2">
-          <select
+          <SearchableSelect
+            label="Scope"
+            hideLabel
             value={repoId}
-            onChange={(e) => setRepoId(e.target.value)}
-            className="field flex-1"
-            aria-label="Scope"
-          >
-            <option value="">global</option>
-            {repos.map((r) => (
-              <option key={r.id} value={r.id}>
-                {r.full_name}
-              </option>
-            ))}
-          </select>
+            onChange={setRepoId}
+            placeholder="global"
+            options={repos.map((r) => ({ value: String(r.id), label: r.full_name }))}
+          />
           <button
             type="submit"
             disabled={busy || !name.trim() || !value || !!nameError}
@@ -917,19 +913,14 @@ function EnvVarsSection({
           className="field w-full resize-y font-mono leading-relaxed"
         />
         <div className="flex flex-wrap items-center gap-2">
-          <select
+          <SearchableSelect
+            label="Import scope"
+            hideLabel
             value={importScope}
-            onChange={(e) => setImportScope(e.target.value)}
-            className="field w-40"
-            aria-label="Import scope"
-          >
-            <option value="">global</option>
-            {repos.map((r) => (
-              <option key={r.id} value={r.id}>
-                {r.full_name}
-              </option>
-            ))}
-          </select>
+            onChange={setImportScope}
+            placeholder="global"
+            options={repos.map((r) => ({ value: String(r.id), label: r.full_name }))}
+          />
           <button type="submit" disabled={busy || !importText.trim()} className="btn-ghost">
             Import .env
           </button>
@@ -1650,20 +1641,15 @@ export default function Settings() {
           >
             <label className="flex items-center gap-2 text-xs text-ink-400">
               Backend
-              <select
+              <SearchableSelect
+                label="Default backend"
+                hideLabel
                 value={settings.default_backend}
-                onChange={(e) => void save("default_backend", e.target.value)}
-                className="field w-44"
-                aria-label="Default backend"
-              >
-                {(settings.enabled_backends?.length ? settings.enabled_backends : AGENT_CLIS).map(
-                  (c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  )
-                )}
-              </select>
+                onChange={(v) => void save("default_backend", v)}
+                options={
+                  settings.enabled_backends?.length ? settings.enabled_backends : AGENT_CLIS
+                }
+              />
             </label>
           </Row>
           <Row
@@ -1724,28 +1710,19 @@ export default function Settings() {
             <div className="flex flex-col items-end gap-2">
               <label className="flex items-center gap-2 text-xs text-ink-400">
                 Model
-                <select
+                <SearchableSelect
+                  label="Default model"
+                  hideLabel
                   value={modelInList ? settings.default_model : ""}
-                  onChange={(e) => {
-                    if (e.target.value) void save("default_model", e.target.value);
+                  onChange={(v) => {
+                    if (v) void save("default_model", v);
                   }}
-                  className="field w-44"
-                  aria-label="Default model"
-                >
-                  <option value="" disabled>
-                    {defaultModels.length === 0 ? "no models returned" : "select a model"}
-                  </option>
-                  {defaultModels.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
-                  {!modelInList && settings.default_model !== "" && (
-                    <option value={settings.default_model}>
-                      {settings.default_model} (custom)
-                    </option>
-                  )}
-                </select>
+                  placeholder={
+                    defaultModels.length === 0 ? "no models returned" : "select a model"
+                  }
+                  options={defaultModels}
+                  allowCustom
+                />
               </label>
               {showCustomModel && (
                 <label className="flex items-center gap-2 text-xs text-ink-400">
@@ -1899,35 +1876,29 @@ export default function Settings() {
             {timezones ? (
               <label className="flex items-center gap-2 text-xs text-ink-400">
                 Zone
-                <select
+                <SearchableSelect
+                  label="Timezone"
+                  hideLabel
                   value={tzKnown ? (settings.timezone ?? "local") : "__unknown__"}
-                  onChange={(e) => void save("timezone", e.target.value)}
-                  className="field w-52"
-                  aria-label="Timezone"
-                >
-                  <option value="local">local (this machine)</option>
-                  {!tzKnown && (
-                    <option value="__unknown__" disabled>
-                      {settings.timezone} (unknown — pick one)
-                    </option>
-                  )}
-                  <optgroup label="Common">
-                    {timezones.common.map((z) => (
-                      <option key={z} value={z}>
-                        {z}
-                      </option>
-                    ))}
-                  </optgroup>
-                  <optgroup label="All">
-                    {timezones.all
+                  onChange={(v) => {
+                    if (v && v !== "__unknown__") void save("timezone", v);
+                  }}
+                  options={[
+                    { value: "local", label: "local (this machine)" },
+                    ...(!tzKnown
+                      ? [
+                          {
+                            value: "__unknown__",
+                            label: `${settings.timezone} (unknown — pick one)`,
+                          },
+                        ]
+                      : []),
+                    ...timezones.common.map((z) => ({ value: z, label: `Common / ${z}` })),
+                    ...timezones.all
                       .filter((z) => !timezones.common.includes(z))
-                      .map((z) => (
-                        <option key={z} value={z}>
-                          {z}
-                        </option>
-                      ))}
-                  </optgroup>
-                </select>
+                      .map((z) => ({ value: z, label: z })),
+                  ]}
+                />
               </label>
             ) : (
               <TextInput

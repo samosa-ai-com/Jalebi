@@ -120,6 +120,25 @@ const FINDINGS = [
   },
 ];
 
+/** Pick an option in a SearchableSelect: open it by label, search, click. */
+async function pick(label: string | RegExp, search: string, option: string | RegExp) {
+  await userEvent.click(await screen.findByLabelText(label));
+  await userEvent.type(screen.getByRole("combobox"), search);
+  await userEvent.click(await screen.findByRole("option", { name: option }));
+}
+
+/** Load-gate: the screens fetch resolved (the screen filter offers the
+ * screen). Replaces bare findByText gates, which used to match the native
+ * select's inline options — the searchable picker only renders options
+ * when open. */
+async function awaitScreensLoaded(name: string | RegExp = "owner/repo · Security posture") {
+  const btn = await screen.findByLabelText("Filter by screen");
+  await userEvent.click(btn);
+  expect(await screen.findByRole("option", { name })).toBeInTheDocument();
+  // Toggle closed (Escape only reaches the search input when focused).
+  await userEvent.click(btn);
+}
+
 function makeFetchMock() {
   return vi.fn(async (url: string, init?: RequestInit) => {
     const method = init?.method ?? "GET";
@@ -242,11 +261,8 @@ describe("Screenings", () => {
     await goScreens();
     await screen.findByText("owner/repo · Security posture");
     await userEvent.click(screen.getByRole("button", { name: "New screen" }));
-    await userEvent.selectOptions(
-      screen.getByDisplayValue("Pick a starter screen…"),
-      "Security posture"
-    );
-    await userEvent.selectOptions(screen.getByLabelText("Repo"), "1");
+    await pick("Starter template", "Security", "Security posture");
+    await pick("Repo", "owner/repo", "owner/repo");
     await userEvent.click(screen.getByRole("button", { name: "Create screen" }));
     await waitFor(() => {
       const call = fetchMock.mock.calls.find(
@@ -332,9 +348,8 @@ describe("Screenings", () => {
     await goScreens();
     await screen.findByText("owner/repo · Security posture");
     await userEvent.click(screen.getByRole("button", { name: "New screen" }));
-    const tplSelect = screen.getByDisplayValue("Pick a starter screen…") as HTMLSelectElement;
-    await userEvent.selectOptions(tplSelect, "Security posture");
-    expect(tplSelect.value).toBe("Security posture");
+    await pick("Starter template", "Security", "Security posture");
+    expect(screen.getByLabelText("Starter template")).toHaveTextContent("Security posture");
   });
 
   it("populates the scope branch dropdown from the repo's branches", async () => {
@@ -344,13 +359,14 @@ describe("Screenings", () => {
     await goScreens();
     await screen.findByText("owner/repo · Security posture");
     await userEvent.click(screen.getByRole("button", { name: "New screen" }));
-    await userEvent.selectOptions(screen.getByLabelText("Repo"), "1");
+    await pick("Repo", "owner/repo", "owner/repo");
     await waitFor(() => {
       const call = fetchMock.mock.calls.find((c) => c[0] === "/api/repos/1/branches");
       expect(call).toBeTruthy();
     });
-    const scope = screen.getByLabelText(/Scope branch/) as HTMLSelectElement;
-    expect([...scope.options].map((o) => o.value)).toEqual(expect.arrayContaining(["main", "dev"]));
+    await userEvent.click(screen.getByLabelText(/Scope branch/));
+    expect(screen.getByRole("option", { name: "main" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "dev" })).toBeInTheDocument();
   });
 
   it("edits a screen from the card and saves via PUT", async () => {
@@ -401,11 +417,12 @@ describe("Screenings", () => {
     await screen.findByText("owner/repo · Security posture");
     await userEvent.click(screen.getByRole("button", { name: "New screen" }));
 
-    const backend = screen.getByLabelText("Backend") as HTMLSelectElement;
-    expect(backend.value).toBe("");
-    expect([...backend.options].map((o) => o.value)).toEqual(
-      expect.arrayContaining(["", "opencode", "codex", "claude"])
-    );
+    const backendBtn = screen.getByLabelText("Backend");
+    expect(backendBtn).toHaveTextContent("default (global setting)");
+    await userEvent.click(backendBtn);
+    expect(screen.getByRole("option", { name: "opencode" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "codex" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "claude" })).toBeInTheDocument();
   });
 
   it("refetches the Model dropdown when the Backend changes", async () => {
@@ -416,16 +433,18 @@ describe("Screenings", () => {
     await screen.findByText("owner/repo · Security posture");
     await userEvent.click(screen.getByRole("button", { name: "New screen" }));
 
-    const model = screen.getByLabelText("Model") as HTMLSelectElement;
-    expect([...model.options].map((o) => o.value)).toEqual(
-      expect.arrayContaining(["opencode-go/deepseek-v4-flash"])
-    );
+    await userEvent.click(screen.getByLabelText("Model"));
+    expect(
+      screen.getByRole("option", { name: "opencode-go/deepseek-v4-flash" })
+    ).toBeInTheDocument();
 
-    await userEvent.selectOptions(screen.getByLabelText("Backend"), "codex");
+    await pick("Backend", "codex", "codex");
     await waitFor(() => {
-      expect([...model.options].map((o) => o.value)).toEqual(
-        expect.arrayContaining(["gpt-5.4-mini", "gpt-5.5"])
-      );
+      expect(fetchMock.mock.calls.some(([u]) => String(u).includes("cli=codex"))).toBe(true);
+    });
+    await userEvent.click(screen.getByLabelText("Model"));
+    await waitFor(() => {
+      expect(screen.getByRole("option", { name: "gpt-5.4-mini" })).toBeInTheDocument();
     });
     // The model list followed the selected backend, not the global setting.
     expect(fetchMock.mock.calls.some(([u]) => String(u).includes("cli=codex"))).toBe(true);
@@ -498,11 +517,12 @@ describe("Screenings", () => {
     await screen.findByText("owner/repo · Security posture");
     await userEvent.click(screen.getByRole("button", { name: "New screen" }));
 
-    const model = screen.getByLabelText("Model") as HTMLSelectElement;
-    await userEvent.selectOptions(model, "opencode-go/deepseek-v4-flash");
-    expect(model.value).toBe("opencode-go/deepseek-v4-flash");
-    await userEvent.selectOptions(screen.getByLabelText("Backend"), "codex");
-    await waitFor(() => expect(model.value).toBe(""));
+    await pick("Model", "deepseek", "opencode-go/deepseek-v4-flash");
+    expect(screen.getByLabelText("Model")).toHaveTextContent("opencode-go/deepseek-v4-flash");
+    await pick("Backend", "codex", "codex");
+    await waitFor(() =>
+      expect(screen.getByLabelText("Model")).toHaveTextContent("default (CLI default)")
+    );
   });
 
   it("surfaces branch-list failures in the form", async () => {
@@ -522,7 +542,7 @@ describe("Screenings", () => {
     await goScreens();
     await screen.findByText("owner/repo · Security posture");
     await userEvent.click(screen.getByRole("button", { name: "New screen" }));
-    await userEvent.selectOptions(screen.getByLabelText("Repo"), "1");
+    await pick("Repo", "owner/repo", "owner/repo");
     expect(await screen.findByText(/Branch list failed to load/)).toBeInTheDocument();
   });
 
@@ -597,7 +617,7 @@ describe("Screenings", () => {
   it("shows a unified findings inbox with severity filter", async () => {
     vi.stubGlobal("fetch", makeFetchMock());
     renderScreenings();
-    await screen.findByText("owner/repo · Security posture");
+    await awaitScreensLoaded();
     await userEvent.click(screen.getByRole("button", { name: "findings" }));
     expect(await screen.findByText("Stale comment")).toBeInTheDocument();
     expect(screen.getByText("Secret in config")).toBeInTheDocument();
@@ -610,7 +630,7 @@ describe("Screenings", () => {
     const fetchMock = makeFetchMock();
     vi.stubGlobal("fetch", fetchMock);
     renderScreenings();
-    await screen.findByText("owner/repo · Security posture");
+    await awaitScreensLoaded();
     await userEvent.click(screen.getByRole("button", { name: "findings" }));
     await screen.findByText("Secret in config");
     await userEvent.click(screen.getByText("Secret in config"));
@@ -632,7 +652,7 @@ describe("Screenings", () => {
     const fetchMock = makeFetchMock();
     vi.stubGlobal("fetch", fetchMock);
     renderScreenings();
-    await screen.findByText("owner/repo · Security posture");
+    await awaitScreensLoaded();
     await userEvent.click(screen.getByRole("button", { name: "findings" }));
     await screen.findByText("Stale comment");
     await userEvent.click(screen.getByLabelText("Select all visible findings"));
@@ -667,10 +687,9 @@ describe("Screenings", () => {
       })
     );
     renderScreenings();
-    await screen.findByText("owner/repo · Security posture");
-    const options = [...screen.getByLabelText("Filter by screen").querySelectorAll("option")].map(
-      (o) => o.textContent
-    );
+    await awaitScreensLoaded();
+    await userEvent.click(screen.getByLabelText("Filter by screen"));
+    const options = screen.getAllByRole("option").map((o) => o.textContent);
     expect(options).toContain("owner/repo · Security posture");
     expect(options).toContain("other/repo · Security posture");
   });
@@ -694,7 +713,7 @@ describe("Screenings", () => {
       })
     );
     renderScreenings();
-    await screen.findByText("owner/repo · Security posture");
+    await awaitScreensLoaded();
     await userEvent.click(screen.getByRole("button", { name: "findings" }));
     await screen.findByText("Stale comment");
     await userEvent.click(screen.getByLabelText("Select all visible findings"));
@@ -729,7 +748,7 @@ describe("Screenings", () => {
   it("filters the inbox by text and shows the empty state", async () => {
     vi.stubGlobal("fetch", makeFetchMock());
     renderScreenings();
-    await screen.findByText("owner/repo · Security posture");
+    await awaitScreensLoaded();
     await userEvent.click(screen.getByRole("button", { name: "findings" }));
     await screen.findByText("Secret in config");
     await userEvent.type(screen.getByLabelText("Filter findings"), "stale");
@@ -763,10 +782,10 @@ describe("Screenings", () => {
     const fetchMock = makeFetchMock();
     vi.stubGlobal("fetch", fetchMock);
     renderScreenings();
-    await screen.findByText("owner/repo · Security posture");
+    await awaitScreensLoaded();
     await userEvent.click(screen.getByRole("button", { name: "findings" }));
     await screen.findByText("Secret in config");
-    await userEvent.selectOptions(screen.getByLabelText("Filter by screen"), "7");
+    await pick("Filter by screen", "Security posture", "owner/repo · Security posture");
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([u]) => String(u).includes("screen_id=7"))).toBe(true);
     });
@@ -776,7 +795,7 @@ describe("Screenings", () => {
     const fetchMock = makeFetchMock();
     vi.stubGlobal("fetch", fetchMock);
     renderScreenings();
-    await screen.findByText("owner/repo · Security posture");
+    await awaitScreensLoaded();
     await screen.findByText("Secret in config");
     await userEvent.click(screen.getByLabelText("Select all visible findings"));
     expect(await screen.findByText("2 selected")).toBeInTheDocument();
@@ -846,7 +865,7 @@ describe("Screenings", () => {
       })
     );
     renderScreenings();
-    await screen.findByText("owner/repo · Security posture");
+    await awaitScreensLoaded();
     await screen.findByText("Secret in config");
     await userEvent.click(screen.getByText("Stale comment"));
     await userEvent.click(screen.getAllByRole("button", { name: "Mark dealt" })[0]);
@@ -858,7 +877,7 @@ describe("Screenings", () => {
   it("reveals and reopens dealt findings via the toggle", async () => {
     vi.stubGlobal("fetch", makeFetchMock());
     renderScreenings();
-    await screen.findByText("owner/repo · Security posture");
+    await awaitScreensLoaded();
     await screen.findByText("Secret in config");
     await userEvent.click(screen.getByText("Stale comment"));
     await userEvent.click(screen.getAllByRole("button", { name: "Mark dealt" })[0]);

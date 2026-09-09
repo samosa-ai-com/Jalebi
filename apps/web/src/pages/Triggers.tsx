@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
+import SearchableSelect from "../components/SearchableSelect";
 import type {
   CatalogAgent,
   DeliveryRuleResult,
@@ -160,54 +161,32 @@ function RuleForm({
       </div>
 
       <div className="grid gap-4 sm:grid-cols-3">
-        <label className="block">
-          <span className="mb-1.5 block text-xs font-medium text-ink-400">Repo</span>
-          <select
+        <div>
+          <SearchableSelect
+            label="Repo"
             value={repoId}
-            onChange={(e) => setRepoId(Number(e.target.value))}
-            className="field"
+            onChange={(v) => setRepoId(Number(v))}
             disabled={!!editing || noRepos}
-          >
-            {repos.map((r) => (
-              <option key={r.id} value={r.id}>
-                {r.full_name}
-              </option>
-            ))}
-          </select>
+            options={repos.map((r) => ({ value: String(r.id), label: r.full_name }))}
+          />
           {noRepos && (
             <span className="mt-1 block text-xs text-amber-400">
               No connected repos — connect one on the Repos page first.
             </span>
           )}
-        </label>
-        <label className="block">
-          <span className="mb-1.5 block text-xs font-medium text-ink-400">Event</span>
-          <select
-            value={event}
-            onChange={(e) => setEvent(e.target.value)}
-            className="field font-mono"
-          >
-            {EVENTS.map((e) => (
-              <option key={e} value={e}>
-                {e}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="block">
-          <span className="mb-1.5 block text-xs font-medium text-ink-400">Action</span>
-          <select
-            value={action}
-            onChange={(e) => setAction(e.target.value)}
-            className="field font-mono"
-          >
-            {ACTIONS.map((a) => (
-              <option key={a} value={a}>
-                {a}
-              </option>
-            ))}
-          </select>
-        </label>
+        </div>
+        <SearchableSelect
+          label="Event"
+          value={event}
+          onChange={setEvent}
+          options={EVENTS}
+        />
+        <SearchableSelect
+          label="Action"
+          value={action}
+          onChange={setAction}
+          options={ACTIONS}
+        />
       </div>
       <p className="text-xs leading-relaxed text-ink-500">{ACTION_HELP[action]}</p>
 
@@ -744,17 +723,16 @@ export default function Triggers() {
         <div className="flex flex-wrap items-center gap-2 border-b border-ink-800 px-4 py-3">
           <h2 className="panel-title">Delivery log</h2>
           <span className="ml-auto flex items-center gap-2">
-            <select
+            <SearchableSelect
+              label="Filter by status"
+              hideLabel
               value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="field !w-auto !py-1 text-xs"
-              aria-label="Filter by status"
-            >
-              <option value="all">all statuses</option>
-              <option value="matched">matched</option>
-              <option value="failed">failed</option>
-              <option value="ignored">ignored</option>
-            </select>
+              onChange={setStatusFilter}
+              options={["all", "matched", "failed", "ignored"].map((s) => ({
+                value: s,
+                label: s === "all" ? "all statuses" : s,
+              }))}
+            />
             <input
               value={logQuery}
               onChange={(e) => setLogQuery(e.target.value)}

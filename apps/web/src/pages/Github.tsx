@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
+import SearchableSelect from "../components/SearchableSelect";
 import type { Account, GithubRepo, Repo } from "../types";
 
 function ScopeChip({ scope }: { scope: string }) {
@@ -512,19 +513,20 @@ export default function Github() {
                           placeholder="Search repositories…"
                           className="field max-w-55 !py-1 text-xs"
                         />
-                        <select
+                        <SearchableSelect
+                          label={`Sort repositories for ${account.name}`}
+                          hideLabel
                           value={controlsFor(account.name).sort}
-                          onChange={(e) =>
+                          onChange={(v) =>
                             setControl(account.name, {
-                              sort: e.target.value as "name" | "connected",
+                              sort: v as "name" | "connected",
                             })
                           }
-                          className="field max-w-44 !py-1 text-xs"
-                          aria-label={`Sort repositories for ${account.name}`}
-                        >
-                          <option value="name">Sort: name</option>
-                          <option value="connected">Sort: connected first</option>
-                        </select>
+                          options={[
+                            { value: "name", label: "Sort: name" },
+                            { value: "connected", label: "Sort: connected first" },
+                          ]}
+                        />
                         {(["all", "connected", "not"] as const).map((s) => (
                           <button
                             key={s}

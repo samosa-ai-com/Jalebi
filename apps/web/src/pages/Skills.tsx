@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
+import SearchableSelect from "../components/SearchableSelect";
 import type { LibrarySkill, SkillUsage } from "../types";
 
 const EMPTY: LibrarySkill = {
@@ -333,16 +334,17 @@ export default function Skills() {
           placeholder="Search id, name, description, content…"
           className="field max-w-xs !py-1.5 text-sm"
         />
-        <select
+        <SearchableSelect
+          label="Sort skills"
+          hideLabel
           value={sort}
-          onChange={(e) => setSort(e.target.value as SortKey)}
-          className="field max-w-44 !py-1.5 text-sm"
-          aria-label="Sort skills"
-        >
-          <option value="name">Sort: name</option>
-          <option value="updated">Sort: recently updated</option>
-          <option value="used">Sort: most used</option>
-        </select>
+          onChange={(v) => setSort(v as SortKey)}
+          options={[
+            { value: "name", label: "Sort: name" },
+            { value: "updated", label: "Sort: recently updated" },
+            { value: "used", label: "Sort: most used" },
+          ]}
+        />
         {allTags.map((t) => (
           <button
             key={t}

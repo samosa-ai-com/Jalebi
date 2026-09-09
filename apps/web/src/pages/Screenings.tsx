@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
+import SearchableSelect from "../components/SearchableSelect";
 import { useBackends } from "../hooks/useBackends";
 import {
   clearLegacyDealt,
@@ -188,24 +189,16 @@ function ScreenForm({
       </div>
 
       {!isEdit && templates.length > 0 && (
-        <div>
-          <span className="mb-1.5 block text-xs font-medium text-ink-400">Starter template</span>
-          <select
-            value={tpl}
-            onChange={(e) => {
-              const t = templates.find((x) => x.name === e.target.value);
-              applyTemplate(t);
-            }}
-            className="field"
-          >
-            <option value="">Pick a starter screen…</option>
-            {templates.map((t) => (
-              <option key={t.name} value={t.name}>
-                {t.name}
-              </option>
-            ))}
-          </select>
-        </div>
+        <SearchableSelect
+          label="Starter template"
+          value={tpl}
+          onChange={(v) => {
+            const t = templates.find((x) => x.name === v);
+            applyTemplate(t);
+          }}
+          placeholder="Pick a starter screen…"
+          options={templates.map((t) => t.name)}
+        />
       )}
 
       <div className="grid gap-4 sm:grid-cols-2">
@@ -213,54 +206,35 @@ function ScreenForm({
           <span className="mb-1.5 block text-xs font-medium text-ink-400">Name</span>
           <input value={name} onChange={(e) => setName(e.target.value)} className="field" />
         </label>
-        <label>
-          <span className="mb-1.5 block text-xs font-medium text-ink-400">Repo</span>
-          <select
-            value={repoId}
-            onChange={(e) => {
-              setRepoId(e.target.value === "" ? "" : Number(e.target.value));
-              setScopeBranch("");
-            }}
-            className="field"
-            disabled={isEdit}
-          >
-            <option value="">Select repo…</option>
-            {repos.map((r) => (
-              <option key={r.id} value={r.id}>
-                {r.full_name}
-              </option>
-            ))}
-          </select>
-        </label>
+        <SearchableSelect
+          label="Repo"
+          value={repoId}
+          onChange={(v) => {
+            setRepoId(v === "" ? "" : Number(v));
+            setScopeBranch("");
+          }}
+          placeholder="Select repo…"
+          disabled={isEdit}
+          options={repos.map((r) => ({ value: String(r.id), label: r.full_name }))}
+        />
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <label>
-          <span className="mb-1.5 block text-xs font-medium text-ink-400">
-            Scope branch <span className="text-ink-600">(blank = default)</span>
-          </span>
-          <select
+        <div>
+          <SearchableSelect
+            label="Scope branch (blank = default)"
             value={scopeBranch}
-            onChange={(e) => setScopeBranch(e.target.value)}
-            className="field font-mono"
+            onChange={setScopeBranch}
+            placeholder="default branch"
             disabled={repoId === ""}
-          >
-            <option value="">default branch</option>
-            {branches.map((b) => (
-              <option key={b} value={b}>
-                {b}
-              </option>
-            ))}
-            {scopeBranch && !branches.includes(scopeBranch) && (
-              <option value={scopeBranch}>{scopeBranch}</option>
-            )}
-          </select>
+            options={branches}
+          />
           {branchesError && (
             <span className="mt-1 block text-[11px] text-amber-400">
               Branch list failed to load ({branchesError}) — the default branch applies.
             </span>
           )}
-        </label>
+        </div>
         <label>
           <span className="mb-1.5 block text-xs font-medium text-ink-400">
             Cadence (5-field cron)
@@ -300,43 +274,33 @@ function ScreenForm({
       </label>
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <label>
-          <span className="mb-1.5 block text-xs font-medium text-ink-400">Backend</span>
-          <select
-            value={cli}
-            onChange={(e) => {
-              setCli(e.target.value);
-              // The old model pin belonged to the old backend — drop it rather
-              // than running an invalid combination (the server does the same).
-              setModel("");
-            }}
-            className="field"
-          >
-            <option value="">default (global setting)</option>
-            {backendOptions.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          <span className="mb-1.5 block text-xs font-medium text-ink-400">Model</span>
-          <select value={model} onChange={(e) => setModel(e.target.value)} className="field">
-            <option value="">default (CLI default)</option>
-            {models.map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
-            ))}
-            {model && !models.includes(model) && <option value={model}>{model}</option>}
-          </select>
+        <SearchableSelect
+          label="Backend"
+          value={cli}
+          onChange={(v) => {
+            setCli(v);
+            // The old model pin belonged to the old backend — drop it rather
+            // than running an invalid combination (the server does the same).
+            setModel("");
+          }}
+          placeholder="default (global setting)"
+          options={backendOptions}
+        />
+        <div>
+          <SearchableSelect
+            label="Model"
+            value={model}
+            onChange={setModel}
+            placeholder="default (CLI default)"
+            options={models}
+            allowCustom
+          />
           {modelsError && (
             <span className="mt-1 block text-[11px] text-amber-400">
               Model list failed to load ({modelsError}) — a saved pin still applies.
             </span>
           )}
-        </label>
+        </div>
       </div>
 
       <div className="flex flex-wrap items-center gap-6">
@@ -847,21 +811,19 @@ function FindingsInbox({ screens, repos }: { screens: Screen[]; repos: Repo[] })
           className="field !w-56 !py-1 text-xs"
           aria-label="Filter findings"
         />
-        <select
+        <SearchableSelect
+          label="Filter by screen"
+          hideLabel
           value={screenFilter}
-          onChange={(e) =>
-            setScreenFilter(e.target.value === "all" ? "all" : Number(e.target.value))
-          }
-          className="field !w-auto !py-1 text-xs"
-          aria-label="Filter by screen"
-        >
-          <option value="all">all screens</option>
-          {screens.map((s) => (
-            <option key={s.id} value={s.id}>
-              {qualifiedScreenName(s.name, repos.find((r) => r.id === s.repo_id)?.full_name)}
-            </option>
-          ))}
-        </select>
+          onChange={(v) => setScreenFilter(v === "all" ? "all" : Number(v))}
+          options={[
+            { value: "all", label: "all screens" },
+            ...screens.map((s) => ({
+              value: String(s.id),
+              label: qualifiedScreenName(s.name, repos.find((r) => r.id === s.repo_id)?.full_name),
+            })),
+          ]}
+        />
         <button
           type="button"
           onClick={() => setHideDealt((v) => !v)}

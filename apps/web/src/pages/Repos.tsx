@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
+import SearchableSelect from "../components/SearchableSelect";
 import type { Repo } from "../types";
 
 function timeAgo(iso: string | null): string {
@@ -212,28 +213,26 @@ export default function Repos() {
           placeholder="Search repositories…"
           className="field max-w-xs !py-1.5 text-sm"
         />
-        <select
+        <SearchableSelect
+          label="Filter by account"
+          hideLabel
           value={accountFilter}
-          onChange={(e) => setAccountFilter(e.target.value)}
-          className="field max-w-44 !py-1.5 text-sm"
-          aria-label="Filter by account"
-        >
-          <option value="all">All accounts</option>
-          {accounts.map((a) => (
-            <option key={a} value={a}>
-              @{a}
-            </option>
-          ))}
-        </select>
-        <select
+          onChange={setAccountFilter}
+          options={[
+            { value: "all", label: "All accounts" },
+            ...accounts.map((a) => ({ value: a, label: `@${a}` })),
+          ]}
+        />
+        <SearchableSelect
+          label="Sort repos"
+          hideLabel
           value={sort}
-          onChange={(e) => setSort(e.target.value as SortKey)}
-          className="field max-w-44 !py-1.5 text-sm"
-          aria-label="Sort repos"
-        >
-          <option value="name">Sort: name</option>
-          <option value="checked">Sort: recently checked</option>
-        </select>
+          onChange={(v) => setSort(v as SortKey)}
+          options={[
+            { value: "name", label: "Sort: name" },
+            { value: "checked", label: "Sort: recently checked" },
+          ]}
+        />
       </div>
 
       <section className="surface animate-fade-up" style={{ animationDelay: "0.1s" }}>

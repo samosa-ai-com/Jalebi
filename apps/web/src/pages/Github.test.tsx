@@ -449,10 +449,9 @@ describe("Github page (repo controls)", () => {
     await screen.findByText("hello");
     expect(await screen.findByText("Repositories (2)")).toBeInTheDocument();
 
-    await userEvent.selectOptions(
-      screen.getByLabelText("Sort repositories for primary"),
-      "connected"
-    );
+    await userEvent.click(screen.getByLabelText("Sort repositories for primary"));
+    await userEvent.type(screen.getByRole("combobox"), "connected");
+    await userEvent.click(screen.getByRole("option", { name: "Sort: connected first" }));
     const items = screen.getAllByRole("listitem");
     expect(items[0].textContent).toContain("acct1/world");
 

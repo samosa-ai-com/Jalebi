@@ -97,7 +97,9 @@ describe("Skills", () => {
     render(<Skills />);
     await screen.findByText(/Linked by 1 agent/);
 
-    await userEvent.selectOptions(screen.getByLabelText("Sort skills"), "used");
+    await userEvent.click(screen.getByLabelText("Sort skills"));
+    await userEvent.type(screen.getByRole("combobox"), "most used");
+    await userEvent.click(screen.getByRole("option", { name: "Sort: most used" }));
     const cards = screen.getAllByText(/secure-coding|git-workflow/, { exact: false });
     expect(cards[0].textContent).toContain("secure-coding");
   });

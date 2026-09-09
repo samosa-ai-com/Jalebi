@@ -311,12 +311,13 @@ describe("Settings", () => {
 
     // The select is unlabeled — scope it by its section heading.
     const section = screen.getByRole("heading", { name: "Default backend" }).closest("section")!;
-    const backendSelect = within(section).getByRole("combobox") as HTMLSelectElement;
+    const backendBtn = within(section).getByRole("button", { name: "Default backend" });
 
-    expect(backendSelect.value).toBe("opencode");
-    expect([...backendSelect.options].map((o) => o.value)).toEqual(
-      expect.arrayContaining(["opencode", "codex", "claude"])
-    );
+    expect(backendBtn).toHaveTextContent("opencode");
+    await userEvent.click(backendBtn);
+    expect(screen.getByRole("option", { name: "opencode" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "codex" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "claude" })).toBeInTheDocument();
   });
 });
 
@@ -636,8 +637,9 @@ describe("Settings (recovery + data)", () => {
     vi.stubGlobal("fetch", fetchMock);
     render(<Settings />);
     await expand(/Queue & timeouts/);
-    const select = await screen.findByRole("combobox", { name: "Timezone" });
-    await userEvent.selectOptions(select, "Asia/Kolkata");
+    await userEvent.click(await screen.findByRole("button", { name: "Timezone" }));
+    await userEvent.type(screen.getByRole("combobox"), "Kolkata");
+    await userEvent.click(screen.getByRole("option", { name: /Asia\/Kolkata/ }));
     await waitFor(() => {
       const bodies = fetchMock.mock.calls
         .filter(([url, init]) => String(url).includes("/api/settings") && init?.method === "POST")

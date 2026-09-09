@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
+import SearchableSelect from "../components/SearchableSelect";
 import { useBackends } from "../hooks/useBackends";
 import { AVATARS, avatarFor, avatarUrl, suggestAvatar } from "../lib/agentAvatars";
 import type { AgentUsage, CatalogAgent, LibrarySkill } from "../types";
@@ -173,22 +174,19 @@ function AgentForm({
             className="field"
           />
         </label>
-        <label className="block">
-          <span className="mb-1.5 block text-xs font-medium text-ink-400">Kind</span>
-          <select
+        <div>
+          <SearchableSelect
+            label="Kind"
             value={form.kind}
-            onChange={(e) => set({ kind: e.target.value as "general" | "reviewer" })}
-            className="field"
-          >
-            <option value="general">general</option>
-            <option value="reviewer">reviewer</option>
-          </select>
+            onChange={(v) => set({ kind: v as "general" | "reviewer" })}
+            options={["general", "reviewer"]}
+          />
           <span className="mt-1 block text-[11px] text-ink-600">
             {form.kind === "reviewer"
               ? "Reviewer: runs the PR review workflow and is selectable in trigger rules."
               : "General: plain build agent for issue_fix / freeform tasks."}
           </span>
-        </label>
+        </div>
       </div>
 
       <label className="block">
@@ -243,53 +241,33 @@ function AgentForm({
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <label className="block">
-          <span className="mb-1.5 block text-xs font-medium text-ink-400">
-            CLI override (optional)
-          </span>
-          <select
-            value={form.cli ?? ""}
-            onChange={(e) => {
-              set({ cli: e.target.value });
-              // The old model pin belonged to the old backend — drop it rather
-              // than running an invalid combination (the server does the same).
-              set({ model: "" });
-            }}
-            className="field"
-          >
-            <option value="">default (global setting)</option>
-            {backendOptions.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="block">
-          <span className="mb-1.5 block text-xs font-medium text-ink-400">
-            Model pin (optional)
-          </span>
-          <select
+        <SearchableSelect
+          label="CLI override (optional)"
+          value={form.cli ?? ""}
+          onChange={(v) => {
+            set({ cli: v });
+            // The old model pin belonged to the old backend — drop it rather
+            // than running an invalid combination (the server does the same).
+            set({ model: "" });
+          }}
+          placeholder="default (global setting)"
+          options={backendOptions}
+        />
+        <div>
+          <SearchableSelect
+            label="Model pin (optional)"
             value={form.model ?? ""}
-            onChange={(e) => set({ model: e.target.value || "" })}
-            className="field font-mono"
-          >
-            <option value="">no pin (CLI default)</option>
-            {models.map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
-            ))}
-            {form.model && !models.includes(form.model) && (
-              <option value={form.model}>{form.model}</option>
-            )}
-          </select>
+            onChange={(v) => set({ model: v || "" })}
+            placeholder="no pin (CLI default)"
+            options={models}
+            allowCustom
+          />
           {modelsError && (
             <span className="mt-1 block text-[11px] text-amber-400">
               Model list failed to load ({modelsError}) — a saved pin still applies.
             </span>
           )}
-        </label>
+        </div>
       </div>
 
       <label className="block">
@@ -612,16 +590,16 @@ export default function Agents() {
           placeholder="Search id, name, description…"
           className="field max-w-xs !py-1.5 text-sm"
         />
-        <select
+        <SearchableSelect
+          label="Sort agents"
           value={sort}
-          onChange={(e) => setSort(e.target.value as "name" | "kind" | "newest")}
-          className="field max-w-44 !py-1.5 text-sm"
-          aria-label="Sort agents"
-        >
-          <option value="name">Sort: name</option>
-          <option value="kind">Sort: kind</option>
-          <option value="newest">Sort: newest</option>
-        </select>
+          onChange={(v) => setSort(v as "name" | "kind" | "newest")}
+          options={[
+            { value: "name", label: "Sort: name" },
+            { value: "kind", label: "Sort: kind" },
+            { value: "newest", label: "Sort: newest" },
+          ]}
+        />
         {(["all", "general", "reviewer"] as const).map((k) => (
           <button
             key={k}

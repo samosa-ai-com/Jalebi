@@ -215,8 +215,9 @@ describe("Triggers", () => {
     await screen.findByText("Webhook status");
 
     await userEvent.click(screen.getByRole("button", { name: "+ New rule" }));
-    const actionSelect = screen.getByLabelText("Action");
-    await userEvent.selectOptions(actionSelect, "create_task");
+    await userEvent.click(screen.getByLabelText("Action"));
+    await userEvent.type(screen.getByRole("combobox"), "create_task");
+    await userEvent.click(screen.getByRole("option", { name: "create_task" }));
     expect(screen.getByText(/first selected runs the task/)).toBeInTheDocument();
     // No prompt yet → inline error, no POST.
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -236,10 +237,14 @@ describe("Triggers", () => {
     const editButtons = await screen.findAllByRole("button", { name: "Edit" });
     expect(editButtons).toHaveLength(2);
     await userEvent.click(editButtons[0]);
-    expect(await screen.findByDisplayValue("pull_request.opened")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Event" })).toHaveTextContent(
+      "pull_request.opened"
+    );
     await userEvent.click(editButtons[1]);
     // Without the key-remount fix the form would still show rule #1's event.
-    expect(await screen.findByDisplayValue("push")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Event" })).toHaveTextContent("push");
+    });
   });
 
   it("rule rows surface author, labels, and prompt markers", async () => {
@@ -304,7 +309,9 @@ describe("Triggers", () => {
     renderTriggers();
     await screen.findByText("Delivery log");
 
-    await userEvent.selectOptions(screen.getByLabelText("Filter by status"), "matched");
+    await userEvent.click(screen.getByLabelText("Filter by status"));
+    await userEvent.type(screen.getByRole("combobox"), "matched");
+    await userEvent.click(screen.getByRole("option", { name: "matched" }));
     await waitFor(() => {
       expect(screen.queryByText("push")).not.toBeInTheDocument();
     });

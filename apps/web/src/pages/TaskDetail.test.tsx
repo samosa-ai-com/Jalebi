@@ -57,6 +57,26 @@ const REPOS = [
   },
 ];
 
+/** Pick an option in a SearchableSelect: open it by label, search, click. */
+async function pick(label: string | RegExp, search: string, option: string | RegExp) {
+  await userEvent.click(await screen.findByLabelText(label));
+  await userEvent.type(screen.getByRole("combobox"), search);
+  await userEvent.click(await screen.findByRole("option", { name: option }));
+}
+
+/** Scoped variant for selects inside a dialog (labels repeat the composer). */
+async function pickIn(
+  container: HTMLElement,
+  label: string | RegExp,
+  search: string,
+  option: string | RegExp
+) {
+  const scope = within(container);
+  await userEvent.click(await scope.findByLabelText(label));
+  await userEvent.type(screen.getByRole("combobox"), search);
+  await userEvent.click(await screen.findByRole("option", { name: option }));
+}
+
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
   onmessage: ((ev: { data: string }) => void) | null = null;
@@ -209,12 +229,12 @@ describe("TaskDetail", () => {
     renderDetail();
     await screen.findByText("Follow-up");
 
-    const backend = screen.getByLabelText("Backend") as HTMLSelectElement;
-    expect(backend.value).toBe("opencode");
+    const backend = screen.getByLabelText("Backend");
+    expect(backend).toHaveTextContent("opencode");
     // No note when the backend matches the task's own.
     expect(screen.queryByText(/fresh session/)).not.toBeInTheDocument();
 
-    await userEvent.selectOptions(backend, "codex");
+    await pick("Backend", "codex", "codex");
     expect(screen.getByText(/fresh session/)).toBeInTheDocument();
 
     await userEvent.type(screen.getByPlaceholderText(/Add a regression test/), "switch backend");
@@ -249,13 +269,13 @@ describe("TaskDetail", () => {
     await screen.findByText("Follow-up");
 
     // Default selection is the "Reuse task backend" option (value="").
-    const backend = screen.getByLabelText("Backend") as HTMLSelectElement;
-    expect(backend.value).toBe("");
+    const backend = screen.getByLabelText("Backend");
+    expect(backend).toHaveTextContent("Reuse task backend");
     // No note — the resolved backend is the same.
     expect(screen.queryByText(/fresh session/)).not.toBeInTheDocument();
 
     // Picker is "opencode" — different from the resolved "codex" → note shows.
-    await userEvent.selectOptions(backend, "opencode");
+    await pick("Backend", "opencode", "opencode");
     expect(screen.getByText(/fresh session/)).toBeInTheDocument();
   });
 
@@ -468,8 +488,9 @@ describe("TaskDetail", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Re-run" }));
 
     const dialog = await screen.findByRole("dialog");
-    expect((within(dialog).getByLabelText("Backend") as HTMLSelectElement).value).toBe("codex");
-    expect((within(dialog).getByLabelText("Model") as HTMLSelectElement).value).toBe("gpt-4o");
+    expect(within(dialog).getByLabelText("Backend")).toHaveTextContent("codex");
+    expect(within(dialog).getByLabelText("Model")).toHaveTextContent("gpt-4o");
+    await userEvent.click(within(dialog).getByLabelText("Model"));
     expect(within(dialog).getByRole("option", { name: "gpt-4o" })).toBeInTheDocument();
   });
 
@@ -522,8 +543,10 @@ describe("TaskDetail", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Re-run" }));
 
     const dialog = await screen.findByRole("dialog");
-    await userEvent.selectOptions(within(dialog).getByLabelText("Backend"), "codex");
-    await userEvent.selectOptions(within(dialog).getByLabelText("Model"), "");
+    await pickIn(dialog as HTMLElement, "Backend", "codex", "codex");
+    // Clearing the model: open the picker and choose the Default placeholder.
+    await userEvent.click(within(dialog as HTMLElement).getByLabelText("Model"));
+    await userEvent.click(screen.getByRole("option", { name: "Default" }));
     await userEvent.click(within(dialog).getByRole("button", { name: "Re-run" }));
 
     await waitFor(() => {
@@ -1071,12 +1094,12 @@ describe("TaskDetail", () => {
       // Advanced → Update existing PR → the picker shows the repo's open PRs.
       await userEvent.click(screen.getByRole("button", { name: "Advanced" }));
       await userEvent.click(screen.getByRole("radio", { name: /Update existing PR/ }));
-      const select = screen.getByRole("combobox", { name: "Pull request to update" });
+      await userEvent.click(screen.getByRole("button", { name: "Pull request to update" }));
       expect(screen.getByRole("option", { name: /#1 — Phase 1/ })).toBeInTheDocument();
       expect(screen.getByRole("option", { name: /#5 — Housekeeping/ })).toBeInTheDocument();
 
       // Pick a different open PR and run the publish.
-      await userEvent.selectOptions(select, "5");
+      await userEvent.click(screen.getByRole("option", { name: /#5 — Housekeeping/ }));
       await userEvent.click(screen.getByRole("button", { name: "Run" }));
       const confirm = await screen.findByRole("button", { name: "Confirm" });
       await userEvent.click(confirm);
@@ -1122,9 +1145,10 @@ describe("TaskDetail", () => {
       await screen.findByRole("button", { name: "Push to PR #9" });
       await userEvent.click(screen.getByRole("button", { name: "Advanced" }));
       await userEvent.click(screen.getByRole("radio", { name: /Update existing PR/ }));
-      const select = screen.getByRole("combobox", { name: "Pull request to update" });
+      await userEvent.click(screen.getByRole("button", { name: "Pull request to update" }));
       expect(screen.getByRole("option", { name: "PR #9" })).toBeInTheDocument();
-      expect(select).toHaveTextContent(/couldn't load PRs/);
+      // The load failure surfaces as the picker's placeholder row.
+      expect(screen.getByRole("option", { name: /couldn't load PRs/ })).toBeInTheDocument();
 
       await userEvent.click(screen.getByRole("button", { name: "Run" }));
       const confirm = await screen.findByRole("button", { name: "Confirm" });

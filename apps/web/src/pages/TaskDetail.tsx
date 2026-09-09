@@ -8,9 +8,11 @@ import { DepBadges } from "../components/DepBadges";
 import FileBrowser from "../components/FileBrowser";
 import Markdown from "../components/Markdown";
 import { MergeReadinessPanel } from "../components/MergeReadinessPanel";
+import SearchableSelect from "../components/SearchableSelect";
 import WaitingCard from "../components/WaitingCard";
 import PublishDialog from "../components/PublishDialog";
 import { parseUnifiedDiff } from "../lib/unifiedDiff";
+import { summarizeToolCall } from "../lib/toolCallSummary";
 import { avatarFor, avatarUrl } from "../lib/agentAvatars";
 import { useInView } from "../lib/useInView";
 import { useBackends } from "../hooks/useBackends";
@@ -289,34 +291,21 @@ function PublishButton({
               <span>Update existing PR (push to its head branch)</span>
             </label>
             {advancedMode === "update_pr" && (
-              <select
-                aria-label="Pull request to update"
-                className="select ml-6 w-fit"
+              <SearchableSelect
+                label="Pull request to update"
                 value={advancedPr ?? ""}
-                onChange={(e) => setPickedPr(e.target.value === "" ? "" : Number(e.target.value))}
-              >
-                <option value="">— pick a PR —</option>
-                {prOptions.map((o) => (
-                  <option key={o.number} value={o.number}>
-                    {o.label}
-                  </option>
-                ))}
-                {openPrs === null && prOptions.length === 0 && (
-                  <option value="" disabled>
-                    loading PRs…
-                  </option>
-                )}
-                {prsLoadFailed && (
-                  <option value="" disabled>
-                    couldn't load PRs
-                  </option>
-                )}
-                {openPrs !== null && !prsLoadFailed && prOptions.length === 0 && (
-                  <option value="" disabled>
-                    no open PRs in this repo
-                  </option>
-                )}
-              </select>
+                onChange={(v) => setPickedPr(v === "" ? "" : Number(v))}
+                placeholder={
+                  prsLoadFailed
+                    ? "couldn't load PRs"
+                    : openPrs === null && prOptions.length === 0
+                      ? "loading PRs…"
+                      : prOptions.length === 0
+                        ? "no open PRs in this repo"
+                        : "— pick a PR —"
+                }
+                options={prOptions.map((o) => ({ value: String(o.number), label: o.label }))}
+              />
             )}
             <label className="flex items-center gap-2">
               <input
@@ -364,20 +353,7 @@ function PublishButton({
 }
 
 function ToolCallEntry({ step }: { step: SseEvent }) {
-  let title = step.text ?? "";
-  let details = step.text ?? "";
-  try {
-    const data = JSON.parse(step.text ?? "{}");
-    const tool = data.tool ?? "";
-    title = data.title ? `${tool} — ${data.title}` : tool || (step.text ?? "");
-    details = JSON.stringify(
-      { tool: data.tool, input: data.input, output: data.output, status: data.status },
-      null,
-      2
-    );
-  } catch {
-    // keep raw text as both title and details
-  }
+  const { title, details } = summarizeToolCall(step.text);
   return (
     <details className="group">
       <summary className="cursor-pointer select-none font-mono text-xs text-chai-300 hover:text-chai-200">
@@ -595,39 +571,37 @@ function FollowUpComposer({
       </p>
       <form onSubmit={submit} className="space-y-3">
         <div className="grid gap-3 sm:grid-cols-2">
-          <label className="block">
-            <span className="mb-1.5 block text-xs font-medium text-ink-400">Credentials</span>
-            <select value={patName} onChange={(e) => setPatName(e.target.value)} className="field">
-              <option value="">Reuse task account</option>
-              {accounts.map((a) => (
-                <option key={a.name} value={a.name}>
-                  {a.login ?? a.name} ({a.masked})
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="block">
-            <span className="mb-1.5 block text-xs font-medium text-ink-400">Backend</span>
-            <select value={cli} onChange={(e) => setCli(e.target.value)} className="field">
-              <option value="">Reuse task backend</option>
-              {backendOptions.map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="block">
-            <span className="mb-1.5 block text-xs font-medium text-ink-400">Model</span>
-            <select value={model} onChange={(e) => setModel(e.target.value)} className="field">
-              <option value="">Reuse task model</option>
-              {models.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
-            </select>
-          </label>
+          <SearchableSelect
+            label="Credentials"
+            value={patName}
+            onChange={setPatName}
+            placeholder="Reuse task account"
+            options={accounts.map((a) => ({
+              value: a.name,
+              label: `${a.login ?? a.name} (${a.masked})`,
+            }))}
+          />
+          <SearchableSelect
+            label="Backend"
+            value={cli}
+            onChange={(v) => {
+              setCli(v);
+              // A new backend means a new model list — drop the old pick so
+              // a stale id from another backend is never submitted.
+              setModel("");
+            }}
+            placeholder="Reuse task backend"
+            options={backendOptions}
+          />
+          <SearchableSelect
+            label="Model"
+            value={model}
+            onChange={setModel}
+            placeholder="Reuse task model"
+            options={models}
+            allowCustom
+            staleHint="Not in this backend's known list — will be sent as-is."
+          />
         </div>
         {backendChanged && (
           <p className="text-xs text-amber-300">
@@ -670,7 +644,23 @@ function FollowUpComposer({
               <span className="shrink-0 font-mono text-[11px] leading-6 text-ink-600">
                 {f.created_at.slice(11, 19)}
               </span>
-              <span className="text-ink-300">{f.body}</span>
+              <div className="min-w-0">
+                {(f.cli || f.model) && (
+                  <div className="mb-0.5 flex flex-wrap gap-1">
+                    {f.cli && (
+                      <span className="rounded bg-ink-800 px-1.5 py-px font-mono text-[10px] text-syrup-300">
+                        {f.cli}
+                      </span>
+                    )}
+                    {f.model && (
+                      <span className="rounded bg-ink-800 px-1.5 py-px font-mono text-[10px] text-ink-400">
+                        {f.model}
+                      </span>
+                    )}
+                  </div>
+                )}
+                <span className="text-ink-300">{f.body}</span>
+              </div>
             </li>
           ))}
         </ol>
@@ -1098,39 +1088,25 @@ function RerunDialog({
         </div>
 
         <div className="grid gap-3 sm:grid-cols-2">
-          <label className="block">
-            <span className="mb-1.5 block text-xs font-medium text-ink-400">Backend</span>
-            <select
-              value={cli}
-              onChange={(e) => {
-                setCli(e.target.value);
-                setModel("");
-              }}
-              className="field"
-            >
-              <option value="">Default ({resolvedTaskCli})</option>
-              {backendOptions.map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="block">
-            <span className="mb-1.5 block text-xs font-medium text-ink-400">Model</span>
-            <select
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              className="field"
-            >
-              <option value="">Default</option>
-              {modelOptions.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
-            </select>
-          </label>
+          <SearchableSelect
+            label="Backend"
+            value={cli}
+            onChange={(v) => {
+              setCli(v);
+              setModel("");
+            }}
+            placeholder={`Default (${resolvedTaskCli})`}
+            options={backendOptions}
+          />
+          <SearchableSelect
+            label="Model"
+            value={model}
+            onChange={setModel}
+            placeholder="Default"
+            options={modelOptions}
+            allowCustom
+            staleHint="Not in this backend's known list — will be sent as-is."
+          />
         </div>
 
         {error && <p className="text-xs text-red-400">{error}</p>}
@@ -2049,7 +2025,7 @@ export default function TaskDetail() {
                 </span>
               </div>
             </div>
-            <pre className="whitespace-pre-wrap font-mono text-xs leading-relaxed text-ink-300">
+            <div className="whitespace-pre-wrap font-mono text-xs leading-relaxed text-ink-300">
               {consoleLines.length === 0 ? "No output yet." : ""}
               {consoleLines.map((line) => (
                 <div key={line.seq ?? `${line.ts ?? "?"}-${line.type}`} className="flex gap-2">
@@ -2060,12 +2036,18 @@ export default function TaskDetail() {
                   >
                     {line.type === "tool_call" ? "⚙" : "›"}
                   </span>
-                  <span className={line.type === "tool_call" ? "text-chai-300" : "text-ink-300"}>
-                    {line.text}
-                  </span>
+                  {line.type === "tool_call" ? (
+                    <span className="min-w-0 flex-1 truncate text-chai-300" title={line.text ?? ""}>
+                      {summarizeToolCall(line.text).title}
+                    </span>
+                  ) : (
+                    <div className="min-w-0 flex-1 text-ink-300">
+                      <Markdown>{line.text ?? ""}</Markdown>
+                    </div>
+                  )}
                 </div>
               ))}
-            </pre>
+            </div>
           </div>
         </section>
       </div>

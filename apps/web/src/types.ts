@@ -42,6 +42,7 @@ export interface Followup {
   body: string;
   pat_name: string | null;
   model: string | null;
+  cli: string | null;
   created_at: string;
 }
 

@@ -112,7 +112,9 @@ describe("Repos", () => {
     expect(screen.getByText("beta")).toBeInTheDocument();
 
     await userEvent.clear(screen.getByPlaceholderText("Search repositories…"));
-    await userEvent.selectOptions(screen.getByLabelText("Filter by account"), "work");
+    await userEvent.click(screen.getByLabelText("Filter by account"));
+    await userEvent.type(screen.getByRole("combobox"), "work");
+    await userEvent.click(screen.getByRole("option", { name: "@work" }));
     expect(screen.getByText("alpha")).toBeInTheDocument();
     expect(screen.queryByText("beta")).not.toBeInTheDocument();
   });
