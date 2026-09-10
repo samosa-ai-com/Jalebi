@@ -580,6 +580,107 @@ describe("Tasks", () => {
     expect(screen.getByRole("option", { name: "Freeform" })).toBeInTheDocument();
     expect(screen.queryByRole("option", { name: "screen_finding" })).not.toBeInTheDocument();
   });
+
+  it("renders new-user friendliness explainer under New task header", async () => {
+    stubFetch({ ...DEFAULT_HANDLERS });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    await screen.findByText("New task");
+    expect(
+      screen.getByText(/The agent works in a private local copy of the repo on its own branch and cannot push/)
+    ).toBeInTheDocument();
+    // Fresh freeform defaults to manual publish — the summary must agree.
+    expect(screen.getByText(/manual publish/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Jalebi publishes the result for you, and merging is always your decision/)
+    ).toBeInTheDocument();
+  });
+
+  it("shows review-specific read-only guidance for pr_review tasks", async () => {
+    stubFetch({ ...DEFAULT_HANDLERS });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    await screen.findByText("New task");
+    await pick("Task type", "review", /Review/);
+    // Reviews never publish — neither the summary nor the guidance may claim one.
+    expect(screen.getByText(/no publish \(review\)/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/reviews this pull request in a read-only copy and posts its comments/)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Review tasks only post comments — nothing is pushed or published/)
+    ).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /Advanced options/ }));
+    expect(
+      screen.getByText(/Review tasks do not publish a pull request/)
+    ).toBeInTheDocument();
+  });
+
+  it("renders safety line near submit button reflecting publish mode and type semantics", async () => {
+    stubFetch({ ...DEFAULT_HANDLERS });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    await screen.findByText("New task");
+    // Freeform defaults to manual publish
+    expect(screen.getByText(/The task can be cancelled while it runs/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Publishing a pull request is a separate step you control/)
+    ).toBeInTheDocument();
+
+    // Switching to issue_fix defaults to auto publish
+    await pick("Task type", "issue", "Issue fix");
+    expect(
+      screen.getByText(/A pull request will be published automatically when the task finishes/)
+    ).toBeInTheDocument();
+
+    // Opening Advanced options and explicitly choosing manual publish
+    await userEvent.click(screen.getByRole("button", { name: /Advanced options/ }));
+    await pick("Publish mode", "manual", /Manual/);
+    expect(
+      screen.getByText(/Publishing a pull request is a separate step you control/)
+    ).toBeInTheDocument();
+
+    // Explicitly choosing auto publish
+    await pick("Publish mode", "auto", /Auto/);
+    expect(
+      screen.getByText(/A pull request will be published automatically when the task finishes/)
+    ).toBeInTheDocument();
+  });
+
+  it("renames Advanced toggle to 'Advanced options' and shows Publish mode helper text when expanded", async () => {
+    stubFetch({ ...DEFAULT_HANDLERS });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    await screen.findByText("New task");
+    const toggle = screen.getByRole("button", { name: /Advanced options/ });
+    expect(toggle).toBeInTheDocument();
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(
+      screen.queryByText(
+        "Auto publishes when the task finishes, Manual waits for you to review and click Publish."
+      )
+    ).not.toBeInTheDocument();
+
+    await userEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(
+      screen.getByText(
+        "Auto publishes when the task finishes, Manual waits for you to review and click Publish."
+      )
+    ).toBeInTheDocument();
+  });
 });
 
 // ---- Phase 4 T3.1 — Needs-you filter + attention dot + stat card ----------
@@ -984,7 +1085,7 @@ describe("Tasks page (queue overhaul)", () => {
     );
     await screen.findByText("New task");
     expect(screen.queryByLabelText("Backend")).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: /Advanced/ }));
+    await userEvent.click(screen.getByRole("button", { name: /Advanced options/ }));
     expect(screen.getByLabelText("Backend")).toBeInTheDocument();
   });
 
@@ -1057,6 +1158,43 @@ describe("Tasks page (queue overhaul)", () => {
       expect(postCall).toBeTruthy();
       const body = JSON.parse(postCall![1]!.body as string) as Record<string, unknown>;
       expect(body).toMatchObject({ type: "pr_review", pr_number: 4, prompt: "Review PR #4." });
+      // Reviews never publish — no mode may be sent.
+      expect(body).not.toHaveProperty("publish_mode");
+    });
+  });
+
+  it("omits a stale publish mode when a review task is prefilled with one", async () => {
+    const fetchMock = stubFetch(DEFAULT_HANDLERS);
+    render(
+      <MemoryRouter
+        initialEntries={[
+          {
+            pathname: "/",
+            state: {
+              prefill: {
+                repoId: 1,
+                type: "pr_review",
+                prNumber: "4",
+                prompt: "Review PR #4.",
+                publishMode: "auto",
+              },
+            },
+          },
+        ]}
+      >
+        <Tasks />
+      </MemoryRouter>
+    );
+    await screen.findByText("New task");
+    await userEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => {
+      const postCall = fetchMock.mock.calls.find(
+        (call) => call[0] === "/api/tasks" && call[1]?.method === "POST"
+      );
+      expect(postCall).toBeTruthy();
+      const body = JSON.parse(postCall![1]!.body as string) as Record<string, unknown>;
+      expect(body.type).toBe("pr_review");
+      expect(body).not.toHaveProperty("publish_mode");
     });
   });
 

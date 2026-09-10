@@ -176,13 +176,24 @@ function CreateTask({
 
   // Review tasks carry their brief with the agent — instructions optional.
   const promptRequired = type !== "pr_review";
+  const isReview = type === "pr_review";
+  // The backend default when the picker is left blank: issue_fix auto-publishes,
+  // everything else is manual. Derive the summary and the safety line from this
+  // same value so they can never contradict each other.
+  const effectivePublish: "auto" | "manual" =
+    publishMode === "auto" || publishMode === "manual"
+      ? publishMode
+      : type === "issue_fix"
+        ? "auto"
+        : "manual";
+  const isAutoPublish = !isReview && effectivePublish === "auto";
 
   const agentName = agents.find((a) => a.id === agentId)?.name ?? null;
   const advancedSummary = [
     agentCli ?? "…",
     model || "default model",
     agentName ?? "default agent",
-    publishMode === "manual" ? "manual publish" : "auto publish",
+    isReview ? "no publish (review)" : `${effectivePublish} publish`,
     effectivePatName ? `as ${accountLabel(effectivePatName)}` : null,
     envVars.length > 0 ? `${envVars.length} env` : null,
   ]
@@ -373,7 +384,10 @@ function CreateTask({
         issue_number: issueNumber ? Number(issueNumber) : undefined,
         pr_number: prNumber ? Number(prNumber) : undefined,
         address_reviews: type === "freeform" && prNumber ? addressReviews : undefined,
-        publish_mode: publishMode === "" ? undefined : publishMode,
+        // Reviews never publish: omit any stale mode (e.g. carried in from a
+        // clone or saved defaults) so the backend never persists a contradictory
+        // publish_mode on a pr_review task.
+        publish_mode: isReview || publishMode === "" ? undefined : publishMode,
         reviewers: reviewers.length > 0 ? reviewers : undefined,
         env_vars: envVars,
       });
@@ -443,6 +457,12 @@ function CreateTask({
         </span>
       </div>
 
+      <p className="text-xs text-ink-500">
+        {type === "pr_review"
+          ? "The agent reviews this pull request in a read-only copy and posts its comments. It never changes the code or opens a merge."
+          : "The agent works in a private local copy of the repo on its own branch and cannot push. Jalebi publishes the result for you, and merging is always your decision."}
+      </p>
+
       <div className="grid gap-4 sm:grid-cols-2">
         <SearchableSelect
           label="Repository"
@@ -456,7 +476,13 @@ function CreateTask({
         <SearchableSelect
           label="Task type"
           value={type}
-          onChange={(v) => setType(v as typeof type)}
+          onChange={(v) => {
+            const next = v as typeof type;
+            setType(next);
+            // Reviews never publish, so drop any publish pin carried over from
+            // another type — the summary and submit must not report a mode.
+            if (next === "pr_review") setPublishMode("");
+          }}
           options={TASK_TYPES}
         />
       </div>
@@ -635,7 +661,7 @@ function CreateTask({
           className="flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left"
         >
           <span className="shrink-0 text-xs font-medium text-ink-400">
-            Advanced {showAdvanced ? "▾" : "▸"}
+            Advanced options {showAdvanced ? "▾" : "▸"}
           </span>
           <span className="truncate font-mono text-[11px] text-ink-500">{advancedSummary}</span>
         </button>
@@ -680,16 +706,29 @@ function CreateTask({
                   label: `${a.login ?? a.name} (${a.masked})`,
                 }))}
               />
-              <SearchableSelect
-                label="Publish mode"
-                value={publishMode}
-                onChange={(v) => setPublishMode(v as "auto" | "manual" | "")}
-                placeholder="Auto (by type)"
-                options={[
-                  { value: "auto", label: "Auto — publish when done" },
-                  { value: "manual", label: "Manual — I publish" },
-                ]}
-              />
+              {type === "pr_review" ? (
+                <p className="text-[11px] text-ink-500">
+                  Review tasks do not publish a pull request — the review is posted as comments on
+                  the PR.
+                </p>
+              ) : (
+                <div>
+                  <SearchableSelect
+                    label="Publish mode"
+                    value={publishMode}
+                    onChange={(v) => setPublishMode(v as "auto" | "manual" | "")}
+                    placeholder="Auto (by type)"
+                    options={[
+                      { value: "auto", label: "Auto — publish when done" },
+                      { value: "manual", label: "Manual — I publish" },
+                    ]}
+                  />
+                  <p className="mt-1.5 text-[11px] text-ink-500">
+                    Auto publishes when the task finishes, Manual waits for you to review and click
+                    Publish.
+                  </p>
+                </div>
+              )}
             </div>
 
             {availableEnvVars.length > 0 && (
@@ -772,13 +811,22 @@ function CreateTask({
 
       {error && <p className="text-xs text-red-400">{error}</p>}
 
-      <div className="flex justify-end">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-xs text-ink-500">
+          {type === "pr_review"
+            ? "Review tasks only post comments — nothing is pushed or published. You can cancel while it runs."
+            : `The task can be cancelled while it runs. ${
+                isAutoPublish
+                  ? "A pull request will be published automatically when the task finishes."
+                  : "Publishing a pull request is a separate step you control."
+              }`}
+        </p>
         <button
           type="submit"
           disabled={
             busy || settingsLoading || !effectiveRepoId || (promptRequired && !prompt.trim())
           }
-          className="btn-primary"
+          className="btn-primary shrink-0 self-end sm:self-auto"
         >
           {busy ? "Creating…" : settingsLoading ? "Loading…" : "Create"}
         </button>

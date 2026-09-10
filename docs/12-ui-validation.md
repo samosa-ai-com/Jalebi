@@ -340,3 +340,8 @@ Backend `178` pytest + `15` web vitest pass; ruff/typecheck/eslint clean; `npm r
 - [ ] Mission Control labels are legible to a newcomer: Cooks (agents),
       Pantry (skills), Kitchen wire (activity), Karhais (running tasks),
       Queued tasks, Recent tasks, Spoiled (did not finish).
+- [ ] New-task form: explainer under the header explains the local worktree and
+      that the agent cannot push; the footer safety line matches the effective
+      publish mode; switching to **PR review** hides Publish mode, shows
+      "reviews do not publish", and a created review task sends no
+      `publish_mode` (verify in the request body).
