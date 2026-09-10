@@ -24,6 +24,16 @@ export interface WireEvent {
   category: "live" | "alerts" | "served" | "spoiled";
 }
 
+/** Plain-language label for a terminal non-success status (statuses include
+ * failed / timed_out / interrupted), so the wire never reads "Task stopped:
+ * failed". */
+const STOPPED_LABELS: Record<string, string> = {
+  failed: "Task failed",
+  timed_out: "Task timed out",
+  interrupted: "Task interrupted",
+  cancelled: "Task cancelled",
+};
+
 function formatTime(isoOrMs: string | number | null | undefined): string {
   if (!isoOrMs)
     return new Date().toLocaleTimeString([], {
@@ -145,7 +155,7 @@ export function KitchenWire({
           time: formatTime(updatedEpoch),
           tag: `#${t.id} SPOILED`,
           tagColor: "text-red-400",
-          text: `Dish spoiled: ${t.status}`,
+          text: STOPPED_LABELS[t.status] ?? `Task stopped (${t.status})`,
           link: `/tasks/${t.id}`,
           category: "spoiled",
         });
@@ -213,7 +223,7 @@ export function KitchenWire({
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-syrup-400 opacity-75" />
             <span className="relative inline-flex rounded-full h-2 w-2 bg-syrup-500" />
           </span>
-          <h3 className="panel-title text-xs tracking-wider">Kitchen wire</h3>
+          <h3 className="panel-title text-xs tracking-wider">Kitchen wire (activity)</h3>
         </div>
 
         <div className="flex flex-wrap items-center gap-1 text-[10px] font-mono">

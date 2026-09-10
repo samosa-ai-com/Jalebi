@@ -439,18 +439,18 @@ export function FryStation({
         </span>
       ) : (
         <span className="mt-1 block text-center">
-          <span className="block font-mono text-[10px] text-ink-600">stove {slot} · simmering</span>
+          <span className="block font-mono text-[10px] text-ink-600">stove {slot} · idle</span>
           <button
             type="button"
-            aria-label={`Strike a match on stove ${slot} — start a new task`}
-            title="Strike a match — start a new task"
+            aria-label={`Start a task on stove ${slot}`}
+            title="Start a task"
             onClick={(e) => {
               e.stopPropagation();
               onOrder();
             }}
             className="mt-1 cursor-pointer rounded-full border border-ink-700 px-2.5 py-0.5 font-mono text-[10px] text-syrup-300 transition-colors hover:border-syrup-500/60 hover:bg-syrup-500/10"
           >
-            🪔 strike a match
+            🪔 start a task
           </button>
         </span>
       )}

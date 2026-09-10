@@ -42,7 +42,7 @@ export function Pantry({
       className="surface flex min-h-0 flex-col overflow-hidden px-3 py-2.5"
       aria-label="Ingredients"
     >
-      <h3 className="panel-title">Ingredients</h3>
+      <h3 className="panel-title">Pantry (skills)</h3>
       <p className="mt-0.5 text-[11px] text-ink-500">skills in the pantry</p>
       {ingredients.length === 0 ? (
         <p className="mt-3 text-xs text-ink-600">No skills in the library yet.</p>

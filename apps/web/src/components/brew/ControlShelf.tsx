@@ -170,7 +170,7 @@ export function ControlShelf({
           </Link>
         </div>
         {repos.length === 0 ? (
-          <p className="mt-3 text-xs text-ink-600">Nothing connected yet.</p>
+          <p className="mt-3 text-xs text-ink-600">No repos connected yet.</p>
         ) : (
           <>
             <div className="mt-2 flex flex-wrap gap-1.5" aria-hidden="true">

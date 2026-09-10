@@ -45,7 +45,7 @@ export function ShopFloor({
   return (
     <section
       className="surface flex min-h-0 min-w-0 flex-col justify-between overflow-hidden px-4 py-3"
-      aria-label="Karhais (cooking pots)"
+      aria-label="Karhais (running tasks)"
     >
       <div
         className="mb-2 flex items-center gap-1.5 overflow-x-auto"
@@ -74,13 +74,13 @@ export function ShopFloor({
       </div>
 
       <div className="flex items-baseline justify-between gap-2">
-        <h3 className="panel-title">Karhais (cooking pots)</h3>
+        <h3 className="panel-title">Karhais (running tasks)</h3>
         <Link
           to="/settings?section=queue"
           className="font-mono text-[11px] text-ink-500 hover:text-syrup-300"
           title="Worker slots come from the queue concurrency setting"
         >
-          {slots} burner{slots === 1 ? "" : "s"} →
+          {slots} slot{slots === 1 ? "" : "s"} →
         </Link>
       </div>
 
@@ -88,7 +88,7 @@ export function ShopFloor({
         <div
           className="mt-2 flex gap-1.5 overflow-x-auto pb-1"
           role="group"
-          aria-label="Order tickets"
+          aria-label="Queued tasks"
         >
           {queued.map((s) => (
             <div
@@ -154,7 +154,7 @@ export function ShopFloor({
         <div
           className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-ink-800/60 pt-2"
           role="group"
-          aria-label="Serving counter"
+          aria-label="Recent tasks"
         >
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="font-mono text-[10px] uppercase tracking-wide text-ink-500">Served</span>
@@ -175,7 +175,7 @@ export function ShopFloor({
           </div>
           {spoiled && spoiled.length > 0 && (
             <div className="flex flex-wrap items-center gap-1.5">
-              <span className="font-mono text-[10px] uppercase tracking-wide text-red-400/80">Spoiled</span>
+              <span className="font-mono text-[10px] uppercase tracking-wide text-red-400/80">Spoiled (did not finish)</span>
               <ul className="flex flex-wrap gap-1.5">
                 {spoiled.map((t) => (
                   <li key={t.id}>

@@ -172,7 +172,7 @@ describe("BrewHouse", () => {
     // freeform fries a jalebi (stove card + menu row).
     expect(screen.getAllByText("jalebi").length).toBeGreaterThanOrEqual(2);
     // The floor names the pot for everyone.
-    expect(screen.getByRole("region", { name: "Karhais (cooking pots)" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Karhais (running tasks)" })).toBeInTheDocument();
   });
 
   it("bounds a long backends list so it scrolls inside its card", async () => {
@@ -197,8 +197,8 @@ describe("BrewHouse", () => {
     renderHouse();
     await screen.findByRole("button", { name: /Open task 1/ });
     // concurrency 4, one active → three simmering stoves.
-    expect(screen.getByText("stove 2 · simmering")).toBeInTheDocument();
-    expect(screen.getByText("stove 4 · simmering")).toBeInTheDocument();
+    expect(screen.getByText("stove 2 · idle")).toBeInTheDocument();
+    expect(screen.getByText("stove 4 · idle")).toBeInTheDocument();
   });
 
   it("opens the task when its station is clicked", async () => {
@@ -336,21 +336,21 @@ describe("BrewHouse", () => {
         <BrewHouse tasks={[]} repos={REPOS as never} onNewTask={onNewTask} />
       </MemoryRouter>
     );
-    await userEvent.click(await screen.findByRole("button", { name: /Strike a match on stove 1/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /Start a task on stove 1/ }));
     expect(onNewTask).toHaveBeenCalledTimes(1);
   });
 
   it("tickets queued orders above the karhais", async () => {
     stubFetch({ ...HANDLERS });
     renderHouse([{ ...TASK, id: 2, type: "issue_fix", status: "queued", prompt: "fix it" }]);
-    const tickets = await screen.findByRole("group", { name: "Order tickets" });
+    const tickets = await screen.findByRole("group", { name: "Queued tasks" });
     expect(within(tickets).getByText("fix it")).toBeInTheDocument();
   });
 
   it("serving counter links recent dones to their tasks", async () => {
     stubFetch({ ...HANDLERS });
     renderHouse([{ ...TASK, id: 9, status: "done", prompt: "fixed" }]);
-    const counter = await screen.findByRole("group", { name: "Serving counter" });
+    const counter = await screen.findByRole("group", { name: "Recent tasks" });
     const link = within(counter).getByRole("link", { name: /#9/ });
     expect(link).toHaveAttribute("href", "/tasks/9");
   });
@@ -391,9 +391,10 @@ describe("BrewHouse", () => {
     stubFetch({ ...HANDLERS });
     const { container } = renderHouse([]);
     await screen.findByRole("group", { name: "Today's menu" });
-    const floor = container.querySelector('section[aria-label="Karhais (cooking pots)"]');
+    const floor = container.querySelector('section[aria-label="Karhais (running tasks)"]');
     const menu = container.querySelector('[aria-label="Today\'s menu"]');
     const grid = floor?.querySelector(".grid");
+
     expect(floor).not.toBeNull();
     expect(menu).not.toBeNull();
     expect(grid).not.toBeNull();
@@ -406,7 +407,7 @@ describe("BrewHouse", () => {
     stubFetch({ ...HANDLERS });
     renderHouse();
     await screen.findByRole("button", { name: /Open task 1/ });
-    const link = screen.getByRole("link", { name: /4 burners/ });
+    const link = screen.getByRole("link", { name: /4 slots/ });
     expect(link).toHaveAttribute("href", "/settings?section=queue");
   });
 
@@ -517,9 +518,9 @@ describe("BrewHouse", () => {
         />
       </MemoryRouter>
     );
-    const counter = await screen.findByRole("group", { name: "Serving counter" });
+    const counter = await screen.findByRole("group", { name: "Recent tasks" });
     expect(within(counter).getByText("Served")).toBeInTheDocument();
-    expect(within(counter).getByText("Spoiled")).toBeInTheDocument();
+    expect(within(counter).getByText("Spoiled (did not finish)")).toBeInTheDocument();
     expect(within(counter).getByRole("link", { name: /#8/ })).toHaveAttribute("href", "/tasks/8");
     expect(within(counter).getByRole("link", { name: /#9/ })).toHaveAttribute("href", "/tasks/9");
   });
@@ -576,7 +577,7 @@ describe("BrewHouse", () => {
       </MemoryRouter>
     );
     const wire = await screen.findByRole("region", { name: "Kitchen wire" });
-    expect(within(wire).getByText("Kitchen wire")).toBeInTheDocument();
+    expect(within(wire).getByText("Kitchen wire (activity)")).toBeInTheDocument();
     expect(within(wire).getByText(/Frying jalebi/)).toBeInTheDocument();
     // Test filter toggle
     await userEvent.click(within(wire).getByRole("button", { name: "live" }));
