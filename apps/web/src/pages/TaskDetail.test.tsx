@@ -806,6 +806,118 @@ describe("TaskDetail", () => {
     expect(fetchMock.mock.calls.filter((c) => c[1]?.method === "POST")).toEqual([]);
   });
 
+  function stubFetchWithCi(
+    task: Record<string, unknown>,
+    ci: { ok: boolean; state: string; message: string }
+  ) {
+    const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
+      if (url.includes("/publish-check")) {
+        return {
+          ok: true,
+          json: async () => ({
+            status: ci.ok ? "ready" : "attention",
+            base_ref: "main",
+            checks: [{ name: "ci", ...ci }],
+          }),
+        };
+      }
+      if (url.endsWith("/runs")) return { ok: true, json: async () => [task.run ?? RUN] };
+      if (url.includes("/api/tasks")) return { ok: true, json: async () => task };
+      if (url.includes("/api/settings")) {
+        return {
+          ok: true,
+          json: async () => ({ default_backend: "opencode", default_model: "m1" }),
+        };
+      }
+      if (url.includes("/api/github/tokens")) {
+        return { ok: true, json: async () => ({ accounts: [] }) };
+      }
+      if (url.includes("/api/models")) {
+        return { ok: true, json: async () => ({ cli: "opencode", models: ["m1"] }) };
+      }
+      return { ok: true, json: async () => REPOS };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  it("Fix failed CI opens the New-task form prefilled with the PR-head base", async () => {
+    const fixTask = {
+      ...TASK,
+      type: "issue_fix",
+      repo_id: 1,
+      pr_number: 9,
+      prs: [9],
+      target_branch: "main",
+      status: "done",
+      run: { ...RUN, status: "done" },
+      reviewers: [],
+    };
+    const fetchMock = stubFetchWithCi(fixTask, {
+      ok: false,
+      state: "failure",
+      message: "CI is failing",
+    });
+    vi.stubGlobal("EventSource", FakeEventSource);
+
+    const captured: {
+      current: { pathname: string; search: string; state: unknown } | null;
+    } = { current: null };
+    function Probe() {
+      const loc = useLocation();
+      captured.current = { pathname: loc.pathname, search: loc.search, state: loc.state };
+      return null;
+    }
+    render(
+      <MemoryRouter initialEntries={["/tasks/7"]}>
+        <Routes>
+          <Route path="/tasks/:id" element={<TaskDetail />} />
+          <Route path="/" element={<Probe />} />
+        </Routes>
+      </MemoryRouter>
+    );
+    await screen.findByText("Follow-up");
+    await userEvent.click(await screen.findByRole("button", { name: "Fix failed CI" }));
+
+    await waitFor(() => expect(captured.current?.pathname).toBe("/"));
+    expect(captured.current?.search).toBe("?view=queue");
+    const state = captured.current?.state as {
+      prefill: Record<string, unknown>;
+      from: string;
+    };
+    expect(state.from).toBe("task-detail");
+    expect(state.prefill).toMatchObject({
+      repoId: 1,
+      type: "freeform",
+      prNumber: "9",
+      sourceBranch: "pr/9/head",
+      targetBranch: "main",
+      publishMode: "manual",
+    });
+    expect(String(state.prefill.prompt)).toContain("PR #9");
+    // Handoff only — nothing is posted until the user submits the new form.
+    expect(fetchMock.mock.calls.filter((c) => c[1]?.method === "POST")).toEqual([]);
+  });
+
+  it("hides Fix failed CI when CI is not failing", async () => {
+    stubFetchWithCi(
+      {
+        ...TASK,
+        repo_id: 1,
+        pr_number: 9,
+        prs: [9],
+        status: "done",
+        run: { ...RUN, status: "done" },
+      },
+      { ok: true, state: "success", message: "CI is green" }
+    );
+    vi.stubGlobal("EventSource", FakeEventSource);
+
+    renderDetail();
+    expect(await screen.findByText("CI is green")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Fix failed CI" })).toBeNull();
+  });
+
   it("shows the waiting card for a waiting_input run", async () => {
     const waitingTask = {
       ...TASK,

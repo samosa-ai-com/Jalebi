@@ -1141,6 +1141,34 @@ export default function TaskDetail() {
   const fromMission = (location.state as { from?: string } | null)?.from === "mission";
   const taskId = Number(id);
   const [task, setTask] = useState<Task | null>(null);
+  const navigate = useNavigate();
+
+  function fixFailedCi() {
+    // Handoff to a fresh freeform task based on the PR head, so the agent can
+    // fetch the failing GitHub Actions run (a classic `repo` PAT covers Actions
+    // logs) and push the fix back onto the PR. `pr/<N>/head` starts the worktree
+    // at the current head, fork-aware, and defaults publish to update_pr.
+    const pr = task?.prs?.[0] ?? task?.pr_number ?? null;
+    if (pr == null) return;
+    navigate("/?view=queue", {
+      state: {
+        prefill: {
+          repoId: task?.repo_id,
+          type: "freeform",
+          prNumber: String(pr),
+          sourceBranch: `pr/${pr}/head`,
+          targetBranch: task?.target_branch || undefined,
+          publishMode: "manual" as const,
+          prompt:
+            `CI is failing on PR #${pr}. Fetch the failed GitHub Actions run and its logs ` +
+            `with the token in $JALEBI_GITHUB_TOKEN (curl -L against api.github.com), ` +
+            `diagnose the root cause, fix the code, and run the failing check locally. ` +
+            `Keep the change minimal.`,
+        },
+        from: "task-detail",
+      },
+    });
+  }
   const [runs, setRuns] = useState<Run[]>([]);
   const [repos, setRepos] = useState<Repo[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -1842,7 +1870,13 @@ export default function TaskDetail() {
 
       <div className="flex flex-wrap gap-2">
         {(task.status === "needs_approval" || canManualPublish(task)) && (
-          <MergeReadinessPanel taskId={task.id} refreshKey={task.updated_at} />
+          <MergeReadinessPanel
+            taskId={task.id}
+            refreshKey={task.updated_at}
+            onFixCi={
+              (task.prs?.length ?? 0) > 0 || task.pr_number != null ? fixFailedCi : undefined
+            }
+          />
         )}
       </div>
 

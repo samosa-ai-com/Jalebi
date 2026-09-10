@@ -7,6 +7,7 @@
  * tests, which stub `/publish-check` with a Task payload, green).
  */
 import { useEffect, useState } from "react";
+import type { ReactNode } from "react";
 
 import { api } from "../api/client";
 import type { PublishCheck, PublishCheckStatus } from "../types";
@@ -21,10 +22,12 @@ function CheckRow({
   ok,
   name,
   message,
+  action,
 }: {
   ok: boolean;
   name: string;
   message: string;
+  action?: ReactNode;
 }) {
   return (
     <li className="flex items-start gap-2 py-1.5 text-sm">
@@ -37,6 +40,7 @@ function CheckRow({
       <span className={`flex-1 ${ok ? "text-ink-300" : "text-red-300"}`}>
         {message}
       </span>
+      {action}
     </li>
   );
 }
@@ -44,9 +48,11 @@ function CheckRow({
 export function MergeReadinessPanel({
   taskId,
   refreshKey,
+  onFixCi,
 }: {
   taskId: number;
   refreshKey: string;
+  onFixCi?: () => void;
 }) {
   const [data, setData] = useState<PublishCheck | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -130,7 +136,24 @@ export function MergeReadinessPanel({
       </p>
       <ul className="divide-y divide-ink-800/60">
         {data.checks.map((c) => (
-          <CheckRow key={c.name} ok={c.ok} name={c.name} message={c.message} />
+          <CheckRow
+            key={c.name}
+            ok={c.ok}
+            name={c.name}
+            message={c.message}
+            action={
+              c.name === "ci" && c.state === "failure" && onFixCi ? (
+                <button
+                  type="button"
+                  onClick={onFixCi}
+                  className="btn-ghost shrink-0 text-xs"
+                  title="Open the New-task form to fetch the failing workflow logs and fix the code"
+                >
+                  Fix failed CI
+                </button>
+              ) : undefined
+            }
+          />
         ))}
       </ul>
     </section>

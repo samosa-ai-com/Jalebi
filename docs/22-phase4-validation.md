@@ -142,6 +142,21 @@
 - [ ] Follow-up with a backend switch shows the backend badge on its row;
       a failed follow-up still appears in the follow-ups list.
 
+## 8c. Fix failed CI + classic-token guidance (2026-09-10)
+
+- [ ] GitHub page "Add a GitHub account" recommends a **classic `repo`** token
+      (covers Actions logs) and notes fine-grained needs **Actions: read**.
+- [ ] The missing-scopes help matches that recommendation.
+- [ ] On a task with an open PR whose CI is failing, the Publish readiness
+      panel's `ci` row shows **Fix failed CI**; it is absent when CI is green
+      or no PR is linked.
+- [ ] Clicking it opens the New-task form prefilled: `freeform`, same repo,
+      PR linked, source `pr/<N>/head`, task's target branch, manual publish,
+      and a prompt instructing the agent to fetch the failed Actions run with
+      `$JALEBI_GITHUB_TOKEN`. No follow-up is posted.
+- [ ] Submitting that form runs an agent that can read the failed run's logs
+      (classic `repo` PAT) and updates the existing PR on publish (`update_pr`).
+
 ## 9. Known limitations (do NOT expect these yet)
 - `test_check_runs.py:331` may flake under full-suite load (isolated green).
 - Fork push needs maintainer-edit permission; otherwise `new_pr` fallback.
