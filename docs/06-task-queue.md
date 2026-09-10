@@ -78,6 +78,7 @@ Queue items are tagged tuples: `("task", task_id)` or `("followup", task_id, bod
 - **Exception paths:** a worker crash (`_run_task`/`_run_review`/`_run_followup` `except`) now also calls `_complete_status` (best-effort, guarded) after the run is marked `failed`, so a crashed run never leaves a forever-blocking `pending` on the head SHA.
 - **Publish:** `_publish_status` posts the final state on the just-pushed head (auto-publish in `_stream_and_finish`; manual publish in `publish_task`).
 - **Non-fatal:** all status API calls are best-effort; a failure is logged and never fails the task.
+- **Aggregate on a shared head:** the context is per task *type* (`Jalebi / review`, `Jalebi / fix`), so several tasks can share one `(sha, context)` — parallel reviewers on one PR. `_set_status` posts `checkruns.aggregate_state(...)` (worst-of: any `failure`/`error` wins, else any non-`success` keeps it `pending`, else `success`) instead of the single task's state, so a later success can't overwrite an earlier failure. With one task the aggregate is that task's own state — unchanged behaviour. (`issue_fix` statuses land on the unique `jalebi/<id>` branch head, so they never collide.)
 - Registry rows live in `check_runs` (see `docs/02`); `tasks.check_run_id` tracks the latest.
 
 ## 5. Timeouts (PRD F16)

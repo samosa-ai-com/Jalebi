@@ -2234,10 +2234,16 @@ class TaskQueue:
             if not head_sha:
                 return
             context = checkruns.status_context(task)
+            # Several tasks can share one (sha, context) — parallel reviewers on
+            # one PR. Post the aggregate so a later success can't overwrite an
+            # earlier failure; a lone task's aggregate is just its own state.
+            aggregate = checkruns.aggregate_state(
+                session, repo.id, head_sha, context, task_id=task.id, state=state
+            )
             client = GitHubClient(token)
             try:
                 github_id = client.set_commit_status(
-                    repo.full_name, head_sha, state, context,
+                    repo.full_name, head_sha, aggregate, context,
                     description=f"Jalebi {task.type} for {repo.full_name}",
                 )
             finally:
