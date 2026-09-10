@@ -13,7 +13,7 @@ interface SearchableSelectProps {
   placeholder?: string;
   disabled?: boolean;
   /** When true, the search text can be submitted as a custom value
-   * (model inputs for backends without a catalog, e.g. goose). */
+   * (model inputs for backends without a catalog). */
   allowCustom?: boolean;
   /** Hint shown when the current value is not among the options. */
   staleHint?: string;

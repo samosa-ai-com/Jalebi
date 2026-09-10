@@ -199,19 +199,10 @@ stated.
   follow-ups resume via `--id`. `content_update` tool pings with an empty
   chunk are silent; non-empty stdout/stderr chunks become messages. Resume
   (`--id`) and diff shapes per-docs, not live-exercised.
-- **goose** (`goose run -t … --output-format stream-json`, 1.49.0): terminal
-  event is `complete` (+ exit 0); CLI errors go to stderr with exit 1.
-  Stdout starts with a non-JSON banner (blank lines dropped, banner lines are
-  step markers — visible but not run content, so a banner-only run fails the
-  queue's empty-run guard instead of a false `done`). `--model` is passed
-  without `--provider` (always the configured default provider — a foreign
-  model id is silently mismatched, so prefer the configured model).
-  Sessions are **named** (`-n`) in one global SQLite DB — the adapter derives
-  `jalebi-<worktree>` per worktree so same-name resumes can't cross tasks,
-  and persists that name as the run's `session_id` so follow-ups resume
-  (`-r -n <name>`).
-  Resume (`-r -n`) and tool/diff shapes per binary vocabulary, not
-  live-exercised. No list-models command (`list_models` → `[]`).
+- **goose (REMOVED Sep 2026):** the CLI exposes no model catalog and the
+  owner chose removal over a permanently empty dropdown. Historical runs
+  pinned to `goose` fall back to the first enabled backend (see
+  `docs/06-task-queue.md` §4a); the adapter + its tests are deleted.
 - **grok** (`grok -p … --output-format streaming-json`, 1.0.13): first line
   `available_commands` is the init signal; `thought` silent, `text` chunks
   emit per-chunk messages, `tool_call` → tool_call, `tool_call_update` →

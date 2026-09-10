@@ -30,7 +30,7 @@ from jalebi import (
     tasks,
     worktree_bootstrap,
 )
-from jalebi.adapters import get_adapter
+from jalebi.adapters import available_adapters, get_adapter
 from jalebi.adapters.types import AgentAdapter, AgentEvent
 from jalebi.config import Config
 from jalebi.db import CatalogAgent, Repo, Run, Session, Task, now
@@ -650,7 +650,7 @@ class TaskQueue:
         )
         if empty_done:
             # The process exited 0 but the agent produced no observable output
-            # (e.g. a goose banner-only run): that is a failure, not a
+            # (e.g. a banner-only run): that is a failure, not a
             # success. The marker phrase doubles as a non-retryable pattern
             # (see settings.DEFAULTS) so auto-recovery doesn't loop on it.
             # Appended BEFORE the steps_json dump below so it persists.
@@ -867,14 +867,27 @@ class TaskQueue:
 
         Tasks/screens pinned to a backend that the owner later disabled must
         still run instead of 500ing mid-dispatch; the substitution is logged.
+        A cli unknown to the registry (e.g. a backend removed after the pin
+        was stored) falls back the same way.
         """
         enabled = settings.get_setting(session, "enabled_backends")
         if not isinstance(enabled, list) or not enabled:
+            # No list configured: known backends pass through, but an
+            # unknown/removed cli can never dispatch — fail safe.
+            if cli in available_adapters():
+                return cli
+            logger.warning("backend %s is not installed; running on opencode instead", cli)
+            return "opencode"
+        if cli in enabled and cli in available_adapters():
             return cli
-        if cli in enabled:
-            return cli
-        fallback = next((c for c in enabled if isinstance(c, str) and c), "opencode")
-        logger.warning("backend %s is disabled; running on %s instead", cli, fallback)
+        # Prefer a fallback the registry still knows; only when every
+        # enabled entry is gone do we keep the legacy first-enabled pick.
+        known = [c for c in enabled if isinstance(c, str) and c and c in available_adapters()]
+        fallback = known[0] if known else next(
+            (c for c in enabled if isinstance(c, str) and c), "opencode"
+        )
+        reason = "not installed" if cli not in available_adapters() else "disabled"
+        logger.warning("backend %s is %s; running on %s instead", cli, reason, fallback)
         return fallback
 
     def _run_task(self, task_id: int) -> None:

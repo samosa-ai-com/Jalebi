@@ -133,7 +133,7 @@
       screens, skills, timezones); keyboard Up/Down/Enter/Escape works.
 - [ ] Switching backend in any form clears the model picker; a model id that
       is not in the new backend's list shows a warning instead of submitting
-      silently (goose offers custom-value entry).
+      silently (custom-value entry covers catalog-less backends).
 - [ ] A grok-style word stream shows a handful of merged message steps, not
       hundreds; collapsed tool calls show `tool — summary` one-liners.
 - [ ] Rerun dialog with a different backend/model actually runs the new

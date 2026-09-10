@@ -11,7 +11,6 @@ from jalebi.adapters.claude import ClaudeAdapter
 from jalebi.adapters.cline import ClineAdapter
 from jalebi.adapters.codex import CodexAdapter
 from jalebi.adapters.commandcode import CommandCodeAdapter
-from jalebi.adapters.goose import GooseAdapter
 from jalebi.adapters.grok import GrokAdapter
 from jalebi.adapters.kilo import KiloAdapter
 from jalebi.adapters.opencode import OpenCodeAdapter
@@ -27,7 +26,6 @@ ADAPTERS: dict[str, AgentAdapter] = {
     "kilo": KiloAdapter(),
     "qwen": QwenAdapter(),
     "cline": ClineAdapter(),
-    "goose": GooseAdapter(),
     "grok": GrokAdapter(),
     "commandcode": CommandCodeAdapter(),
     "agy": AgyAdapter(),

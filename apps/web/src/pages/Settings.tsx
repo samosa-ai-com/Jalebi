@@ -514,14 +514,14 @@ function IDESettings({
   );
 }
 
-const AGENT_CLIS = ["opencode", "codex", "claude", "pi", "kilo", "qwen", "cline", "goose", "grok", "commandcode", "agy"];
+const AGENT_CLIS = ["opencode", "codex", "claude", "pi", "kilo", "qwen", "cline", "grok", "commandcode", "agy"];
 
 // Backends added Sep 2026: implemented against vendor docs + a one-prompt
 // smoke test each, but not yet live-tested from the app.
-const NEW_BACKENDS = ["pi", "kilo", "qwen", "cline", "goose", "grok", "commandcode", "agy"];
+const NEW_BACKENDS = ["pi", "kilo", "qwen", "cline", "grok", "commandcode", "agy"];
 
 const NEW_BACKENDS_NOTICE =
-  "New backends (pi, kilo, qwen, cline, goose, grok, commandcode, agy) should work " +
+  "New backends (pi, kilo, qwen, cline, grok, commandcode, agy) should work " +
   "according to their vendors' documentation, but they haven't been tested from the app " +
   "yet — report issues before relying on them.";
 

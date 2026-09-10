@@ -56,7 +56,6 @@ def test_enabled_backends_validated_and_listed(client: FlaskClient) -> None:
         "kilo",
         "qwen",
         "cline",
-        "goose",
         "grok",
         "commandcode",
         "agy",

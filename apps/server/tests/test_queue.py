@@ -1275,7 +1275,7 @@ def test_non_message_event_splits_coalesced_messages(
 def test_done_with_only_steps_and_no_content_is_failed(
     q, session, repo_row, monkeypatch
 ) -> None:
-    """Exit-0 with zero agent output (the goose banner-only shape) is a
+    """Exit-0 with zero agent output (e.g. a banner-only run) is a
     failure, not a success — with a stable marker auto-recovery won't retry."""
     _no_publish(session)
     task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
@@ -2246,3 +2246,17 @@ def test_rerun_override_flows_into_run(q, session, repo_row, monkeypatch) -> Non
     run = _latest_run(session, task.id)
     assert run.cli == "codex"
     assert run.model == "m9"
+
+
+def test_enabled_cli_falls_back_for_unknown_backend(q, session) -> None:
+    """A pin to a backend the registry no longer knows (e.g. removed goose)
+    falls back to the first enabled backend instead of 500ing mid-dispatch."""
+    from jalebi.queue import TaskQueue
+
+    settings.set_setting(session, "enabled_backends", ["goose", "opencode"])
+    assert TaskQueue._enabled_cli(session, "goose") == "opencode"
+    assert TaskQueue._enabled_cli(session, "opencode") == "opencode"
+    # No list configured at all: known backends pass, unknown fail safe.
+    settings.set_setting(session, "enabled_backends", [])
+    assert TaskQueue._enabled_cli(session, "opencode") == "opencode"
+    assert TaskQueue._enabled_cli(session, "goose") == "opencode"
