@@ -480,4 +480,13 @@ describe("Agents", () => {
       });
     });
   });
+
+  it("shows friendly EmptyState when there are no agents", async () => {
+    const fetchMock = makeFetchMock([]);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Agents />);
+    expect(await screen.findByRole("heading", { name: "No catalog agents yet" })).toBeInTheDocument();
+    expect(screen.getByText(/Create an agent to give tasks a personality/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create agent" })).toBeInTheDocument();
+  });
 });

@@ -5,6 +5,7 @@ import { AttentionBadge } from "../components/AttentionBadge";
 import { BrewHouse } from "../components/brew/BrewHouse";
 import type { SnackKind } from "../components/brew/snacks";
 import { DepBadges } from "../components/DepBadges";
+import { EmptyState } from "../components/EmptyState";
 import { OnboardingChecklist } from "../components/OnboardingChecklist";
 import { RunningCard } from "../components/RunningCard";
 import SearchableSelect from "../components/SearchableSelect";
@@ -1536,14 +1537,33 @@ export default function Tasks() {
                 <tbody>
                   {pageRows.length === 0 && (
                     <tr>
-                      <td colSpan={8} className="px-4 py-8 text-center text-ink-600">
+                      <td colSpan={8} className="p-6">
                         {query || repoFilter ? (
-                          <>
+                          <div className="py-4 text-center text-sm text-ink-600">
                             No tasks{filter !== "all" ? ` in “${filter}”` : ""} matching your
                             search.
-                          </>
+                          </div>
+                        ) : filter === "all" && tasks.length === 0 ? (
+                          <EmptyState
+                            icon="📋"
+                            title="No tasks yet"
+                            description={
+                              repos.length === 0
+                                ? "Create your first task above, or connect a repository first."
+                                : "Create your first task above to start an agent run."
+                            }
+                            action={
+                              repos.length === 0 ? (
+                                <Link to="/repos" className="btn-primary">
+                                  Connect repository
+                                </Link>
+                              ) : undefined
+                            }
+                          />
                         ) : (
-                          EMPTY_STATE[filter]
+                          <div className="py-4 text-center text-sm text-ink-600">
+                            {EMPTY_STATE[filter]}
+                          </div>
                         )}
                       </td>
                     </tr>

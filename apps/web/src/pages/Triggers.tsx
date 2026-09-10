@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
+import { EmptyState } from "../components/EmptyState";
 import SearchableSelect from "../components/SearchableSelect";
 import type {
   CatalogAgent,
@@ -645,9 +646,25 @@ export default function Triggers() {
           <h2 className="panel-title">Trigger rules</h2>
         </div>
         {rules.length === 0 ? (
-          <p className="px-4 py-6 text-sm text-ink-500">
-            No rules yet — create one to auto-start work on a GitHub event.
-          </p>
+          <div className="p-4">
+            <EmptyState
+              icon="⚡"
+              title="No trigger rules yet"
+              description="Create a rule to auto-start agent work when GitHub events arrive."
+              action={
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditing(null);
+                    setShowForm(true);
+                  }}
+                  className="btn-primary"
+                >
+                  Create rule
+                </button>
+              }
+            />
+          </div>
         ) : (
           <ul className="max-h-96 divide-y divide-ink-800/70 overflow-y-auto">
             {rules.map((rule) => (

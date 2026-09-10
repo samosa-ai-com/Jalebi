@@ -936,4 +936,21 @@ describe("Screenings", () => {
       await screen.findByRole("link", { name: /Back to Mission control/i })
     ).toBeInTheDocument();
   });
+
+  it("renders friendly EmptyState when there are no screens", async () => {
+    const base = makeFetchMock();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url, init) => {
+        if (url === "/api/screenings") {
+          return { ok: true, json: async () => [] };
+        }
+        return base(url, init);
+      })
+    );
+    renderScreenings();
+    await goScreens();
+    expect(await screen.findByRole("heading", { name: "No screens yet" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create your first screen" })).toBeInTheDocument();
+  });
 });

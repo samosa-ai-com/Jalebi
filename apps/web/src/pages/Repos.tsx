@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
+import { EmptyState } from "../components/EmptyState";
 import SearchableSelect from "../components/SearchableSelect";
 import type { Repo } from "../types";
 
@@ -245,19 +246,24 @@ export default function Repos() {
         {loading && repos.length === 0 ? (
           <div className="px-6 py-10 text-center text-sm text-ink-600">Loading repositories…</div>
         ) : visible.length === 0 ? (
-          <div className="px-6 py-10 text-center text-sm text-ink-600">
-            {repos.length === 0 ? (
-              <>
-                Nothing connected yet. Pick one from the{" "}
-                <Link to="/github" className="link">
-                  GitHub page
-                </Link>
-                .
-              </>
-            ) : (
-              "No repositories match the current search or filters."
-            )}
-          </div>
+          repos.length === 0 ? (
+            <div className="p-6">
+              <EmptyState
+                icon="📦"
+                title="Nothing connected yet"
+                description="Connect a repository to enable code reviews, scheduled screenings, and agent tasks."
+                action={
+                  <Link to="/github" className="btn-primary">
+                    Connect on GitHub
+                  </Link>
+                }
+              />
+            </div>
+          ) : (
+            <div className="px-6 py-10 text-center text-sm text-ink-600">
+              No repositories match the current search or filters.
+            </div>
+          )
         ) : (
           <ul className="divide-y divide-ink-800/70">
             {visible.map((r) => (

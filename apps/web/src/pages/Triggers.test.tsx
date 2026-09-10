@@ -347,3 +347,12 @@ it("replay button reports the outcome and refreshes the delivery log", async () 
     expect(getDeliveriesCalls.length).toBeGreaterThanOrEqual(2);
   });
 });
+
+it("shows friendly EmptyState when there are no trigger rules", async () => {
+  const fetchMock = makeFetchMock([], []);
+  vi.stubGlobal("fetch", fetchMock);
+  renderTriggers();
+  expect(await screen.findByRole("heading", { name: "No trigger rules yet" })).toBeInTheDocument();
+  expect(screen.getByText(/Create a rule to auto-start agent work/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Create rule" })).toBeInTheDocument();
+});

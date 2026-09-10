@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
+import { EmptyState } from "../components/EmptyState";
 import SearchableSelect from "../components/SearchableSelect";
 import type { LibrarySkill, SkillUsage } from "../types";
 
@@ -366,16 +367,30 @@ export default function Skills() {
       </div>
 
       {visible.length === 0 && !showForm ? (
-        <div className="surface flex flex-col items-start gap-3 p-6 animate-fade-up">
-          <h2 className="panel-title">
-            {skills.length === 0 ? "No skills yet" : "No skills match"}
-          </h2>
-          <p className="text-sm text-ink-400">
-            {skills.length === 0
-              ? "Create a skill to give agents reusable, centrally-editable knowledge."
-              : "Try a different search or clear the tag filter."}
-          </p>
-        </div>
+        skills.length === 0 ? (
+          <EmptyState
+            icon="🧩"
+            title="No skills yet"
+            description="Create a skill to provide reusable instructions and context across your agents."
+            action={
+              <button
+                type="button"
+                onClick={() => {
+                  setEditing(null);
+                  setShowForm(true);
+                }}
+                className="btn-primary"
+              >
+                Create skill
+              </button>
+            }
+          />
+        ) : (
+          <div className="surface flex flex-col items-start gap-3 p-6 animate-fade-up">
+            <h2 className="panel-title">No skills match</h2>
+            <p className="text-sm text-ink-400">Try a different search or clear the tag filter.</p>
+          </div>
+        )
       ) : (
         <div className="grid gap-3 sm:grid-cols-2">
           {visible.map((s) => (

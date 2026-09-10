@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
+import { EmptyState } from "../components/EmptyState";
 import SearchableSelect from "../components/SearchableSelect";
 import { useBackends } from "../hooks/useBackends";
 import { AVATARS, avatarFor, avatarUrl, suggestAvatar } from "../lib/agentAvatars";
@@ -645,16 +646,30 @@ export default function Agents() {
       )}
 
       {visible.length === 0 && !showForm ? (
-        <div className="surface flex flex-col items-start gap-3 p-6 animate-fade-up">
-          <h2 className="panel-title">
-            {agents.length === 0 ? "No catalog agents yet" : "No agents match"}
-          </h2>
-          <p className="text-sm text-ink-400">
-            {agents.length === 0
-              ? "Create an agent to give tasks a personality, skills, and optional model/CLI pins."
-              : "Try a different search or clear the filters."}
-          </p>
-        </div>
+        agents.length === 0 ? (
+          <EmptyState
+            icon="🤖"
+            title="No catalog agents yet"
+            description="Create an agent to give tasks a personality, skills, and optional model/CLI pins."
+            action={
+              <button
+                type="button"
+                onClick={() => {
+                  setEditing(null);
+                  setShowForm(true);
+                }}
+                className="btn-primary"
+              >
+                Create agent
+              </button>
+            }
+          />
+        ) : (
+          <div className="surface flex flex-col items-start gap-3 p-6 animate-fade-up">
+            <h2 className="panel-title">No agents match</h2>
+            <p className="text-sm text-ink-400">Try a different search or clear the filters.</p>
+          </div>
+        )
       ) : (
         <div className="grid gap-3 sm:grid-cols-2">
           {visible.map((a) => (

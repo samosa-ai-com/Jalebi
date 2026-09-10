@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
+import { EmptyState } from "../components/EmptyState";
 import SearchableSelect from "../components/SearchableSelect";
 import type { Account, GithubRepo, Repo } from "../types";
 
@@ -402,6 +403,29 @@ export default function Github() {
 
       {loadingAccounts && accounts.length === 0 && (
         <p className="text-sm text-ink-500 animate-fade-up">Loading accounts…</p>
+      )}
+
+      {!loadingAccounts && accounts.length === 0 && (
+        <EmptyState
+          icon="🐙"
+          title="No GitHub accounts yet"
+          description="Add a personal access token below to connect repositories and run agent tasks."
+          action={
+            <button
+              type="button"
+              onClick={() => {
+                const input = document.querySelector<HTMLInputElement>(
+                  'input[placeholder*="label"]'
+                );
+                input?.focus();
+                input?.scrollIntoView({ behavior: "smooth" });
+              }}
+              className="btn-primary"
+            >
+              Add an account below
+            </button>
+          }
+        />
       )}
 
       {accounts.map((account) => {

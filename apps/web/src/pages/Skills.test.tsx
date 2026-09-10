@@ -172,4 +172,12 @@ describe("Skills", () => {
     await userEvent.click(edits[0]);
     expect(await screen.findByDisplayValue("Git Workflow")).toBeInTheDocument();
   });
+
+  it("shows friendly EmptyState when there are no skills", async () => {
+    vi.stubGlobal("fetch", makeFetchMock([]));
+    render(<Skills />);
+    expect(await screen.findByRole("heading", { name: "No skills yet" })).toBeInTheDocument();
+    expect(screen.getByText(/Create a skill to provide reusable instructions/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create skill" })).toBeInTheDocument();
+  });
 });

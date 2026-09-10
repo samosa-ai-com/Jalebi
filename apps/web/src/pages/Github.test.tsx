@@ -54,6 +54,8 @@ describe("Github", () => {
       </MemoryRouter>
     );
     expect(await screen.findByText("Add a GitHub account")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "No GitHub accounts yet" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add an account below" })).toBeInTheDocument();
   });
 
   it("shows each equal account with its repos and connect uses the account name", async () => {

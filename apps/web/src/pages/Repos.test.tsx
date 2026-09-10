@@ -176,7 +176,8 @@ describe("Repos", () => {
     );
     renderPage();
 
-    expect(await screen.findByText(/Nothing connected yet/)).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "GitHub page" })).toHaveAttribute("href", "/github");
+    expect(await screen.findByRole("heading", { name: "Nothing connected yet" })).toBeInTheDocument();
+    expect(screen.getByText(/Connect a repository to enable code reviews/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Connect on GitHub" })).toHaveAttribute("href", "/github");
   });
 });

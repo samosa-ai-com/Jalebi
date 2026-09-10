@@ -1318,5 +1318,27 @@ describe("Tasks page (queue overhaul)", () => {
     expect(window.HTMLElement.prototype.scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth" });
     expect(document.activeElement).toBe(newTaskContainer);
   });
+
+  it("renders friendly EmptyState when the task queue is empty", async () => {
+    stubFetch({ ...DEFAULT_HANDLERS, "/api/tasks": [] });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    expect(await screen.findByRole("heading", { name: "No tasks yet" })).toBeInTheDocument();
+    expect(screen.getByText(/Create your first task above/)).toBeInTheDocument();
+  });
+
+  it("points to /repos in EmptyState when no repos are connected", async () => {
+    stubFetch({ ...DEFAULT_HANDLERS, "/api/tasks": [], "/api/repos": [] });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    expect(await screen.findByRole("heading", { name: "No tasks yet" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Connect repository" })).toHaveAttribute("href", "/repos");
+  });
 });
 

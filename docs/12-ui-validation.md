@@ -322,3 +322,21 @@ Backend `178` pytest + `15` web vitest pass; ruff/typecheck/eslint clean; `npm r
 - **FIXED — each saved PAT is now a first-class account.** The GitHub page shows one **Accounts** list: the default account (primary token) plus every named PAT, each with its own live status (login, token type, scopes), masked token, remove, and its **own repository list** with Connect/Disconnect. Add a second account's PAT and its repos appear alongside the default's.
 - **FIXED — repos from any account, in any task.** The task form's repository dropdown is **grouped by account**; picking a repo pre-fills the Credentials with that account (overridable). A task inherits the selected repo's account automatically.
 - **FIXED — per-account git/GitHub ops.** Connected repos remember their account (`repos.pat_name`); the task's git credentials, GitHub calls, PR, review, issue comment, and pruning all use that account's token. Removing an account **deletes** its connected repos and all their tasks (with a confirm dialog + affected-count alert in the UI).
+
+## New-user friendliness (2026-09-10)
+
+- [ ] Top nav renders all links with thin separators between groups
+      (Tasks | Repos/GitHub | Agents/Skills | Screenings/Triggers | Settings);
+      the Screenings unread badge still shows and all links work.
+- [ ] On a fresh install (no accounts), the queue view shows the **Setup**
+      checklist with `1 of 3 done` progressing as account → repo → task are
+      completed; the task step scrolls/focuses the New-task form; **Dismiss**
+      hides it and survives a reload.
+- [ ] The status strip under the Tasks subtitle reads `N running, N queued,
+      N needs you`, or "No tasks yet, nothing is running" when empty.
+- [ ] Main pages (Agents, Skills, Screenings, Triggers, Repos, GitHub,
+      Tasks queue) show a guided `EmptyState` with one clear action; a
+      search that matches nothing still shows the terse no-match text.
+- [ ] Mission Control labels are legible to a newcomer: Cooks (agents),
+      Pantry (skills), Kitchen wire (activity), Karhais (running tasks),
+      Queued tasks, Recent tasks, Spoiled (did not finish).

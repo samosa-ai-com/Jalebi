@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
+import { EmptyState } from "../components/EmptyState";
 import SearchableSelect from "../components/SearchableSelect";
 import { useBackends } from "../hooks/useBackends";
 import {
@@ -1311,23 +1312,23 @@ export default function Screenings() {
       ) : loading ? (
         <p className="text-sm text-ink-500 animate-fade-up">Loading screens…</p>
       ) : screens.length === 0 && !showForm ? (
-        <div className="surface flex flex-col items-start gap-3 p-6 animate-fade-up">
-          <h2 className="panel-title">No screens yet</h2>
-          <p className="text-sm text-ink-400">
-            Create a screen to audit a connected repo on a schedule (e.g. security posture, docs
-            drift). Pick a starter template — each is user-editable.
-          </p>
-          <button
-            type="button"
-            className="btn-primary"
-            onClick={() => {
-              setEditing(null);
-              setShowForm(true);
-            }}
-          >
-            Create your first screen
-          </button>
-        </div>
+        <EmptyState
+          icon="🛡️"
+          title="No screens yet"
+          description="Create a screen to audit a connected repo on a schedule (e.g. security posture, docs drift)."
+          action={
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() => {
+                setEditing(null);
+                setShowForm(true);
+              }}
+            >
+              Create your first screen
+            </button>
+          }
+        />
       ) : (
         <div className="grid gap-4 md:grid-cols-2">
           {screens.map((s) => (
