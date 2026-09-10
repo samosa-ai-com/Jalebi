@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { Link, NavLink, Route, Routes, useLocation } from "react-router-dom";
 import { api } from "./api/client";
 import Agents from "./pages/Agents";
@@ -26,14 +26,14 @@ function JalebiMark({ className }: { className?: string }) {
 }
 
 const NAV_ITEMS = [
-  { to: "/", label: "Tasks", end: true },
-  { to: "/repos", label: "Repos", end: false },
-  { to: "/github", label: "GitHub", end: false },
-  { to: "/agents", label: "Agents", end: false },
-  { to: "/skills", label: "Skills", end: false },
-  { to: "/screenings", label: "Screenings", end: false },
-  { to: "/triggers", label: "Triggers", end: false },
-  { to: "/settings", label: "Settings", end: false },
+  { to: "/", label: "Tasks", end: true, group: "tasks" },
+  { to: "/repos", label: "Repos", end: false, group: "repos" },
+  { to: "/github", label: "GitHub", end: false, group: "repos" },
+  { to: "/agents", label: "Agents", end: false, group: "agents" },
+  { to: "/skills", label: "Skills", end: false, group: "agents" },
+  { to: "/screenings", label: "Screenings", end: false, group: "screenings" },
+  { to: "/triggers", label: "Triggers", end: false, group: "screenings" },
+  { to: "/settings", label: "Settings", end: false, group: "settings" },
 ];
 
 const SOON_ITEMS: { to: string; label: string }[] = [];
@@ -114,19 +114,27 @@ function App() {
           </Link>
 
           <nav className="flex items-center gap-1">
-            {NAV_ITEMS.map((item) => (
-              <NavLink key={item.to} to={item.to} end={item.end} className={navClass}>
-                {item.label}
-                {item.to === "/screenings" && screeningsUnread > 0 && (
-                  <span
-                    title={`${screeningsUnread} screen(s) with new findings`}
-                    className="ml-1.5 inline-flex min-h-5 min-w-5 items-center justify-center rounded-full bg-syrup-500 px-1 text-[11px] font-semibold text-ink-950"
-                  >
-                    {screeningsUnread}
-                  </span>
-                )}
-              </NavLink>
-            ))}
+            {NAV_ITEMS.map((item, idx) => {
+              const showSeparator = idx > 0 && item.group !== NAV_ITEMS[idx - 1].group;
+              return (
+                <Fragment key={item.to}>
+                  {showSeparator && (
+                    <span aria-hidden="true" className="mx-1 h-5 w-px bg-ink-800" />
+                  )}
+                  <NavLink to={item.to} end={item.end} className={navClass}>
+                    {item.label}
+                    {item.to === "/screenings" && screeningsUnread > 0 && (
+                      <span
+                        title={`${screeningsUnread} screen(s) with new findings`}
+                        className="ml-1.5 inline-flex min-h-5 min-w-5 items-center justify-center rounded-full bg-syrup-500 px-1 text-[11px] font-semibold text-ink-950"
+                      >
+                        {screeningsUnread}
+                      </span>
+                    )}
+                  </NavLink>
+                </Fragment>
+              );
+            })}
           </nav>
 
           <div className="ml-auto flex items-center gap-1">

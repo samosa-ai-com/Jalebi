@@ -1274,4 +1274,49 @@ describe("Tasks page (queue overhaul)", () => {
       expect(screen.getByLabelText("Task type")).toHaveTextContent("Freeform");
     });
   });
+
+  it("shows the status reassurance strip with zero tasks", async () => {
+    stubFetch({ ...DEFAULT_HANDLERS, "/api/tasks": [] });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    expect(await screen.findByText("No tasks yet, nothing is running")).toBeInTheDocument();
+  });
+
+  it("shows the status reassurance strip with computed counts", async () => {
+    const mixed = [
+      { ...TASKS[0], id: 1, status: "running", attention: "normal" },
+      { ...TASKS[0], id: 2, status: "queued", attention: "needs_you" },
+      { ...TASKS[0], id: 3, status: "done", attention: "needs_you" },
+    ];
+    stubFetch({ ...DEFAULT_HANDLERS, "/api/tasks": mixed });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    // 1 running, 1 queued, 2 needs_you
+    expect(await screen.findByText("1 running, 1 queued, 2 needs you")).toBeInTheDocument();
+  });
+
+  it("renders the onboarding checklist in queue view and scrolls/focuses new-task form", async () => {
+    window.HTMLElement.prototype.scrollIntoView = vi.fn();
+    stubFetch({ ...DEFAULT_HANDLERS, "/api/tasks": [] });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    expect(await screen.findByText("Setup")).toBeInTheDocument();
+    const taskBtn = screen.getByRole("button", { name: "Create your first task" });
+    const newTaskContainer = document.getElementById("new-task");
+    expect(newTaskContainer).toBeInTheDocument();
+
+    await userEvent.click(taskBtn);
+    expect(window.HTMLElement.prototype.scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth" });
+    expect(document.activeElement).toBe(newTaskContainer);
+  });
 });
+

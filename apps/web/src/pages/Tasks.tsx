@@ -5,6 +5,7 @@ import { AttentionBadge } from "../components/AttentionBadge";
 import { BrewHouse } from "../components/brew/BrewHouse";
 import type { SnackKind } from "../components/brew/snacks";
 import { DepBadges } from "../components/DepBadges";
+import { OnboardingChecklist } from "../components/OnboardingChecklist";
 import { RunningCard } from "../components/RunningCard";
 import SearchableSelect from "../components/SearchableSelect";
 import { StatusBadge } from "../components/StatusBadge";
@@ -409,7 +410,11 @@ function CreateTask({
 
   if (repos.length === 0) {
     return (
-      <div className="surface flex flex-col items-start gap-3 p-6 animate-fade-up">
+      <div
+        id="new-task"
+        tabIndex={-1}
+        className="surface flex flex-col items-start gap-3 p-6 animate-fade-up outline-none"
+      >
         <h2 className="panel-title">New task</h2>
         <p className="text-sm text-ink-400">
           No repos connected yet — connect one from the{" "}
@@ -425,8 +430,9 @@ function CreateTask({
   return (
     <form
       onSubmit={submit}
-      id="new-task-form"
-      className="surface space-y-4 p-6 animate-fade-up"
+      id="new-task"
+      tabIndex={-1}
+      className="surface space-y-4 p-6 animate-fade-up outline-none"
       style={{ animationDelay: "0.05s" }}
     >
       <div className="flex items-baseline justify-between">
@@ -1195,6 +1201,22 @@ export default function Tasks() {
     }
   }
 
+  const handleStartTask = useCallback(() => {
+    const el = document.getElementById("new-task");
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth" });
+      el.focus();
+    }
+  }, []);
+
+  const reassuranceText = useMemo(() => {
+    if (tasks.length === 0) return "No tasks yet, nothing is running";
+    const running = tasks.filter((t) => t.status === "running").length;
+    const queued = tasks.filter((t) => t.status === "queued").length;
+    const needsYou = tasks.filter((t) => t.attention === "needs_you").length;
+    return `${running} running, ${queued} queued, ${needsYou} needs you`;
+  }, [tasks]);
+
   const statCards: { label: string; value: number; accent: string; filter: FilterId }[] = [
     { label: "Total", value: stats.total, accent: "text-ink-100", filter: "all" },
     { label: "Needs you", value: stats.needsYou, accent: "text-syrup-300", filter: "needs_you" },
@@ -1211,6 +1233,11 @@ export default function Tasks() {
           <p className="mt-1 text-sm text-ink-500">
             Your agent queue — what&apos;s running, what&apos;s done, what needs a decision.
           </p>
+          {view === "queue" && (
+            <p className="mt-1 text-xs text-ink-500">
+              {reassuranceText}
+            </p>
+          )}
         </div>
         <div
           role="group"
@@ -1244,6 +1271,13 @@ export default function Tasks() {
         />
       ) : (
         <>
+          <OnboardingChecklist
+            accounts={accounts.length}
+            repos={repos.length}
+            tasks={tasks.length}
+            onStartTask={handleStartTask}
+          />
+
           <div
             className="grid grid-cols-2 gap-3 sm:grid-cols-5 animate-fade-up"
             style={{ animationDelay: "0.05s" }}
