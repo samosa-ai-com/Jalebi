@@ -404,7 +404,7 @@ def _api_screen(client, repo_row):
 
 def test_dealt_api_roundtrip(client, repo_row):
     sid = _api_screen(client, repo_row)
-    fp = '[%d,"T","a.py",1]' % sid
+    fp = f'[{sid},"T","a.py",1]'
     assert client.get("/api/screenings/dealt").status_code == 400
     assert client.get("/api/screenings/dealt?screen_id=nope").status_code == 400
     assert client.get("/api/screenings/dealt?screen_id=424242").status_code == 404

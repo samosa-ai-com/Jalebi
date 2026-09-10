@@ -197,7 +197,8 @@ def test_update_cli_switch_drops_stale_model(client) -> None:
 def test_agent_usage_reports_tasks_and_rules(client, session) -> None:
     """Usage shows historical task references plus live trigger rules, so the
     UI can warn before a delete that would break rules at dispatch."""
-    from jalebi import repos, tasks as tasks_service, webhooks
+    from jalebi import repos, webhooks
+    from jalebi import tasks as tasks_service
 
     assert client.post("/api/agents", json=_agent_payload()).status_code == 201
     row, _ = repos.upsert_repo(
