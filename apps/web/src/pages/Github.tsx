@@ -70,6 +70,13 @@ function AddAccountForm({ onAdded }: { onAdded: () => void }) {
           Each saved PAT is its own account — its repos appear below and are selectable when
           creating tasks. All accounts are equal; the one you pick for a task is the one used.
         </p>
+        <p className="mt-2 text-xs leading-relaxed text-ink-500">
+          Recommended: a <span className="font-mono">classic</span> token with the{" "}
+          <span className="font-mono">repo</span> scope. It also covers reading GitHub Actions
+          logs, which the reviewer and “Fix failed CI” use. A fine-grained token works too, but
+          add <span className="font-mono">Actions: read</span> for CI logs (plus Contents, Pull
+          requests, Issues, Metadata, and Commit statuses).
+        </p>
       </div>
       <div className="grid gap-2 sm:grid-cols-[1fr_2fr_auto] sm:items-center">
         <input
@@ -464,7 +471,10 @@ export default function Github() {
                     </div>
                     <p className="mt-1.5 text-[11px] text-ink-500">
                       Without these, Jalebi can&apos;t review, comment, push, or report commit
-                      statuses. Create a token with the required scopes at{" "}
+                      statuses. A <span className="font-mono">classic</span> token needs only the{" "}
+                      <span className="font-mono">repo</span> scope (it also covers reading
+                      Actions logs); a fine-grained token needs the permissions here plus{" "}
+                      <span className="font-mono">Actions: read</span> for CI logs. Create one at{" "}
                       <a
                         href="https://github.com/settings/tokens"
                         target="_blank"

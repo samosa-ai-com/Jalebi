@@ -81,8 +81,8 @@ This is critical and repeated: **all GitHub interaction in this project goes thr
 
 ### 3.4 Scope requirements (PRD §F1) — document, don't guess
 
-- Classic PAT: `repo`.
-- Fine-grained: Contents read/write, Pull requests read/write, Issues read/write, Metadata read, Commit statuses read/write.
+- Classic PAT (`repo`) — recommended: `repo` also covers reading GitHub Actions runs/logs (used to inspect a failing workflow and fix it).
+- Fine-grained: Contents read/write, Pull requests read/write, Issues read/write, Metadata read, Commit statuses read/write, Actions read (to read failed workflow logs).
 
 ---
 

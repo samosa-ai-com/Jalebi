@@ -13,8 +13,8 @@
 
 ## 2. Required scopes & validation (PRD §F1)
 
-- **Classic PAT:** `repo`.
-- **Fine-grained:** Contents read/write, Pull requests read/write, Issues read/write, Metadata read, **Commit statuses read/write** (for check runs).
+- **Classic PAT (`repo`) — recommended:** `repo` also covers reading GitHub Actions runs/logs, so an agent can inspect a failing workflow and fix it. No extra scope is needed.
+- **Fine-grained:** Contents read/write, Pull requests read/write, Issues read/write, Metadata read, **Commit statuses read/write** (for check runs), and **Actions read** (to read failed workflow logs — the "Fix failed CI" flow).
 
 `GitHubClient.validate_token()` calls `GET /user` and classifies the result:
 

@@ -24,7 +24,8 @@ REQUIRED_CLASSIC_SCOPES = ("repo",)
 FINE_GRAINED_NOTE = (
     "fine-grained token: GitHub does not expose an enumerable scope list. "
     "Verify Contents (RW), Pull requests (RW), Issues (RW), Metadata (read), "
-    "and Commit statuses (RW) in the GitHub UI."
+    "Commit statuses (RW), and Actions (read — to read failed workflow logs), "
+    "in the GitHub UI."
 )
 
 TokenType = Literal["classic", "fine-grained", "unknown"]
