@@ -2260,3 +2260,31 @@ def test_enabled_cli_falls_back_for_unknown_backend(q, session) -> None:
     settings.set_setting(session, "enabled_backends", [])
     assert TaskQueue._enabled_cli(session, "opencode") == "opencode"
     assert TaskQueue._enabled_cli(session, "goose") == "opencode"
+
+
+def test_is_backend_available() -> None:
+    """Availability is registry + PATH: installed here vs nonsense name."""
+    from jalebi.adapters import is_backend_available
+
+    assert is_backend_available("opencode") is True
+    assert is_backend_available("definitely-not-a-cli") is False
+
+
+def test_missing_binary_fails_fast_without_recovery(
+    q, session, repo_row, monkeypatch, tmp_path
+) -> None:
+    """An enabled-but-uninstalled backend fails with a clear, non-retryable
+    message — one run, no auto-recovery loop, no spawn crash."""
+    task = tasks.create_task(
+        session, type_="freeform", repo_id=repo_row.id, prompt="do it", cli="opencode"
+    )
+    # Empty PATH: no CLI binary resolves (restored automatically after).
+    monkeypatch.setenv("PATH", str(tmp_path))
+    q._run_task(task.id)
+
+    session.expire_all()
+    assert _fresh_task(session, task.id).status == "failed"
+    runs = tasks.runs_for_task(session, task.id)
+    assert len(runs) <= 1
+    steps = json.loads(runs[0].steps_json or "[]") if runs else []
+    assert any("not installed" in (s.get("text") or "") for s in steps)

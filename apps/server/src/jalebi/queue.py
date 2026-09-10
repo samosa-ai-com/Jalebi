@@ -30,7 +30,7 @@ from jalebi import (
     tasks,
     worktree_bootstrap,
 )
-from jalebi.adapters import available_adapters, get_adapter
+from jalebi.adapters import available_adapters, get_adapter, is_backend_available
 from jalebi.adapters.types import AgentAdapter, AgentEvent
 from jalebi.config import Config
 from jalebi.db import CatalogAgent, Repo, Run, Session, Task, now
@@ -890,6 +890,21 @@ class TaskQueue:
         logger.warning("backend %s is %s; running on %s instead", cli, reason, fallback)
         return fallback
 
+    @staticmethod
+    def _require_cli(cli: str) -> None:
+        """Fail fast when the resolved backend's binary is missing.
+
+        An enabled-but-uninstalled backend must fail with a clear,
+        non-retryable message — not a spawn crash deep in the run. Called
+        right after the run row exists so the attempt and its reason stay
+        visible on the timeline.
+        """
+        if not is_backend_available(cli):
+            raise RuntimeError(
+                f"{cli} CLI is not installed (not found on PATH) — "
+                "install it or switch backend"
+            )
+
     def _run_task(self, task_id: int) -> None:
         session = Session()
         run: Run | None = None
@@ -903,6 +918,9 @@ class TaskQueue:
         repo: Repo | None = None
         token: str | None = None
         git: GitWorkspace | None = None
+        # Bound for the except handler's timeline diagnostic (assigned for
+        # real during setup; None when setup failed before masking existed).
+        masker = None
         try:
             task = session.get(Task, task_id)
             if task is None:
@@ -998,6 +1016,10 @@ class TaskQueue:
             run.pat_name = task.pat_name
             session.commit()
             run_id = run.id
+            # Fail fast on a missing binary now that the attempt is recorded:
+            # a clear, non-retryable message beats a spawn crash with no
+            # worktree or session yet created.
+            self._require_cli(cli)
 
             git = GitWorkspace(self.config)
             git.ensure_mirror(repo.full_name, repo.clone_url, token)
@@ -1044,7 +1066,7 @@ class TaskQueue:
             self._complete_status(session, task, repo, run, git, token)
             session.commit()
             self._maybe_recover(session, task, run, repo, state, masker)
-        except Exception:
+        except Exception as exc:
             # Roll back FIRST (see _run_review): the session may be poisoned by
             # a failed flush, and even reading run.id can raise on it. The
             # logger uses the plain-int task_id arg, never the ORM object.
@@ -1067,6 +1089,25 @@ class TaskQueue:
                 if run is not None:
                     run.status = "failed"
                     run.finished_at = now()
+                    # Setup failures (missing binary, no token, ...) must say
+                    # so on the timeline — otherwise the run fails with zero
+                    # diagnostic.
+                    try:
+                        fail_steps = json.loads(run.steps_json or "[]")
+                    except (ValueError, TypeError):
+                        fail_steps = []
+                    detail = str(exc).strip() or "run failed during setup"
+                    if masker is not None:
+                        detail = masker(detail)
+                    fail_steps.append(
+                        {
+                            "type": "error",
+                            "phase": None,
+                            "text": detail,
+                            "ts": clock.to_iso(now()),
+                        }
+                    )
+                    run.steps_json = json.dumps(fail_steps[-MAX_STEPS:])
             session.commit()
             # Close out the commit status so a crashed run doesn't leave a
             # permanently-blocking `pending` on the head SHA (best-effort; the
@@ -1122,6 +1163,7 @@ class TaskQueue:
             # If this reviewer task has an assignment, mark it running (with the run).
             reviews.set_assignment_status(session, task.id, "running", run_id=run.id)
             cli, agent_skills = self._agent_run_opts(session, task, cli)
+            self._require_cli(cli)
             agent = self._catalog_agent(session, task)
             effective_model = task.model or (agent.model if agent is not None else None)
             effective_prompt = task.prompt
@@ -1176,7 +1218,7 @@ class TaskQueue:
             # the merge gate.
             self._complete_status(session, task, repo, run, git, token)
             session.commit()
-        except Exception:
+        except Exception as exc:
             # Roll back FIRST: the session may be poisoned by a failed flush
             # (PendingRollbackError). Everything below uses only plain-int ids
             # and freshly re-fetched rows — never the possibly-stale objects.
@@ -1194,6 +1236,22 @@ class TaskQueue:
             if run is not None:
                 run.status = "failed"
                 run.finished_at = now()
+                # Setup failures must say so on the timeline — otherwise the
+                # review fails with zero diagnostic (masker is a parameter
+                # here, always bound).
+                try:
+                    fail_steps = json.loads(run.steps_json or "[]")
+                except (ValueError, TypeError):
+                    fail_steps = []
+                fail_steps.append(
+                    {
+                        "type": "error",
+                        "phase": None,
+                        "text": masker(str(exc).strip() or "review failed during setup"),
+                        "ts": clock.to_iso(now()),
+                    }
+                )
+                run.steps_json = json.dumps(fail_steps[-MAX_STEPS:])
             if task is not None and task.status not in ("cancelled",):
                 task.status = "failed"
                 task.updated_at = now()
@@ -1507,6 +1565,9 @@ class TaskQueue:
         repo: Repo | None = None
         token: str | None = None
         git: GitWorkspace | None = None
+        # Bound for the except handler's timeline diagnostic (assigned for
+        # real during setup; None when setup failed before masking existed).
+        masker = None
         try:
             task = session.get(Task, task_id)
             if task is None:
@@ -1585,6 +1646,7 @@ class TaskQueue:
             run.model = effective_model
             session.commit()
             run_id = run.id
+            self._require_cli(cli)
 
             git = GitWorkspace(self.config)
             git.ensure_mirror(repo.full_name, repo.clone_url, token)
@@ -1677,7 +1739,7 @@ class TaskQueue:
                 )
             session.commit()
             self._maybe_recover(session, task, run, repo, state, masker)
-        except Exception:
+        except Exception as exc:
             # Roll back FIRST (see _run_review): the session may be poisoned by
             # a failed flush, and even reading run.id can raise on it. The
             # logger uses the plain-int task_id arg, never the ORM object.
@@ -1699,6 +1761,24 @@ class TaskQueue:
                 if run is not None:
                     run.status = "failed"
                     run.finished_at = now()
+                    # Setup failures must say so on the timeline — otherwise
+                    # the follow-up fails with zero diagnostic.
+                    try:
+                        fail_steps = json.loads(run.steps_json or "[]")
+                    except (ValueError, TypeError):
+                        fail_steps = []
+                    detail = str(exc).strip() or "follow-up failed during setup"
+                    if masker is not None:
+                        detail = masker(detail)
+                    fail_steps.append(
+                        {
+                            "type": "error",
+                            "phase": None,
+                            "text": detail,
+                            "ts": clock.to_iso(now()),
+                        }
+                    )
+                    run.steps_json = json.dumps(fail_steps[-MAX_STEPS:])
             if run_id is not None and not auto:
                 # A failed user follow-up still records its row — otherwise
                 # the attempt leaves no trace in the follow-ups list.

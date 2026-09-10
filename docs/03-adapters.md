@@ -158,7 +158,11 @@ Top-level JSON `type` values (one object per line, `--verbose` required) and the
 Validated live Sep 2026 (one trivial prompt each, free-tier models) + local
 `--help`. Resume follow-ups and tool-call/diff event shapes are per-docs and
 structurally confirmed unless noted; live resume was exercised only where
-stated.
+stated. Each adapter records the CLI version it was validated against
+(`VERIFIED_VERSIONS` in `adapters/__init__.py`); `GET /api/backends/health`
+reports per-backend install state, detected version, and drift from the
+verified version (warn-only). A backend whose binary is missing fails its
+runs fast with a clear non-retryable message (`TaskQueue._require_cli`).
 
 - **pi** (`pi --print --mode json --approve`, 0.80.2): resume via
   `--session <id>` (`--resume` is a TUI picker — never use headlessly).

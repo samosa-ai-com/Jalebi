@@ -2,6 +2,7 @@ import type {
   AgentUsage,
   BackupInfo,
   BackendsResponse,
+  BackendsHealthResponse,
   CatalogAgent,
   CatalogSkill,
   DataUsage,
@@ -74,6 +75,7 @@ export const api = {
   getHealth: () => request<Health>("/api/health"),
   getSettings: () => request<SettingsMap>("/api/settings"),
   getBackends: () => request<BackendsResponse>("/api/backends"),
+  getBackendsHealth: () => request<BackendsHealthResponse>("/api/backends/health"),
   getTimezones: () => request<TimezoneList>("/api/timezones"),
   getModels: (cli?: string) =>
     request<{ cli: string; models: string[] }>(

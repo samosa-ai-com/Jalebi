@@ -65,6 +65,11 @@ DEFAULTS: dict[str, object] = {
             # The queue's own empty-run marker (exit-0 with zero agent
             # output): re-running the same prompt reproduces it.
             "without producing any agent output",
+            # Enabled-but-uninstalled backends fail fast with this marker
+            # (see TaskQueue._require_cli) — reinstalling can't be retried
+            # into existence.
+            "not installed",
+            "not found on PATH",
         ],
     },
     # No-output threshold before a run is declared stalled (and auto-recovered).

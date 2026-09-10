@@ -1001,6 +1001,7 @@ class ScreeningEngine:
         from jalebi.queue import TaskQueue
 
         effective_cli = TaskQueue._enabled_cli(session, effective_cli)
+        TaskQueue._require_cli(effective_cli)
 
         # Screening audits *untrusted* repository code (the highest prompt-injection
         # exposure in the system) — the agent gets no PAT. Codex is the only backend

@@ -36,6 +36,8 @@ def test_defaults_returned_when_unset(session: OrmSession) -> None:
             "payment required",
             "try again later",
             "without producing any agent output",
+            "not installed",
+            "not found on PATH",
         ],
     }
     assert get_setting(session, "stall_timeout_seconds") == 600

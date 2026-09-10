@@ -12,7 +12,14 @@ from flask import Flask, Response, current_app, g, jsonify, request, send_from_d
 from flask.typing import ResponseReturnValue
 
 from jalebi import artifacts, clock, db, ide, masking, notify, secrets, seed_catalog, settings
-from jalebi.adapters import ADAPTERS, available_adapters, get_adapter
+from jalebi.adapters import (
+    ADAPTERS,
+    VERIFIED_VERSIONS,
+    available_adapters,
+    cli_version,
+    get_adapter,
+    is_backend_available,
+)
 from jalebi.config import Config, load_config, repo_root
 from jalebi.poller import Poller
 from jalebi.queue import TaskQueue
@@ -232,8 +239,13 @@ def _basic_auth_gate() -> ResponseReturnValue | None:
     )
 
 
-# -- failed-login ntfy push (throttled) -----------------------------------
+# -- backend health cache (5-minute TTL) --------------------------------------
+# Version probes spawn a subprocess per backend; cache them so the Settings
+# page can't stall the request thread on a cold machine.
+_backends_health_cache: dict = {"at": 0.0, "rows": None}
 
+
+# -- failed-login ntfy push (throttled) -----------------------------------
 # One push per client per window, so a brute-force scan can't spam the channel.
 _FAILED_LOGIN_WINDOW_SECONDS = 60
 _failed_login_pushes: dict[str, float] = {}
@@ -445,6 +457,45 @@ def create_app(config: Config | None = None) -> Flask:
                 "default": default,
             }
         )
+
+    @app.get("/api/backends/health")
+    def backends_health() -> ResponseReturnValue:
+        """Per-backend install/version drift check (read-only, for Settings).
+
+        ``installed`` = binary on PATH; ``version`` = best-effort
+        ``<bin> --version`` (None when missing/unparseable); ``verified`` =
+        the version parsing was validated against; ``version_match`` is a
+        same-version-or-patch-ahead comparison. A drift only warns — newer
+        CLIs usually still work, and parsers degrade to verbatim text.
+        Results are cached for 5 minutes: version probes run subprocesses
+        that can each take seconds on a cold machine.
+        """
+        now_ts = time.monotonic()
+        cached = _backends_health_cache["rows"]
+        if cached is not None and now_ts - _backends_health_cache["at"] < 300:
+            return jsonify({"backends": cached})
+        rows = []
+        for cli in list(ADAPTERS):
+            installed = is_backend_available(cli)
+            version = cli_version(cli) if installed else None
+            verified = VERIFIED_VERSIONS.get(cli)
+            match = (
+                version is not None
+                and verified is not None
+                and (version == verified or version.startswith(verified + "."))
+            )
+            rows.append(
+                {
+                    "cli": cli,
+                    "installed": installed,
+                    "version": version,
+                    "verified": verified,
+                    "version_match": match,
+                }
+            )
+        _backends_health_cache["rows"] = rows
+        _backends_health_cache["at"] = now_ts
+        return jsonify({"backends": rows})
 
     @app.post("/api/settings")
     def update_settings() -> ResponseReturnValue:

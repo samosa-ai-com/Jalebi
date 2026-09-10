@@ -253,6 +253,18 @@ export interface BackendsResponse {
   default: string;
 }
 
+export interface BackendHealth {
+  cli: string;
+  installed: boolean;
+  version: string | null;
+  verified: string | null;
+  version_match: boolean;
+}
+
+export interface BackendsHealthResponse {
+  backends: BackendHealth[];
+}
+
 export interface BackupInfo {
   name: string;
   size: number;
