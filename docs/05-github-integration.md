@@ -28,6 +28,8 @@ Validation is explicit (endpoints below), **not** run at startup — the server 
 
 `GitHubClient` (`jalebi/github.py`, httpx, `base_url=https://api.github.com`, `_request` seam for tests):
 
+- **Rate-limit backoff:** `_request`/`_request_etag` route through `_send`, which retries a rate-limited response with a bounded wait. A **429** always retries; a **403** retries only when it carries a rate-limit signal (`X-RateLimit-Remaining: 0` for the primary limit, or a `Retry-After` header for the secondary limit). Wait = `Retry-After` else `X-RateLimit-Reset − now` else 1 s, capped at `RATE_LIMIT_MAX_WAIT` (60 s), up to `RATE_LIMIT_MAX_RETRIES` (3) retries. An ordinary 403 (missing scope) is returned unchanged. Safe for POST/DELETE because GitHub returns the limit *before* executing the action. This matters under concurrency: every task on a repo shares one PAT's budget.
+
 - `validate_token() -> TokenInfo` (`valid`, `login`, `token_type`, `granted_scopes`, `missing_scopes`, `note`, `error`).
 - `get_repo(full_name)` → `{full_name, default_branch, clone_url, private}`; raises `GitHubNotFound` on 404.
 - `create_pr(full_name, *, title, body, head, base) -> int` — opens a pull request and returns its number.
