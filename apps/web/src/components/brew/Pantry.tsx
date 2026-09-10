@@ -38,13 +38,16 @@ export function Pantry({
   onHoverStove?: (slot: number | null) => void;
 }) {
   return (
-    <section className="surface flex min-h-0 flex-col px-3 py-2.5" aria-label="Ingredients">
+    <section
+      className="surface flex min-h-0 flex-col overflow-hidden px-3 py-2.5"
+      aria-label="Ingredients"
+    >
       <h3 className="panel-title">Ingredients</h3>
       <p className="mt-0.5 text-[11px] text-ink-500">skills in the pantry</p>
       {ingredients.length === 0 ? (
         <p className="mt-3 text-xs text-ink-600">No skills in the library yet.</p>
       ) : (
-        <ul className="mt-2 min-h-0 space-y-1.5 overflow-y-auto pr-0.5">
+        <ul className="mt-2 min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-0.5">
           {ingredients.map(({ skill, uses, inPlay, stoveSlots }) => (
             <li
               key={skill.id}

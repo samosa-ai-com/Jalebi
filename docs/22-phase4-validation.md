@@ -157,6 +157,16 @@
 - [ ] Submitting that form runs an agent that can read the failed run's logs
       (classic `repo` PAT) and updates the existing PR on publish (`update_pr`).
 
+## 8d. Mission-control bounded-card layout (2026-09-10)
+
+- [ ] On a wide (`xl`) screen, each Mission Control card keeps its own height:
+      the right rail is stats (auto) / control shelf (0.8fr) / Kitchen wire (1.2fr).
+- [ ] Enable many backends (e.g. 15+). The **Backends** card keeps its size and
+      scrolls internally; the **Kitchen wire** below it keeps its height.
+- [ ] Many cooks / many skills scroll inside the Cooks and Pantry cards.
+- [ ] Many burners (high `concurrency`) scroll inside the shop-floor pot grid.
+- [ ] No card's content pushes another card off-screen or to near-zero height.
+
 ## 9. Known limitations (do NOT expect these yet)
 - `test_check_runs.py:331` may flake under full-suite load (isolated green).
 - Fork push needs maintainer-edit permission; otherwise `new_pr` fallback.

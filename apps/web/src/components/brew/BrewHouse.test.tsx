@@ -175,6 +175,23 @@ describe("BrewHouse", () => {
     expect(screen.getByRole("region", { name: "Karhais (cooking pots)" })).toBeInTheDocument();
   });
 
+  it("bounds a long backends list so it scrolls inside its card", async () => {
+    const many = Array.from({ length: 30 }, (_, i) => `backend-${i}`);
+    stubFetch({
+      ...HANDLERS,
+      "/api/backends": { backends: many, enabled: many, default: many[0] },
+    });
+    renderHouse();
+    const card = await screen.findByRole("region", { name: "Configured backends" });
+    const list = within(card).getByRole("list");
+    // Class-contract guard only — jsdom has no layout engine, so real geometry
+    // is checked manually (docs/22 §8d). This keeps the scroll container from
+    // being removed, and proves the full list renders (not sliced/truncated).
+    expect(list.className).toContain("overflow-y-auto");
+    expect(list.className).toContain("flex-1");
+    expect(within(card).getAllByRole("listitem")).toHaveLength(30);
+  });
+
   it("shows simmering stoves beside the frying one", async () => {
     stubFetch({ ...HANDLERS });
     renderHouse();

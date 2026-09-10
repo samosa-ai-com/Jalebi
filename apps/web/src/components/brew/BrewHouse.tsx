@@ -366,7 +366,10 @@ export function BrewHouse({
           />
         </div>
 
-        <div className="flex min-h-0 flex-col gap-2.5 xl:h-[calc(100vh-290px)] xl:min-h-[480px] xl:overflow-hidden">
+        {/* Right rail: explicit bounded tracks (StatsBoard auto, ControlShelf
+            0.8fr, KitchenWire 1.2fr) so a long list inside one card scrolls
+            internally instead of stealing height from its neighbours. */}
+        <div className="flex min-h-0 flex-col gap-2.5 xl:grid xl:h-[calc(100vh-290px)] xl:min-h-[480px] xl:grid-rows-[auto_minmax(0,0.8fr)_minmax(0,1.2fr)] xl:overflow-hidden">
           <StatsBoard tasks={tasks} now={now} />
 
           <ControlShelf

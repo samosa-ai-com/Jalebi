@@ -134,7 +134,7 @@ export function ShopFloor({
         </div>
       )}
 
-      <div className="mt-2 grid min-h-[120px] shrink grid-cols-1 gap-3 overflow-y-auto pr-0.5 sm:grid-cols-2">
+      <div className="mt-2 grid min-h-[120px] flex-1 grid-cols-1 gap-3 overflow-y-auto pr-0.5 sm:grid-cols-2">
         {Array.from({ length: slots }, (_, i) => (
           <FryStation
             key={i}

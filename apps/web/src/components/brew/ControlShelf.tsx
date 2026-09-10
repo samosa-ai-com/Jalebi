@@ -61,11 +61,13 @@ export function ControlShelf({
   return (
     <div
       className={
-        compact ? "grid shrink-0 grid-cols-2 gap-2" : "grid gap-4 md:grid-cols-2 xl:grid-cols-4"
+        compact
+          ? "grid min-h-0 shrink-0 grid-cols-2 gap-2 xl:h-full xl:grid-rows-2"
+          : "grid gap-4 md:grid-cols-2 xl:grid-cols-4"
       }
     >
       <section
-        className={`surface flex ${compact ? "min-w-0 flex-col items-start gap-1 px-2.5 py-2" : "items-center gap-4 p-4"}`}
+        className={`surface flex ${compact ? "min-h-0 min-w-0 flex-col items-start gap-1 overflow-y-auto px-2.5 py-2" : "items-center gap-4 p-4"}`}
         aria-label="Worker load"
       >
         <Ring
@@ -91,7 +93,7 @@ export function ControlShelf({
       </section>
 
       <section
-        className={`surface ${compact ? "min-w-0 px-2.5 py-2" : "px-3 py-2.5"}`}
+        className={`surface ${compact ? "flex min-h-0 min-w-0 flex-col overflow-y-auto px-2.5 py-2" : "px-3 py-2.5"}`}
         aria-label="Configured backends"
       >
         <div className="flex items-baseline justify-between gap-1">
@@ -111,7 +113,11 @@ export function ControlShelf({
         ) : (backends.enabled ?? []).length === 0 ? (
           <p className="mt-3 text-xs text-ink-600">No backends enabled.</p>
         ) : (
-          <ul className="mt-2 space-y-1.5">
+          <ul
+            className={`mt-2 space-y-1.5 ${
+              compact ? "min-h-0 flex-1 overflow-y-auto pr-0.5" : ""
+            }`}
+          >
             {(backends.enabled ?? []).map((b) => (
               <li
                 key={b}
@@ -148,7 +154,7 @@ export function ControlShelf({
       </section>
 
       <section
-        className={`surface ${compact ? "min-w-0 px-2.5 py-2" : "px-3 py-2.5"}`}
+        className={`surface ${compact ? "flex min-h-0 min-w-0 flex-col overflow-y-auto px-2.5 py-2" : "px-3 py-2.5"}`}
         aria-label="Repositories"
       >
         <div className="flex items-baseline justify-between gap-1">
@@ -194,7 +200,7 @@ export function ControlShelf({
       </section>
 
       <section
-        className={`surface ${compact ? "min-w-0 px-2.5 py-2" : "px-3 py-2.5"}`}
+        className={`surface ${compact ? "flex min-h-0 min-w-0 flex-col overflow-y-auto px-2.5 py-2" : "px-3 py-2.5"}`}
         aria-label="Screenings"
       >
         <div className="flex items-baseline justify-between gap-1">
@@ -210,7 +216,11 @@ export function ControlShelf({
           </Link>
         </div>
         {liveScreens.length > 0 ? (
-          <ul className="mt-2 space-y-1.5">
+          <ul
+            className={`mt-2 space-y-1.5 ${
+              compact ? "min-h-0 flex-1 overflow-y-auto pr-0.5" : ""
+            }`}
+          >
             {liveScreens.slice(0, compact ? 2 : 3).map((s) => (
               <li key={s.id} className="flex items-center gap-2 text-xs">
                 <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-syrup-400 brew-needs-you" />

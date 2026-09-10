@@ -23,13 +23,16 @@ export function CooksRail({
   onHoverCook?: (slot: number | null) => void;
 }) {
   return (
-    <section className="surface flex min-h-0 flex-col px-3 py-2.5" aria-label="Cooks">
+    <section
+      className="surface flex min-h-0 flex-col overflow-hidden px-3 py-2.5"
+      aria-label="Cooks"
+    >
       <h3 className="panel-title">Cooks</h3>
       <p className="mt-0.5 text-[11px] text-ink-500">{cooks.length} in the kitchen</p>
       {cooks.length === 0 ? (
         <p className="mt-3 text-xs text-ink-600">No agents in the catalog yet.</p>
       ) : (
-        <ul className="mt-2 min-h-0 space-y-1.5 overflow-y-auto pr-0.5">
+        <ul className="mt-2 min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-0.5">
           {cooks.map(({ agent, activeTasks, stoveSlot }) => {
             const busy = activeTasks > 0;
             const isHighlighted = stoveSlot != null && hoveredSlot === stoveSlot;
