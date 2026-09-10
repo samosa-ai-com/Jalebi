@@ -1,5 +1,6 @@
 import { Children, isValidElement, useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
+import BackendHealth from "../components/BackendHealth";
 import SearchableSelect from "../components/SearchableSelect";
 import type {
   BackupInfo,
@@ -519,6 +520,22 @@ const AGENT_CLIS = ["opencode", "codex", "claude", "pi", "kilo", "qwen", "cline"
 // Backends added Sep 2026: implemented against vendor docs + a one-prompt
 // smoke test each, but not yet live-tested from the app.
 const NEW_BACKENDS = ["pi", "kilo", "qwen", "cline", "grok", "commandcode", "agy"];
+
+// Where each backend's built-in model list comes from, and how to change
+// it. Rendered under the Model overrides row so owners know which lists are
+// live, which come from a local file, and which can only be pinned by hand.
+const MODEL_LIST_HELP: Array<{ cli: string; how: string }> = [
+  { cli: "opencode", how: "Live: `opencode models`. Nothing to do." },
+  { cli: "codex", how: "Auto from `~/.codex/models_cache.json` — re-run `codex login` to refresh, or pin above." },
+  { cli: "claude", how: "Fixed alias list in the app — change it via the override box above." },
+  { cli: "pi", how: "Live: `pi --list-models`. Nothing to do." },
+  { cli: "kilo", how: "Live: `kilo models`. Nothing to do." },
+  { cli: "qwen", how: "From `~/.qwen/settings.json` (modelProviders) — edit that file, or pin above." },
+  { cli: "cline", how: "Curated ids plus the installed bundle's catalog — pin anything else above." },
+  { cli: "grok", how: "Live: `grok models`. Nothing to do." },
+  { cli: "commandcode", how: "Live: `--list-models`. Nothing to do." },
+  { cli: "agy", how: "Live: `agy models`. Nothing to do." },
+];
 
 const NEW_BACKENDS_NOTICE =
   "New backends (pi, kilo, qwen, cline, grok, commandcode, agy) should work " +
@@ -1702,6 +1719,12 @@ export default function Settings() {
             </div>
           </Row>
           <Row
+            label="Backend health"
+            desc="Which CLI binaries are installed on this machine and whether their versions match what the parsers were validated against. A drift only warns — newer CLIs usually still work. Missing binaries fail their runs fast with a clear message."
+          >
+            <BackendHealth />
+          </Row>
+          <Row
             label="Default model"
             desc="Applied only on the default backend; other backends use their CLI's own default. Required."
             status={badge("default_model")}
@@ -1787,6 +1810,18 @@ export default function Settings() {
                   />
                 </label>
               ))}
+            </div>
+            <div className="mt-3 w-full max-w-lg space-y-1 border-t border-ink-800 pt-2">
+              <p className="text-[11px] font-medium text-ink-400">
+                Where each built-in list comes from (empty box = built-in):
+              </p>
+              <ul className="space-y-1">
+                {MODEL_LIST_HELP.map(({ cli, how }) => (
+                  <li key={cli} className="text-[11px] leading-snug text-ink-500">
+                    <span className="font-mono text-ink-300">{cli}</span> — {how}
+                  </li>
+                ))}
+              </ul>
             </div>
           </Row>
         </div>

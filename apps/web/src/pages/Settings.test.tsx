@@ -648,6 +648,15 @@ describe("Settings (recovery + data)", () => {
     });
   });
 
+  it("explains where each backend's model list comes from", async () => {
+    vi.stubGlobal("fetch", makeFetchMock());
+    render(<Settings />);
+    await expand(/Agent defaults/);
+    expect(await screen.findByText(/Where each built-in list comes from/)).toBeInTheDocument();
+    expect(screen.getByText(/Fixed alias list in the app/)).toBeInTheDocument();
+    expect(screen.getByText(/re-run `codex login` to refresh/)).toBeInTheDocument();
+  });
+
   it("ticking a secret preset saves the combined pattern list", async () => {
     const fetchMock = makeFetchMock();
     vi.stubGlobal("fetch", fetchMock);
