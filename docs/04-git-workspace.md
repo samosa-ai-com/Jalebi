@@ -8,7 +8,7 @@
 
 Jalebi uses the **git CLI** (not libgit2) for all repo operations. Each task/agent runs in an isolated **git worktree** created from a **bare mirror** of the repo. This keeps agents isolated from each other and from the user's working copy.
 
-**Implementation:** `src/jalebi/git_workspace.py` — `GitWorkspace(config)` wrapping git via `subprocess`, with a per-repo `threading.Lock` around all shared-mirror mutations.
+**Implementation:** `src/jalebi/git_workspace.py` — `GitWorkspace(config)` wrapping git via `subprocess`, with a class-level per-repo `threading.Lock` around all shared-mirror mutations.
 
 ## 2. Directory layout (under data dir, default `~/.jalebi/`)
 
@@ -21,7 +21,7 @@ Jalebi uses the **git CLI** (not libgit2) for all repo operations. Each task/age
 - **`git clone --bare`** (not `--mirror`), normalized after clone: remote branches are tracked under `refs/remotes/origin/*` (`remote.origin.fetch = +refs/heads/*:refs/remotes/origin/*`, `remote.origin.mirror = false`), and a local `refs/heads/<default>` is kept in sync with `origin/<default>` purely so the mirror HEAD is valid (`git worktree add` requires HEAD under `refs/heads`).
 - **Why not `--mirror`:** a mirror fetches `refs/*:refs/*` directly, which (a) refuses to fetch into a `jalebi/<taskId>` branch checked out in an active worktree, and (b) blocks pushes with an explicit refspec. With `origin/*` tracking, `fetch --prune` only touches remote-tracking refs — local task branches are safe, and plain `git push origin <branch>` works.
 - `ensure_mirror(full_name, clone_url, token=None)` — clone + normalize, or `fetch origin --prune`, authenticated with the token (§6).
-- **Concurrency lock:** a per-repo `threading.Lock` in `GitWorkspace` serializes all `clone`/`fetch`/`worktree` operations on the shared mirror, preventing concurrent workers from racing or producing `.git/config.lock` errors.
+- **Concurrency lock:** a **class-level** per-repo `threading.Lock` (`GitWorkspace._locks`) serializes all `clone`/`fetch`/`worktree`/`push` operations on the shared mirror, preventing concurrent workers from racing or producing `.git/config.lock` errors. It must be class-level, not instance-level: every caller constructs a fresh `GitWorkspace` (queue workers, routes, cleanup), so per-instance locks would not exclude two workers hitting the same mirror. It assumes the single-process daemon Jalebi runs; multi-process would need an OS file lock (out of scope).
 
 ## 4. Worktree lifecycle
 

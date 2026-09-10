@@ -103,10 +103,16 @@ def auth_env(token: str | None) -> dict[str, str]:
 
 
 class GitWorkspace:
+    # Shared per-repo locks live on the CLASS, not the instance: every caller
+    # constructs a fresh ``GitWorkspace`` (queue workers, routes, cleanup), so
+    # instance-level locks would not serialize two workers hitting the same
+    # bare mirror. Class-level locks make the documented per-repo serialization
+    # real across the whole process.
+    _locks: dict[str, threading.Lock] = {}
+    _locks_guard = threading.Lock()
+
     def __init__(self, config: Config):
         self.config = config
-        self._locks: dict[str, threading.Lock] = {}
-        self._locks_guard = threading.Lock()
 
     @staticmethod
     def mirror_path(data_dir: Path, full_name: str) -> Path:
