@@ -44,7 +44,7 @@ export function ShopFloor({
   const queued = stations.filter((s) => s.task.status === "queued");
   return (
     <section
-      className="surface flex min-h-0 flex-col justify-between px-4 py-3"
+      className="surface flex min-h-0 min-w-0 flex-col justify-between overflow-hidden px-4 py-3"
       aria-label="Karhais (cooking pots)"
     >
       <div

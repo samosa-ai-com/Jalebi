@@ -337,20 +337,20 @@ export function BrewHouse({
       {/* Single-viewport mission grid on wide screens: side rails scroll
           internally, the page itself stays put. Stacks below xl. */}
       <div className="grid gap-3 xl:grid-cols-[230px_minmax(0,1fr)_270px] xl:overflow-hidden">
-        <div className="flex min-h-0 flex-col gap-3 xl:h-[calc(100vh-290px)] xl:min-h-[480px]">
-          <div className="flex min-h-0 flex-1 flex-col [&>section]:flex-1">
+        <div className="flex min-h-0 min-w-0 flex-col gap-3 xl:h-[calc(100vh-290px)] xl:min-h-[480px]">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col [&>section]:flex-1">
             <CooksRail
               cooks={cooks}
               hoveredSlot={highlightedSlot}
               onHoverCook={setHighlightedSlot}
             />
           </div>
-          <div className="flex min-h-0 flex-1 flex-col [&>section]:flex-1">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col [&>section]:flex-1">
             <Pantry ingredients={ingredients} onHoverStove={setHighlightedSlot} />
           </div>
         </div>
 
-        <div className="flex min-h-0 flex-col xl:h-[calc(100vh-290px)] xl:min-h-[480px] [&>section]:flex-1">
+        <div className="flex min-h-0 min-w-0 flex-col xl:h-[calc(100vh-290px)] xl:min-h-[480px] [&>section]:flex-1">
           <ShopFloor
             stations={stations}
             slots={slots}
@@ -367,9 +367,13 @@ export function BrewHouse({
         </div>
 
         {/* Right rail: explicit bounded tracks (StatsBoard auto, ControlShelf
-            0.8fr, KitchenWire 1.2fr) so a long list inside one card scrolls
-            internally instead of stealing height from its neighbours. */}
-        <div className="flex min-h-0 flex-col gap-2.5 xl:grid xl:h-[calc(100vh-290px)] xl:min-h-[480px] xl:grid-rows-[auto_minmax(0,0.8fr)_minmax(0,1.2fr)] xl:overflow-hidden">
+            1.4fr, KitchenWire 0.7fr) so a long list inside one card scrolls
+            internally instead of stealing height from its neighbours. The
+            Control shelf gets the larger share so its four cards stay readable;
+            the wire still scrolls and stays usable. The single column is
+            explicitly minmax(0,1fr) so no card's content can widen it past the
+            rail. */}
+        <div className="flex min-h-0 min-w-0 flex-col gap-2.5 xl:grid xl:h-[calc(100vh-290px)] xl:min-h-[480px] xl:grid-cols-[minmax(0,1fr)] xl:grid-rows-[auto_minmax(0,1.4fr)_minmax(0,0.7fr)] xl:overflow-hidden">
           <StatsBoard tasks={tasks} now={now} />
 
           <ControlShelf

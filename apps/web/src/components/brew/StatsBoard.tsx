@@ -71,14 +71,14 @@ export function StatsBoard({ tasks, now }: { tasks: Task[]; now: number }) {
   }, [tasks, now]);
 
   return (
-    <section className="surface px-3 py-2" aria-label="Shop stats">
+    <section className="surface min-w-0 overflow-hidden px-3 py-2" aria-label="Shop stats">
       <h3 className="panel-title">Today</h3>
       <dl className="mt-1.5 grid grid-cols-4 gap-2">
-        <div>
+        <div className="min-w-0">
           <dt className="font-mono text-[9px] uppercase tracking-wide text-ink-500">served</dt>
           <dd className="font-mono text-lg tabular-nums text-ink-100">{stats.doneToday}</dd>
         </div>
-        <div>
+        <div className="min-w-0">
           <dt className="font-mono text-[9px] uppercase tracking-wide text-ink-500">needs you</dt>
           <dd
             className={`font-mono text-lg tabular-nums ${stats.needsYou > 0 ? "text-syrup-300" : "text-ink-100"}`}
@@ -86,13 +86,13 @@ export function StatsBoard({ tasks, now }: { tasks: Task[]; now: number }) {
             {stats.needsYou}
           </dd>
         </div>
-        <div>
+        <div className="min-w-0">
           <dt className="font-mono text-[9px] uppercase tracking-wide text-ink-500">spoiled</dt>
           <dd className="font-mono text-lg tabular-nums text-ink-100">{stats.failedToday}</dd>
         </div>
-        <div>
+        <div className="min-w-0">
           <dt className="font-mono text-[9px] uppercase tracking-wide text-ink-500">avg fry</dt>
-          <dd className="whitespace-nowrap font-mono text-lg tabular-nums text-ink-100">
+          <dd className="font-mono text-lg tabular-nums text-ink-100">
             {stats.avg === null ? "—" : formatMinutes(stats.avg)}
           </dd>
         </div>

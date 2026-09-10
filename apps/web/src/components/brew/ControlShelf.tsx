@@ -62,8 +62,8 @@ export function ControlShelf({
     <div
       className={
         compact
-          ? "grid min-h-0 shrink-0 grid-cols-2 gap-2 xl:h-full xl:grid-rows-2"
-          : "grid gap-4 md:grid-cols-2 xl:grid-cols-4"
+          ? "grid min-h-0 min-w-0 shrink-0 grid-cols-2 gap-2 xl:h-full xl:grid-rows-2"
+          : "grid min-w-0 gap-4 md:grid-cols-2 xl:grid-cols-4"
       }
     >
       <section

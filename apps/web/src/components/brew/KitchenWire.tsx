@@ -202,7 +202,7 @@ export function KitchenWire({
 
   return (
     <section
-      className="surface flex min-h-0 flex-1 flex-col px-3 py-2.5"
+      className="surface flex min-h-0 min-w-0 flex-1 flex-col px-3 py-2.5"
       aria-label="Kitchen wire"
       onMouseEnter={() => setIsPaused(true)}
       onMouseLeave={() => setIsPaused(false)}
@@ -250,7 +250,7 @@ export function KitchenWire({
         className="mt-2 min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-0.5 font-mono text-[11px]"
       >
         {filtered.length === 0 ? (
-          <div className="flex h-24 items-center justify-center text-center text-xs text-ink-600">
+          <div className="flex min-h-full items-center justify-center px-2 text-center text-xs text-ink-600">
             No events recorded in this category yet.
           </div>
         ) : (

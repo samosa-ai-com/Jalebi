@@ -160,7 +160,10 @@
 ## 8d. Mission-control bounded-card layout (2026-09-10)
 
 - [ ] On a wide (`xl`) screen, each Mission Control card keeps its own height:
-      the right rail is stats (auto) / control shelf (0.8fr) / Kitchen wire (1.2fr).
+      the right rail is stats (auto) / control shelf (1.4fr) / Kitchen wire (0.7fr),
+      so the four 2×2 control-shelf cards stay readable and the wire stays short.
+- [ ] With 10+ backends, the Backends card shows its first rows without scrolling
+      the whole page, and the Kitchen wire still shows its header + a few events.
 - [ ] Enable many backends (e.g. 15+). The **Backends** card keeps its size and
       scrolls internally; the **Kitchen wire** below it keeps its height.
 - [ ] Many cooks / many skills scroll inside the Cooks and Pantry cards.
