@@ -79,6 +79,7 @@ export default function NotificationBell() {
   const [unread, setUnread] = useState(0);
   const [notifications, setNotifications] = useState<TaskNotification[]>([]);
   const rootRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
   const navigate = useNavigate();
 
   // Close on outside click and on Escape
@@ -92,6 +93,7 @@ export default function NotificationBell() {
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") {
         setOpen(false);
+        buttonRef.current?.focus();
       }
     }
     document.addEventListener("mousedown", onDown);
@@ -102,6 +104,8 @@ export default function NotificationBell() {
     };
   }, [open]);
 
+  const prevUnreadRef = useRef<number | null>(null);
+
   // The unread badge and the Mark-all-read action always follow the server
   // count — never the visible page. The list endpoint returns only the newest
   // page, so deriving the count from it would hide older unread rows.
@@ -109,12 +113,49 @@ export default function NotificationBell() {
     try {
       const res = await api.getUnreadCount();
       if (res && typeof res.unread === "number") {
-        setUnread(res.unread);
+        const newUnread = res.unread;
+        const prev = prevUnreadRef.current;
+        setUnread(newUnread);
+        prevUnreadRef.current = newUnread;
+
+        if (prev !== null && newUnread > prev) {
+          try {
+            const isEnabled =
+              typeof localStorage !== "undefined" &&
+              localStorage.getItem("jalebi-browser-notifications-v1") === "1";
+            const hasPerm =
+              typeof Notification !== "undefined" && Notification.permission === "granted";
+            const isHidden = typeof document !== "undefined" && document.hidden === true;
+
+            if (isEnabled && hasPerm && isHidden) {
+              const list = await api.getNotifications();
+              if (Array.isArray(list) && list.length > 0) {
+                const unreadItem = list.find((item) => !item.read_at);
+                if (unreadItem) {
+                  const notif = new Notification(unreadItem.title, {
+                    body: "Task #" + unreadItem.task_id,
+                    tag: "jalebi-n-" + unreadItem.id,
+                  });
+                  notif.onclick = () => {
+                    try {
+                      navigate(`/tasks/${unreadItem.task_id}`);
+                      notif.close();
+                    } catch {
+                      // best effort
+                    }
+                  };
+                }
+              }
+            }
+          } catch {
+            // best-effort, never break the bell
+          }
+        }
       }
     } catch {
       // best effort, keep previous state
     }
-  }, []);
+  }, [navigate]);
 
   useEffect(() => {
     // Polling fetch: the state update happens asynchronously after the fetch
@@ -181,9 +222,12 @@ export default function NotificationBell() {
   return (
     <div ref={rootRef} className="relative">
       <button
+        ref={buttonRef}
         type="button"
         aria-label="Notifications"
         aria-expanded={open}
+        aria-haspopup="dialog"
+        aria-controls="notification-panel"
         onClick={() => setOpen((prev) => !prev)}
         className="relative flex items-center justify-center rounded-lg p-2 text-ink-400 hover:text-ink-100 hover:bg-ink-850 transition-colors"
       >
@@ -212,7 +256,10 @@ export default function NotificationBell() {
 
       {open && (
         <div
+          id="notification-panel"
           data-testid="notification-panel"
+          role="dialog"
+          aria-label="Notifications"
           className="absolute right-0 mt-2 w-80 sm:w-96 max-h-96 rounded-xl border border-ink-800 bg-ink-900 shadow-2xl z-50 flex flex-col overflow-hidden"
         >
           <div className="flex items-center justify-between border-b border-ink-800 px-4 py-2.5 shrink-0">

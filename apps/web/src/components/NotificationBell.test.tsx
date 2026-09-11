@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -250,7 +250,7 @@ describe("NotificationBell", () => {
     expect(screen.queryByRole("button", { name: "Mark all read" })).not.toBeInTheDocument();
   });
 
-  it("closes panel on outside click and on Escape key", async () => {
+  it("closes panel on outside click and on Escape key, restoring focus to bell button", async () => {
     vi.spyOn(api, "getUnreadCount").mockResolvedValue({ unread: 0 });
     vi.spyOn(api, "getNotifications").mockResolvedValue([]);
 
@@ -264,13 +264,19 @@ describe("NotificationBell", () => {
     );
 
     const bellBtn = screen.getByRole("button", { name: /notifications/i });
+    expect(bellBtn).toHaveAttribute("aria-haspopup", "dialog");
+    expect(bellBtn).toHaveAttribute("aria-controls", "notification-panel");
 
     // Test Escape key
     await userEvent.click(bellBtn);
-    expect(await screen.findByTestId("notification-panel")).toBeInTheDocument();
+    const panel = await screen.findByTestId("notification-panel");
+    expect(panel).toBeInTheDocument();
+    expect(panel).toHaveAttribute("role", "dialog");
+    expect(panel).toHaveAttribute("aria-label", "Notifications");
 
     fireEvent.keyDown(document, { key: "Escape" });
     expect(screen.queryByTestId("notification-panel")).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(bellBtn);
 
     // Test outside click
     await userEvent.click(bellBtn);
@@ -296,6 +302,131 @@ describe("NotificationBell", () => {
     // Open panel despite error
     await userEvent.click(bellBtn);
     expect(await screen.findByTestId("notification-panel")).toBeInTheDocument();
+  });
+
+  it("fires browser notification when unread count increases and document is hidden", async () => {
+    localStorage.setItem("jalebi-browser-notifications-v1", "1");
+    Object.defineProperty(document, "hidden", { value: true, configurable: true });
+
+    let lastNotification: {
+      onclick: (() => void) | null;
+      close: () => void;
+      title: string;
+      options?: NotificationOptions;
+    } | null = null;
+
+    class MockNotification {
+      static permission: NotificationPermission = "granted";
+      onclick: (() => void) | null = null;
+      close = vi.fn();
+      title: string;
+      options?: NotificationOptions;
+      constructor(title: string, options?: NotificationOptions) {
+        this.title = title;
+        this.options = options;
+        // eslint-disable-next-line @typescript-eslint/no-this-alias
+        lastNotification = this;
+      }
+    }
+
+    (window as unknown as { Notification: typeof MockNotification }).Notification =
+      MockNotification;
+
+    let countCall = 0;
+    vi.spyOn(api, "getUnreadCount").mockImplementation(async () => {
+      countCall++;
+      return { unread: countCall === 1 ? 1 : 2 };
+    });
+    vi.spyOn(api, "getNotifications").mockResolvedValue(NOTIFICATIONS);
+
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+
+    render(
+      <MemoryRouter>
+        <NotificationBell />
+      </MemoryRouter>
+    );
+
+    // First fetch resolves count: 1
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(lastNotification).toBeNull();
+
+    // Advance 10s for next polling tick
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10000);
+    });
+
+    expect(lastNotification).not.toBeNull();
+    expect(lastNotification!.title).toBe(NOTIFICATIONS[0].title);
+    expect(lastNotification!.options).toEqual({
+      body: "Task #" + NOTIFICATIONS[0].task_id,
+      tag: "jalebi-n-" + NOTIFICATIONS[0].id,
+    });
+
+    // Test clicking notification
+    act(() => {
+      lastNotification!.onclick?.();
+    });
+    expect(navigateMock).toHaveBeenCalledWith(`/tasks/${NOTIFICATIONS[0].task_id}`);
+    vi.useRealTimers();
+    Object.defineProperty(document, "hidden", { value: false, configurable: true });
+  });
+
+  it("does not fire browser notification when list contains no actually-unread items", async () => {
+    localStorage.setItem("jalebi-browser-notifications-v1", "1");
+    Object.defineProperty(document, "hidden", { value: true, configurable: true });
+
+    let lastNotification: unknown = null;
+
+    class MockNotification {
+      static permission: NotificationPermission = "granted";
+      constructor() {
+        // eslint-disable-next-line @typescript-eslint/no-this-alias
+        lastNotification = this;
+      }
+    }
+
+    (window as unknown as { Notification: typeof MockNotification }).Notification =
+      MockNotification;
+
+    let countCall = 0;
+    vi.spyOn(api, "getUnreadCount").mockImplementation(async () => {
+      countCall++;
+      return { unread: countCall === 1 ? 1 : 2 };
+    });
+    // All items returned have read_at set (no unread items)
+    const allReadList = NOTIFICATIONS.map((n) => ({
+      ...n,
+      read_at: "2026-09-10T12:00:00Z",
+    }));
+    vi.spyOn(api, "getNotifications").mockResolvedValue(allReadList);
+
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+
+    render(
+      <MemoryRouter>
+        <NotificationBell />
+      </MemoryRouter>
+    );
+
+    // Initial tick
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(lastNotification).toBeNull();
+
+    // Advance 10s
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10000);
+    });
+
+    // Still null because there are no unread items
+    expect(lastNotification).toBeNull();
+
+    vi.useRealTimers();
+    Object.defineProperty(document, "hidden", { value: false, configurable: true });
   });
 });
 

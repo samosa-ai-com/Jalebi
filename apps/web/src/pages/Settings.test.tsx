@@ -252,6 +252,7 @@ describe("Settings", () => {
   });
 
   it("labels the timeout setting 'Timeout' not 'Default timeout'", async () => {
+    localStorage.setItem("jalebi-settings-show-advanced-v1", "1");
     const fetchMock = makeFetchMock();
     vi.stubGlobal("fetch", fetchMock);
 
@@ -289,6 +290,7 @@ describe("Settings", () => {
   });
 
   it("shows the stall-timeout and continue-prompt recovery fields", async () => {
+    localStorage.setItem("jalebi-settings-show-advanced-v1", "1");
     const fetchMock = makeFetchMock();
     vi.stubGlobal("fetch", fetchMock);
 
@@ -445,17 +447,17 @@ describe("Settings (recovery + data)", () => {
   }
 
   it("shows Recovery attempts and saves max_attempts", async () => {
+    localStorage.setItem("jalebi-settings-show-advanced-v1", "1");
     const fetchMock = makeFetchMock();
     vi.stubGlobal("fetch", fetchMock);
     render(<Settings />);
     await expand(/Recovery/);
     expect(await screen.findByText("Recovery attempts")).toBeInTheDocument();
-    expect(screen.getByText("Non-retryable errors")).toBeInTheDocument();
-
     const input = screen.getByRole("spinbutton", { name: "Recovery attempts" });
     await userEvent.clear(input);
     await userEvent.type(input, "5");
     await userEvent.tab();
+
     await waitFor(() => {
       const postCall = fetchMock.mock.calls.find(
         ([url, init]) => String(url).includes("/api/settings") && init?.method === "POST"
@@ -476,11 +478,12 @@ describe("Settings (recovery + data)", () => {
     render(<Settings />);
     await expand(/Agent defaults/);
     expect(
-      await screen.findByText(/isn't in this backend's list/, { exact: false })
+      await screen.findByText(/current value isn't in this backend's list/)
     ).toBeInTheDocument();
   });
 
   it("renders the Data management section with storage and prune", async () => {
+    localStorage.setItem("jalebi-settings-show-advanced-v1", "1");
     const fetchMock = makeFetchMock();
     vi.stubGlobal("fetch", fetchMock);
     render(<Settings />);
@@ -517,6 +520,7 @@ describe("Settings (recovery + data)", () => {
   });
 
   it("expand all opens every section at once", async () => {
+    localStorage.setItem("jalebi-settings-show-advanced-v1", "1");
     const fetchMock = makeFetchMock();
     vi.stubGlobal("fetch", fetchMock);
     render(<Settings />);
@@ -533,10 +537,16 @@ describe("Settings (recovery + data)", () => {
     await expand(/Agent defaults/);
     await userEvent.click(await screen.findByText(/Use gpt-a/));
     await waitFor(() => {
-      const bodies = fetchMock.mock.calls
-        .filter(([url, init]) => String(url).includes("/api/settings") && init?.method === "POST")
-        .map(([, init]) => JSON.parse((init?.body as string) || "{}"));
-      expect(bodies.some((b) => b.key === "default_model" && b.value === "gpt-a")).toBe(true);
+      const postCall = fetchMock.mock.calls.find(
+        ([url, init]) => String(url).includes("/api/settings") && init?.method === "POST"
+      );
+      expect(postCall).toBeTruthy();
+      const body = JSON.parse((postCall?.[1] as RequestInit).body as string) as {
+        key: string;
+        value: string;
+      };
+      expect(body.key).toBe("default_model");
+      expect(body.value).toBe("gpt-a");
     });
   });
 
@@ -564,10 +574,12 @@ describe("Settings (recovery + data)", () => {
     await userEvent.type(input, "9");
     await userEvent.tab();
     await waitFor(() => expect(input).toHaveValue(4));
+
     expect(await screen.findAllByText("bad value")).toHaveLength(2);
   });
 
   it("restore previews the backup then executes on RESTORE", async () => {
+    localStorage.setItem("jalebi-settings-show-advanced-v1", "1");
     const fetchMock = makeFetchMock();
     vi.stubGlobal("fetch", fetchMock);
     render(<Settings />);
@@ -591,6 +603,7 @@ describe("Settings (recovery + data)", () => {
   });
 
   it("restore stays disabled while screening runs are busy", async () => {
+    localStorage.setItem("jalebi-settings-show-advanced-v1", "1");
     const base = makeFetchMock();
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       if (String(url).includes("/restore")) {
@@ -639,12 +652,22 @@ describe("Settings (recovery + data)", () => {
     });
   });
 
-  it("shows the new-backends not-yet-tested notice", async () => {
+  it("shows the active backends notice with link to GitHub issues", async () => {
     const fetchMock = makeFetchMock();
     vi.stubGlobal("fetch", fetchMock);
     render(<Settings />);
     await expand(/Agent defaults/);
-    expect(await screen.findByText(/haven't been tested from the app yet/)).toBeInTheDocument();
+    expect(screen.queryByText(/haven't been tested from the app yet/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/not yet tested from the app/)).not.toBeInTheDocument();
+
+    const link = await screen.findByRole("link", { name: /^here$/i });
+    expect(link).toBeInTheDocument();
+    expect(link).toHaveAttribute("href", "https://github.com/Rishabh-Bajpai/Jalebi/issues/new");
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("rel", "noreferrer");
+    expect(
+      screen.getByText(/Backend versions change over time/)
+    ).toBeInTheDocument();
   });
 
   it("timezone dropdown saves the chosen zone", async () => {
@@ -664,6 +687,7 @@ describe("Settings (recovery + data)", () => {
   });
 
   it("explains where each backend's model list comes from", async () => {
+    localStorage.setItem("jalebi-settings-show-advanced-v1", "1");
     vi.stubGlobal("fetch", makeFetchMock());
     render(<Settings />);
     await expand(/Agent defaults/);
@@ -673,6 +697,7 @@ describe("Settings (recovery + data)", () => {
   });
 
   it("ticking a secret preset saves the combined pattern list", async () => {
+    localStorage.setItem("jalebi-settings-show-advanced-v1", "1");
     const fetchMock = makeFetchMock();
     vi.stubGlobal("fetch", fetchMock);
     render(<Settings />);
@@ -699,6 +724,7 @@ describe("Settings (recovery + data)", () => {
   });
 
   it("renders normalized Non-retryable errors textarea with full width and min height", async () => {
+    localStorage.setItem("jalebi-settings-show-advanced-v1", "1");
     vi.stubGlobal("fetch", makeFetchMock());
     render(<Settings />);
     await expand(/Recovery/);
@@ -709,6 +735,7 @@ describe("Settings (recovery + data)", () => {
   });
 
   it("renders normalized Model overrides help box with relaxed leading and vertical rhythm", async () => {
+    localStorage.setItem("jalebi-settings-show-advanced-v1", "1");
     vi.stubGlobal("fetch", makeFetchMock());
     render(<Settings />);
     await expand(/Agent defaults/);
@@ -718,6 +745,187 @@ describe("Settings (recovery + data)", () => {
     expect(container?.className).toMatch(/\bpt-3\b/);
     const helpItem = screen.getByText(/Live: `opencode models`/);
     expect(helpItem.closest("li")?.className).toMatch(/\bleading-relaxed\b/);
+  });
+
+  it("renders the expanded Auto-nudge help text", async () => {
+    vi.stubGlobal("fetch", makeFetchMock());
+    render(<Settings />);
+    await expand(/Recovery/);
+    expect(await screen.findByText("Auto-nudge")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Watches your tasks’ pull requests for new signals — CI failures (via commit-status webhooks, or the GitHub poller when webhooks aren’t configured) and change-requested reviews (via the poller). When one arrives, it automatically queues a follow-up on the same agent session with the failing check or review as context, so the PR-feedback loop resolves without babysitting. Guardrails: only tasks waiting on attention with a resumable session qualify — never queued, running, done, cancelled, or interrupted ones; one nudge per unique signal, max 3 nudges per task."
+      )
+    ).toBeInTheDocument();
+  });
+
+  it("renders the Browser notifications toggle card with description and toggle action", async () => {
+    vi.stubGlobal("fetch", makeFetchMock());
+    const mockRequestPermission = vi.fn().mockResolvedValue("granted");
+    class MockNotification {
+      static permission: NotificationPermission = "default";
+      static requestPermission = mockRequestPermission;
+    }
+    vi.stubGlobal("Notification", MockNotification);
+
+    render(<Settings />);
+    await expand(/Notifications/);
+    expect(await screen.findByText("Browser notifications")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Push notification when a task completes, fails, or needs approval while Jalebi is in the background."
+      )
+    ).toBeInTheDocument();
+
+    const switchBtn = screen.getByRole("switch", { name: "Browser notifications" });
+    expect(switchBtn).toHaveAttribute("aria-checked", "false");
+
+    await userEvent.click(switchBtn);
+    expect(mockRequestPermission).toHaveBeenCalled();
+    await waitFor(() => {
+      expect(switchBtn).toHaveAttribute("aria-checked", "true");
+      expect(localStorage.getItem("jalebi-browser-notifications-v1")).toBe("1");
+    });
+
+    await userEvent.click(switchBtn);
+    await waitFor(() => {
+      expect(switchBtn).toHaveAttribute("aria-checked", "false");
+      expect(localStorage.getItem("jalebi-browser-notifications-v1")).toBe("0");
+    });
+  });
+
+  it("indicates blocked permission when browser notifications permission is denied", async () => {
+    vi.stubGlobal("fetch", makeFetchMock());
+    class MockNotification {
+      static permission: NotificationPermission = "denied";
+      static requestPermission = vi.fn().mockResolvedValue("denied");
+    }
+    vi.stubGlobal("Notification", MockNotification);
+
+    render(<Settings />);
+    await expand(/Notifications/);
+    const hint = await screen.findByText("Permission blocked in browser settings");
+    expect(hint).toBeInTheDocument();
+    expect(hint).toHaveAttribute("id", "browser-notifications-hint");
+    const switchBtn = screen.getByRole("switch", { name: "Browser notifications" });
+    expect(switchBtn).toBeDisabled();
+    expect(switchBtn).toHaveAttribute("aria-describedby", "browser-notifications-hint");
+  });
+
+  it("hides advanced settings by default and reveals them when Advanced toggle is clicked", async () => {
+    vi.stubGlobal("fetch", makeFetchMock());
+    render(<Settings />);
+
+    const advToggle = await screen.findByRole("switch", { name: "Show advanced settings" });
+    expect(advToggle).toHaveAttribute("aria-checked", "false");
+
+    await expand(/Queue & timeouts/);
+    expect(screen.getByText("Queue concurrency")).toBeInTheDocument();
+    expect(screen.queryByText("Timeout")).not.toBeInTheDocument();
+    expect(screen.queryByText("Stall timeout")).not.toBeInTheDocument();
+
+    // Toggle advanced ON
+    await userEvent.click(advToggle);
+    expect(advToggle).toHaveAttribute("aria-checked", "true");
+    expect(localStorage.getItem("jalebi-settings-show-advanced-v1")).toBe("1");
+
+    expect(await screen.findByText("Timeout")).toBeInTheDocument();
+    expect(screen.getByText("Stall timeout")).toBeInTheDocument();
+  });
+
+  it("shows hint bar when search query matches hidden advanced settings", async () => {
+    vi.stubGlobal("fetch", makeFetchMock());
+    render(<Settings />);
+
+    const searchInput = await screen.findByLabelText("Filter settings");
+    await userEvent.type(searchInput, "stall timeout");
+
+    expect(
+      await screen.findByText(/matching setting\(s\) are advanced and hidden\./)
+    ).toBeInTheDocument();
+    const showAdvBtn = screen.getByRole("button", { name: "Show advanced" });
+    expect(showAdvBtn).toBeInTheDocument();
+
+    await userEvent.click(showAdvBtn);
+    expect(await screen.findByText("Stall timeout")).toBeInTheDocument();
+    expect(screen.queryByText(/matching setting\(s\) are advanced and hidden\./)).not.toBeInTheDocument();
+  });
+
+  it("deep link forces hidden advanced section open even when Advanced is off", async () => {
+    vi.stubGlobal("fetch", makeFetchMock());
+    window.history.pushState({}, "", "/settings?section=webhooks");
+    try {
+      render(<Settings />);
+      expect(await screen.findByText("Webhooks")).toBeInTheDocument();
+      expect(screen.getByText("Public webhook URL (tunnel base)")).toBeInTheDocument();
+    } finally {
+      window.history.pushState({}, "", "/settings");
+    }
+  });
+
+  it("search browser with toggle OFF reveals the Browser card without being silently absent", async () => {
+    vi.stubGlobal("fetch", makeFetchMock());
+    render(<Settings />);
+
+    const searchInput = await screen.findByLabelText("Filter settings");
+    await userEvent.type(searchInput, "browser");
+
+    expect(await screen.findByText("Browser notifications")).toBeInTheDocument();
+    expect(screen.queryByText(/matching setting\(s\) are advanced and hidden\./)).not.toBeInTheDocument();
+  });
+
+  it("search still running with toggle OFF shows hint bar then reveals after click", async () => {
+    vi.stubGlobal("fetch", makeFetchMock());
+    render(<Settings />);
+
+    const searchInput = await screen.findByLabelText("Filter settings");
+    await userEvent.type(searchInput, "still running");
+
+    expect(
+      await screen.findByText(/matching setting\(s\) are advanced and hidden\./)
+    ).toBeInTheDocument();
+    const showAdvBtn = screen.getByRole("button", { name: "Show advanced" });
+    expect(showAdvBtn).toBeInTheDocument();
+
+    await userEvent.click(showAdvBtn);
+    expect(await screen.findByText("Still running (interval pings)")).toBeInTheDocument();
+    expect(screen.queryByText(/matching setting\(s\) are advanced and hidden\./)).not.toBeInTheDocument();
+  });
+
+  it("search prune with toggle OFF shows hint then reveals", async () => {
+    vi.stubGlobal("fetch", makeFetchMock());
+    render(<Settings />);
+
+    const searchInput = await screen.findByLabelText("Filter settings");
+    await userEvent.type(searchInput, "prune");
+
+    expect(
+      await screen.findByText(/matching setting\(s\) are advanced and hidden\./)
+    ).toBeInTheDocument();
+    const showAdvBtn = screen.getByRole("button", { name: "Show advanced" });
+    expect(showAdvBtn).toBeInTheDocument();
+
+    await userEvent.click(showAdvBtn);
+    expect(await screen.findByText("Clean up old data")).toBeInTheDocument();
+    expect(screen.queryByText(/matching setting\(s\) are advanced and hidden\./)).not.toBeInTheDocument();
+  });
+
+  it("search import reveals the env import form", async () => {
+    vi.stubGlobal("fetch", makeFetchMock());
+    render(<Settings />);
+
+    const searchInput = await screen.findByLabelText("Filter settings");
+    await userEvent.type(searchInput, "import");
+
+    expect(
+      await screen.findByText(/matching setting\(s\) are advanced and hidden\./)
+    ).toBeInTheDocument();
+    const showAdvBtn = screen.getByRole("button", { name: "Show advanced" });
+    expect(showAdvBtn).toBeInTheDocument();
+
+    await userEvent.click(showAdvBtn);
+    expect(await screen.findByPlaceholderText(/Paste a \.env file/)).toBeInTheDocument();
+    expect(screen.queryByText(/matching setting\(s\) are advanced and hidden\./)).not.toBeInTheDocument();
   });
 });
 

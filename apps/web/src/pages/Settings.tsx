@@ -1,7 +1,8 @@
-import { Children, isValidElement, useEffect, useRef, useState } from "react";
+import { Children, isValidElement, useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import BackendHealth from "../components/BackendHealth";
 import SearchableSelect from "../components/SearchableSelect";
+import { useBrowserNotifications } from "../lib/useBrowserNotifications";
 import type {
   BackupInfo,
   DataUsage,
@@ -36,7 +37,8 @@ function isDeepLinked(id: string): boolean {
   }
 }
 
-// Collapsible section wrapper. A <div> (not <section>) so each inner row// keeps its own <section> landmark for headings/tests. Everything starts
+// Collapsible section wrapper. A <div> (not <section>) so each inner row
+// keeps its own <section> landmark for headings/tests. Everything starts
 // collapsed; a search query filters rows, hides empty sections, and forces
 // matches open (the toggle state is restored when the query clears).
 function Section({
@@ -47,6 +49,10 @@ function Section({
   query = "",
   keywords = "",
   onVisibility,
+  onHiddenCount,
+  advanced = false,
+  showAdvanced = false,
+  extraHiddenCount = 0,
 }: {
   id: string;
   title: string;
@@ -55,6 +61,10 @@ function Section({
   query?: string;
   keywords?: string;
   onVisibility?: (id: string, visible: boolean) => void;
+  onHiddenCount?: (id: string, count: number) => void;
+  advanced?: boolean;
+  showAdvanced?: boolean;
+  extraHiddenCount?: number;
 }) {
   const [open, setOpen] = useState(() => {
     try {
@@ -90,12 +100,41 @@ function Section({
   // die on the section-level match. Row sections narrow to matching rows,
   // unless the title itself matches (then the whole section shows).
   const sectionMatch = q !== "" && matchesQuery(q, title, desc, keywords);
-  const content =
-    q === "" || sectionMatch ? children : keywords !== "" ? null : filterTree(children, q);
+  const isSectionHiddenAdvanced = advanced && !showAdvanced && !deepLink;
+
+  let content: React.ReactNode;
+  let hiddenCount = extraHiddenCount;
+
+  if (isSectionHiddenAdvanced) {
+    if (q !== "" && sectionMatch) {
+      hiddenCount += 1;
+    }
+    content = null;
+  } else if (q === "") {
+    if (keywords !== "") {
+      content = children;
+    } else {
+      const res = filterTree(children, "", showAdvanced, false);
+      content = res.content;
+      hiddenCount += res.hiddenCount;
+    }
+  } else {
+    if (keywords !== "") {
+      content = sectionMatch ? children : null;
+    } else {
+      const res = filterTree(children, q, showAdvanced, sectionMatch);
+      content = res.content;
+      hiddenCount += res.hiddenCount;
+    }
+  }
+
   const visible = content !== null && treeHasContent(content);
   useEffect(() => {
     onVisibility?.(id, visible);
   }, [id, visible, onVisibility]);
+  useEffect(() => {
+    onHiddenCount?.(id, hiddenCount);
+  }, [id, hiddenCount, onHiddenCount]);
   if (!visible) return null;
   const shown = q === "" ? open : true;
   return (
@@ -136,26 +175,59 @@ function isRowElement(node: React.ReactNode): boolean {
   return typeof props.label === "string" && typeof props.desc === "string";
 }
 
+function isAdvancedRow(node: React.ReactNode): boolean {
+  if (!isValidElement(node)) return false;
+  const props = node.props as Record<string, unknown>;
+  return Boolean(props.advanced);
+}
+
 function rowMatches(node: React.ReactNode, q: string): boolean {
   if (!isValidElement(node)) return false;
   const props = node.props as Record<string, unknown>;
   return matchesQuery(q, props.label as string, props.desc as string);
 }
 
+interface FilterTreeResult {
+  content: React.ReactNode;
+  hiddenCount: number;
+}
+
 // Recursively drop non-matching Rows (and containers left without content).
-function filterTree(node: React.ReactNode, q: string): React.ReactNode {
-  const out = Children.map(node, (child) => {
+function filterTree(
+  node: React.ReactNode,
+  q: string,
+  showAdvanced: boolean,
+  matchAllRows = false
+): FilterTreeResult {
+  let hiddenCount = 0;
+  const content = Children.map(node, (child) => {
     if (!isValidElement(child)) return child;
-    if (isRowElement(child)) return rowMatches(child, q) ? child : null;
+    if (isRowElement(child)) {
+      const isAdv = isAdvancedRow(child);
+      if (q === "") {
+        if (isAdv && !showAdvanced) {
+          return null;
+        }
+        return child;
+      }
+      const matches = matchAllRows || rowMatches(child, q);
+      if (!matches) return null;
+      if (isAdv && !showAdvanced) {
+        hiddenCount += 1;
+        return null;
+      }
+      return child;
+    }
     const props = child.props as { children?: React.ReactNode };
     if (props.children === undefined) return child;
-    const filtered = filterTree(props.children, q);
-    if (!treeHasContent(filtered)) return null;
-    return filtered === props.children
+    const res = filterTree(props.children, q, showAdvanced, matchAllRows);
+    hiddenCount += res.hiddenCount;
+    if (!treeHasContent(res.content)) return null;
+    return res.content === props.children
       ? child
-      : { ...child, props: { ...props, children: filtered } };
+      : { ...child, props: { ...props, children: res.content } };
   });
-  return out;
+  return { content, hiddenCount };
 }
 
 // Whether a (possibly filtered) subtree holds any renderable content:
@@ -200,6 +272,7 @@ function Row({
   error?: string | null;
   children: React.ReactNode;
   className?: string;
+  advanced?: boolean;
 }) {
   return (
     <section
@@ -521,9 +594,7 @@ function IDESettings({
 
 const AGENT_CLIS = ["opencode", "codex", "claude", "pi", "kilo", "qwen", "cline", "grok", "commandcode", "agy"];
 
-// Backends added Sep 2026: implemented against vendor docs + a one-prompt
-// smoke test each, but not yet live-tested from the app.
-const NEW_BACKENDS = ["pi", "kilo", "qwen", "cline", "grok", "commandcode", "agy"];
+const BACKEND_ISSUES_URL = "https://github.com/Rishabh-Bajpai/Jalebi/issues/new";
 
 // Where each backend's built-in model list comes from, and how to change
 // it. Rendered under the Model overrides row so owners know which lists are
@@ -540,11 +611,6 @@ const MODEL_LIST_HELP: Array<{ cli: string; how: string }> = [
   { cli: "commandcode", how: "Live: `--list-models`. Nothing to do." },
   { cli: "agy", how: "Live: `agy models`. Nothing to do." },
 ];
-
-const NEW_BACKENDS_NOTICE =
-  "New backends (pi, kilo, qwen, cline, grok, commandcode, agy) should work " +
-  "according to their vendors' documentation, but they haven't been tested from the app " +
-  "yet — report issues before relying on them.";
 
 // Common secret formats offered as one-click presets (plus free-form regex).
 const SECRET_PRESETS = [
@@ -645,10 +711,16 @@ function Toggle({
   checked,
   onChange,
   ariaLabel,
+  disabled = false,
+  title,
+  ariaDescribedBy,
 }: {
   checked: boolean;
   onChange: (v: boolean) => void;
   ariaLabel: string;
+  disabled?: boolean;
+  title?: string;
+  ariaDescribedBy?: string;
 }) {
   return (
     <button
@@ -656,8 +728,15 @@ function Toggle({
       role="switch"
       aria-label={ariaLabel}
       aria-checked={checked}
-      onClick={() => onChange(!checked)}
+      aria-describedby={ariaDescribedBy}
+      disabled={disabled}
+      title={title}
+      onClick={() => {
+        if (!disabled) onChange(!checked);
+      }}
       className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors duration-200 ${
+        disabled ? "opacity-40 cursor-not-allowed " : ""
+      }${
         checked ? "bg-syrup-500" : "bg-ink-800 ring-1 ring-inset ring-ink-600"
       }`}
     >
@@ -794,13 +873,17 @@ function EnvVarsSection({
   reposLoaded,
   query,
   onVisibility,
+  onHiddenCount,
   resetKey,
+  showAdvanced = false,
 }: {
   repos: Repo[];
   reposLoaded: boolean;
   query: string;
   onVisibility: (id: string, visible: boolean) => void;
+  onHiddenCount?: (id: string, count: number) => void;
   resetKey: number;
+  showAdvanced?: boolean;
 }) {
   const [vars, setVars] = useState<EnvVar[]>([]);
   const [name, setName] = useState("");
@@ -874,6 +957,15 @@ function EnvVarsSection({
     }
   }
 
+  const qEnv = query.trim().toLowerCase();
+  const envHidden =
+    !showAdvanced &&
+    qEnv !== "" &&
+    (matchesQuery(qEnv, "import", "dotenv", ".env", "env-file", "env_file", "env file") ||
+      ["import", "dotenv", ".env", "env-file"].some((term) => qEnv.includes(term)))
+      ? 1
+      : 0;
+
   return (
     <Section
       key={`envvars-${resetKey}`}
@@ -881,8 +973,11 @@ function EnvVarsSection({
       title="Environment variables"
       desc="Variables injected into task agents' environments (build/test env, keys). Values are stored as secrets — never shown in full, and redacted if an agent echoes them. Pick which ones a task gets on the task form."
       query={query}
-      keywords="environment variables env secrets keys dotenv"
+      keywords="environment variables env secrets keys dotenv import .env env-file"
       onVisibility={onVisibility}
+      onHiddenCount={onHiddenCount}
+      showAdvanced={showAdvanced}
+      extraHiddenCount={envHidden}
     >
       <form onSubmit={addVar} className="mb-4 grid gap-3 sm:grid-cols-4">
         <div>
@@ -928,29 +1023,31 @@ function EnvVarsSection({
         </p>
       )}
 
-      <form onSubmit={importEnv} className="mb-4 space-y-2">
-        <textarea
-          value={importText}
-          onChange={(e) => setImportText(e.target.value)}
-          rows={4}
-          placeholder={"Paste a .env file…\nKEY=VALUE per line"}
-          aria-label="Paste a .env file"
-          className="field w-full resize-y font-mono leading-relaxed"
-        />
-        <div className="flex flex-wrap items-center gap-2">
-          <SearchableSelect
-            label="Import scope"
-            hideLabel
-            value={importScope}
-            onChange={setImportScope}
-            placeholder="global"
-            options={repos.map((r) => ({ value: String(r.id), label: r.full_name }))}
+      {showAdvanced && (
+        <form onSubmit={importEnv} className="mb-4 space-y-2">
+          <textarea
+            value={importText}
+            onChange={(e) => setImportText(e.target.value)}
+            rows={4}
+            placeholder={"Paste a .env file…\nKEY=VALUE per line"}
+            aria-label="Paste a .env file"
+            className="field w-full resize-y font-mono leading-relaxed"
           />
-          <button type="submit" disabled={busy || !importText.trim()} className="btn-ghost">
-            Import .env
-          </button>
-        </div>
-      </form>
+          <div className="flex flex-wrap items-center gap-2">
+            <SearchableSelect
+              label="Import scope"
+              hideLabel
+              value={importScope}
+              onChange={setImportScope}
+              placeholder="global"
+              options={repos.map((r) => ({ value: String(r.id), label: r.full_name }))}
+            />
+            <button type="submit" disabled={busy || !importText.trim()} className="btn-ghost">
+              Import .env
+            </button>
+          </div>
+        </form>
+      )}
 
       {msg && (
         <p className={`mb-3 text-xs ${msg.kind === "ok" ? "text-green-300" : "text-red-400"}`}>
@@ -994,13 +1091,17 @@ const PRUNE_SCOPES = [
 function DataSection({
   query,
   onVisibility,
+  onHiddenCount,
   resetKey,
   onRestored,
+  showAdvanced = false,
 }: {
   query: string;
   onVisibility: (id: string, visible: boolean) => void;
+  onHiddenCount?: (id: string, count: number) => void;
   resetKey: number;
   onRestored: () => void;
+  showAdvanced?: boolean;
 }) {
   const [usage, setUsage] = useState<DataUsage | null>(null);
   const [usageErr, setUsageErr] = useState<string | null>(null);
@@ -1125,6 +1226,29 @@ function DataSection({
       )
     : 0;
 
+  const qData = query.trim().toLowerCase();
+  let dataHidden = 0;
+  if (!showAdvanced && qData !== "") {
+    if (
+      matchesQuery(qData, "vacuum", "vacuum-database", "vacuum database") ||
+      ["vacuum", "vacuum-database"].some((term) => qData.includes(term))
+    ) {
+      dataHidden += 1;
+    }
+    if (
+      matchesQuery(qData, "restore", "backup-name", "backup name", "delete backup") ||
+      ["restore", "backup-name"].some((term) => qData.includes(term))
+    ) {
+      dataHidden += 1;
+    }
+    if (
+      matchesQuery(qData, "prune", "cleanup", "clean up", "delete-days", "delete days") ||
+      ["prune", "cleanup", "delete-days"].some((term) => qData.includes(term))
+    ) {
+      dataHidden += 1;
+    }
+  }
+
   return (
     <Section
       key={`data-${resetKey}`}
@@ -1132,8 +1256,11 @@ function DataSection({
       title="Data management"
       desc="Back up the database, reclaim disk, and see where every byte lives. Prune always previews first and never touches queued, running, or blocked tasks."
       query={query}
-      keywords="data backup prune vacuum storage cleanup disk usage"
+      keywords="data backup prune vacuum storage cleanup disk usage vacuum-database restore backup-name delete-days"
       onVisibility={onVisibility}
+      onHiddenCount={onHiddenCount}
+      showAdvanced={showAdvanced}
+      extraHiddenCount={dataHidden}
     >
       {usageErr && <p className="mb-3 text-xs text-red-400">{usageErr}</p>}
       <div className="mb-4 rounded-lg border border-ink-800 bg-ink-900/50 p-3 text-[11px] leading-relaxed text-ink-400">
@@ -1196,20 +1323,22 @@ function DataSection({
         >
           {busy === "backup" ? "Backing up…" : "Back up now"}
         </button>
-        <button
-          type="button"
-          onClick={() =>
-            runBusy("vacuum", async () => {
-              const r = await api.vacuumData();
-              return `vacuumed ${formatBytes(r.before)} → ${formatBytes(r.after)}`;
-            })
-          }
-          disabled={busy !== null}
-          className="btn-ghost text-xs disabled:opacity-40"
-          title="Rebuilds the database file; briefly locks the database while running."
-        >
-          {busy === "vacuum" ? "Vacuuming…" : "Vacuum database"}
-        </button>
+        {showAdvanced && (
+          <button
+            type="button"
+            onClick={() =>
+              runBusy("vacuum", async () => {
+                const r = await api.vacuumData();
+                return `vacuumed ${formatBytes(r.before)} → ${formatBytes(r.after)}`;
+              })
+            }
+            disabled={busy !== null}
+            className="btn-ghost text-xs disabled:opacity-40"
+            title="Rebuilds the database file; briefly locks the database while running."
+          >
+            {busy === "vacuum" ? "Vacuuming…" : "Vacuum database"}
+          </button>
+        )}
       </div>
       {backups.length === 0 ? (
         <p className="mb-5 text-xs text-ink-500">No backups yet.</p>
@@ -1227,30 +1356,34 @@ function DataSection({
               >
                 download
               </a>
-              <button
-                type="button"
-                onClick={() => previewRestore(b.name)}
-                className="text-ink-400 hover:text-ink-200 underline-offset-2 hover:underline"
-              >
-                restore
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  runBusy(`del-${b.name}`, async () => {
-                    await api.deleteBackup(b.name);
-                    return `deleted ${b.name}`;
-                  })
-                }
-                className="text-ink-500 hover:text-red-400"
-              >
-                delete
-              </button>
+              {showAdvanced && (
+                <button
+                  type="button"
+                  onClick={() => previewRestore(b.name)}
+                  className="text-ink-400 hover:text-ink-200 underline-offset-2 hover:underline"
+                >
+                  restore
+                </button>
+              )}
+              {showAdvanced && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    runBusy(`del-${b.name}`, async () => {
+                      await api.deleteBackup(b.name);
+                      return `deleted ${b.name}`;
+                    })
+                  }
+                  className="text-ink-500 hover:text-red-400"
+                >
+                  delete
+                </button>
+              )}
             </li>
           ))}
         </ul>
       )}
-      {restoreName && (
+      {showAdvanced && restoreName && (
         <div className="mb-5 rounded-lg border border-ink-800 bg-ink-900/50 p-3 text-xs text-ink-400">
           <p className="font-mono text-[11px] text-ink-300">{restoreName}</p>
           {restorePreview ? (
@@ -1331,85 +1464,89 @@ function DataSection({
       )}
 
       {/* Prune */}
-      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-ink-400">
-        Clean up old data
-      </h3>
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <label className="flex items-center gap-2 text-xs text-ink-400">
-          Older than
-          <input
-            type="number"
-            min={1}
-            value={days}
-            onChange={(e) => {
-              setDays(e.target.value);
-              setPreview(null);
-              setConfirm("");
-            }}
-            className="field w-20 font-mono"
-            aria-label="Older than (days)"
-          />
-          days
-        </label>
-        {PRUNE_SCOPES.map((s) => (
-          <label
-            key={s.key}
-            title={s.desc}
-            className="flex cursor-pointer items-center gap-1.5 rounded border border-ink-800 px-2 py-1 text-[11px] text-ink-400"
-          >
-            <input
-              type="checkbox"
-              checked={scopes.includes(s.key)}
-              onChange={() => toggleScope(s.key)}
-              className="accent-amber-500"
-            />
-            {s.label}
-          </label>
-        ))}
-        <button
-          type="button"
-          onClick={runPreview}
-          disabled={busy !== null || scopes.length === 0}
-          className="btn-ghost text-xs disabled:opacity-40"
-        >
-          {busy === "preview" ? "Previewing…" : "Preview"}
-        </button>
-      </div>
-      {preview && (
-        <div className="mb-3 rounded-lg border border-ink-800 bg-ink-900/50 p-3 text-xs text-ink-400">
-          <p className="font-mono text-[11px] text-ink-500">cutoff: {preview.cutoff}</p>
-          <ul className="mt-1 list-disc pl-5">
-            <li>
-              {preview.tasks.count} task(s), {preview.runs} run(s), {preview.task_events} timeline
-              event(s)
-            </li>
-            <li>
-              {preview.orphan_worktrees.length} orphan worktree(s),{" "}
-              {preview.orphan_artifacts.length} orphan artifact dir(s)
-            </li>
-            <li>
-              {preview.deliveries} webhook deliveries, {preview.screening_runs} old screening
-              run(s), {preview.old_logs} log file(s)
-            </li>
-          </ul>
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            <input
-              value={confirm}
-              onChange={(e) => setConfirm(e.target.value)}
-              placeholder="type DELETE to confirm"
-              aria-label="Type DELETE to confirm prune"
-              className="field w-48 font-mono text-xs"
-            />
+      {showAdvanced && (
+        <>
+          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-ink-400">
+            Clean up old data
+          </h3>
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <label className="flex items-center gap-2 text-xs text-ink-400">
+              Older than
+              <input
+                type="number"
+                min={1}
+                value={days}
+                onChange={(e) => {
+                  setDays(e.target.value);
+                  setPreview(null);
+                  setConfirm("");
+                }}
+                className="field w-20 font-mono"
+                aria-label="Older than (days)"
+              />
+              days
+            </label>
+            {PRUNE_SCOPES.map((s) => (
+              <label
+                key={s.key}
+                title={s.desc}
+                className="flex cursor-pointer items-center gap-1.5 rounded border border-ink-800 px-2 py-1 text-[11px] text-ink-400"
+              >
+                <input
+                  type="checkbox"
+                  checked={scopes.includes(s.key)}
+                  onChange={() => toggleScope(s.key)}
+                  className="accent-amber-500"
+                />
+                {s.label}
+              </label>
+            ))}
             <button
               type="button"
-              onClick={runPrune}
-              disabled={busy !== null || confirm !== "DELETE"}
-              className="btn-ghost text-xs text-red-300 disabled:opacity-40"
+              onClick={runPreview}
+              disabled={busy !== null || scopes.length === 0}
+              className="btn-ghost text-xs disabled:opacity-40"
             >
-              {busy === "prune" ? "Pruning…" : "Prune now"}
+              {busy === "preview" ? "Previewing…" : "Preview"}
             </button>
           </div>
-        </div>
+          {preview && (
+            <div className="mb-3 rounded-lg border border-ink-800 bg-ink-900/50 p-3 text-xs text-ink-400">
+              <p className="font-mono text-[11px] text-ink-500">cutoff: {preview.cutoff}</p>
+              <ul className="mt-1 list-disc pl-5">
+                <li>
+                  {preview.tasks.count} task(s), {preview.runs} run(s), {preview.task_events} timeline
+                  event(s)
+                </li>
+                <li>
+                  {preview.orphan_worktrees.length} orphan worktree(s),{" "}
+                  {preview.orphan_artifacts.length} orphan artifact dir(s)
+                </li>
+                <li>
+                  {preview.deliveries} webhook deliveries, {preview.screening_runs} old screening
+                  run(s), {preview.old_logs} log file(s)
+                </li>
+              </ul>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <input
+                  value={confirm}
+                  onChange={(e) => setConfirm(e.target.value)}
+                  placeholder="type DELETE to confirm"
+                  aria-label="Type DELETE to confirm prune"
+                  className="field w-48 font-mono text-xs"
+                />
+                <button
+                  type="button"
+                  onClick={runPrune}
+                  disabled={busy !== null || confirm !== "DELETE"}
+                  className="btn-ghost text-xs text-red-300 disabled:opacity-40"
+                >
+                  {busy === "prune" ? "Pruning…" : "Prune now"}
+                </button>
+              </div>
+            </div>
+          )}
+        </>
       )}
       {msg && (
         <p className={`text-xs ${msg.kind === "ok" ? "text-green-300" : "text-red-400"}`}>
@@ -1460,6 +1597,35 @@ export default function Settings() {
     }
     setBulkN((n) => n + 1);
   }
+
+  const [showAdvanced, setShowAdvancedState] = useState(() => {
+    try {
+      return localStorage.getItem("jalebi-settings-show-advanced-v1") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const setShowAdvanced = (val: boolean) => {
+    try {
+      localStorage.setItem("jalebi-settings-show-advanced-v1", val ? "1" : "0");
+    } catch {
+      // ignore storage failures
+    }
+    setShowAdvancedState(val);
+  };
+
+  const {
+    supported: browserSupported,
+    enabled: browserEnabled,
+    enable: enableBrowserNotifications,
+    disable: disableBrowserNotifications,
+  } = useBrowserNotifications();
+  const [permBlocked, setPermBlocked] = useState(false);
+
+  const [hiddenSections, setHiddenSections] = useState<Record<string, number>>({});
+  const handleHiddenCount = useCallback((id: string, count: number) => {
+    setHiddenSections((prev) => (prev[id] === count ? prev : { ...prev, [id]: count }));
+  }, []);
 
   useEffect(() => {
     if (!settings?.default_backend) return;
@@ -1589,12 +1755,51 @@ export default function Settings() {
   const showCustomModel = defaultModels.length === 0 || !modelInList;
   const tzKnown =
     !timezones ||
+    !Array.isArray(timezones.common) ||
+    !Array.isArray(timezones.all) ||
     (settings.timezone ?? "local") === "local" ||
     timezones.common.includes(settings.timezone ?? "") ||
     timezones.all.includes(settings.timezone ?? "");
 
+
+
+  const hiddenAdvancedCount = showAdvanced
+    ? 0
+    : Object.values(hiddenSections).reduce((a, b) => a + b, 0);
+
+  const qNotif = query.trim().toLowerCase();
+  const matchesStillRunning =
+    qNotif !== "" &&
+    (matchesQuery(
+      qNotif,
+      "still",
+      "running",
+      "pings",
+      "still running",
+      "still-running",
+      "interval pings"
+    ) ||
+      ["still", "running", "pings"].some((term) => qNotif.includes(term)));
+  const matchesProgressInterval =
+    qNotif !== "" &&
+    (matchesQuery(
+      qNotif,
+      "progress",
+      "interval",
+      "ping",
+      "progress ping",
+      "ping interval",
+      "progress ping interval"
+    ) ||
+      ["progress", "interval", "ping"].some((term) => qNotif.includes(term)));
+  const notifHidden =
+    !showAdvanced && qNotif !== ""
+      ? (matchesStillRunning ? 1 : 0) + (matchesProgressInterval ? 1 : 0)
+      : 0;
+
   const noMatches =
     query.trim() !== "" &&
+    hiddenAdvancedCount === 0 &&
     Object.values(visibleSections).length > 0 &&
     Object.values(visibleSections).every((v) => !v);
 
@@ -1643,8 +1848,40 @@ export default function Settings() {
           >
             Collapse all
           </button>
+          <span className="text-ink-700" aria-hidden>
+            ·
+          </span>
+          {/* eslint-disable-next-line jsx-a11y/label-has-associated-control -- nested Toggle renders a button with role=switch */}
+          <label
+            title="Show advanced settings"
+            className="flex items-center gap-1.5 cursor-pointer text-[11px] text-ink-500 hover:text-ink-300 select-none"
+          >
+            <span>Advanced</span>
+            <Toggle
+              checked={showAdvanced}
+              onChange={setShowAdvanced}
+              ariaLabel="Show advanced settings"
+            />
+          </label>
         </div>
       </header>
+
+      {hiddenAdvancedCount > 0 && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="flex items-center justify-between gap-3 rounded-lg border border-syrup-500/30 bg-syrup-500/10 px-4 py-2.5 text-xs text-ink-200 animate-fade-up"
+        >
+          <span>{hiddenAdvancedCount} matching setting(s) are advanced and hidden.</span>
+          <button
+            type="button"
+            onClick={() => setShowAdvanced(true)}
+            className="btn-ghost !px-2.5 !py-1 text-xs font-medium text-syrup-400 hover:text-syrup-300 focus:outline-none focus:ring-2 focus:ring-syrup-500/50"
+          >
+            Show advanced
+          </button>
+        </div>
+      )}
 
       {noMatches && <p className="text-sm text-ink-500">No settings match “{query.trim()}”.</p>}
 
@@ -1656,6 +1893,8 @@ export default function Settings() {
         desc="The fallback backend + model used when an operation doesn't pick its own. Every task, follow-up, screen, and agent form can override these per action."
         query={query}
         onVisibility={handleVisibility}
+        onHiddenCount={handleHiddenCount}
+        showAdvanced={showAdvanced}
       >
         <div className="grid gap-4 md:grid-cols-2">
           <Row
@@ -1685,7 +1924,19 @@ export default function Settings() {
             error={fieldState["enabled_backends"]?.msg}
           >
             <div className="flex w-full flex-col gap-2">
-              <p className="text-xs leading-relaxed text-ink-500">{NEW_BACKENDS_NOTICE}</p>
+              <p className="text-xs leading-relaxed text-ink-500">
+                Backend versions change over time and some features may stop working. If that
+                happens, please report it by creating an issue{" "}
+                <a
+                  href={BACKEND_ISSUES_URL}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-ink-300 underline underline-offset-2 hover:text-ink-100"
+                >
+                  here
+                </a>
+                .
+              </p>
               <div className="flex flex-wrap justify-end gap-2">
               {AGENT_CLIS.map((c) => {
                 const enabledList = settings.enabled_backends ?? [...AGENT_CLIS];
@@ -1701,7 +1952,7 @@ export default function Settings() {
                         ? "The default backend can't be switched off"
                         : isLast
                           ? "At least one backend must stay on"
-                          : `Include ${c}${NEW_BACKENDS.includes(c) ? " (new — not yet tested from the app)" : ""}`
+                          : `Include ${c}`
                     }
                     className={`flex cursor-pointer items-center gap-1.5 rounded border px-2 py-1.5 font-mono text-xs ${
                       enabled
@@ -1793,6 +2044,7 @@ export default function Settings() {
             </div>
           </Row>
           <Row
+            advanced
             label="Model overrides"
             desc="Force what each backend offers in every model dropdown across the app (new tasks, follow-ups, screens, agents). Use it for a custom provider or to hide models you never pick. Empty = the backend's built-in list."
             status={badge("adapter_model_lists")}
@@ -1855,6 +2107,8 @@ export default function Settings() {
         desc="Parallelism, per-task time budget, stall detection, and artifact retention."
         query={query}
         onVisibility={handleVisibility}
+        onHiddenCount={handleHiddenCount}
+        showAdvanced={showAdvanced}
       >
         <div className="grid gap-4 md:grid-cols-2">
           <Row
@@ -1884,6 +2138,7 @@ export default function Settings() {
             />
           </Row>
           <Row
+            advanced
             label="Timeout"
             desc="Default minutes a task may run before it is force-killed."
             status={badge("default_timeout_minutes")}
@@ -1897,6 +2152,7 @@ export default function Settings() {
             />
           </Row>
           <Row
+            advanced
             label="Stall timeout"
             desc="Seconds of no agent output before a run is declared hung (e.g. a sub-agent/tool that stops reporting) and auto-recovered."
             status={badge("stall_timeout_seconds")}
@@ -1910,6 +2166,7 @@ export default function Settings() {
             />
           </Row>
           <Row
+            advanced
             label="Artifact retention"
             desc="Artifacts are files an agent created but never committed (captured per run, shown in the task's Artifacts card). This keeps them N days, then auto-deletes them at startup. Repos, worktrees, tasks, and logs are never touched by this."
             status={badge("artifact_ttl_days")}
@@ -1928,7 +2185,7 @@ export default function Settings() {
             status={badge("timezone")}
             error={fieldState["timezone"]?.msg}
           >
-            {timezones ? (
+            {timezones && Array.isArray(timezones.common) && Array.isArray(timezones.all) ? (
               // eslint-disable-next-line jsx-a11y/label-has-associated-control -- nested SearchableSelect renders a native button+input, so the label correctly forwards activation
               <label className="flex items-center gap-2 text-xs text-ink-400">
                 Zone
@@ -1968,6 +2225,7 @@ export default function Settings() {
             )}
           </Row>
           <Row
+            advanced
             label="Secret patterns"
             desc="Tick common secret formats and/or add your own regex (one per line). Anything matching is redacted from agent output, prompts, diffs, and notifications."
             status={badge("secret_patterns")}
@@ -1989,6 +2247,8 @@ export default function Settings() {
         desc="What happens when a run fails, times out, or stalls. Bounded: a deterministically failing task stops after the attempt cap instead of looping until you cancel it."
         query={query}
         onVisibility={handleVisibility}
+        onHiddenCount={handleHiddenCount}
+        showAdvanced={showAdvanced}
       >
         <div className="grid gap-4 md:grid-cols-2">
           <Row
@@ -2004,6 +2264,7 @@ export default function Settings() {
             />
           </Row>
           <Row
+            advanced
             label="Recovery attempts"
             desc="Max auto-recovery attempts per task. After the cap the task stays failed with a give-up note."
             status={badge("retry_policy.max_attempts")}
@@ -2018,6 +2279,7 @@ export default function Settings() {
             />
           </Row>
           <Row
+            advanced
             label="Continue prompt"
             desc="Message sent when a timed-out / failed run is resumed (stalls restart fresh)."
             status={badge("retry_policy.continue_prompt")}
@@ -2037,6 +2299,7 @@ export default function Settings() {
             />
           </Row>
           <Row
+            advanced
             label="Timeout multiplier"
             desc="Each recovery multiplies the task's timeout (capped by Max timeout)."
             status={badge("retry_policy.timeout_multiplier")}
@@ -2052,6 +2315,7 @@ export default function Settings() {
             />
           </Row>
           <Row
+            advanced
             label="Max timeout"
             desc="Ceiling (minutes) a recovered run may reach."
             status={badge("retry_policy.max_timeout_minutes")}
@@ -2067,6 +2331,7 @@ export default function Settings() {
             />
           </Row>
           <Row
+            advanced
             label="Non-retryable errors"
             desc="Failures containing one of these phrases (case-insensitive) fail immediately with no recovery — e.g. a wrong model name. One per line."
             status={badge("retry_policy.non_retryable_patterns")}
@@ -2093,7 +2358,7 @@ export default function Settings() {
           </Row>
           <Row
             label="Auto-nudge"
-            desc="Automatically queue a follow-up when a task's CI or review state changes after it finished."
+            desc="Watches your tasks’ pull requests for new signals — CI failures (via commit-status webhooks, or the GitHub poller when webhooks aren’t configured) and change-requested reviews (via the poller). When one arrives, it automatically queues a follow-up on the same agent session with the failing check or review as context, so the PR-feedback loop resolves without babysitting. Guardrails: only tasks waiting on attention with a resumable session qualify — never queued, running, done, cancelled, or interrupted ones; one nudge per unique signal, max 3 nudges per task."
             status={badge("auto_nudge")}
             error={fieldState["auto_nudge"]?.msg}
           >
@@ -2113,8 +2378,11 @@ export default function Settings() {
         title="Notifications"
         desc="Push task lifecycle updates to an ntfy server. The endpoint is either a bare topic name (sent to ntfy.sh) or a full URL to a self-hosted server."
         query={query}
-        keywords="ntfy notify push alerts test pings"
+        keywords="ntfy notify push alerts test pings browser done failed approval still running progress interval"
         onVisibility={handleVisibility}
+        onHiddenCount={handleHiddenCount}
+        showAdvanced={showAdvanced}
+        extraHiddenCount={notifHidden}
       >
         <p className="mb-4 text-[11px] leading-relaxed text-ink-500">
           New to ntfy? Start with the{" "}
@@ -2164,17 +2432,19 @@ export default function Settings() {
                 </span>
               )}
             </div>
-            <div className="block">
-              <span className="mb-1.5 block text-xs font-medium text-ink-400">
-                Progress ping interval (minutes)
-              </span>
-              <NumberInput
-                value={settings.notify_progress_interval_minutes}
-                min={1}
-                onCommit={(v) => save("notify_progress_interval_minutes", v)}
-                ariaLabel="Progress ping interval"
-              />
-            </div>
+            {showAdvanced && (
+              <div className="block">
+                <span className="mb-1.5 block text-xs font-medium text-ink-400">
+                  Progress ping interval (minutes)
+                </span>
+                <NumberInput
+                  value={settings.notify_progress_interval_minutes}
+                  min={1}
+                  onCommit={(v) => save("notify_progress_interval_minutes", v)}
+                  ariaLabel="Progress ping interval"
+                />
+              </div>
+            )}
             <div className="flex items-center gap-3 pt-1">
               <button
                 onClick={sendTestNotification}
@@ -2194,6 +2464,60 @@ export default function Settings() {
             </div>
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="sm:col-span-2 flex items-center justify-between gap-3 rounded border border-ink-800 px-3 py-2.5 text-sm">
+              <div className="space-y-0.5">
+                <div className="font-medium text-ink-200">Browser notifications</div>
+                <div className="text-xs text-ink-500">
+                  Push notification when a task completes, fails, or needs approval while Jalebi is
+                  in the background.
+                </div>
+                {!browserSupported && (
+                  <div id="browser-notifications-hint" className="text-[11px] text-ink-500">
+                    Notifications not supported by your browser
+                  </div>
+                )}
+                {browserSupported &&
+                  (permBlocked ||
+                    (typeof Notification !== "undefined" &&
+                      Notification.permission === "denied")) && (
+                    <div id="browser-notifications-hint" className="text-[11px] text-amber-400">
+                      Permission blocked in browser settings
+                    </div>
+                  )}
+              </div>
+              <Toggle
+                checked={
+                  browserEnabled &&
+                  !(typeof Notification !== "undefined" && Notification.permission === "denied")
+                }
+                disabled={
+                  !browserSupported ||
+                  (typeof Notification !== "undefined" && Notification.permission === "denied")
+                }
+                ariaDescribedBy={
+                  !browserSupported ||
+                  permBlocked ||
+                  (typeof Notification !== "undefined" && Notification.permission === "denied")
+                    ? "browser-notifications-hint"
+                    : undefined
+                }
+                onChange={async (v) => {
+                  if (v) {
+                    const ok = await enableBrowserNotifications();
+                    if (
+                      !ok &&
+                      typeof Notification !== "undefined" &&
+                      Notification.permission === "denied"
+                    ) {
+                      setPermBlocked(true);
+                    }
+                  } else {
+                    disableBrowserNotifications();
+                  }
+                }}
+                ariaLabel="Browser notifications"
+              />
+            </div>
             <div className="flex items-center justify-between gap-3 rounded border border-ink-800 px-3 py-2.5 text-sm">
               <span>Task done</span>
               <Toggle
@@ -2210,14 +2534,16 @@ export default function Settings() {
                 ariaLabel="Notify on task failure"
               />
             </div>
-            <div className="flex items-center justify-between gap-3 rounded border border-ink-800 px-3 py-2.5 text-sm">
-              <span>Still running (interval pings)</span>
-              <Toggle
-                checked={settings.notify_on_progress}
-                onChange={(v) => void save("notify_on_progress", v)}
-                ariaLabel="Notify on progress"
-              />
-            </div>
+            {showAdvanced && (
+              <div className="flex items-center justify-between gap-3 rounded border border-ink-800 px-3 py-2.5 text-sm">
+                <span>Still running (interval pings)</span>
+                <Toggle
+                  checked={settings.notify_on_progress}
+                  onChange={(v) => void save("notify_on_progress", v)}
+                  ariaLabel="Notify on progress"
+                />
+              </div>
+            )}
             <div className="flex items-center justify-between gap-3 rounded border border-ink-800 px-3 py-2.5 text-sm">
               <span>Needs approval</span>
               <Toggle
@@ -2239,6 +2565,9 @@ export default function Settings() {
         query={query}
         keywords="webhook tunnel github delivery secret url"
         onVisibility={handleVisibility}
+        onHiddenCount={handleHiddenCount}
+        advanced
+        showAdvanced={showAdvanced}
       >
         <div className="grid gap-4 md:grid-cols-2">
           <div className="block">
@@ -2284,14 +2613,18 @@ export default function Settings() {
         reposLoaded={reposLoaded}
         query={query}
         onVisibility={handleVisibility}
+        onHiddenCount={handleHiddenCount}
         resetKey={bulkN}
+        showAdvanced={showAdvanced}
       />
 
       <DataSection
         query={query}
         onVisibility={handleVisibility}
+        onHiddenCount={handleHiddenCount}
         resetKey={bulkN}
         onRestored={() => loadSettings()}
+        showAdvanced={showAdvanced}
       />
     </div>
   );
