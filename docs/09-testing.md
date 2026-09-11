@@ -50,7 +50,22 @@ After any code change, run the relevant tests and build before marking work done
 - Manual smoke tests (e.g. end-to-end task → PR) run against `example-smoke-repo` and are cleaned up afterwards (PR closed, branch deleted).
 - The `gh` CLI is authorized **only** for local git operations on the Jalebi repo itself (staging, committing, pushing to `Rishabh-Bajpai/Jalebi`) — never for testing/verification against the testing account.
 
-## 6. Reference
+## 6. Runaway guardrails (no test may eat the machine)
+
+- Every test is bounded by `pytest-timeout` (`timeout = 120`, signal method,
+  configured in `apps/server/pyproject.toml`): a hanging test FAILS at 120s
+  instead of looping forever. Serial full-suite wall time is ~60-90s, so 120s
+  per test is generous — if the timeout ever fires, treat it as a hung-test
+  bug, not a slow box.
+- For unattended runs add a shell backstop too: `timeout 900 uv run pytest`.
+- Prefer `uv run pytest -n auto` for speed; serial `uv run pytest` is the
+  correctness baseline.
+- If a run ever needs killing: kill only the `pytest`/`uv run pytest` PIDs.
+  NEVER kill the daemon — its PID is in `~/.jalebi/server.pid` (port 2052).
+  To find the hanging test, re-run with `-vv` and read the last test name
+  before the stall (or the `Timeout` failure line).
+
+## 7. Reference
 
 - PRD §13 (non-functional requirements — testability), §17.2 (no `gh` CLI), §17.3 (testing repo & account).
 

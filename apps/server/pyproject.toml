@@ -14,6 +14,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest>=8",
+    "pytest-timeout>=2.0",
     "pytest-xdist>=3.8.0",
     "ruff>=0.9",
 ]
@@ -34,6 +35,11 @@ package = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+# Guardrail: no single test may hang the suite and eat the machine. Any test
+# (including its fixtures) running longer than this fails outright instead of
+# looping forever. Serial full-suite wall time is ~60s; 120s is generous.
+timeout = 120
+timeout_method = "signal"
 
 [tool.ruff]
 line-length = 100
