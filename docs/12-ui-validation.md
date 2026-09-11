@@ -347,6 +347,25 @@ Backend `178` pytest + `15` web vitest pass; ruff/typecheck/eslint clean; `npm r
 - [ ] Mission Control labels are legible to a newcomer: Cooks (agents),
       Pantry (skills), Kitchen wire (activity), Karhais (running tasks),
       Queued tasks, Recent tasks, Spoiled (did not finish).
+- [ ] Mission Control themes: single theme switcher in Tasks page header toggles between
+      'Ops Deck' and 'Halwai', persisted in `localStorage` under `jalebi-mission-theme`;
+      'Ops Deck' is the default theme; Halwai theme is preserved byte-for-byte.
+- [ ] Ops Deck terminal process grid: idle worker cores show terminal prompt
+      `$ core-0N ready` with blinking caret and `+ spin up a job` CTA; queued tasks do not
+      consume a core (cores are reserved for running jobs only; other cores render the idle terminal);
+      queued and blocked tasks appear in the 'Pending jobs' strip with visible 'blocked' badge
+      whenever status is 'blocked' or blocked is true (blocked work stays visible).
+      Running tasks stream live step telemetry into bounded scrolling log (capped at 120 lines,
+      deduped by seq and consecutive identical text) with flowing barber-pole progress stripes,
+      sparkline, and PR link. Tasks in `needs_you` display amber pulsing border, `awaiting input`
+      tag, and prominent `respond →` button.
+- [ ] Ops Deck concurrency link: clicking `{N} cores allocated →` navigates to queue settings
+      and preserves mission context (`state: { from: 'mission' }`).
+- [ ] Ops Deck Director mode: toggling Director ON spotlights the active process
+      core while smoothly dimming non-focused cores.
+- [ ] Ops Deck dispatch presets: clicking `new feature`, `new fix`, or `new review`
+      flips to Queue view with corresponding task type pre-selected (`freeform`,
+      `issue_fix`, `pr_review`) and `from=mission` state.
 - [ ] New-task form: explainer under the header explains the local worktree and
       that the agent cannot push; the footer safety line matches the effective
       publish mode; switching to **PR review** hides Publish mode, shows

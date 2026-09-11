@@ -4,6 +4,9 @@ import { api } from "../api/client";
 import { AttentionBadge } from "../components/AttentionBadge";
 import { BrewHouse } from "../components/brew/BrewHouse";
 import type { SnackKind } from "../components/brew/snacks";
+import { OpsDeck } from "../components/ops/OpsDeck";
+import type { JobKind } from "../components/ops/jobStyle";
+import { getMissionTheme, setMissionTheme, type MissionTheme } from "../lib/missionTheme";
 import { DepBadges } from "../components/DepBadges";
 import { EmptyState } from "../components/EmptyState";
 import { OnboardingChecklist } from "../components/OnboardingChecklist";
@@ -936,6 +939,13 @@ export default function Tasks() {
       return "queue";
     }
   })();
+
+  const [missionTheme, setMissionThemeState] = useState<MissionTheme>(() => getMissionTheme());
+
+  const handleMissionThemeChange = useCallback((nextTheme: MissionTheme) => {
+    setMissionTheme(nextTheme);
+    setMissionThemeState(nextTheme);
+  }, []);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const load = useCallback(() => {
@@ -1109,9 +1119,14 @@ export default function Tasks() {
   }
 
   // Mission-control order buttons flip to the queue, pre-select the
-  // task type matching the ordered snack, and push history without scrolling.
-  function handleMissionOrder(kind?: SnackKind) {
-    const type = kind === "samosa" ? "issue_fix" : kind === "pakora" ? "pr_review" : "freeform";
+  // task type matching the ordered snack or job kind, and push history without scrolling.
+  function handleMissionOrder(kind?: SnackKind | JobKind) {
+    const type =
+      kind === "samosa" || kind === "fix"
+        ? "issue_fix"
+        : kind === "pakora" || kind === "review"
+          ? "pr_review"
+          : "freeform";
     setPrefill({ type });
     setPendingDealtFps([]);
     setPrefillNonce((n) => n + 1);
@@ -1293,36 +1308,71 @@ export default function Tasks() {
             </p>
           )}
         </div>
-        <div
-          role="group"
-          aria-label="Tasks view"
-          className="flex overflow-hidden rounded-full border border-ink-800 text-sm"
-        >
-          {(["queue", "mission"] as const).map((v) => (
-            <button
-              key={v}
-              type="button"
-              onClick={() => selectView(v)}
-              aria-pressed={view === v}
-              className={`px-3.5 py-1 transition-colors ${
-                view === v
-                  ? "bg-syrup-500 font-semibold text-ink-950"
-                  : "text-ink-400 hover:bg-ink-850 hover:text-ink-100"
-              }`}
+        <div className="flex flex-wrap items-center gap-2">
+          {view === "mission" && (
+            <div
+              role="group"
+              aria-label="Mission theme"
+              className="flex overflow-hidden rounded-full border border-ink-800 text-xs"
             >
-              {v === "queue" ? "Queue" : "Mission control"}
-            </button>
-          ))}
+              {(["ops", "brew"] as const).map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => handleMissionThemeChange(t)}
+                  aria-pressed={missionTheme === t}
+                  className={`px-3 py-1 transition-colors cursor-pointer ${
+                    missionTheme === t
+                      ? "bg-ink-800 font-semibold text-ink-100"
+                      : "text-ink-400 hover:bg-ink-850 hover:text-ink-200"
+                  }`}
+                >
+                  {t === "ops" ? "Ops Deck" : "Halwai"}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <div
+            role="group"
+            aria-label="Tasks view"
+            className="flex overflow-hidden rounded-full border border-ink-800 text-sm"
+          >
+            {(["queue", "mission"] as const).map((v) => (
+              <button
+                key={v}
+                type="button"
+                onClick={() => selectView(v)}
+                aria-pressed={view === v}
+                className={`px-3.5 py-1 transition-colors ${
+                  view === v
+                    ? "bg-syrup-500 font-semibold text-ink-950"
+                    : "text-ink-400 hover:bg-ink-850 hover:text-ink-100"
+                }`}
+              >
+                {v === "queue" ? "Queue" : "Mission control"}
+              </button>
+            ))}
+          </div>
         </div>
       </header>
 
       {view === "mission" ? (
-        <BrewHouse
-          tasks={tasks}
-          repos={repos}
-          onNewTask={handleMissionOrder}
-          onCancel={handleCancel}
-        />
+        missionTheme === "ops" ? (
+          <OpsDeck
+            tasks={tasks}
+            repos={repos}
+            onNewTask={handleMissionOrder}
+            onCancel={handleCancel}
+          />
+        ) : (
+          <BrewHouse
+            tasks={tasks}
+            repos={repos}
+            onNewTask={handleMissionOrder}
+            onCancel={handleCancel}
+          />
+        )
       ) : (
         <>
           <OnboardingChecklist
@@ -1379,7 +1429,7 @@ export default function Tasks() {
             <div className="flex items-center justify-between rounded-xl border border-syrup-500/30 bg-syrup-950/20 px-4 py-2.5 text-xs text-syrup-300 animate-fade-up">
               <span className="flex items-center gap-2">
                 <span className="h-1.5 w-1.5 rounded-full bg-syrup-400" />
-                <span>Ordering from Halwai Shop (Mission Control)</span>
+                <span>Ordering from Mission Control</span>
               </span>
               <button
                 type="button"

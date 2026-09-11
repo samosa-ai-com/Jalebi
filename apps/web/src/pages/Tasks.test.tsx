@@ -1198,7 +1198,7 @@ describe("Tasks page (queue overhaul)", () => {
     });
   });
 
-  it("mission order buttons flip back with the matching type pre-selected", async () => {
+  it("mission order buttons flip back with the matching type pre-selected (Ops Deck and Halwai)", async () => {
     stubFetch({
       ...DEFAULT_HANDLERS,
       "/api/settings": { default_backend: "opencode", default_model: "x", concurrency: 4 },
@@ -1215,6 +1215,21 @@ describe("Tasks page (queue overhaul)", () => {
     );
     await screen.findByText("New task");
     await userEvent.click(screen.getByRole("button", { name: "Mission control" }));
+
+    // Default theme is Ops Deck
+    expect(await screen.findByRole("heading", { name: "Ops Deck" })).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole("button", { name: /new fix/i }));
+    await waitFor(() => {
+      expect(screen.getByLabelText("Task type")).toHaveTextContent("Issue fix");
+    });
+
+    // Flip back to Mission control and switch to Halwai theme
+    await userEvent.click(screen.getByRole("button", { name: "Mission control" }));
+    const halwaiBtn = screen.getAllByRole("button", { name: "Halwai" })[0];
+    await userEvent.click(halwaiBtn);
+    expect(await screen.findByRole("heading", { name: "Halwai shop" })).toBeInTheDocument();
+
+    // Halwai order buttons flip back with matching type
     await userEvent.click(await screen.findByRole("button", { name: /samosa.*issue_fix/ }));
     await waitFor(() => {
       expect(screen.getByLabelText("Task type")).toHaveTextContent("Issue fix");
@@ -1257,7 +1272,160 @@ describe("Tasks page (queue overhaul)", () => {
     const backBtn = await screen.findByRole("button", { name: /Back to Mission control/i });
     expect(backBtn).toBeInTheDocument();
     await userEvent.click(backBtn);
-    expect(screen.getByRole("heading", { name: "Halwai shop" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Ops Deck" })).toBeInTheDocument();
+  });
+
+  it("persists theme switch between Ops Deck and Halwai", async () => {
+    stubFetch({
+      ...DEFAULT_HANDLERS,
+      "/api/settings": { default_backend: "opencode", default_model: "x", concurrency: 4 },
+      "/api/agents": [],
+      "/api/skills": [],
+      "/api/backends": { backends: ["opencode"], enabled: ["opencode"], default: "opencode" },
+      "/api/screenings": [],
+      "/api/screenings/findings": [],
+    });
+    render(
+      <MemoryRouter initialEntries={[{ pathname: "/", search: "?view=mission" }]}>
+        <Tasks />
+      </MemoryRouter>
+    );
+    expect(await screen.findByRole("heading", { name: "Ops Deck" })).toBeInTheDocument();
+    expect(localStorage.getItem("jalebi-mission-theme")).toBeNull();
+
+    // Toggle to Halwai
+    const halwaiBtns = screen.getAllByRole("button", { name: "Halwai" });
+    await userEvent.click(halwaiBtns[0]);
+    expect(await screen.findByRole("heading", { name: "Halwai shop" })).toBeInTheDocument();
+    expect(localStorage.getItem("jalebi-mission-theme")).toBe("brew");
+
+    // Toggle back to Ops Deck
+    const opsBtns = screen.getAllByRole("button", { name: "Ops Deck" });
+    await userEvent.click(opsBtns[0]);
+    expect(await screen.findByRole("heading", { name: "Ops Deck" })).toBeInTheDocument();
+    expect(localStorage.getItem("jalebi-mission-theme")).toBe("ops");
+  });
+
+  it("Ops Deck quick-launch buttons pre-select freeform and review task types", async () => {
+    stubFetch({
+      ...DEFAULT_HANDLERS,
+      "/api/settings": { default_backend: "opencode", default_model: "x", concurrency: 4 },
+      "/api/agents": [],
+      "/api/skills": [],
+      "/api/backends": { backends: ["opencode"], enabled: ["opencode"], default: "opencode" },
+      "/api/screenings": [],
+      "/api/screenings/findings": [],
+    });
+    render(
+      <MemoryRouter initialEntries={[{ pathname: "/", search: "?view=mission" }]}>
+        <Tasks />
+      </MemoryRouter>
+    );
+    expect(await screen.findByRole("heading", { name: "Ops Deck" })).toBeInTheDocument();
+
+    // Click new feature
+    await userEvent.click(screen.getByRole("button", { name: /new feature/i }));
+    await waitFor(() => {
+      expect(screen.getByLabelText("Task type")).toHaveTextContent("Freeform");
+    });
+
+    // Go back to mission and click new review
+    await userEvent.click(screen.getByRole("button", { name: "Mission control" }));
+    await userEvent.click(screen.getByRole("button", { name: /new review/i }));
+    await waitFor(() => {
+      expect(screen.getByLabelText("Task type")).toHaveTextContent("Review PR");
+    });
+  });
+
+  it("Ops Deck idle core 'spin up a job' button dispatches to Queue", async () => {
+    stubFetch({
+      ...DEFAULT_HANDLERS,
+      "/api/tasks": [],
+      "/api/settings": { default_backend: "opencode", default_model: "x", concurrency: 2 },
+      "/api/agents": [],
+      "/api/skills": [],
+      "/api/backends": { backends: ["opencode"], enabled: ["opencode"], default: "opencode" },
+      "/api/screenings": [],
+      "/api/screenings/findings": [],
+    });
+    render(
+      <MemoryRouter initialEntries={[{ pathname: "/", search: "?view=mission" }]}>
+        <Tasks />
+      </MemoryRouter>
+    );
+    expect(await screen.findByRole("heading", { name: "Ops Deck" })).toBeInTheDocument();
+
+    const spinUpBtn = await screen.findByRole("button", { name: /Spin up a job on core 1/i });
+    await userEvent.click(spinUpBtn);
+    await waitFor(() => {
+      expect(screen.getByText("New task")).toBeInTheDocument();
+    });
+  });
+
+  it("Ops Deck toggles Director mode on and off", async () => {
+    stubFetch({
+      ...DEFAULT_HANDLERS,
+      "/api/settings": { default_backend: "opencode", default_model: "x", concurrency: 2 },
+      "/api/agents": [],
+      "/api/skills": [],
+      "/api/backends": { backends: ["opencode"], enabled: ["opencode"], default: "opencode" },
+      "/api/screenings": [],
+      "/api/screenings/findings": [],
+    });
+    render(
+      <MemoryRouter initialEntries={[{ pathname: "/", search: "?view=mission" }]}>
+        <Tasks />
+      </MemoryRouter>
+    );
+    expect(await screen.findByRole("heading", { name: "Ops Deck" })).toBeInTheDocument();
+
+    const directorBtn = screen.getByRole("button", { name: /Director/i });
+    expect(directorBtn).toHaveAttribute("aria-pressed", "false");
+    expect(directorBtn).toHaveTextContent("OFF");
+
+    await userEvent.click(directorBtn);
+    expect(directorBtn).toHaveAttribute("aria-pressed", "true");
+    expect(directorBtn).toHaveTextContent("ON");
+
+    await userEvent.click(directorBtn);
+    expect(directorBtn).toHaveAttribute("aria-pressed", "false");
+    expect(directorBtn).toHaveTextContent("OFF");
+  });
+
+  it("Ops Deck keeps blocked tasks visible and displays queued jobs in pending strip without occupying cores", async () => {
+    stubFetch({
+      ...DEFAULT_HANDLERS,
+      "/api/tasks": [
+        { ...TASKS[0], id: 101, status: "running", prompt: "Running job" },
+        { ...TASKS[0], id: 102, status: "queued", prompt: "Queued job" },
+        { ...TASKS[0], id: 103, status: "blocked", blocked: true, prompt: "Blocked job" },
+      ],
+      "/api/settings": { default_backend: "opencode", default_model: "x", concurrency: 3 },
+      "/api/agents": [],
+      "/api/skills": [],
+      "/api/backends": { backends: ["opencode"], enabled: ["opencode"], default: "opencode" },
+      "/api/screenings": [],
+      "/api/screenings/findings": [],
+    });
+    render(
+      <MemoryRouter initialEntries={[{ pathname: "/", search: "?view=mission" }]}>
+        <Tasks />
+      </MemoryRouter>
+    );
+    expect(await screen.findByRole("heading", { name: "Ops Deck" })).toBeInTheDocument();
+
+    // Queued and blocked tasks appear in the Pending jobs strip
+    const pendingGroup = screen.getByRole("group", { name: "Pending jobs" });
+    expect(pendingGroup).toBeInTheDocument();
+    expect(pendingGroup).toHaveTextContent("#102");
+    expect(pendingGroup).toHaveTextContent("#103");
+    expect(pendingGroup).toHaveTextContent("blocked");
+
+    // Only running task (101) occupies a core. With concurrency=3 and 1 running task, idle cores exist.
+    const idleButtons = screen.getAllByRole("button", { name: /spin up a job/i });
+    expect(idleButtons.length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("CORE-01")).toBeInTheDocument();
+    expect(screen.getAllByText("#101").length).toBeGreaterThanOrEqual(1);
   });
 
   it("applies a screening handoff prefill and marks findings dealt only on create", async () => {

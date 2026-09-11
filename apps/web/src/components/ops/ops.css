@@ -1,0 +1,305 @@
+/**
+ * Ops Deck — mission-control motion & styling set.
+ *
+ * Terminal / process-grid operations console motion.
+ * All animations use cheap composited properties (opacity, transform, stroke-dashoffset).
+ * Reduced motion is globally handled by apps/web/src/index.css.
+ */
+
+/* 1. Ops Scanline: slow vertical sweep across the ops deck */
+@keyframes ops-scanline-sweep {
+  0% {
+    transform: translateY(-100%);
+  }
+  100% {
+    transform: translateY(1200%);
+  }
+}
+
+.ops-scanline {
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(56, 189, 248, 0.04) 50%,
+    transparent 100%
+  );
+  animation: ops-scanline-sweep 10s linear infinite;
+  pointer-events: none;
+}
+
+/* 2. Ops Caret: classic blinking terminal block/underline */
+@keyframes ops-caret-blink {
+  0%, 49% {
+    opacity: 1;
+  }
+  50%, 100% {
+    opacity: 0;
+  }
+}
+
+.ops-caret {
+  animation: ops-caret-blink 0.9s steps(2, start) infinite;
+}
+
+/* 3. Ops Line-In: new streaming log line arrival */
+@keyframes ops-line-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.ops-line-in {
+  animation: ops-line-in 0.16s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* 4. Ops LED: breathing status beacon */
+@keyframes ops-led-breathe {
+  0%, 100% {
+    opacity: 0.45;
+    transform: scale(0.92);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.1);
+  }
+}
+
+.ops-led {
+  animation: ops-led-breathe 2s ease-in-out infinite;
+}
+
+.ops-led-fast {
+  animation: ops-led-breathe 1s ease-in-out infinite;
+}
+
+/* 5. Ops Shimmer: indeterminate queued progress sweep */
+@keyframes ops-shimmer-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(250%);
+  }
+}
+
+.ops-shimmer {
+  animation: ops-shimmer-sweep 1.8s ease-in-out infinite;
+}
+
+/* 6. Ops Stripes: flowing barber-pole progress bar */
+@keyframes ops-stripes-flow {
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: 28px 0;
+  }
+}
+
+.ops-stripes {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    rgba(255, 255, 255, 0.18) 0,
+    rgba(255, 255, 255, 0.18) 7px,
+    transparent 7px,
+    transparent 14px
+  );
+  background-size: 28px 28px;
+  animation: ops-stripes-flow 1s linear infinite;
+}
+
+/* 7. Ops Ripple: one-shot / repeating attention ring */
+@keyframes ops-ripple-ring {
+  0% {
+    transform: scale(0.85);
+    opacity: 0.9;
+  }
+  100% {
+    transform: scale(1.8);
+    opacity: 0;
+  }
+}
+
+.ops-ripple {
+  animation: ops-ripple-ring 1.8s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+}
+
+/* 8. Ops Spot: director spotlight pulse */
+@keyframes ops-spot-glow {
+  0%, 100% {
+    box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.4), 0 0 18px rgba(56, 189, 248, 0.2);
+  }
+  50% {
+    box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.85), 0 0 32px rgba(56, 189, 248, 0.45);
+  }
+}
+
+.ops-spot {
+  animation: ops-spot-glow 2.2s ease-in-out infinite;
+}
+
+/* 9. Ops Burst: completion flash */
+@keyframes ops-burst-flash {
+  0% {
+    opacity: 0.8;
+    filter: brightness(1.3);
+  }
+  100% {
+    opacity: 1;
+    filter: brightness(1);
+  }
+}
+
+.ops-burst {
+  animation: ops-burst-flash 0.5s ease-out both;
+}
+
+/* 10. Ops Shake: failure / faulted jitter */
+@keyframes ops-shake-jitter {
+  0%, 100% {
+    transform: translateX(0);
+  }
+  20% {
+    transform: translateX(-3px);
+  }
+  40% {
+    transform: translateX(3px);
+  }
+  60% {
+    transform: translateX(-2px);
+  }
+  80% {
+    transform: translateX(2px);
+  }
+}
+
+.ops-shake {
+  animation: ops-shake-jitter 0.45s ease-in-out;
+}
+
+/* 11. Ops Radar: rotating sweep vector */
+@keyframes ops-radar-rotate {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.ops-radar {
+  transform-origin: center center;
+  animation: ops-radar-rotate 4s linear infinite;
+}
+
+/* 12. Ops Flow: moving particle dots along the pipeline */
+@keyframes ops-flow-march {
+  0% {
+    stroke-dashoffset: 24;
+  }
+  100% {
+    stroke-dashoffset: 0;
+  }
+}
+
+.ops-flow {
+  stroke-dasharray: 4 6;
+  animation: ops-flow-march 1s linear infinite;
+}
+
+/* Radar strip marquee with hover-pause */
+@keyframes ops-radar-scroll {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+.ops-radar-track {
+  animation: ops-radar-scroll 90s linear infinite;
+}
+
+.ops-radar-marquee:hover .ops-radar-track {
+  animation-play-state: paused;
+}
+
+/* Runner active / idle states */
+@keyframes ops-runner-glow {
+  0%, 100% {
+    box-shadow: 0 0 8px rgba(56, 189, 248, 0.15);
+  }
+  50% {
+    box-shadow: 0 0 16px rgba(56, 189, 248, 0.35);
+  }
+}
+
+.ops-runner-working {
+  animation: ops-runner-glow 2s ease-in-out infinite;
+}
+
+@keyframes ops-runner-bob {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-2px);
+  }
+}
+
+.ops-runner-bob {
+  animation: ops-runner-bob 3.2s ease-in-out infinite;
+}
+
+/* Module active glow */
+@keyframes ops-module-pulse {
+  0%, 100% {
+    opacity: 0.8;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.ops-module-active {
+  animation: ops-module-pulse 1.8s ease-in-out infinite;
+}
+
+/* Pane state utility bindings */
+.ops-pane-idle {
+  border-color: rgba(51, 39, 30, 0.7);
+  background-color: rgba(20, 15, 12, 0.6);
+}
+
+.ops-pane-queued {
+  border-color: rgba(74, 58, 45, 0.9);
+  background-color: rgba(13, 10, 8, 0.7);
+}
+
+.ops-pane-running {
+  border-color: rgba(56, 189, 248, 0.4);
+  background-color: rgba(13, 10, 8, 0.85);
+}
+
+.ops-pane-needs-you {
+  border-color: rgba(245, 158, 11, 0.8);
+  background-color: rgba(30, 20, 10, 0.85);
+  box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.4);
+  animation: ops-spot-glow 1.8s ease-in-out infinite;
+}
+
+.ops-pane-shipped {
+  border-color: rgba(16, 185, 129, 0.4);
+  background-color: rgba(13, 22, 16, 0.7);
+}
+
+.ops-pane-faulted {
+  border-color: rgba(239, 68, 68, 0.5);
+  background-color: rgba(25, 12, 12, 0.7);
+}
