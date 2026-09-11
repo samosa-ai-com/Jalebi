@@ -624,6 +624,39 @@ class Nudge(Base):
     )
 
 
+# ---- Task notifications --------------------------------------------------
+
+
+class Notification(Base):
+    """A persistent in-app notification row (PRD task-notification backend).
+
+    Records task lifecycle events: terminal outcomes (done, failed, timed_out)
+    and input requests (needs_approval, waiting_for_input).
+    """
+
+    __tablename__ = "notifications"
+    __table_args__ = (
+        Index("ix_notifications_task_id_created_at", "task_id", "created_at"),
+        Index("ix_notifications_created_at", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    task_id: Mapped[int] = mapped_column(
+        ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False
+    )
+    run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("runs.id", ondelete="CASCADE"), nullable=True
+    )
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    body: Mapped[str | None] = mapped_column(Text, nullable=True)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=now, server_default=sa.text("CURRENT_TIMESTAMP")
+    )
+
+
+
 _engine: Engine | None = None
 Session = sessionmaker(expire_on_commit=False)
 

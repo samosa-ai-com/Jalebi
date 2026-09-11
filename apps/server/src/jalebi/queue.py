@@ -22,6 +22,7 @@ from jalebi import (
     envvars,
     masking,
     messaging,
+    notifications,
     notify,
     prompts,
     reviews,
@@ -721,6 +722,14 @@ class TaskQueue:
                         }
                     )
                     run.steps_json = json.dumps(steps[-MAX_STEPS:])
+                    self._notify_in_app(
+                        session,
+                        task,
+                        "needs_input",
+                        f"Task #{task.id} needs approval",
+                        repo=repo,
+                        run_id=run.id,
+                    )
 
         # Push a terminal notification (done/failed/timed_out/cancelled or a
         # needs_approval publish failure), with the agent's final message. The
@@ -832,6 +841,54 @@ class TaskQueue:
                     except Exception:
                         logger.debug("working-tree diff capture failed for task %s", task.id)
                 run.steps_json = json.dumps(steps[-MAX_STEPS:])
+
+        last_msg = attention.last_message_text(steps)
+        if (
+            run.status in attention.WAITING_INPUT_STATUSES
+            and attention.is_waiting_message(last_msg)
+        ):
+            self._notify_in_app(
+                session,
+                task,
+                "needs_input",
+                f"Task #{task.id} is waiting for input",
+                body=last_msg[:200],
+                repo=repo,
+                run_id=run.id,
+            )
+        elif task.status == "needs_approval":
+            pass  # Already notified when assigned above
+        elif task.type != "pr_review" and task.status in ("done", "failed", "timed_out"):
+            kind = "task_done" if task.status == "done" else "task_failed"
+            title = (
+                f"Task #{task.id} done"
+                if task.status == "done"
+                else f"Task #{task.id} timed out"
+                if task.status == "timed_out"
+                else f"Task #{task.id} failed"
+            )
+            self._notify_in_app(
+                session,
+                task,
+                kind,
+                title,
+                repo=repo,
+                run_id=run.id,
+            )
+        elif task.type == "pr_review" and task.status in ("failed", "timed_out"):
+            title = (
+                f"Task #{task.id} timed out"
+                if task.status == "timed_out"
+                else f"Task #{task.id} failed"
+            )
+            self._notify_in_app(
+                session,
+                task,
+                "task_failed",
+                title,
+                repo=repo,
+                run_id=run.id,
+            )
 
     def _resolve_timeout(self, session, task: Task) -> int:
         """Effective per-run timeout: the task's own, escalated by auto-recovery.
@@ -1109,6 +1166,15 @@ class TaskQueue:
                     )
                     run.steps_json = json.dumps(fail_steps[-MAX_STEPS:])
             session.commit()
+            if task is not None and task.status == "failed":
+                self._notify_in_app(
+                    session,
+                    task,
+                    "task_failed",
+                    f"Task #{task.id} failed",
+                    repo=repo,
+                    run_id=run_id,
+                )
             # Close out the commit status so a crashed run doesn't leave a
             # permanently-blocking `pending` on the head SHA (best-effort; the
             # status API is non-fatal). Only when setup got far enough to matter.
@@ -1209,7 +1275,7 @@ class TaskQueue:
             )
             session.commit()
 
-            self._post_review(
+            posted = self._post_review(
                 session, task, repo, pr_number, wt, run, token, masker
             )
             # Complete AFTER _post_review so a review that failed to post (or a
@@ -1218,6 +1284,15 @@ class TaskQueue:
             # the merge gate.
             self._complete_status(session, task, repo, run, git, token)
             session.commit()
+            if posted:
+                self._notify_in_app(
+                    session,
+                    task,
+                    "task_done",
+                    f"Task #{task.id} done",
+                    repo=repo,
+                    run_id=run.id,
+                )
         except Exception as exc:
             # Roll back FIRST: the session may be poisoned by a failed flush
             # (PendingRollbackError). Everything below uses only plain-int ids
@@ -1256,6 +1331,15 @@ class TaskQueue:
                 task.status = "failed"
                 task.updated_at = now()
             session.commit()
+            if task is not None and task.status == "failed":
+                self._notify_in_app(
+                    session,
+                    task,
+                    "task_failed",
+                    f"Task #{task.id} failed",
+                    repo=repo,
+                    run_id=run_id,
+                )
             # Best-effort: a crashed review must not leave a forever-`pending`
             # status on the PR head (never raise out of the handler).
             if git is not None and task is not None and run is not None:
@@ -1279,8 +1363,13 @@ class TaskQueue:
         run: Run,
         token: str,
         masker,
-    ) -> None:
+    ) -> bool:
         """Post a ``pr_review`` run's deliverable to GitHub and reconcile the assignment.
+
+        Returns True only when a review was actually posted to the PR; every
+        other path (non-done run, approval-wait skip, no-content flip, post
+        error) returns False so callers never announce a delivery that does
+        not exist.
 
         Shared by the initial review run and follow-up resumes, which both finish
         with ``run.status`` decided and the review written to the review
@@ -1296,7 +1385,7 @@ class TaskQueue:
         """
         if run.status != "done":
             reviews.set_assignment_status(session, task.id, "failed", run_id=run.id)
-            return
+            return False
 
         review_text = self._read_review(worktree)
         if not review_text:
@@ -1309,7 +1398,7 @@ class TaskQueue:
                 logger.info(
                     "review for task %s awaiting approval; skipping PR post", task.id
                 )
-                return
+                return False
             review_text = self._last_message(session, task.id)
         if not review_text:
             # A done run with no review content has nothing to post. Flip the run
@@ -1334,7 +1423,15 @@ class TaskQueue:
             run.steps_json = json.dumps(steps[-MAX_STEPS:])
             session.commit()
             reviews.set_assignment_status(session, task.id, "failed", run_id=run.id)
-            return
+            self._notify_in_app(
+                session,
+                task,
+                "task_failed",
+                f"Task #{task.id} failed",
+                repo=repo,
+                run_id=run.id,
+            )
+            return False
 
         review_text = masker(review_text)
         review_body = messaging.wrap_pr_review(review_text)
@@ -1356,6 +1453,7 @@ class TaskQueue:
             run.steps_json = json.dumps(steps[-MAX_STEPS:])
             session.commit()
             reviews.set_assignment_status(session, task.id, "posted", run_id=run.id)
+            return True
         except Exception as exc:
             logger.warning("posting review for task %s failed: %s", task.id, exc)
             steps = json.loads(run.steps_json or "[]")
@@ -1377,6 +1475,15 @@ class TaskQueue:
             task.updated_at = now()
             session.commit()
             reviews.set_assignment_status(session, task.id, "failed", run_id=run.id)
+            self._notify_in_app(
+                session,
+                task,
+                "task_failed",
+                f"Task #{task.id} failed",
+                repo=repo,
+                run_id=run.id,
+            )
+            return False
 
     @staticmethod
     def _task_pr_number(task: Task) -> int | None:
@@ -1505,6 +1612,45 @@ class TaskQueue:
         if secret_values:
             values += [v for v in secret_values if v]
         return masking.build_masker(values, patterns)
+
+    def _notify_in_app(
+        self,
+        session,
+        task: Task,
+        kind: str,
+        title: str,
+        *,
+        body: str | None = None,
+        repo: Repo | None = None,
+        run_id: int | None = None,
+    ) -> None:
+        """Best-effort recording of an in-app persistent notification (never fails the task)."""
+        try:
+            if body is None:
+                repo_full_name = repo.full_name if repo is not None else ""
+                if not repo_full_name and task.repo_id:
+                    r = session.get(Repo, task.repo_id)
+                    if r is not None:
+                        repo_full_name = r.full_name
+                body = f"{task.type} task in {repo_full_name}".strip()
+            notifications.notify(
+                session,
+                task_id=task.id,
+                run_id=run_id,
+                kind=kind,
+                title=title,
+                body=body,
+            )
+        except Exception:
+            # A failed notification write must not poison the caller's session:
+            # roll back so the next commit cannot raise PendingRollbackError.
+            try:
+                session.rollback()
+            except Exception:
+                pass
+            logger.warning(
+                "recording in-app notification for task %s failed", task.id, exc_info=True
+            )
 
     def _prior_conversation(self, run) -> str:
         """Extract a compact "prior conversation" from a run's (masked) timeline.
@@ -1715,16 +1861,26 @@ class TaskQueue:
                 worktree=wt,
                 adapter=adapter,
             )
+            posted = False
             if task.type == "pr_review":
                 pr_number = self._task_pr_number(task)
                 if pr_number is not None:
-                    self._post_review(
+                    posted = self._post_review(
                         session, task, repo, pr_number, wt, run, token, masker
                     )
             # Complete AFTER the review post (see _run_review) so a failed review
             # yields a failure status, not a green one.
             self._complete_status(session, task, repo, run, git, token)
             session.commit()
+            if task.type == "pr_review" and posted:
+                self._notify_in_app(
+                    session,
+                    task,
+                    "task_done",
+                    f"Task #{task.id} done",
+                    repo=repo,
+                    run_id=run.id,
+                )
             if not auto:
                 # Auto-recovery resumes are not user follow-ups; only real
                 # follow-ups get a row (the recovery step is on the failed run).
@@ -1797,6 +1953,15 @@ class TaskQueue:
                         "could not record failed follow-up for task %s", task_id
                     )
             session.commit()
+            if task is not None and task.status == "failed":
+                self._notify_in_app(
+                    session,
+                    task,
+                    "task_failed",
+                    f"Task #{task.id} failed",
+                    repo=repo,
+                    run_id=run_id,
+                )
             # Best-effort: close out the pending status on a failed follow-up too
             # (never raise out of the handler).
             if (

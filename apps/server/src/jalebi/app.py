@@ -27,6 +27,7 @@ from jalebi.routes.catalog import bp as catalog_bp
 from jalebi.routes.data import bp as data_bp
 from jalebi.routes.envvars import bp as envvars_bp
 from jalebi.routes.github import bp as github_bp
+from jalebi.routes.notifications import bp as notifications_bp
 from jalebi.routes.repos import bp as repos_bp
 from jalebi.routes.screening import bp as screening_bp
 from jalebi.routes.skills import bp as skills_bp
@@ -380,6 +381,7 @@ def create_app(config: Config | None = None) -> Flask:
     app.register_blueprint(triggers_bp)
     app.register_blueprint(webhooks_bp)
     app.register_blueprint(screening_bp)
+    app.register_blueprint(notifications_bp)
 
     @app.teardown_appcontext
     def close_session(_exc) -> None:

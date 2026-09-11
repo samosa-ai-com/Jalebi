@@ -311,6 +311,21 @@ list, FK-less by design — unknown slugs refused at write time, skipped at run
 time). Deleting a linked skill is refused (409 + linking agents). Seed content
 is versioned (`catalog_seed_version` setting) — see `docs/15-catalog.md` §8.
 
+### `notifications` (task-notification backend)
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | int PK | |
+| `task_id` | int FK → tasks | `ON DELETE CASCADE`, not null |
+| `run_id` | int null FK → runs | `ON DELETE CASCADE`, nullable |
+| `kind` | text | `task_done` \| `task_failed` \| `needs_input` |
+| `title` | text | notification headline |
+| `body` | text null | short summary or agent message snippet |
+| `read_at` | datetime null | null means unread |
+| `created_at` | datetime | default now, server_default `CURRENT_TIMESTAMP` |
+
+Indexes: `(task_id, created_at)`, `(created_at)`.
+
 ## 3. Relationships (Phase 0 + Phase 1 catalog + reviewers)
 
 ```
@@ -319,6 +334,8 @@ tasks 1───* runs
 tasks 1───* followups
 runs  1───* followups  (run_id nullable)
 runs  1───* artifacts
+tasks 1───* notifications
+runs  0───* notifications  (run_id nullable)
 repos 0───* env_vars   (repo_id nullable = global)
 tasks 0───1 catalog_agents  (agent_id slug, FK-less by design)
 catalog_agents *───* catalog_skills  (skill_ids_json ordered slug list, FK-less)
@@ -357,3 +374,9 @@ None — all Phase-0/1/2 tables are materialized. (Phase 3 adds no new tables.)
 
 - **Delete cascade (`tasks.delete_tasks_cascade`):** TaskDependency → Followup → ReviewAssignment → **CheckRun** → Artifact → Run → Task, plus the task's `task_events` rows (deleted by the caller in prune; the task-delete route relies on FK CASCADE for events). `check_runs.task_id`/`run_id` carry **no** `ON DELETE CASCADE` (the SQLite batch-rebuild hazard), so check runs are deleted explicitly — deleting a task that ever reported a commit status would otherwise `IntegrityError` under `PRAGMA foreign_keys=ON`.
   - `tasks.status` widened to include `"blocked"` (T4.1). A blocked task sits with deps unmet; cleared by `cascade_unblock` when the last unsatisfied dep finishes.
+
+- **Task Notifications (`a2b3c4d5e6f7_notifications.py`):**
+  - `notifications(id PK, task_id FK→tasks ON DELETE CASCADE, run_id FK→runs ON DELETE CASCADE, kind, title, body, read_at, created_at)`
+  - Indexes: `(task_id, created_at)` and `(created_at)`.
+  - Records persistent notifications on terminal states (`task_done`, `task_failed`) and input requests (`needs_input`). Unread deduplication on `(task_id, kind)` avoids retry spam; bounded retention automatically prunes older rows keeping the newest 500.
+

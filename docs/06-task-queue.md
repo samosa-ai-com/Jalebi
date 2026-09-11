@@ -94,6 +94,23 @@ Queue items are tagged tuples: `("task", task_id)` or `("followup", task_id, bod
 - **Progress notifications:** a third watchdog thread (`_progress_notify_loop`) pushes "still running — Nm elapsed — last: <agent message>" every `notify_progress_interval_minutes` (default 30), starting at the first interval mark, while the agent process is alive (gated by `notify_on_progress`; reads settings live).
 - **Test endpoint:** `POST /api/notify/test` sends a sample markdown push with a click action and reports ok/error (Settings → Notifications → "Send test notification").
 
+## 5b. In-App Persistent Notifications (`notifications`)
+
+Persistent in-app notification rows stored in SQLite (`notifications` table) backing the in-app notification bell and `/api/notifications` REST API.
+
+- **Hook points in task lifecycle (`TaskQueue`):**
+  - `_stream_and_finish` terminal status: records `task_done` for `done`, `task_failed` for `failed` or `timed_out` (skips `cancelled`). Titles follow `Task #<id> done`, `Task #<id> failed`, `Task #<id> timed out`.
+  - `_run_review` / `_post_review` terminal paths: records `task_done` on review post success, or `task_failed` when review produces no content, review posting to GitHub fails, or the review run encounters a fatal exception.
+  - `needs_approval` assignment: records `needs_input` titled `Task #<id> needs approval` whenever auto-publishing encounters a conflict or error that halts automated progression.
+  - `waiting_input` detection: records `needs_input` titled `Task #<id> is waiting for input` when a run reaches a terminal state with an assistant question detected via `attention.is_waiting_message` (e.g. plan-first confirmation), carrying the last assistant message truncated to 200 characters in the notification body.
+  - Worker exception fallbacks: `_run_task` and `_run_followup` exception handlers record `task_failed` if setup or execution aborts before reaching terminal streaming.
+- **Dedup policy:**
+  - `notifications.notify` checks for an existing **unread** notification with the same `(task_id, kind)`.
+  - If one exists, the insert is skipped to avoid spamming the owner during retries or recovery loops.
+  - Once the owner marks the notification as read (`read_at` set), subsequent events for that `(task_id, kind)` will insert a fresh notification.
+- **Retention & pruning policy:**
+  - Bounded storage: after every successful insert, `notifications.prune_notifications` prunes the table by deleting older rows, retaining only the newest 500 rows based on primary key IDs.
+
 ## 6. Cancellation (PRD F3)
 
 - `cancel()` sets a reason and kills the child process group (SIGTERM → SIGKILL); the event stream ends and the run resolves to `cancelled`. Cancellation works for a task that is `queued` (status flip + `queue.cancel` so an in-flight pickup is flagged) or `running` (child killed). Agent children spawn in their own session (`start_new_session`), so killing the process group reaches MCP servers/grandchildren instead of orphaning them.
