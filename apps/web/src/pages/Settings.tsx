@@ -208,7 +208,7 @@ function Row({
         </div>
         <p className="mt-1 text-xs leading-relaxed text-ink-500">{desc}</p>
       </div>
-      <div className="flex items-center justify-end">{children}</div>
+      <div className="flex flex-col items-end gap-3">{children}</div>
       {error && <p className="text-xs text-red-400">{error}</p>}
     </section>
   );
@@ -1676,8 +1676,9 @@ export default function Settings() {
             status={badge("enabled_backends")}
             error={fieldState["enabled_backends"]?.msg}
           >
-            <p className="mb-2 text-xs leading-relaxed text-ink-500">{NEW_BACKENDS_NOTICE}</p>
-            <div className="flex flex-wrap justify-end gap-2">
+            <div className="flex w-full flex-col gap-2">
+              <p className="text-xs leading-relaxed text-ink-500">{NEW_BACKENDS_NOTICE}</p>
+              <div className="flex flex-wrap justify-end gap-2">
               {AGENT_CLIS.map((c) => {
                 const enabledList = settings.enabled_backends ?? [...AGENT_CLIS];
                 const enabled = enabledList.includes(c);
@@ -1717,6 +1718,7 @@ export default function Settings() {
                   </label>
                 );
               })}
+              </div>
             </div>
           </Row>
           <Row
@@ -1788,42 +1790,49 @@ export default function Settings() {
             status={badge("adapter_model_lists")}
             error={fieldState["adapter_model_lists"]?.msg}
           >
-            <div className="flex w-full max-w-lg flex-col items-end gap-2">
-              {AGENT_CLIS.map((cli) => (
-                <label key={cli} className="flex w-full items-center gap-2 text-xs text-ink-400">
-                  <span className="w-16 shrink-0 font-mono">{cli}</span>
-                  <TextInput
-                    value={(settings.adapter_model_lists?.[cli] ?? []).join(", ")}
-                    onCommit={(v) => {
-                      const models = v
-                        .split(",")
-                        .map((s) => s.trim())
-                        .filter(Boolean);
-                      return save(
-                        "adapter_model_lists",
-                        { ...(settings.adapter_model_lists ?? {}), [cli]: models },
-                        "adapter_model_lists"
-                      );
-                    }}
-                    placeholder="comma-separated models, empty = built-in list"
-                    ariaLabel={`Model override for ${cli}`}
-                    mono
-                    className="field w-full text-xs"
-                  />
-                </label>
-              ))}
-            </div>
-            <div className="mt-3 w-full max-w-lg space-y-1.5 border-t border-ink-800 pt-3">
-              <p className="text-[11px] font-medium text-ink-400">
-                Where each built-in list comes from (empty box = built-in):
-              </p>
-              <ul className="space-y-1.5">
-                {MODEL_LIST_HELP.map(({ cli, how }) => (
-                  <li key={cli} className="text-[11px] leading-relaxed text-ink-500">
-                    <span className="font-mono text-ink-300">{cli}</span> — {how}
-                  </li>
+            <div className="flex w-full flex-col gap-3">
+              <div className="flex w-full flex-col gap-2">
+                {AGENT_CLIS.map((cli) => (
+                  <label key={cli} className="flex w-full items-center gap-3 text-xs text-ink-400">
+                    <span className="w-24 shrink-0 truncate font-mono" title={cli}>
+                      {cli}
+                    </span>
+                    <TextInput
+                      value={(settings.adapter_model_lists?.[cli] ?? []).join(", ")}
+                      onCommit={(v) => {
+                        const models = v
+                          .split(",")
+                          .map((s) => s.trim())
+                          .filter(Boolean);
+                        return save(
+                          "adapter_model_lists",
+                          { ...(settings.adapter_model_lists ?? {}), [cli]: models },
+                          "adapter_model_lists"
+                        );
+                      }}
+                      placeholder="comma-separated models, empty = built-in list"
+                      ariaLabel={`Model override for ${cli}`}
+                      mono
+                      className="field min-w-0 flex-1 text-xs"
+                    />
+                  </label>
                 ))}
-              </ul>
+              </div>
+              <div className="w-full space-y-1.5 border-t border-ink-800 pt-3">
+                <p className="text-[11px] font-medium text-ink-400">
+                  Where each built-in list comes from (empty box = built-in):
+                </p>
+                <ul className="space-y-1.5">
+                  {MODEL_LIST_HELP.map(({ cli, how }) => (
+                    <li
+                      key={cli}
+                      className="text-[11px] leading-relaxed break-words text-ink-500"
+                    >
+                      <span className="font-mono text-ink-300">{cli}</span> — {how}
+                    </li>
+                  ))}
+                </ul>
+              </div>
             </div>
           </Row>
         </div>
