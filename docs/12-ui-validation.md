@@ -360,6 +360,6 @@ Backend `178` pytest + `15` web vitest pass; ruff/typecheck/eslint clean; `npm r
       renders above the Backend health card (not behind it). Same for the
       Default model dropdown above the Model overrides help box.
 - [ ] Mission Control: clicking a cook opens /agents, clicking an ingredient
-      opens /skills; the compact Recent card shows the latest 3 tasks with a
+      opens /skills; the compact Recent card shows up to 8 tasks with a
       status dot and links to each task (header opens the queue, without a
       mission order banner); the Backends card shows no failed/needs-you line.
