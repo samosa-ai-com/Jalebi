@@ -363,3 +363,13 @@ Backend `178` pytest + `15` web vitest pass; ruff/typecheck/eslint clean; `npm r
       opens /skills; the compact Recent card shows up to 8 tasks with a
       status dot and links to each task (header opens the queue, without a
       mission order banner); the Backends card shows no failed/needs-you line.
+- [ ] Header bell shows the unread count (9+ cap), opens a panel with kind
+      icons/titles/relative times, marks a row read and navigates to its task
+      on click, Mark-all-read clears the badge, Escape/outside-click closes,
+      and "You are all caught up." shows when empty.
+- [ ] With 50+ notifications where older unread rows sit beyond the first
+      page, the badge and Mark-all-read stay visible (count comes from
+      /api/notifications/unread-count, never the visible page).
+- [ ] Run a task to done/failed and confirm exactly one notification row
+      appears; a review ending in an approval question yields needs_input
+      only, never a completion row.

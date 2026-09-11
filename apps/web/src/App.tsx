@@ -10,6 +10,7 @@ import Skills from "./pages/Skills";
 import TaskDetail from "./pages/TaskDetail";
 import Tasks from "./pages/Tasks";
 import Triggers from "./pages/Triggers";
+import NotificationBell from "./components/NotificationBell";
 
 function JalebiMark({ className }: { className?: string }) {
   return (
@@ -157,6 +158,7 @@ function App() {
                 {item.label}
               </NavLink>
             ))}
+            <NotificationBell />
             <span className="ml-3 flex items-center gap-2 rounded-full border border-ink-800 px-3 py-1.5">
               <HealthDot />
               <span className="font-mono text-[11px] text-ink-500">

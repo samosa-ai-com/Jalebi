@@ -485,3 +485,19 @@ export interface ScreenTemplate {
   cadence_cron: string;
   system_prompt: string;
 }
+
+export interface TaskNotification {
+  id: number;
+  task_id: number;
+  run_id: number | null;
+  kind: string;
+  title: string;
+  body: string | null;
+  read_at: string | null;
+  created_at: string | null;
+  repo_id?: number | null;
+  type?: string | null;
+  status?: string | null;
+  pr_number?: number | null;
+}
+

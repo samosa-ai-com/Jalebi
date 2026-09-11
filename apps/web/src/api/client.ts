@@ -27,6 +27,7 @@ import type {
   SkillUsage,
   SseEvent,
   Task,
+  TaskNotification,
   RestorePreview,
   TimezoneList,
   TokensResponse,
@@ -426,6 +427,18 @@ export const api = {
     `/api/tasks/${taskId}/artifacts/${artifactId}/download`,
   artifactContentUrl: (taskId: number, artifactId: number) =>
     `/api/tasks/${taskId}/artifacts/${artifactId}/content`,
+  getNotifications: (opts?: { unreadOnly?: boolean; limit?: number }) => {
+    const q = new URLSearchParams();
+    if (opts?.unreadOnly !== undefined) q.set("unread_only", String(opts.unreadOnly));
+    if (opts?.limit !== undefined) q.set("limit", String(opts.limit));
+    const qs = q.toString();
+    return request<TaskNotification[]>(`/api/notifications${qs ? `?${qs}` : ""}`);
+  },
+  getUnreadCount: () => request<{ unread: number }>("/api/notifications/unread-count"),
+  markNotificationRead: (id: number) =>
+    request<TaskNotification>(`/api/notifications/${id}/read`, { method: "POST" }),
+  markAllNotificationsRead: () =>
+    request<{ marked: number }>("/api/notifications/read-all", { method: "POST" }),
 };
 
 /** Optional hooks for an SSE subscription (all no-ops by default). */
