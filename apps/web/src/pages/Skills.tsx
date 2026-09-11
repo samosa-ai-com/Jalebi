@@ -93,7 +93,7 @@ function SkillForm({
             className="field font-mono"
           />
           {!isEdit && (
-            <span className="mt-1 block text-[11px] text-ink-600">
+            <span className="mt-1 block text-[11px] text-ink-500">
               Lowercase letters/digits with single hyphens. Permanent — agents link it.
             </span>
           )}
@@ -135,7 +135,7 @@ function SkillForm({
       <label className="block">
         <span className="mb-1.5 block text-xs font-medium text-ink-400">
           Content (markdown, loaded by agents via @path){" "}
-          <span className="text-ink-600">{form.content.length.toLocaleString()}/100,000</span>
+          <span className="text-ink-500">{form.content.length.toLocaleString()}/100,000</span>
         </span>
         <textarea
           value={form.content}
@@ -203,7 +203,7 @@ function SkillCard({
                   .join(", ")}`}
           </p>
         ) : (
-          <p className="mt-1.5 text-[11px] text-ink-600">Usage unavailable.</p>
+          <p className="mt-1.5 text-[11px] text-ink-500">Usage unavailable.</p>
         )}
       </div>
       <div className="flex shrink-0 gap-2">

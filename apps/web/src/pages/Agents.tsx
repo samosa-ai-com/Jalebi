@@ -160,7 +160,7 @@ function AgentForm({
             className="field font-mono"
           />
           {!isEdit && (
-            <span className="mt-1 block text-[11px] text-ink-600">
+            <span className="mt-1 block text-[11px] text-ink-500">
               Lowercase letters/digits with single hyphens. Permanent — tasks and rules reference
               it.
             </span>
@@ -182,7 +182,7 @@ function AgentForm({
             onChange={(v) => set({ kind: v as "general" | "reviewer" })}
             options={["general", "reviewer"]}
           />
-          <span className="mt-1 block text-[11px] text-ink-600">
+          <span className="mt-1 block text-[11px] text-ink-500">
             {form.kind === "reviewer"
               ? "Reviewer: runs the PR review workflow and is selectable in trigger rules."
               : "General: plain build agent for issue_fix / freeform tasks."}
@@ -205,7 +205,7 @@ function AgentForm({
       <div>
         <span className="mb-1.5 block text-xs font-medium text-ink-400">
           Profile picture{" "}
-          <span className="text-ink-600">
+          <span className="text-ink-500">
             auto-suggested from name/description: {suggested} (override anytime)
           </span>
         </span>
@@ -288,7 +288,7 @@ function AgentForm({
         <span className="mb-1.5 block text-xs font-medium text-ink-400">
           Skills (from the library only
           {library !== null && (
-            <span className="text-ink-600">
+            <span className="text-ink-500">
               {" "}
               · {(form.skill_ids ?? []).length} of {library.length} selected
             </span>
@@ -362,7 +362,7 @@ function AgentForm({
               })}
           </div>
         )}
-        <span className="mt-1 block text-[11px] text-ink-600">
+        <span className="mt-1 block text-[11px] text-ink-500">
           To add or edit a skill itself, use the Skills section.
         </span>
       </div>
@@ -370,7 +370,7 @@ function AgentForm({
       <label className="block">
         <span className="mb-1.5 block text-xs font-medium text-ink-400">
           Custom instructions (appended to the task prompt){" "}
-          <span className="text-ink-600">
+          <span className="text-ink-500">
             {form.custom_instructions.length.toLocaleString()}/20,000
           </span>
         </span>
@@ -464,7 +464,7 @@ function AgentRow({
                 .join(", ")}`}
           </p>
         ) : (
-          <p className="mt-1.5 text-[11px] text-ink-600">Usage unavailable.</p>
+          <p className="mt-1.5 text-[11px] text-ink-500">Usage unavailable.</p>
         )}
         {agent.personality_md && (
           <p className="mt-2 line-clamp-2 text-xs text-ink-400">{agent.personality_md}</p>

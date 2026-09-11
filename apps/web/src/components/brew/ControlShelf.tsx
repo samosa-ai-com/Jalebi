@@ -109,9 +109,9 @@ export function ControlShelf({
           </Link>
         </div>
         {backends === null ? (
-          <p className="mt-3 text-xs text-ink-600">Loading…</p>
+          <p className="mt-3 text-xs text-ink-500">Loading…</p>
         ) : (backends.enabled ?? []).length === 0 ? (
-          <p className="mt-3 text-xs text-ink-600">No backends enabled.</p>
+          <p className="mt-3 text-xs text-ink-500">No backends enabled.</p>
         ) : (
           <ul
             className={`mt-2 space-y-1.5 ${
@@ -170,7 +170,7 @@ export function ControlShelf({
           </Link>
         </div>
         {repos.length === 0 ? (
-          <p className="mt-3 text-xs text-ink-600">No repos connected yet.</p>
+          <p className="mt-3 text-xs text-ink-500">No repos connected yet.</p>
         ) : (
           <>
             <div className="mt-2 flex flex-wrap gap-1.5" aria-hidden="true">
@@ -240,7 +240,7 @@ export function ControlShelf({
             ))}
           </ul>
         ) : (
-          <p className="mt-3 text-xs text-ink-600">
+          <p className="mt-3 text-xs text-ink-500">
             {screens.length === 0 ? "No screens configured." : "All quiet — no audit running."}
           </p>
         )}

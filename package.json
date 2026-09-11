@@ -21,5 +21,10 @@
   },
   "devDependencies": {
     "concurrently": "^10.0.4"
+  },
+  "overrides": {
+    "eslint-plugin-jsx-a11y": {
+      "eslint": "^10.8.0"
+    }
   }
 }

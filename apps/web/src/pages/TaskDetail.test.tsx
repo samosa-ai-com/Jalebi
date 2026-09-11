@@ -1906,4 +1906,61 @@ describe("TaskDetail improvements", () => {
       await screen.findByRole("link", { name: /Back to Mission control/i })
     ).toBeInTheDocument();
   });
+
+  it("announces a status transition in polite live region", async () => {
+    let currentTask: Record<string, unknown> = {
+      ...TASK,
+      status: "running",
+      attention: "working",
+    };
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/runs")) {
+        return { ok: true, json: async () => [currentTask.run ?? RUN] };
+      }
+      if (url.includes("/files")) {
+        return { ok: true, json: async () => ({ path: "", entries: [] }) };
+      }
+      if (url.includes("/api/tasks")) {
+        return { ok: true, json: async () => currentTask };
+      }
+      if (url.includes("/api/settings")) {
+        return {
+          ok: true,
+          json: async () => ({ default_backend: "opencode", default_model: "m1" }),
+        };
+      }
+      if (url.includes("/api/github/tokens")) {
+        return { ok: true, json: async () => ({ accounts: [] }) };
+      }
+      if (url.includes("/api/models")) {
+        return { ok: true, json: async () => ({ cli: "opencode", models: ["m1"] }) };
+      }
+      return { ok: true, json: async () => REPOS };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("EventSource", FakeEventSource);
+
+    renderDetail();
+    expect(await screen.findByText("fix the bug")).toBeInTheDocument();
+    const liveRegion = screen.getByRole("status");
+    expect(liveRegion).toHaveTextContent("");
+
+    await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));
+    const source = FakeEventSource.instances[FakeEventSource.instances.length - 1];
+
+    // Transition task to done
+    currentTask = {
+      ...TASK,
+      status: "done",
+      attention: "done",
+      run: { ...RUN, status: "done" },
+    };
+    act(() => {
+      source.emit({ type: "stream_end" });
+    });
+
+    await waitFor(() => {
+      expect(liveRegion).toHaveTextContent("Task 7 done");
+    });
+  });
 });

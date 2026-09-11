@@ -202,7 +202,7 @@ function RuleForm({
             placeholder="main"
             className="field font-mono"
           />
-          <span className="mt-1 block text-[11px] text-ink-600">
+          <span className="mt-1 block text-[11px] text-ink-500">
             Matches the head or base branch (for push: the pushed ref). Clearing a saved filter
             removes it.
           </span>
@@ -217,7 +217,7 @@ function RuleForm({
             placeholder="octocat"
             className="field font-mono"
           />
-          <span className="mt-1 block text-[11px] text-ink-600">
+          <span className="mt-1 block text-[11px] text-ink-500">
             PR/issue author login. Needs a PR or issue payload — never matches push.
           </span>
         </label>
@@ -233,7 +233,7 @@ function RuleForm({
           placeholder="bug, frontend"
           className="field"
         />
-        <span className="mt-1 block text-[11px] text-ink-600">
+        <span className="mt-1 block text-[11px] text-ink-500">
           All listed labels must be present. Needs a PR or issue payload — never matches push.
         </span>
       </label>
@@ -389,17 +389,17 @@ function DeliveryRow({ d, onReplayed }: { d: EventDelivery; onReplayed: () => vo
           <span className="font-mono text-ink-300">{d.event}</span>
           {d.action && <span className="text-ink-500">· {d.action}</span>}
           <span className="text-ink-500">{d.repo_full_name ?? "—"}</span>
-          <span className="font-mono text-ink-600" title={d.received_at}>
+          <span className="font-mono text-ink-500" title={d.received_at}>
             {whenLabel}
           </span>
-          <span className="text-ink-600">{open ? "▾" : "▸"}</span>
+          <span className="text-ink-500">{open ? "▾" : "▸"}</span>
         </button>
         <span className="ml-auto flex items-center gap-2">
           {outcome && <span className="text-ink-500">{outcome}</span>}
           <button
             onClick={replay}
             disabled={busy}
-            className="btn-ghost !px-2 !py-0.5 disabled:opacity-50"
+            className="btn-ghost !px-2 !py-0.5 min-h-6 disabled:opacity-50"
           >
             {busy ? "replaying…" : "replay"}
           </button>
@@ -420,7 +420,7 @@ function DeliveryRow({ d, onReplayed }: { d: EventDelivery; onReplayed: () => vo
                 rule #{r.rule_id} · {r.action}
               </span>
               <span className="ml-2 text-ink-500">{workSummary(r)}</span>
-              {r.note && <span className="ml-2 text-ink-600">({r.note})</span>}
+              {r.note && <span className="ml-2 text-ink-500">({r.note})</span>}
               <ul className="ml-4 mt-1 space-y-0.5">
                 {r.work.map((w, i) => (
                   <li key={i} className={w.type === "error" ? "text-red-400" : "text-ink-400"}>

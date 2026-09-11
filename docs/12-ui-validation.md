@@ -345,3 +345,14 @@ Backend `178` pytest + `15` web vitest pass; ruff/typecheck/eslint clean; `npm r
       publish mode; switching to **PR review** hides Publish mode, shows
       "reviews do not publish", and a created review task sends no
       `publish_mode` (verify in the request body).
+
+## Accessibility Manual QA Checks
+
+| # | Check | How to test | Expected behavior | Pass |
+| --- | --- | --- | --- | --- |
+| A.1 | **Keyboard-only walkthrough** | Use only `Tab`, `Shift+Tab`, `Enter`, `Space`, and `Escape` to navigate through the app from `/` through Tasks, Repos, Settings, and Task Detail. | Skip link appears on first `Tab` and jumps to `#main-content`. Focus rings are visible on every focused element. Modals trap focus completely within the dialog; `Escape` closes modals and returns focus to the trigger button. Forms, dropdowns, and buttons can all be activated without a mouse. | ☐ |
+| A.2 | **Screen-reader pass** | Enable VoiceOver (macOS) or NVDA/Orca (Linux/Windows) and navigate through the Tasks queue and Task Detail page. | Page landmarks (`header`, `main`, `nav`) are announced. Status announcements in polite live regions fire upon task transitions (`Task N done`, `Task N needs your input`) without spamming steady-state noise. Modals announce their dialog role and title upon opening. | ☐ |
+| A.3 | **200% zoom** | Set browser zoom to 200% in viewport widths from 1280px down to 1024px. | No content clipped, overlapping, or horizontally broken. Navigation, stat cards, tables, and dialogs wrap gracefully and remain usable without bidirectional scrolling. | ☐ |
+| A.4 | **Reduced motion on** | Enable OS-level reduced motion (`prefers-reduced-motion: reduce`) or emulate in DevTools Rendering panel. | All animations and transitions (fade-up, pulse dots, spinners, ticker drifts) immediately freeze or finish within 0.01ms. Page transitions and dialogs open instantaneously without jarring movement. | ☐ |
+| A.5 | **Contrast spot-check on muted text** | Inspect muted secondary text (`text-ink-500`) and input placeholders (`placeholder:text-ink-500`) across dark background surfaces (`bg-ink-900` / `bg-ink-950`). | Muted text displays `--color-ink-500: #97836f`, yielding at least 5.03:1 contrast ratio against `ink-900` (#1a1410), comfortably exceeding the WCAG AA 4.5:1 requirement. Verify zero `text-ink-600` usages. | ☐ |
+

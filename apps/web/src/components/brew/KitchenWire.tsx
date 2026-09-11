@@ -234,7 +234,7 @@ export function KitchenWire({
                 key={cat}
                 type="button"
                 onClick={() => setFilter(cat)}
-                className={`rounded px-1.5 py-0.5 transition-colors ${
+                className={`inline-flex items-center min-h-6 rounded px-1.5 py-0.5 transition-colors ${
                   active
                     ? cat === "alerts"
                       ? "bg-amber-500/25 text-amber-300 font-semibold"
@@ -260,7 +260,7 @@ export function KitchenWire({
         className="mt-2 min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-0.5 font-mono text-[11px]"
       >
         {filtered.length === 0 ? (
-          <div className="flex min-h-full items-center justify-center px-2 text-center text-xs text-ink-600">
+          <div className="flex min-h-full items-center justify-center px-2 text-center text-xs text-ink-500">
             No events recorded in this category yet.
           </div>
         ) : (
@@ -269,7 +269,7 @@ export function KitchenWire({
               key={e.id}
               className="group flex items-baseline gap-2 rounded px-1.5 py-1 transition-colors hover:bg-ink-850/60"
             >
-              <span className="shrink-0 text-[10px] tabular-nums text-ink-600">{e.time}</span>
+              <span className="shrink-0 text-[10px] tabular-nums text-ink-500">{e.time}</span>
               <span className={`shrink-0 text-[10px] font-semibold ${e.tagColor}`}>{e.tag}</span>
               {e.link ? (
                 <Link

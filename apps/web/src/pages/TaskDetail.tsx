@@ -15,6 +15,8 @@ import { parseUnifiedDiff } from "../lib/unifiedDiff";
 import { summarizeToolCall } from "../lib/toolCallSummary";
 import { avatarFor, avatarUrl } from "../lib/agentAvatars";
 import { useInView } from "../lib/useInView";
+import { useFocusTrap } from "../lib/useFocusTrap";
+import { useStatusAnnouncer } from "../lib/useStatusAnnouncer";
 import { useBackends } from "../hooks/useBackends";
 import type {
   Account,
@@ -121,7 +123,9 @@ function CopyButton({ text, label }: { text: string; label: string }) {
       if (timer.current) clearTimeout(timer.current);
     };
   }, []);
-  async function copy() {
+  async function copy(e: React.MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
     try {
       await navigator.clipboard.writeText(text);
       setCopied(true);
@@ -377,7 +381,7 @@ function TimelineItem({ step, index }: { step: SseEvent; index: number }) {
       <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ring-2 ring-ink-950 ${dot}`} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <span className="font-mono text-[11px] text-ink-600">{step.ts?.slice(11, 19) ?? ""}</span>
+          <span className="font-mono text-[11px] text-ink-500">{step.ts?.slice(11, 19) ?? ""}</span>
           <span
             className={`rounded px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide ${
               STEP_STYLE[step.type] ?? "bg-ink-700/30 text-ink-300"
@@ -616,7 +620,7 @@ function FollowUpComposer({
           placeholder="e.g. Add a regression test, then update the README…"
           className="field resize-y"
         />
-        <p className="text-[11px] leading-relaxed text-ink-600">
+        <p className="text-[11px] leading-relaxed text-ink-500">
           Resume refreshes remote refs first, then continues your worktree&apos;s local commits;
           review worktrees move to the current PR head.
         </p>
@@ -641,7 +645,7 @@ function FollowUpComposer({
         <ol className="mt-4 space-y-2 border-t border-ink-800 pt-3">
           {followups.map((f) => (
             <li key={f.id} className="flex gap-2 text-sm">
-              <span className="shrink-0 font-mono text-[11px] leading-6 text-ink-600">
+              <span className="shrink-0 font-mono text-[11px] leading-6 text-ink-500">
                 {f.created_at.slice(11, 19)}
               </span>
               <div className="min-w-0">
@@ -771,7 +775,7 @@ function ArtifactPreview({
 }) {
   const [content, setContent] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
-  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const dialogRef = useFocusTrap<HTMLDivElement>();
   const ext = extOf(artifact.path);
   const isImage = IMAGE_EXTENSIONS.has(ext);
   const isText = TEXT_EXTENSIONS.has(ext);
@@ -796,10 +800,7 @@ function ArtifactPreview({
   }, [taskId, artifact.id, isText]);
 
   useEffect(() => {
-    // Focus the dialog and close on Escape. The listener is registered once
-    // because onClose is a stable useCallback.
-    const node = dialogRef.current;
-    node?.focus();
+    // Close on Escape. The listener is registered once because onClose is a stable useCallback.
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
@@ -808,18 +809,21 @@ function ArtifactPreview({
   }, [onClose]);
 
   return createPortal(
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-ink-950/80 p-4"
-      onClick={onClose}
-    >
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink-950/80 p-4">
+      <button
+        type="button"
+        className="fixed inset-0 cursor-default border-0 bg-transparent"
+        tabIndex={-1}
+        aria-label="Close preview"
+        onClick={onClose}
+      />
       <div
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label={artifact.path}
         tabIndex={-1}
-        className="surface flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden outline-none"
-        onClick={(e) => e.stopPropagation()}
+        className="surface relative z-10 flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden outline-none"
       >
         <div className="flex items-center gap-3 border-b border-ink-800 px-5 py-3">
           <h3 className="min-w-0 flex-1 truncate font-mono text-sm text-ink-100">
@@ -828,7 +832,7 @@ function ArtifactPreview({
           <a href={api.artifactUrl(taskId, artifact.id)} className="btn-ghost !px-3 !py-1 text-xs">
             Download
           </a>
-          <button onClick={onClose} className="btn-ghost !px-2 !py-1 text-xs">
+          <button onClick={onClose} className="btn-ghost !px-2 !py-1 min-h-6 min-w-6 text-xs">
             ✕
           </button>
         </div>
@@ -930,7 +934,7 @@ function DiffFileSection({
         {file.additions > 0 && <span className="ml-2 text-green-400">+{file.additions}</span>}
         {file.deletions > 0 && <span className="ml-2 text-red-400">−{file.deletions}</span>}
         {!file.binary && (
-          <span className="ml-2" onClick={(e) => e.preventDefault()}>
+          <span className="ml-2">
             <CopyButton text={rawText} label={`${pathLabel(file)} diff`} />
           </span>
         )}
@@ -1042,6 +1046,7 @@ function RerunDialog({
   setCli: (v: string) => void;
   setModel: (v: string) => void;
 }) {
+  const dialogRef = useFocusTrap<HTMLDivElement>(open);
   const backendOptions = useBackends();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1050,6 +1055,15 @@ function RerunDialog({
     model && !models.includes(model)
       ? [model, ...models.filter((candidate) => candidate !== model)]
       : models;
+
+  useEffect(() => {
+    if (!open) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape" && !busy) onClose();
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [open, busy, onClose]);
 
   async function handleRerun() {
     setBusy(true);
@@ -1070,15 +1084,21 @@ function RerunDialog({
 
   if (!open) return null;
   return createPortal(
-    <div
-      role="dialog"
-      aria-modal="true"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div className="surface w-full max-w-md space-y-4 p-5 animate-fade-up">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+      <button
+        type="button"
+        className="fixed inset-0 cursor-default border-0 bg-transparent"
+        tabIndex={-1}
+        aria-label="Close dialog"
+        onClick={onClose}
+      />
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        tabIndex={-1}
+        className="surface relative z-10 w-full max-w-md space-y-4 p-5 animate-fade-up"
+      >
         <div>
           <h2 className="text-sm font-semibold text-ink-100">Re-run task</h2>
           <p className="mt-1 text-xs text-ink-400">
@@ -1141,6 +1161,8 @@ export default function TaskDetail() {
   const fromMission = (location.state as { from?: string } | null)?.from === "mission";
   const taskId = Number(id);
   const [task, setTask] = useState<Task | null>(null);
+  const announcerTasks = useMemo(() => (task ? [task] : []), [task]);
+  const statusAnnouncement = useStatusAnnouncer(announcerTasks);
   const navigate = useNavigate();
 
   function fixFailedCi() {
@@ -1570,8 +1592,26 @@ export default function TaskDetail() {
       .finally(() => setIdeBusy(false));
   };
 
-  if (error) return <p className="text-red-400">{error}</p>;
-  if (!task) return <p className="text-ink-500">Loading…</p>;
+  if (error) {
+    return (
+      <div className="space-y-6 animate-fade-up">
+        <div className="sr-only" role="status" aria-live="polite">
+          {statusAnnouncement}
+        </div>
+        <p className="text-red-400">{error}</p>
+      </div>
+    );
+  }
+  if (!task) {
+    return (
+      <div className="space-y-6 animate-fade-up">
+        <div className="sr-only" role="status" aria-live="polite">
+          {statusAnnouncement}
+        </div>
+        <p className="text-ink-500">Loading…</p>
+      </div>
+    );
+  }
 
   const repoName =
     task.repo_full_name ??
@@ -1619,6 +1659,9 @@ export default function TaskDetail() {
 
   return (
     <div className="space-y-6 animate-fade-up">
+      <div className="sr-only" role="status" aria-live="polite">
+        {statusAnnouncement}
+      </div>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-3">
           <Link
@@ -1643,7 +1686,7 @@ export default function TaskDetail() {
                 <button
                   type="button"
                   onClick={handleDismissAttention}
-                  className="rounded px-1.5 py-0.5 text-[10px] font-medium text-ink-400 ring-1 ring-ink-700/60 hover:bg-ink-800 hover:text-ink-200 transition-colors"
+                  className="inline-flex items-center min-h-6 rounded px-1.5 py-0.5 text-[10px] font-medium text-ink-400 ring-1 ring-ink-700/60 hover:bg-ink-800 hover:text-ink-200 transition-colors"
                   title="Dismiss attention for this task"
                 >
                   Dismiss
@@ -1826,11 +1869,11 @@ export default function TaskDetail() {
 
         <dl className="mt-4 grid grid-cols-2 gap-x-6 gap-y-2 border-t border-ink-800 pt-4 text-xs sm:grid-cols-4">
           <div>
-            <dt className="text-ink-600">Type</dt>
+            <dt className="text-ink-500">Type</dt>
             <dd className="mt-0.5 font-mono text-ink-300">{task.type}</dd>
           </div>
           <div>
-            <dt className="text-ink-600">Publish</dt>
+            <dt className="text-ink-500">Publish</dt>
             <dd className="mt-0.5 font-mono text-ink-300">
               {task.publish_mode === "auto"
                 ? "auto"
@@ -1840,22 +1883,22 @@ export default function TaskDetail() {
             </dd>
           </div>
           <div>
-            <dt className="text-ink-600">Branch</dt>
+            <dt className="text-ink-500">Branch</dt>
             <dd className="mt-0.5 font-mono text-ink-300">
               {task.target_branch || "—"} ← {task.source_branch || "default"}
             </dd>
           </div>
           <div>
-            <dt className="text-ink-600">Timeout</dt>
+            <dt className="text-ink-500">Timeout</dt>
             <dd className="mt-0.5 font-mono text-ink-300">{task.timeout_minutes}m</dd>
           </div>
           <div>
-            <dt className="text-ink-600">Retries</dt>
+            <dt className="text-ink-500">Retries</dt>
             <dd className="mt-0.5 font-mono text-ink-300">{task.retry_count}</dd>
           </div>
           {task.triggered_by && (
             <div>
-              <dt className="text-ink-600">Started by</dt>
+              <dt className="text-ink-500">Started by</dt>
               <dd
                 className="mt-0.5 font-mono text-ink-300"
                 title={`delivery ${task.triggered_by.delivery_id}`}
@@ -1949,7 +1992,7 @@ export default function TaskDetail() {
         />
       ) : (
         !TERMINAL.has(task.status) && (
-          <p className="text-xs text-ink-600">
+          <p className="text-xs text-ink-500">
             Follow-ups open when this run finishes
             {task.status === "queued" ? " and a run starts" : ""}.
           </p>
@@ -2019,7 +2062,7 @@ export default function TaskDetail() {
                     key={t}
                     type="button"
                     onClick={() => setTlType(t)}
-                    className={`rounded-full border px-2 py-0.5 font-mono text-[10px] transition-colors ${
+                    className={`inline-flex items-center min-h-6 rounded-full border px-2 py-0.5 font-mono text-[10px] transition-colors ${
                       tlType === t
                         ? "border-syrup-500 text-syrup-300"
                         : "border-ink-800 text-ink-400 hover:text-ink-100"
@@ -2032,7 +2075,7 @@ export default function TaskDetail() {
             </div>
             <ol className="space-y-3 text-sm">
               {filteredTimeline.length === 0 && (
-                <li className="text-ink-600">
+                <li className="text-ink-500">
                   {tlActive ? "No steps match the current filter." : "No steps yet."}
                 </li>
               )}

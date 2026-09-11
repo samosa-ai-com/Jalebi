@@ -363,7 +363,7 @@ function IDESettings({
             {name || command} {found ? "ready" : "not found on PATH"}
           </span>
         ) : (
-          <span className="text-[11px] text-ink-600">No IDE configured.</span>
+          <span className="text-[11px] text-ink-500">No IDE configured.</span>
         )}
       </div>
 
@@ -420,7 +420,7 @@ function IDESettings({
               }`}
             >
               <span className="text-sm font-semibold text-ink-300">Custom command…</span>
-              <span className="mt-0.5 text-[11px] text-ink-600">
+              <span className="mt-0.5 text-[11px] text-ink-500">
                 Enter custom CLI binary or path
               </span>
             </button>
@@ -436,7 +436,7 @@ function IDESettings({
               className="flex flex-col items-start rounded-lg border border-dashed border-ink-800 bg-ink-900/20 hover:border-ink-700 hover:bg-ink-850 p-3 text-left transition-all"
             >
               <span className="text-sm font-semibold text-ink-300">Custom command…</span>
-              <span className="mt-0.5 text-[11px] text-ink-600">
+              <span className="mt-0.5 text-[11px] text-ink-500">
                 Enter custom CLI binary or path
               </span>
             </button>
@@ -915,7 +915,7 @@ function EnvVarsSection({
         </div>
       </form>
       {!reposLoaded && (
-        <p className="mb-2 text-[11px] text-ink-600">
+        <p className="mb-2 text-[11px] text-ink-500">
           Loading repositories… per-repo scopes appear when ready.
         </p>
       )}
@@ -951,7 +951,7 @@ function EnvVarsSection({
       )}
 
       {vars.length === 0 ? (
-        <p className="text-xs text-ink-600">No environment variables configured yet.</p>
+        <p className="text-xs text-ink-500">No environment variables configured yet.</p>
       ) : (
         <ul className="divide-y divide-ink-800/70">
           {vars.map((v) => (
@@ -961,7 +961,7 @@ function EnvVarsSection({
               <span className="rounded bg-ink-800 px-1.5 py-0.5 font-mono text-[10px] text-ink-500">
                 {repoLabel(v.repo_id)}
               </span>
-              <span className="flex-1 truncate font-mono text-[11px] text-ink-600">{v.masked}</span>
+              <span className="flex-1 truncate font-mono text-[11px] text-ink-500">{v.masked}</span>
               <button
                 onClick={() => removeVar(v.id)}
                 className="text-[11px] text-ink-500 transition-colors hover:text-red-400"
@@ -1137,7 +1137,7 @@ function DataSection({
       </div>
       {/* Storage meter */}
       <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-ink-400">
-        Storage {totalSize > 0 && <span className="text-ink-600">· {formatBytes(totalSize)}</span>}
+        Storage {totalSize > 0 && <span className="text-ink-500">· {formatBytes(totalSize)}</span>}
       </h3>
       {usage ? (
         <div className="mb-5 space-y-1.5">
@@ -1157,19 +1157,19 @@ function DataSection({
               </div>
             );
           })}
-          <p className="pt-1 text-[11px] text-ink-600">
+          <p className="pt-1 text-[11px] text-ink-500">
             {usage.counts?.tasks ?? 0} tasks · {usage.counts?.runs ?? 0} runs ·{" "}
             {usage.counts?.artifacts ?? 0} artifacts · {usage.counts?.task_events ?? 0} timeline
             events
           </p>
         </div>
       ) : (
-        <p className="mb-5 text-xs text-ink-600">Loading usage…</p>
+        <p className="mb-5 text-xs text-ink-500">Loading usage…</p>
       )}
 
       {/* Backups */}
       <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-ink-400">Backups</h3>
-      <p className="mb-2 text-[11px] leading-relaxed text-ink-600">
+      <p className="mb-2 text-[11px] leading-relaxed text-ink-500">
         Consistent snapshot of the live database (safe while running). Restoring swaps the live
         database back — a dry run first, a safety snapshot always, and it refuses while tasks are
         queued or running.
@@ -1204,13 +1204,13 @@ function DataSection({
         </button>
       </div>
       {backups.length === 0 ? (
-        <p className="mb-5 text-xs text-ink-600">No backups yet.</p>
+        <p className="mb-5 text-xs text-ink-500">No backups yet.</p>
       ) : (
         <ul className="mb-5 divide-y divide-ink-800/70">
           {backups.map((b) => (
             <li key={b.name} className="flex items-center gap-3 py-2 text-xs">
               <span className="font-mono text-ink-200">{b.name}</span>
-              <span className="font-mono text-ink-600">{formatBytes(b.size)}</span>
+              <span className="font-mono text-ink-500">{formatBytes(b.size)}</span>
               <span className="flex-1" />
               <a
                 href={api.backupDownloadUrl(b.name)}
@@ -1277,7 +1277,7 @@ function DataSection({
                   )}
                 </li>
               </ul>
-              <p className="mt-1 text-[11px] text-ink-600">
+              <p className="mt-1 text-[11px] text-ink-500">
                 Restoring takes effect immediately. A safety snapshot of the current database is
                 saved first and named in the result.
               </p>
@@ -1317,7 +1317,7 @@ function DataSection({
               </div>
             </>
           ) : (
-            <p className="mt-1 text-[11px] text-ink-600">Checking backup…</p>
+            <p className="mt-1 text-[11px] text-ink-500">Checking backup…</p>
           )}
         </div>
       )}
@@ -1656,6 +1656,7 @@ export default function Settings() {
             status={badge("default_backend")}
             error={fieldState["default_backend"]?.msg}
           >
+            {/* eslint-disable-next-line jsx-a11y/label-has-associated-control -- nested SearchableSelect renders a native button+input, so the label correctly forwards activation */}
             <label className="flex items-center gap-2 text-xs text-ink-400">
               Backend
               <SearchableSelect
@@ -1696,7 +1697,7 @@ export default function Settings() {
                     className={`flex cursor-pointer items-center gap-1.5 rounded border px-2 py-1.5 font-mono text-xs ${
                       enabled
                         ? "border-syrup-500/60 bg-syrup-500/10 text-ink-100"
-                        : "border-ink-800 text-ink-600"
+                        : "border-ink-800 text-ink-500"
                     } ${locked ? "cursor-not-allowed opacity-60" : ""}`}
                   >
                     <input
@@ -1731,6 +1732,7 @@ export default function Settings() {
             error={fieldState["default_model"]?.msg}
           >
             <div className="flex flex-col items-end gap-2">
+              {/* eslint-disable-next-line jsx-a11y/label-has-associated-control -- nested SearchableSelect renders a native button+input, so the label correctly forwards activation */}
               <label className="flex items-center gap-2 text-xs text-ink-400">
                 Model
                 <SearchableSelect
@@ -1909,6 +1911,7 @@ export default function Settings() {
             error={fieldState["timezone"]?.msg}
           >
             {timezones ? (
+              // eslint-disable-next-line jsx-a11y/label-has-associated-control -- nested SearchableSelect renders a native button+input, so the label correctly forwards activation
               <label className="flex items-center gap-2 text-xs text-ink-400">
                 Zone
                 <SearchableSelect
@@ -2095,7 +2098,7 @@ export default function Settings() {
         keywords="ntfy notify push alerts test pings"
         onVisibility={handleVisibility}
       >
-        <p className="mb-4 text-[11px] leading-relaxed text-ink-600">
+        <p className="mb-4 text-[11px] leading-relaxed text-ink-500">
           New to ntfy? Start with the{" "}
           <a
             href="https://ntfy.sh"
@@ -2127,7 +2130,7 @@ export default function Settings() {
         </p>
         <div className="grid gap-4 md:grid-cols-2">
           <div className="space-y-4">
-            <label className="block">
+            <div className="block">
               <span className="mb-1.5 block text-xs font-medium text-ink-400">ntfy endpoint</span>
               <TextInput
                 value={settings.ntfy_topic}
@@ -2142,8 +2145,8 @@ export default function Settings() {
                   {fieldState["ntfy_topic"].msg}
                 </span>
               )}
-            </label>
-            <label className="block">
+            </div>
+            <div className="block">
               <span className="mb-1.5 block text-xs font-medium text-ink-400">
                 Progress ping interval (minutes)
               </span>
@@ -2153,7 +2156,7 @@ export default function Settings() {
                 onCommit={(v) => save("notify_progress_interval_minutes", v)}
                 ariaLabel="Progress ping interval"
               />
-            </label>
+            </div>
             <div className="flex items-center gap-3 pt-1">
               <button
                 onClick={sendTestNotification}
@@ -2173,38 +2176,38 @@ export default function Settings() {
             </div>
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <label className="flex items-center justify-between gap-3 rounded border border-ink-800 px-3 py-2.5 text-sm">
+            <div className="flex items-center justify-between gap-3 rounded border border-ink-800 px-3 py-2.5 text-sm">
               <span>Task done</span>
               <Toggle
                 checked={settings.notify_on_done}
                 onChange={(v) => void save("notify_on_done", v)}
                 ariaLabel="Notify on task done"
               />
-            </label>
-            <label className="flex items-center justify-between gap-3 rounded border border-ink-800 px-3 py-2.5 text-sm">
+            </div>
+            <div className="flex items-center justify-between gap-3 rounded border border-ink-800 px-3 py-2.5 text-sm">
               <span>Task failed / timed out / cancelled</span>
               <Toggle
                 checked={settings.notify_on_failed}
                 onChange={(v) => void save("notify_on_failed", v)}
                 ariaLabel="Notify on task failure"
               />
-            </label>
-            <label className="flex items-center justify-between gap-3 rounded border border-ink-800 px-3 py-2.5 text-sm">
+            </div>
+            <div className="flex items-center justify-between gap-3 rounded border border-ink-800 px-3 py-2.5 text-sm">
               <span>Still running (interval pings)</span>
               <Toggle
                 checked={settings.notify_on_progress}
                 onChange={(v) => void save("notify_on_progress", v)}
                 ariaLabel="Notify on progress"
               />
-            </label>
-            <label className="flex items-center justify-between gap-3 rounded border border-ink-800 px-3 py-2.5 text-sm">
+            </div>
+            <div className="flex items-center justify-between gap-3 rounded border border-ink-800 px-3 py-2.5 text-sm">
               <span>Needs approval</span>
               <Toggle
                 checked={settings.notify_on_needs_approval}
                 onChange={(v) => void save("notify_on_needs_approval", v)}
                 ariaLabel="Notify on needs approval"
               />
-            </label>
+            </div>
           </div>
         </div>
       </Section>
@@ -2220,7 +2223,7 @@ export default function Settings() {
         onVisibility={handleVisibility}
       >
         <div className="grid gap-4 md:grid-cols-2">
-          <label className="block">
+          <div className="block">
             <span className="mb-1.5 block text-xs font-medium text-ink-400">
               Public webhook URL (tunnel base)
             </span>
@@ -2236,7 +2239,7 @@ export default function Settings() {
               GitHub delivers event payloads to the <span className="font-mono">/webhook</span> path
               on this URL.
             </span>
-          </label>
+          </div>
           <label className="block">
             <span className="mb-1.5 block text-xs font-medium text-ink-400">
               Webhook secret (optional)

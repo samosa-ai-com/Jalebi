@@ -142,7 +142,7 @@ export default function SearchableSelect({
         }}
         className="field flex items-center justify-between gap-2 text-left disabled:opacity-50"
       >
-        <span className={selected || current ? "truncate" : "truncate text-ink-600"}>
+        <span className={selected || current ? "truncate" : "truncate text-ink-500"}>
           {selected ? selected.label : current || placeholder || "Select…"}
         </span>
         <span aria-hidden className="shrink-0 text-ink-500">
@@ -170,7 +170,7 @@ export default function SearchableSelect({
               }}
               onKeyDown={onSearchKey}
               placeholder={placeholder ? `Search ${placeholder.toLowerCase()}…` : "Search…"}
-              className="w-full border-b border-ink-800 bg-transparent px-3 py-2 text-sm text-ink-100 outline-none placeholder:text-ink-600"
+              className="w-full border-b border-ink-800 bg-transparent px-3 py-2 text-sm text-ink-100 outline-none placeholder:text-ink-500"
             />
             <ul role="listbox" id={listId} className="max-h-56 overflow-auto py-1">
               {placeholder !== undefined && query.trim() === "" && (
@@ -178,6 +178,12 @@ export default function SearchableSelect({
                   role="option"
                   aria-selected={current === ""}
                   onClick={() => choose("")}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      choose("");
+                    }
+                  }}
                   onMouseEnter={() => setHighlight(-1)}
                   className={`cursor-pointer px-3 py-1.5 text-sm ${
                     highlight === -1 ? "bg-ink-800" : ""
@@ -192,6 +198,12 @@ export default function SearchableSelect({
                   role="option"
                   aria-selected={o.value === current}
                   onClick={() => choose(o.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      choose(o.value);
+                    }
+                  }}
                   onMouseEnter={() => setHighlight(i)}
                   className={`cursor-pointer truncate px-3 py-1.5 font-mono text-[13px] ${
                     highlight === i ? "bg-ink-800" : ""
@@ -205,6 +217,12 @@ export default function SearchableSelect({
                   role="option"
                   aria-selected={false}
                   onClick={() => choose(query.trim())}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      choose(query.trim());
+                    }
+                  }}
                   onMouseEnter={() => setHighlight(filtered.length)}
                   className={`cursor-pointer px-3 py-1.5 text-sm ${
                     highlight === filtered.length ? "bg-ink-800" : ""
@@ -214,7 +232,7 @@ export default function SearchableSelect({
                 </li>
               )}
               {filtered.length === 0 && !showCustom && (
-                <li className="px-3 py-1.5 text-sm text-ink-600">No matches.</li>
+                <li className="px-3 py-1.5 text-sm text-ink-500">No matches.</li>
               )}
             </ul>
           </div>

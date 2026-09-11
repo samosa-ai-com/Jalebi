@@ -99,7 +99,7 @@ export function OnboardingChecklist({
           type="button"
           onClick={handleDismiss}
           aria-label="Dismiss setup"
-          className="text-xs text-ink-500 hover:text-ink-300 transition-colors"
+          className="inline-flex min-h-6 items-center text-xs text-ink-500 hover:text-ink-300 transition-colors"
         >
           Dismiss
         </button>

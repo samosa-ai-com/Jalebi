@@ -16,7 +16,7 @@ function AccountStatus({ account }: { account: Account }) {
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
       <div>
-        <p className="text-xs text-ink-600">Account</p>
+        <p className="text-xs text-ink-500">Account</p>
         <p className="mt-0.5 font-mono text-sm text-ink-100">
           {account.login ?? "—"}
           <span className="ml-2 rounded bg-ink-850 px-1.5 py-0.5 font-mono text-[10px] text-ink-400">
@@ -25,13 +25,13 @@ function AccountStatus({ account }: { account: Account }) {
         </p>
       </div>
       <div>
-        <p className="text-xs text-ink-600">Status</p>
+        <p className="text-xs text-ink-500">Status</p>
         <p className={`mt-0.5 text-sm ${account.valid ? "text-ink-100" : "text-red-400"}`}>
           {account.valid ? "valid & authorized" : (account.error ?? "invalid")}
         </p>
       </div>
       <div>
-        <p className="text-xs text-ink-600">Token</p>
+        <p className="text-xs text-ink-500">Token</p>
         <p className="mt-0.5 font-mono text-sm text-ink-300">
           {account.token_type ?? "unknown"} · {account.masked}
         </p>
@@ -470,10 +470,10 @@ export default function Github() {
                 <AccountStatus account={account} />
 
                 <div>
-                  <p className="mb-2 text-xs text-ink-600">Granted scopes</p>
+                  <p className="mb-2 text-xs text-ink-500">Granted scopes</p>
                   <div className="flex flex-wrap gap-1.5">
                     {account.granted_scopes.length === 0 ? (
-                      <span className="text-sm text-ink-600">none</span>
+                      <span className="text-sm text-ink-500">none</span>
                     ) : (
                       account.granted_scopes.map((s) => <ScopeChip key={s} scope={s} />)
                     )}
@@ -513,7 +513,7 @@ export default function Github() {
                 )}
 
                 <div className="border-t border-ink-800 pt-3">
-                  <p className="mb-2 text-xs text-ink-600">
+                  <p className="mb-2 text-xs text-ink-500">
                     Repositories ({visibleRepos(account.name).length}
                     {visibleRepos(account.name).length !==
                       (reposByAccount.get(account.name) ?? []).length &&
@@ -531,9 +531,9 @@ export default function Github() {
                   {loadingRepos &&
                   (reposByAccount.get(account.name) ?? []).length === 0 &&
                   !repoErrors.get(account.name) ? (
-                    <p className="text-sm text-ink-600">Loading repositories…</p>
+                    <p className="text-sm text-ink-500">Loading repositories…</p>
                   ) : visibleRepos(account.name).length === 0 ? (
-                    <p className="text-sm text-ink-600">
+                    <p className="text-sm text-ink-500">
                       {(reposByAccount.get(account.name) ?? []).length === 0
                         ? "No repositories listed for this account."
                         : "No repositories match the current search or filters."}
@@ -598,7 +598,7 @@ export default function Github() {
                                     <span className="text-ink-500">{owner}/</span>
                                     {repo}
                                   </a>
-                                  <span className="ml-2 font-mono text-[11px] text-ink-600">
+                                  <span className="ml-2 font-mono text-[11px] text-ink-500">
                                     {r.private ? "private" : "public"} · {r.default_branch ?? "—"}
                                   </span>
                                 </span>

@@ -61,7 +61,7 @@ export function ShopFloor({
             type="button"
             onClick={() => onNewTaskKind(snackForType(m.type))}
             title={`Order a ${snackForType(m.type)} (${m.type}, ${m.total} total)`}
-            className="flex min-w-0 flex-1 cursor-pointer items-center gap-0.5 rounded-full border border-ink-800 px-1 py-0.5 transition-colors hover:border-syrup-500/60 hover:bg-syrup-500/10"
+            className="flex min-h-6 min-w-0 flex-1 cursor-pointer items-center gap-0.5 rounded-full border border-ink-800 px-1 py-0.5 transition-colors hover:border-syrup-500/60 hover:bg-syrup-500/10"
           >
             <span className="truncate font-mono text-[10px] text-ink-200">
               {snackForType(m.type)}
@@ -124,7 +124,7 @@ export function ShopFloor({
                     e.stopPropagation();
                     onCancel(s.task.id);
                   }}
-                  className="hidden group-hover:inline-flex cursor-pointer rounded px-1 py-0.5 font-mono text-[10px] text-ink-500 hover:bg-red-500/10 hover:text-red-300"
+                  className="hidden group-hover:inline-flex min-h-6 min-w-6 items-center justify-center cursor-pointer rounded px-1 py-0.5 font-mono text-[10px] text-ink-500 hover:bg-red-500/10 hover:text-red-300"
                 >
                   ✕
                 </button>

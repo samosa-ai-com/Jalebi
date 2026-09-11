@@ -36,7 +36,7 @@
   --color-ink-800: #33271e;
   --color-ink-700: #4a3a2d;
   --color-ink-600: #6b5745;
-  --color-ink-500: #8d7a67;
+  --color-ink-500: #97836f;
   --color-ink-400: #b3a48d;
   --color-ink-300: #d6c9ba;
   --color-ink-200: #e9dfd1;
@@ -104,7 +104,7 @@
   }
 
   .field {
-    @apply w-full rounded-lg border border-ink-800 bg-ink-950/60 px-3 py-2 text-sm text-ink-100 outline-none transition-colors placeholder:text-ink-600 focus:border-syrup-500/60 focus:ring-2 focus:ring-syrup-500/20;
+    @apply w-full rounded-lg border border-ink-800 bg-ink-950/60 px-3 py-2 text-sm text-ink-100 outline-none transition-colors placeholder:text-ink-500 focus:border-syrup-500/60 focus:ring-2 focus:ring-syrup-500/20;
   }
 
   .btn-primary {
@@ -176,10 +176,12 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .animate-fade-up,
-  .animate-pulse-dot,
-  .jalebi-spin,
-  .anchor-flash {
-    animation: none;
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

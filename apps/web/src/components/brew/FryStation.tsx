@@ -416,7 +416,7 @@ export function FryStation({
                   type="button"
                   aria-label={`Open task ${station.task.id}`}
                   onClick={() => onOpen(station.task.id)}
-                  className="cursor-pointer rounded bg-syrup-500/20 px-1.5 py-0.5 font-mono text-[10px] text-syrup-300 hover:bg-syrup-500/30"
+                  className="inline-flex items-center min-h-6 cursor-pointer rounded bg-syrup-500/20 px-1.5 py-0.5 font-mono text-[10px] text-syrup-300 hover:bg-syrup-500/30"
                 >
                   {needsYou ? "respond →" : "open →"}
                 </button>
@@ -429,7 +429,7 @@ export function FryStation({
                     e.stopPropagation();
                     onCancel(station.task.id);
                   }}
-                  className="cursor-pointer rounded px-1.5 py-0.5 font-mono text-[10px] text-ink-500 ring-1 ring-ink-800 transition-colors hover:bg-red-500/10 hover:text-red-300 hover:ring-red-500/30"
+                  className="inline-flex items-center min-h-6 cursor-pointer rounded px-1.5 py-0.5 font-mono text-[10px] text-ink-500 ring-1 ring-ink-800 transition-colors hover:bg-red-500/10 hover:text-red-300 hover:ring-red-500/30"
                 >
                   cancel
                 </button>
@@ -439,7 +439,7 @@ export function FryStation({
         </span>
       ) : (
         <span className="mt-1 block text-center">
-          <span className="block font-mono text-[10px] text-ink-600">stove {slot} · idle</span>
+          <span className="block font-mono text-[10px] text-ink-500">stove {slot} · idle</span>
           <button
             type="button"
             aria-label={`Start a task on stove ${slot}`}
@@ -448,7 +448,7 @@ export function FryStation({
               e.stopPropagation();
               onOrder();
             }}
-            className="mt-1 cursor-pointer rounded-full border border-ink-700 px-2.5 py-0.5 font-mono text-[10px] text-syrup-300 transition-colors hover:border-syrup-500/60 hover:bg-syrup-500/10"
+            className="mt-1 inline-flex items-center min-h-6 cursor-pointer rounded-full border border-ink-700 px-2.5 py-0.5 font-mono text-[10px] text-syrup-300 transition-colors hover:border-syrup-500/60 hover:bg-syrup-500/10"
           >
             🪔 start a task
           </button>

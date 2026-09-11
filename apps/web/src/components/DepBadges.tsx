@@ -41,6 +41,7 @@ export function DepBadges({
         <Link
           key={`dep-${n}`}
           to={`/tasks/${n}`}
+          onClick={(e) => e.stopPropagation()}
           className="rounded-full bg-ink-800/70 px-2 py-0.5 font-mono text-[10px] text-ink-300 ring-1 ring-inset ring-ink-700/60 transition-colors hover:text-syrup-300 hover:ring-syrup-500/40"
           title={`This task depends on #${n}`}
         >
@@ -51,6 +52,7 @@ export function DepBadges({
         <Link
           key={`blk-${n}`}
           to={`/tasks/${n}`}
+          onClick={(e) => e.stopPropagation()}
           className="rounded-full bg-ink-800/70 px-2 py-0.5 font-mono text-[10px] text-ink-300 ring-1 ring-inset ring-ink-700/60 transition-colors hover:text-syrup-300 hover:ring-syrup-500/40"
           title={`Task #${n} depends on this task`}
         >

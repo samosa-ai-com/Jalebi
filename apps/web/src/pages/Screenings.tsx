@@ -944,11 +944,11 @@ function FindingsInbox({ screens, repos }: { screens: Screen[]; repos: Repo[] })
                         {f.line != null ? `:${f.line}` : ""}
                       </span>
                     )}
-                    <span className="ml-auto font-mono text-[11px] text-ink-600">
+                    <span className="ml-auto font-mono text-[11px] text-ink-500">
                       {qualifiedScreenName(f.screen_name, f.repo_full_name)} ·{" "}
                       {f.finished_at ? new Date(f.finished_at).toLocaleString() : "—"}
                     </span>
-                    <span className="text-ink-600">{open ? "▾" : "▸"}</span>
+                    <span className="text-ink-500">{open ? "▾" : "▸"}</span>
                   </button>
                 </div>
                 {open && (
@@ -989,7 +989,7 @@ function FindingsInbox({ screens, repos }: { screens: Screen[]; repos: Repo[] })
                         {isDealt ? "Reopen" : "Mark dealt"}
                       </button>
                     </span>
-                    <p className="text-[11px] text-ink-600">
+                    <p className="text-[11px] text-ink-500">
                       The New-task form opens with the prompt filled in — review it there before
                       creating (findings are LLM-generated and may be wrong).
                     </p>
@@ -1108,13 +1108,13 @@ function ScreenCard({
             </span>
           )}
           {(latest.finished_at || latest.started_at) && (
-            <span className="font-mono text-ink-600">
+            <span className="font-mono text-ink-500">
               {new Date((latest.finished_at || latest.started_at) as string).toLocaleString()}
             </span>
           )}
         </p>
       ) : (
-        <p className="mt-2 text-xs text-ink-600">Never run.</p>
+        <p className="mt-2 text-xs text-ink-500">Never run.</p>
       )}
 
       {actionError && <p className="mt-2 text-xs text-red-400">{actionError}</p>}

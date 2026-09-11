@@ -37,7 +37,7 @@ function RepoRow({
           <span className="text-ink-500">{owner}/</span>
           {name}
         </span>
-        <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-[11px] text-ink-600">
+        <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-[11px] text-ink-500">
           <span>{repo.default_branch}</span>
           {repo.pat_name && <span title="Bound GitHub account">@{repo.pat_name}</span>}
           <span
@@ -46,7 +46,7 @@ function RepoRow({
                 ? "Webhook registered — events push in real time"
                 : "No webhook — register one on the Triggers page for real-time events"
             }
-            className={repo.webhook_registered ? "text-green-400" : "text-ink-600"}
+            className={repo.webhook_registered ? "text-green-400" : "text-ink-500"}
           >
             webhook: {repo.webhook_registered ? "on" : "off"}
           </span>
@@ -54,7 +54,7 @@ function RepoRow({
           <span title="Last poller check">checked {timeAgo(repo.last_checked_at)}</span>
         </span>
       </span>
-      <span className="hidden font-mono text-[11px] text-ink-600 sm:block">#{repo.id}</span>
+      <span className="hidden font-mono text-[11px] text-ink-500 sm:block">#{repo.id}</span>
       <button
         type="button"
         title={
@@ -244,7 +244,7 @@ export default function Repos() {
           </h2>
         </div>
         {loading && repos.length === 0 ? (
-          <div className="px-6 py-10 text-center text-sm text-ink-600">Loading repositories…</div>
+          <div className="px-6 py-10 text-center text-sm text-ink-500">Loading repositories…</div>
         ) : visible.length === 0 ? (
           repos.length === 0 ? (
             <div className="p-6">
@@ -260,7 +260,7 @@ export default function Repos() {
               />
             </div>
           ) : (
-            <div className="px-6 py-10 text-center text-sm text-ink-600">
+            <div className="px-6 py-10 text-center text-sm text-ink-500">
               No repositories match the current search or filters.
             </div>
           )
@@ -292,11 +292,11 @@ export default function Repos() {
                 <li key={r.id} className="flex items-center gap-3 px-6 py-3.5">
                   <span className="h-2 w-2 shrink-0 rounded-full bg-ink-700" />
                   <span className="min-w-0 flex-1 font-mono text-sm text-ink-500">
-                    <span className="text-ink-600">{owner}/</span>
+                    <span className="text-ink-500">{owner}/</span>
                     {name}
                   </span>
                   {r.pat_name && (
-                    <span className="font-mono text-[11px] text-ink-600">@{r.pat_name}</span>
+                    <span className="font-mono text-[11px] text-ink-500">@{r.pat_name}</span>
                   )}
                   <button
                     onClick={() => reconnect(r.id)}

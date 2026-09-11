@@ -141,7 +141,7 @@ export function RunningCard({
           type="button"
           onClick={onCancel}
           title="Cancel this task"
-          className="rounded px-1.5 py-0.5 font-mono text-[11px] text-ink-400 ring-1 ring-ink-700/60 transition-colors hover:bg-red-500/10 hover:text-red-300"
+          className="inline-flex min-h-6 items-center rounded px-1.5 py-0.5 font-mono text-[11px] text-ink-400 ring-1 ring-ink-700/60 transition-colors hover:bg-red-500/10 hover:text-red-300"
         >
           Cancel
         </button>

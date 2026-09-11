@@ -1478,5 +1478,18 @@ describe("Tasks page (queue overhaul)", () => {
     expect(await screen.findByRole("heading", { name: "No tasks yet" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Connect repository" })).toHaveAttribute("href", "/repos");
   });
+
+  it("renders a polite status live region for screen readers", async () => {
+    stubFetch(DEFAULT_HANDLERS);
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    const liveRegion = await screen.findByRole("status");
+    expect(liveRegion).toBeInTheDocument();
+    expect(liveRegion).toHaveAttribute("aria-live", "polite");
+    expect(liveRegion.className).toMatch(/\bsr-only\b/);
+  });
 });
 

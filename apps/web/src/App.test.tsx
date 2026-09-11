@@ -26,6 +26,29 @@ describe("App", () => {
     }
   });
 
+  it("renders a skip to main content link targeting the main element", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, json: async () => [] }))
+    );
+    const { container } = render(
+      <MemoryRouter>
+        <App />
+      </MemoryRouter>
+    );
+    const skipLink = screen.getByRole("link", { name: "Skip to main content" });
+    expect(skipLink).toBeInTheDocument();
+    expect(skipLink).toHaveAttribute("href", "#main-content");
+    expect(skipLink.className).toMatch(/\bsr-only\b/);
+    expect(skipLink.className).toMatch(/\bfocus:not-sr-only\b/);
+
+    const main = container.querySelector("main#main-content");
+    expect(main).toBeInTheDocument();
+    // The skip target must be programmatically focusable so activating the
+    // link moves keyboard focus into the page, not just scrolls.
+    expect(main).toHaveAttribute("tabindex", "-1");
+  });
+
   it("badges the Screenings tab when unseen findings exist", async () => {
     localStorage.clear();
     vi.stubGlobal(

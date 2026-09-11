@@ -102,4 +102,14 @@ describe("OnboardingChecklist", () => {
     );
     expect(container).toBeEmptyDOMElement();
   });
+
+  it("satisfies target size contract with min-h-6 on dismiss button", () => {
+    render(
+      <MemoryRouter>
+        <OnboardingChecklist accounts={0} repos={0} tasks={0} />
+      </MemoryRouter>
+    );
+    const dismissBtn = screen.getByRole("button", { name: /dismiss/i });
+    expect(dismissBtn.className).toMatch(/\bmin-h-6\b/);
+  });
 });

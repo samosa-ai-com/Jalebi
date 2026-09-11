@@ -319,6 +319,21 @@ describe("Settings", () => {
     expect(screen.getByRole("option", { name: "codex" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "claude" })).toBeInTheDocument();
   });
+
+  it("clicking the Backend caption opens the dropdown (label activation)", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<Settings />);
+    await expand(/Agent defaults/);
+    await screen.findByText("Default backend");
+
+    const section = screen.getByRole("heading", { name: "Default backend" }).closest("section")!;
+    // Click the visible caption text, not the control: the wrapping label must
+    // forward activation to the nested select.
+    await userEvent.click(within(section).getByText("Backend", { exact: true }));
+    expect(await screen.findByRole("option", { name: "opencode" })).toBeInTheDocument();
+  });
 });
 
 // ---- Phase 4 T6 — IDE settings section ---------------------------------

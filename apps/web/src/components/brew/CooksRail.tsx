@@ -30,7 +30,7 @@ export function CooksRail({
       <h3 className="panel-title">Cooks (agents)</h3>
       <p className="mt-0.5 text-[11px] text-ink-500">{cooks.length} in the kitchen</p>
       {cooks.length === 0 ? (
-        <p className="mt-3 text-xs text-ink-600">No agents in the catalog yet.</p>
+        <p className="mt-3 text-xs text-ink-500">No agents in the catalog yet.</p>
       ) : (
         <ul className="mt-2 min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-0.5">
           {cooks.map(({ agent, activeTasks, stoveSlot }) => {
@@ -75,7 +75,7 @@ export function CooksRail({
                     karhai {stoveSlot ?? "·"}
                   </span>
                 ) : (
-                  <span className="shrink-0 font-mono text-[10px] text-ink-600">resting</span>
+                  <span className="shrink-0 font-mono text-[10px] text-ink-500">resting</span>
                 )}
               </li>
             );

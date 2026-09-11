@@ -45,7 +45,7 @@ export function Pantry({
       <h3 className="panel-title">Pantry (skills)</h3>
       <p className="mt-0.5 text-[11px] text-ink-500">skills in the pantry</p>
       {ingredients.length === 0 ? (
-        <p className="mt-3 text-xs text-ink-600">No skills in the library yet.</p>
+        <p className="mt-3 text-xs text-ink-500">No skills in the library yet.</p>
       ) : (
         <ul className="mt-2 min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-0.5">
           {ingredients.map(({ skill, uses, inPlay, stoveSlots }) => (

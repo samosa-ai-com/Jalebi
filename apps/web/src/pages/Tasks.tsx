@@ -12,6 +12,7 @@ import SearchableSelect from "../components/SearchableSelect";
 import { StatusBadge } from "../components/StatusBadge";
 import { useBackends } from "../hooks/useBackends";
 import { groupFpsByScreen } from "../lib/screeningDealt";
+import { useStatusAnnouncer } from "../lib/useStatusAnnouncer";
 import type { Account, CatalogAgent, GithubContext, Repo, SettingsMap, Task } from "../types";
 
 function repoName(repos: Repo[], id: number): string {
@@ -903,6 +904,7 @@ export default function Tasks() {
     searchParams.get("action") === "new";
 
   const [tasks, setTasks] = useState<Task[]>([]);
+  const statusAnnouncement = useStatusAnnouncer(tasks);
   const [repos, setRepos] = useState<Repo[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -1276,6 +1278,9 @@ export default function Tasks() {
 
   return (
     <div className="space-y-6">
+      <div className="sr-only" role="status" aria-live="polite">
+        {statusAnnouncement}
+      </div>
       <header className="flex flex-wrap items-start justify-between gap-3 animate-fade-up">
         <div>
           <h1 className="text-3xl font-bold tracking-tight text-ink-100">Tasks</h1>
@@ -1587,7 +1592,7 @@ export default function Tasks() {
                     <tr>
                       <td colSpan={8} className="p-6">
                         {query || repoFilter ? (
-                          <div className="py-4 text-center text-sm text-ink-600">
+                          <div className="py-4 text-center text-sm text-ink-500">
                             No tasks{filter !== "all" ? ` in “${filter}”` : ""} matching your
                             search.
                           </div>
@@ -1609,7 +1614,7 @@ export default function Tasks() {
                             }
                           />
                         ) : (
-                          <div className="py-4 text-center text-sm text-ink-600">
+                          <div className="py-4 text-center text-sm text-ink-500">
                             {EMPTY_STATE[filter]}
                           </div>
                         )}
@@ -1653,15 +1658,12 @@ export default function Tasks() {
                             {t.attention === "needs_you" && (
                               <AttentionBadge attention={t.attention} />
                             )}
-                            {/* DepBadges renders Links — stop them bubbling to the row nav. */}
-                            <span onClick={(e) => e.stopPropagation()}>
-                              <DepBadges
-                                dependsOn={t.depends_on}
-                                blockedBy={t.blocked_by}
-                                blocking={t.blocking}
-                                blocked={t.blocked}
-                              />
-                            </span>
+                            <DepBadges
+                              dependsOn={t.depends_on}
+                              blockedBy={t.blocked_by}
+                              blocking={t.blocking}
+                              blocked={t.blocked}
+                            />
                             {t.attention === "needs_you" && (
                               <button
                                 type="button"
@@ -1670,7 +1672,7 @@ export default function Tasks() {
                                   e.stopPropagation();
                                   handleDismissAttention(t.id);
                                 }}
-                                className="rounded px-1.5 py-0.5 text-[10px] font-medium text-ink-400 ring-1 ring-ink-700/60 hover:bg-ink-800 hover:text-ink-200 transition-colors"
+                                className="inline-flex items-center min-h-6 rounded px-1.5 py-0.5 text-[10px] font-medium text-ink-400 ring-1 ring-ink-700/60 hover:bg-ink-800 hover:text-ink-200 transition-colors"
                                 title="Dismiss attention for this task"
                               >
                                 Dismiss
@@ -1711,7 +1713,7 @@ export default function Tasks() {
                               <GhLink key={`i${n}`} repo={rn} kind="issues" number={n} />
                             ))}
                             {!t.prs?.length && !t.issues?.length && (
-                              <span className="text-ink-600">–</span>
+                              <span className="text-ink-500">–</span>
                             )}
                           </div>
                         </td>
@@ -1724,7 +1726,7 @@ export default function Tasks() {
                               type="button"
                               onClick={() => handleClone(t)}
                               title="Clone — pre-fill the form from this task"
-                              className="rounded px-1.5 py-0.5 font-mono text-xs text-ink-400 hover:bg-ink-800 hover:text-ink-200"
+                              className="inline-flex items-center justify-center min-h-6 min-w-6 rounded px-1.5 py-0.5 font-mono text-xs text-ink-400 hover:bg-ink-800 hover:text-ink-200"
                             >
                               ⧉
                             </button>
@@ -1742,7 +1744,7 @@ export default function Tasks() {
                                     );
                                 }}
                                 title="Re-run this task"
-                                className="rounded px-1.5 py-0.5 font-mono text-xs text-ink-400 hover:bg-ink-800 hover:text-ink-200"
+                                className="inline-flex items-center justify-center min-h-6 min-w-6 rounded px-1.5 py-0.5 font-mono text-xs text-ink-400 hover:bg-ink-800 hover:text-ink-200"
                               >
                                 ↻
                               </button>

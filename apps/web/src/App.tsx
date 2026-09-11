@@ -106,6 +106,12 @@ function App() {
   const screeningsUnread = useScreeningsUnread();
   return (
     <div className="min-h-screen font-sans text-ink-200">
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-3 focus:left-3 focus:z-50 focus:rounded-md focus:bg-ink-850 focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-ink-100 focus:ring-2 focus:ring-syrup-500 focus:outline-none"
+      >
+        Skip to main content
+      </a>
       <header className="sticky top-0 z-10 border-b border-ink-800/80 bg-ink-950/80 backdrop-blur-md">
         <div className="mx-auto flex max-w-6xl items-center gap-1 px-6 py-3">
           <Link to="/" className="mr-6 flex items-center gap-2.5">
@@ -143,7 +149,7 @@ function App() {
                 key={item.to}
                 to={item.to}
                 className={({ isActive }) =>
-                  `rounded-lg px-3 py-1.5 text-sm text-ink-600 transition-colors hover:text-ink-400 ${
+                  `rounded-lg px-3 py-1.5 text-sm text-ink-500 transition-colors hover:text-ink-400 ${
                     isActive ? "bg-ink-850 text-ink-400" : ""
                   }`
                 }
@@ -161,7 +167,7 @@ function App() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-6xl px-6 py-8">
+      <main id="main-content" tabIndex={-1} className="mx-auto max-w-6xl px-6 py-8">
         <Routes>
           <Route path="/" element={<Tasks />} />
           <Route path="/tasks/:id" element={<TaskDetail />} />
