@@ -192,15 +192,19 @@ function Row({
   status,
   error,
   children,
+  className,
 }: {
   label: string;
   desc: string;
   status?: React.ReactNode;
   error?: string | null;
   children: React.ReactNode;
+  className?: string;
 }) {
   return (
-    <section className="surface flex flex-col justify-between gap-4 p-5 focus-within:relative focus-within:z-30">
+    <section
+      className={`surface flex flex-col justify-between gap-4 p-5 focus-within:relative focus-within:z-30${className ? ` ${className}` : ""}`}
+    >
       <div>
         <div className="flex items-center gap-2">
           <h2 className="panel-title">{label}</h2>
@@ -713,6 +717,10 @@ function TextInput({
       }}
       placeholder={placeholder}
       aria-label={ariaLabel}
+      // Native tooltip carries the full ghost text: a single-line <input>
+      // can never wrap its placeholder, so on narrow cards a long hint
+      // would otherwise be unreadable past the cutoff.
+      title={placeholder ?? ariaLabel}
       className={`${className ?? "field"}${mono ? " font-mono" : ""}`}
     />
   );
@@ -1789,8 +1797,9 @@ export default function Settings() {
             desc="Force what each backend offers in every model dropdown across the app (new tasks, follow-ups, screens, agents). Use it for a custom provider or to hide models you never pick. Empty = the backend's built-in list."
             status={badge("adapter_model_lists")}
             error={fieldState["adapter_model_lists"]?.msg}
+            className="md:col-span-2"
           >
-            <div className="flex w-full flex-col gap-3">
+            <div className="grid w-full gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
               <div className="flex w-full flex-col gap-2">
                 {AGENT_CLIS.map((cli) => (
                   <label key={cli} className="flex w-full items-center gap-3 text-xs text-ink-400">
@@ -1810,15 +1819,15 @@ export default function Settings() {
                           "adapter_model_lists"
                         );
                       }}
-                      placeholder="comma-separated models, empty = built-in list"
-                      ariaLabel={`Model override for ${cli}`}
+                      placeholder="e.g. model-a, model-b"
+                      ariaLabel={`Model override for ${cli} (empty = built-in list)`}
                       mono
                       className="field min-w-0 flex-1 text-xs"
                     />
                   </label>
                 ))}
               </div>
-              <div className="w-full space-y-1.5 border-t border-ink-800 pt-3">
+              <div className="w-full space-y-1.5 border-t border-ink-800 pt-3 lg:border-l lg:border-t-0 lg:pl-4 lg:pt-0">
                 <p className="text-[11px] font-medium text-ink-400">
                   Where each built-in list comes from (empty box = built-in):
                 </p>
