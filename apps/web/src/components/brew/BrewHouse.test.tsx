@@ -1,8 +1,9 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BrewHouse } from "./BrewHouse";
+import { ControlShelf } from "./ControlShelf";
 
 const AGENTS = [
   {
@@ -166,13 +167,15 @@ describe("BrewHouse", () => {
   it("fries the active task on a karhai station", async () => {
     stubFetch({ ...HANDLERS });
     renderHouse();
-    expect(await screen.findByRole("button", { name: /Open task 1/ })).toBeInTheDocument();
-    expect(screen.getByText("#1")).toBeInTheDocument();
+    const station = await screen.findByRole("button", { name: /Open task 1/ });
+    expect(station).toBeInTheDocument();
+    const floor = screen.getByRole("region", { name: "Karhais (running tasks)" });
+    expect(within(floor).getByText("#1")).toBeInTheDocument();
     expect(screen.getAllByText("Fixer").length).toBeGreaterThanOrEqual(1);
     // freeform fries a jalebi (stove card + menu row).
     expect(screen.getAllByText("jalebi").length).toBeGreaterThanOrEqual(2);
     // The floor names the pot for everyone.
-    expect(screen.getByRole("region", { name: "Karhais (running tasks)" })).toBeInTheDocument();
+    expect(floor).toBeInTheDocument();
   });
 
   it("bounds a long backends list so it scrolls inside its card", async () => {
@@ -280,13 +283,28 @@ describe("BrewHouse", () => {
     expect(screen.getByText("default")).toBeInTheDocument();
   });
 
-  it("shows live screening runs and the findings ticker", async () => {
+  it("shows live screening runs in non-compact mode and the findings ticker", async () => {
     stubFetch({ ...HANDLERS });
     renderHouse();
-    // Screen names render repo-qualified so identical names stay distinguishable.
-    expect(await screen.findByText("owner/repo · Nightly audit")).toBeInTheDocument();
     // The ticker loops its items for the marquee, so the title appears twice.
-    expect(screen.getAllByText("Leaky token log").length).toBe(2);
+    expect(await screen.findAllByText("Leaky token log")).toHaveLength(2);
+
+    // Live screening runs display in non-compact ControlShelf:
+    render(
+      <MemoryRouter>
+        <ControlShelf
+          tasks={[TASK as never]}
+          repos={REPOS as never}
+          screens={SCREENS as never}
+          findings={FINDINGS as never}
+          backends={{ backends: ["opencode"], enabled: ["opencode"], default: "opencode" }}
+          concurrency={4}
+          compact={false}
+        />
+      </MemoryRouter>
+    );
+    // Screen names render repo-qualified so identical names stay distinguishable.
+    expect(screen.getByText("owner/repo · Nightly audit")).toBeInTheDocument();
   });
 
   it("gauges worker load from active tasks over slots", async () => {
@@ -308,6 +326,22 @@ describe("BrewHouse", () => {
     renderHouse([]);
     expect(await screen.findByText("No skills in the library yet.")).toBeInTheDocument();
     expect(screen.getByText("No agents in the catalog yet.")).toBeInTheDocument();
+    expect(screen.getByText("No tasks yet.")).toBeInTheDocument();
+
+    // Non-compact ControlShelf renders "No screens configured."
+    render(
+      <MemoryRouter>
+        <ControlShelf
+          tasks={[]}
+          repos={[]}
+          screens={[]}
+          findings={[]}
+          backends={{ backends: [], enabled: [], default: "opencode" }}
+          concurrency={4}
+          compact={false}
+        />
+      </MemoryRouter>
+    );
     expect(screen.getByText("No screens configured.")).toBeInTheDocument();
   });
 
@@ -584,5 +618,148 @@ describe("BrewHouse", () => {
     expect(within(wire).getByText(/Frying jalebi/)).toBeInTheDocument();
     await userEvent.click(within(wire).getByRole("button", { name: "alerts" }));
     expect(within(wire).getByText(/Leaky token log/)).toBeInTheDocument();
+  });
+
+  it("navigates to /agents with mission state when a cook row is clicked", async () => {
+    stubFetch({ ...HANDLERS });
+    function TestConsumer() {
+      const loc = useLocation();
+      return <div data-testid="target-state">{JSON.stringify(loc.state)}</div>;
+    }
+    render(
+      <MemoryRouter initialEntries={["/"]}>
+        <Routes>
+          <Route
+            path="/"
+            element={
+              <BrewHouse tasks={[TASK] as never} repos={REPOS as never} onNewTask={() => {}} />
+            }
+          />
+          <Route path="/agents" element={<TestConsumer />} />
+        </Routes>
+      </MemoryRouter>
+    );
+    const cooks = await screen.findByRole("region", { name: "Cooks" });
+    const cookItem = within(cooks).getByText("Fixer").closest("li")!;
+    expect(cookItem).toBeInTheDocument();
+    const cookLink = within(cookItem).getByRole("link", { name: /Fixer/ });
+    expect(cookLink).toHaveAttribute("href", "/agents");
+    await userEvent.click(cookLink);
+    expect(await screen.findByTestId("target-state")).toHaveTextContent('{"from":"mission"}');
+  });
+
+  it("navigates to /skills with mission state when a pantry ingredient row is clicked", async () => {
+    stubFetch({ ...HANDLERS });
+    function TestConsumer() {
+      const loc = useLocation();
+      return <div data-testid="target-state">{JSON.stringify(loc.state)}</div>;
+    }
+    render(
+      <MemoryRouter initialEntries={["/"]}>
+        <Routes>
+          <Route
+            path="/"
+            element={
+              <BrewHouse tasks={[TASK] as never} repos={REPOS as never} onNewTask={() => {}} />
+            }
+          />
+          <Route path="/skills" element={<TestConsumer />} />
+        </Routes>
+      </MemoryRouter>
+    );
+    const pantry = await screen.findByRole("region", { name: "Ingredients" });
+    const skillItem = within(pantry).getByText("Security").closest("li")!;
+    expect(skillItem).toBeInTheDocument();
+    const skillLink = within(skillItem).getByRole("link", { name: /Security/ });
+    expect(skillLink).toHaveAttribute("href", "/skills");
+    await userEvent.click(skillLink);
+    expect(await screen.findByTestId("target-state")).toHaveTextContent('{"from":"mission"}');
+  });
+
+  it("renders the recent card in compact mode with the latest 3 tasks by updated_at", async () => {
+    stubFetch({ ...HANDLERS });
+    const tasks = [
+      { ...TASK, id: 10, type: "freeform", updated_at: "2026-09-07T01:00:00" },
+      { ...TASK, id: 20, type: "issue_fix", updated_at: "2026-09-07T03:00:00" },
+      { ...TASK, id: 30, type: "pr_review", updated_at: "2026-09-07T02:00:00" },
+      { ...TASK, id: 40, type: "freeform", updated_at: "2026-09-07T00:30:00" },
+    ];
+    renderHouse(tasks);
+    const card = await screen.findByRole("region", { name: "Recent" });
+    const list = within(card).getByRole("list");
+    expect(list.className).toContain("overflow-y-auto");
+    expect(list.className).toContain("flex-1");
+
+    const items = within(card).getAllByRole("listitem");
+    expect(items).toHaveLength(3);
+    // Ordered by updated_at descending: 20, 30, 10 (40 omitted)
+    expect(within(items[0]).getByText("#20")).toBeInTheDocument();
+    expect(within(items[0]).getByText("issue_fix")).toBeInTheDocument();
+    expect(within(items[1]).getByText("#30")).toBeInTheDocument();
+    expect(within(items[1]).getByText("pr_review")).toBeInTheDocument();
+    expect(within(items[2]).getByText("#10")).toBeInTheDocument();
+    expect(within(items[2]).getByText("freeform")).toBeInTheDocument();
+    expect(within(card).queryByText("#40")).toBeNull();
+
+    // Row links to /tasks/:id
+    const link = within(items[0]).getByRole("link");
+    expect(link).toHaveAttribute("href", "/tasks/20");
+
+    // Header links to /?view=queue
+    const headerLink = within(card).getByRole("link", { name: "Recent" });
+    expect(headerLink).toHaveAttribute("href", "/?view=queue");
+  });
+
+  it("marks interrupted recent tasks as failures and opens the queue without mission handoff state", async () => {
+    stubFetch({ ...HANDLERS });
+    function Probe() {
+      const loc = useLocation();
+      return (
+        <div data-testid="loc">{`${loc.pathname}${loc.search}|${JSON.stringify(loc.state ?? null)}`}</div>
+      );
+    }
+    render(
+      <MemoryRouter initialEntries={["/"]}>
+        <Routes>
+          <Route
+            path="/"
+            element={
+              <>
+                <BrewHouse
+                  tasks={
+                    [
+                      { ...TASK, id: 50, status: "interrupted", updated_at: "2026-09-07T04:00:00" },
+                    ] as never
+                  }
+                  repos={REPOS as never}
+                  onNewTask={() => {}}
+                />
+                <Probe />
+              </>
+            }
+          />
+        </Routes>
+      </MemoryRouter>
+    );
+    const card = await screen.findByRole("region", { name: "Recent" });
+    const item = within(card).getByText("#50").closest("li")!;
+    expect(item.querySelector(".bg-red-400")).not.toBeNull();
+    // Status is exposed as text, not color-only.
+    expect(
+      within(item).getByRole("link", { name: "Task #50, freeform, interrupted" })
+    ).toHaveAttribute("href", "/tasks/50");
+    await userEvent.click(within(card).getByRole("link", { name: "Recent" }));
+    expect(screen.getByTestId("loc")).toHaveTextContent("/?view=queue|null");
+  });
+
+  it("does not render failed/needs-you summary paragraph in backends card", async () => {
+    stubFetch({ ...HANDLERS });
+    renderHouse([{ ...TASK, status: "failed", attention: "needs_you" }]);
+    const card = await screen.findByRole("region", { name: "Configured backends" });
+    expect(within(card).queryByText(/failed/)).toBeNull();
+    expect(within(card).queryByText(/need you/)).toBeNull();
+    expect(within(card).getByText("Backends")).toBeInTheDocument();
+    expect(within(card).getByRole("link", { name: /Backend settings/ })).toBeInTheDocument();
+    expect(within(card).getByText("opencode")).toBeInTheDocument();
   });
 });

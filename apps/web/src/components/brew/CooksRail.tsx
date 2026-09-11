@@ -3,6 +3,7 @@
  * rail when idle, pinned to a karhai (cooking pot) while they fry a task.
  * Plain cards, no art — the geometric avatar carries the identity.
  */
+import { Link } from "react-router-dom";
 import type { CatalogAgent } from "../../types";
 import { avatarFor, avatarUrl } from "../../lib/agentAvatars";
 
@@ -41,42 +42,48 @@ export function CooksRail({
                 key={agent.id}
                 onMouseEnter={() => stoveSlot && onHoverCook?.(stoveSlot)}
                 onMouseLeave={() => onHoverCook?.(null)}
-                className={`flex items-center gap-2 rounded-lg border px-2 py-1.5 transition-colors ${
+                className={`rounded-lg border transition-colors ${
                   isHighlighted
                     ? "border-syrup-500 bg-syrup-500/15"
                     : busy
                       ? "border-syrup-500/40 bg-syrup-500/5 hover:border-syrup-500/70"
                       : "border-ink-800/60 hover:border-ink-700"
-                } ${busy ? "cursor-pointer" : ""}`}
+                }`}
               >
-                <img
-                  src={
-                    avatarUrl(
-                      avatarFor({
-                        id: agent.id,
-                        name: agent.name,
-                        description: agent.description,
-                        avatar: agent.avatar,
-                      })
-                    ) ?? ""
-                  }
-                  alt=""
-                  className="h-6 w-6 shrink-0 rounded-full"
-                />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-xs text-ink-200">{agent.name}</span>
-                  <span className="block truncate font-mono text-[10px] text-ink-500">
-                    {agent.cli}
-                    {agent.model ? ` · ${agent.model}` : ""}
+                <Link
+                  to="/agents"
+                  state={{ from: "mission" }}
+                  className="flex items-center gap-2 px-2 py-1.5"
+                >
+                  <img
+                    src={
+                      avatarUrl(
+                        avatarFor({
+                          id: agent.id,
+                          name: agent.name,
+                          description: agent.description,
+                          avatar: agent.avatar,
+                        })
+                      ) ?? ""
+                    }
+                    alt=""
+                    className="h-6 w-6 shrink-0 rounded-full"
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-xs text-ink-200">{agent.name}</span>
+                    <span className="block truncate font-mono text-[10px] text-ink-500">
+                      {agent.cli}
+                      {agent.model ? ` · ${agent.model}` : ""}
+                    </span>
                   </span>
-                </span>
-                {busy ? (
-                  <span className="shrink-0 rounded-full bg-syrup-500/15 px-1.5 py-0.5 font-mono text-[10px] text-syrup-300">
-                    karhai {stoveSlot ?? "·"}
-                  </span>
-                ) : (
-                  <span className="shrink-0 font-mono text-[10px] text-ink-500">resting</span>
-                )}
+                  {busy ? (
+                    <span className="shrink-0 rounded-full bg-syrup-500/15 px-1.5 py-0.5 font-mono text-[10px] text-syrup-300">
+                      karhai {stoveSlot ?? "·"}
+                    </span>
+                  ) : (
+                    <span className="shrink-0 font-mono text-[10px] text-ink-500">resting</span>
+                  )}
+                </Link>
               </li>
             );
           })}

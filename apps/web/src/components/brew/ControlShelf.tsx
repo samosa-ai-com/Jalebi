@@ -29,6 +29,41 @@ function Ring({ fraction, label }: { fraction: number; label: string }) {
   );
 }
 
+/** Plain-language status for recent-task links, so the state is not color-only. */
+const STATUS_LABEL: Record<string, string> = {
+  queued: "queued",
+  running: "running",
+  done: "done",
+  failed: "failed",
+  timed_out: "timed out",
+  interrupted: "interrupted",
+  cancelled: "cancelled",
+  needs_approval: "needs approval",
+  blocked: "blocked",
+};
+
+function statusDot(status: string): string {
+  switch (status) {
+    case "running":
+      return "bg-syrup-400 animate-pulse-dot";
+    case "queued":
+      return "bg-ink-400";
+    case "done":
+      return "bg-green-400";
+    case "failed":
+    case "timed_out":
+    case "interrupted":
+      return "bg-red-400";
+    case "needs_approval":
+    case "waiting_review":
+      return "bg-purple-400";
+    case "blocked":
+      return "bg-orange-400";
+    default:
+      return "bg-ink-500";
+  }
+}
+
 export function ControlShelf({
   tasks,
   repos,
@@ -49,14 +84,17 @@ export function ControlShelf({
 }) {
   const active = tasks.filter((t) => t.status === "queued" || t.status === "running").length;
   const done = tasks.filter((t) => t.status === "done").length;
-  const failed = tasks.filter(
-    (t) => t.status === "failed" || t.status === "timed_out" || t.status === "interrupted"
-  ).length;
-  const needsYou = tasks.filter((t) => t.attention === "needs_you").length;
   const liveScreens = screens.filter(
     (s) => s.enabled && (s.latest_run?.status === "queued" || s.latest_run?.status === "running")
   );
   const webhookRepos = repos.filter((r) => r.webhook_registered).length;
+  const recentTasks = [...tasks]
+    .sort((a, b) => {
+      const ta = new Date(a.updated_at).getTime() || 0;
+      const tb = new Date(b.updated_at).getTime() || 0;
+      return tb - ta;
+    })
+    .slice(0, 3);
 
   return (
     <div
@@ -136,21 +174,6 @@ export function ControlShelf({
             ))}
           </ul>
         )}
-        {(failed > 0 || needsYou > 0) && (
-          <p className="mt-2 font-mono text-[11px] tabular-nums">
-            {[
-              failed > 0 ? { text: `${failed} failed`, cls: "text-red-300" } : null,
-              needsYou > 0 ? { text: `${needsYou} need you`, cls: "text-syrup-300" } : null,
-            ]
-              .filter((x) => x !== null)
-              .map((x, i, arr) => (
-                <span key={x.text} className={x.cls}>
-                  {x.text}
-                  {i < arr.length - 1 ? " · " : ""}
-                </span>
-              ))}
-          </p>
-        )}
       </section>
 
       <section
@@ -199,87 +222,131 @@ export function ControlShelf({
         )}
       </section>
 
-      <section
-        className={`surface ${compact ? "flex min-h-0 min-w-0 flex-col overflow-y-auto px-2.5 py-2" : "px-3 py-2.5"}`}
-        aria-label="Screenings"
-      >
-        <div className="flex items-baseline justify-between gap-1">
-          <h3 className="panel-title truncate">Screenings</h3>
-          <Link
-            to="/screenings"
-            state={{ from: "mission" }}
-            title={`${screens.length} screens — open screenings`}
-            aria-label={`${screens.length} screens — open screenings`}
-            className="link shrink-0 whitespace-nowrap font-mono text-[11px]"
-          >
-            {compact ? `${screens.length} →` : `${screens.length} screens →`}
-          </Link>
-        </div>
-        {liveScreens.length > 0 ? (
-          <ul
-            className={`mt-2 space-y-1.5 ${
-              compact ? "min-h-0 flex-1 overflow-y-auto pr-0.5" : ""
-            }`}
-          >
-            {liveScreens.slice(0, compact ? 2 : 3).map((s) => (
-              <li key={s.id} className="flex items-center gap-2 text-xs">
-                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-syrup-400 brew-needs-you" />
-                <Link
-                  to="/screenings"
-                  state={{ from: "mission" }}
-                  title={qualifiedScreenName(
-                    s.name,
-                    repos.find((r) => r.id === s.repo_id)?.full_name
-                  )}
-                  className="min-w-0 flex-1 truncate text-ink-200 hover:text-syrup-300"
-                >
-                  {qualifiedScreenName(s.name, repos.find((r) => r.id === s.repo_id)?.full_name)}
-                </Link>
-                <span className="font-mono text-[10px] text-ink-500">{s.latest_run?.status}</span>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="mt-3 text-xs text-ink-500">
-            {screens.length === 0 ? "No screens configured." : "All quiet — no audit running."}
-          </p>
-        )}
-        {findings.length > 0 && !compact && (
-          <div
-            className="brew-ticker mt-2 overflow-hidden"
-            role="group"
-            aria-label="Latest findings"
-          >
-            <div className="brew-ticker-track flex w-max gap-4">
-              {[...findings.slice(0, 6), ...findings.slice(0, 6)].map((f, i) =>
-                // The second copy only feeds the seamless marquee loop —
-                // hide it from keyboards and screen readers.
-                i < Math.min(6, findings.length) ? (
+      {compact ? (
+        <section
+          className="surface flex min-h-0 min-w-0 flex-col overflow-y-auto px-2.5 py-2"
+          aria-label="Recent"
+        >
+          <div className="flex items-baseline justify-between gap-1">
+            <h3 className="panel-title truncate">
+              <Link to="/?view=queue" className="hover:text-syrup-300">
+                Recent
+              </Link>
+            </h3>
+            <Link
+              to="/?view=queue"
+              title="Recent tasks"
+              aria-label="Recent tasks"
+              className="link shrink-0 whitespace-nowrap font-mono text-[11px]"
+            >
+              →
+            </Link>
+          </div>
+          {recentTasks.length === 0 ? (
+            <p className="mt-3 text-xs text-ink-500">No tasks yet.</p>
+          ) : (
+            <ul className="mt-2 min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-0.5">
+              {recentTasks.map((t) => (
+                <li key={t.id} className="min-w-0 text-xs">
                   <Link
-                    key={`${f.screen_id}-${f.title}-${i}`}
+                    to={`/tasks/${t.id}`}
+                    state={{ from: "mission" }}
+                    aria-label={`Task #${t.id}, ${t.type}, ${STATUS_LABEL[t.status] ?? t.status}`}
+                    className="flex items-center gap-2 text-ink-200 hover:text-syrup-300"
+                  >
+                    <span
+                      aria-hidden="true"
+                      className={`h-1.5 w-1.5 shrink-0 rounded-full ${statusDot(t.status)}`}
+                    />
+                    <span className="font-mono">#{t.id}</span>
+                    <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-ink-500 text-right">
+                      {t.type}
+                    </span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      ) : (
+        <section
+          className="surface px-3 py-2.5"
+          aria-label="Screenings"
+        >
+          <div className="flex items-baseline justify-between gap-1">
+            <h3 className="panel-title truncate">Screenings</h3>
+            <Link
+              to="/screenings"
+              state={{ from: "mission" }}
+              title={`${screens.length} screens — open screenings`}
+              aria-label={`${screens.length} screens — open screenings`}
+              className="link shrink-0 whitespace-nowrap font-mono text-[11px]"
+            >
+              {`${screens.length} screens →`}
+            </Link>
+          </div>
+          {liveScreens.length > 0 ? (
+            <ul className="mt-2 space-y-1.5">
+              {liveScreens.slice(0, 3).map((s) => (
+                <li key={s.id} className="flex items-center gap-2 text-xs">
+                  <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-syrup-400 brew-needs-you" />
+                  <Link
                     to="/screenings"
                     state={{ from: "mission" }}
-                    className="whitespace-nowrap font-mono text-[10px]"
-                    title={`${qualifiedScreenName(f.screen_name, f.repo_full_name)}: ${f.title}`}
+                    title={qualifiedScreenName(
+                      s.name,
+                      repos.find((r) => r.id === s.repo_id)?.full_name
+                    )}
+                    className="min-w-0 flex-1 truncate text-ink-200 hover:text-syrup-300"
                   >
-                    <span className={SEV_COLOR[f.severity] ?? "text-ink-400"}>[{f.severity}]</span>{" "}
-                    <span className="text-ink-400">{f.title}</span>
+                    {qualifiedScreenName(s.name, repos.find((r) => r.id === s.repo_id)?.full_name)}
                   </Link>
-                ) : (
-                  <span
-                    key={`${f.screen_id}-${f.title}-${i}`}
-                    aria-hidden="true"
-                    className="whitespace-nowrap font-mono text-[10px]"
-                  >
-                    <span className={SEV_COLOR[f.severity] ?? "text-ink-400"}>[{f.severity}]</span>{" "}
-                    <span className="text-ink-400">{f.title}</span>
-                  </span>
-                )
-              )}
+                  <span className="font-mono text-[10px] text-ink-500">{s.latest_run?.status}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-3 text-xs text-ink-500">
+              {screens.length === 0 ? "No screens configured." : "All quiet — no audit running."}
+            </p>
+          )}
+          {findings.length > 0 && (
+            <div
+              className="brew-ticker mt-2 overflow-hidden"
+              role="group"
+              aria-label="Latest findings"
+            >
+              <div className="brew-ticker-track flex w-max gap-4">
+                {[...findings.slice(0, 6), ...findings.slice(0, 6)].map((f, i) =>
+                  // The second copy only feeds the seamless marquee loop —
+                  // hide it from keyboards and screen readers.
+                  i < Math.min(6, findings.length) ? (
+                    <Link
+                      key={`${f.screen_id}-${f.title}-${i}`}
+                      to="/screenings"
+                      state={{ from: "mission" }}
+                      className="whitespace-nowrap font-mono text-[10px]"
+                      title={`${qualifiedScreenName(f.screen_name, f.repo_full_name)}: ${f.title}`}
+                    >
+                      <span className={SEV_COLOR[f.severity] ?? "text-ink-400"}>[{f.severity}]</span>{" "}
+                      <span className="text-ink-400">{f.title}</span>
+                    </Link>
+                  ) : (
+                    <span
+                      key={`${f.screen_id}-${f.title}-${i}`}
+                      aria-hidden="true"
+                      className="whitespace-nowrap font-mono text-[10px]"
+                    >
+                      <span className={SEV_COLOR[f.severity] ?? "text-ink-400"}>[{f.severity}]</span>{" "}
+                      <span className="text-ink-400">{f.title}</span>
+                    </span>
+                  )
+                )}
+              </div>
             </div>
-          </div>
-        )}
-      </section>
+          )}
+        </section>
+      )}
     </div>
   );
 }

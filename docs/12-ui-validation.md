@@ -356,3 +356,10 @@ Backend `178` pytest + `15` web vitest pass; ruff/typecheck/eslint clean; `npm r
 | A.4 | **Reduced motion on** | Enable OS-level reduced motion (`prefers-reduced-motion: reduce`) or emulate in DevTools Rendering panel. | All animations and transitions (fade-up, pulse dots, spinners, ticker drifts) immediately freeze or finish within 0.01ms. Page transitions and dialogs open instantaneously without jarring movement. | ☐ |
 | A.5 | **Contrast spot-check on muted text** | Inspect muted secondary text (`text-ink-500`) and input placeholders (`placeholder:text-ink-500`) across dark background surfaces (`bg-ink-900` / `bg-ink-950`). | Muted text displays `--color-ink-500: #97836f`, yielding at least 5.03:1 contrast ratio against `ink-900` (#1a1410), comfortably exceeding the WCAG AA 4.5:1 requirement. Verify zero `text-ink-600` usages. | ☐ |
 
+- [ ] Settings → Agent defaults: open the Default backend dropdown; the list
+      renders above the Backend health card (not behind it). Same for the
+      Default model dropdown above the Model overrides help box.
+- [ ] Mission Control: clicking a cook opens /agents, clicking an ingredient
+      opens /skills; the compact Recent card shows the latest 3 tasks with a
+      status dot and links to each task (header opens the queue, without a
+      mission order banner); the Backends card shows no failed/needs-you line.

@@ -3,6 +3,7 @@
  * with a colored dot, no art. An ingredient in a frying task glows and is
  * marked "in the karhai".
  */
+import { Link } from "react-router-dom";
 import type { LibrarySkill } from "../../types";
 
 export interface PantryIngredient {
@@ -53,24 +54,30 @@ export function Pantry({
               key={skill.id}
               onMouseEnter={() => stoveSlots?.[0] && onHoverStove?.(stoveSlots[0])}
               onMouseLeave={() => onHoverStove?.(null)}
-              className={`flex items-center gap-2 rounded-lg border px-2 py-1.5 transition-colors ${
+              className={`rounded-lg border transition-colors ${
                 inPlay
-                  ? "brew-ingredient-live border-syrup-500/50 bg-syrup-500/5 hover:border-syrup-500/80 cursor-pointer"
+                  ? "brew-ingredient-live border-syrup-500/50 bg-syrup-500/5 hover:border-syrup-500/80"
                   : "border-ink-800/60 hover:border-ink-700"
               }`}
             >
-              <span className={`h-2 w-2 shrink-0 rounded-full ${dotFor(skill.id)}`} />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-xs text-ink-200">{skill.name}</span>
-                <span className="block truncate font-mono text-[10px] text-ink-500">
-                  {uses} cook{uses === 1 ? "" : "s"}
+              <Link
+                to="/skills"
+                state={{ from: "mission" }}
+                className="flex items-center gap-2 px-2 py-1.5"
+              >
+                <span className={`h-2 w-2 shrink-0 rounded-full ${dotFor(skill.id)}`} />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-xs text-ink-200">{skill.name}</span>
+                  <span className="block truncate font-mono text-[10px] text-ink-500">
+                    {uses} cook{uses === 1 ? "" : "s"}
+                  </span>
                 </span>
-              </span>
-              {inPlay && (
-                <span className="shrink-0 rounded-full bg-syrup-500/15 px-1.5 py-0.5 font-mono text-[10px] text-syrup-300">
-                  in the karhai
-                </span>
-              )}
+                {inPlay && (
+                  <span className="shrink-0 rounded-full bg-syrup-500/15 px-1.5 py-0.5 font-mono text-[10px] text-syrup-300">
+                    in the karhai
+                  </span>
+                )}
+              </Link>
             </li>
           ))}
         </ul>
