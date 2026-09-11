@@ -687,4 +687,37 @@ describe("Settings (recovery + data)", () => {
       ).toBe(true);
     });
   });
+
+  it("applies focus-within stacking lift to Row sections", async () => {
+    vi.stubGlobal("fetch", makeFetchMock());
+    render(<Settings />);
+    await expand(/Agent defaults/);
+    const heading = await screen.findByText("Default backend");
+    const rowSection = heading.closest("section");
+    expect(rowSection?.className).toMatch(/\bfocus-within:relative\b/);
+    expect(rowSection?.className).toMatch(/\bfocus-within:z-30\b/);
+  });
+
+  it("renders normalized Non-retryable errors textarea with full width and min height", async () => {
+    vi.stubGlobal("fetch", makeFetchMock());
+    render(<Settings />);
+    await expand(/Recovery/);
+    const textarea = await screen.findByLabelText("Non-retryable errors");
+    expect(textarea.className).toMatch(/\bw-full\b/);
+    expect(textarea.className).toMatch(/\bmax-w-md\b/);
+    expect(textarea.className).toMatch(/\bmin-h-24\b/);
+  });
+
+  it("renders normalized Model overrides help box with relaxed leading and vertical rhythm", async () => {
+    vi.stubGlobal("fetch", makeFetchMock());
+    render(<Settings />);
+    await expand(/Agent defaults/);
+    const helpTitle = await screen.findByText(/Where each built-in list comes from/);
+    const container = helpTitle.closest("div");
+    expect(container?.className).toMatch(/\bspace-y-1.5\b/);
+    expect(container?.className).toMatch(/\bpt-3\b/);
+    const helpItem = screen.getByText(/Live: `opencode models`/);
+    expect(helpItem.closest("li")?.className).toMatch(/\bleading-relaxed\b/);
+  });
 });
+

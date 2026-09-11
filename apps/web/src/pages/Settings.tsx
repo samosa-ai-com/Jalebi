@@ -200,7 +200,7 @@ function Row({
   children: React.ReactNode;
 }) {
   return (
-    <section className="surface flex flex-col justify-between gap-4 p-5">
+    <section className="surface flex flex-col justify-between gap-4 p-5 focus-within:relative focus-within:z-30">
       <div>
         <div className="flex items-center gap-2">
           <h2 className="panel-title">{label}</h2>
@@ -885,7 +885,7 @@ function EnvVarsSection({
             aria-label="Variable name"
             className="field font-mono"
           />
-          {nameError && <p className="mt-1 text-[11px] text-red-400">{nameError}</p>}
+          {nameError && <p className="mt-1.5 text-[11px] text-red-400">{nameError}</p>}
         </div>
         <input
           value={value}
@@ -1277,7 +1277,7 @@ function DataSection({
                   )}
                 </li>
               </ul>
-              <p className="mt-1 text-[11px] text-ink-500">
+              <p className="mt-1.5 text-[11px] leading-relaxed text-ink-500">
                 Restoring takes effect immediately. A safety snapshot of the current database is
                 saved first and named in the result.
               </p>
@@ -1676,7 +1676,7 @@ export default function Settings() {
             status={badge("enabled_backends")}
             error={fieldState["enabled_backends"]?.msg}
           >
-            <p className="mb-2 text-xs text-ink-500">{NEW_BACKENDS_NOTICE}</p>
+            <p className="mb-2 text-xs leading-relaxed text-ink-500">{NEW_BACKENDS_NOTICE}</p>
             <div className="flex flex-wrap justify-end gap-2">
               {AGENT_CLIS.map((c) => {
                 const enabledList = settings.enabled_backends ?? [...AGENT_CLIS];
@@ -1813,13 +1813,13 @@ export default function Settings() {
                 </label>
               ))}
             </div>
-            <div className="mt-3 w-full max-w-lg space-y-1 border-t border-ink-800 pt-2">
+            <div className="mt-3 w-full max-w-lg space-y-1.5 border-t border-ink-800 pt-3">
               <p className="text-[11px] font-medium text-ink-400">
                 Where each built-in list comes from (empty box = built-in):
               </p>
-              <ul className="space-y-1">
+              <ul className="space-y-1.5">
                 {MODEL_LIST_HELP.map(({ cli, how }) => (
-                  <li key={cli} className="text-[11px] leading-snug text-ink-500">
+                  <li key={cli} className="text-[11px] leading-relaxed text-ink-500">
                     <span className="font-mono text-ink-300">{cli}</span> — {how}
                   </li>
                 ))}
@@ -2070,7 +2070,7 @@ export default function Settings() {
               }
               placeholder={"model not found\ninvalid model"}
               aria-label="Non-retryable errors"
-              className="field max-w-md resize-y font-mono text-xs"
+              className="field w-full max-w-md min-h-24 resize-y font-mono text-xs"
             />
           </Row>
           <Row
@@ -2141,7 +2141,7 @@ export default function Settings() {
                 className="field max-w-xs text-xs"
               />
               {fieldState["ntfy_topic"]?.msg && (
-                <span className="mt-1 block text-[11px] text-red-400">
+                <span className="mt-1.5 block text-[11px] text-red-400">
                   {fieldState["ntfy_topic"].msg}
                 </span>
               )}
@@ -2235,7 +2235,7 @@ export default function Settings() {
               mono
               className="field text-xs"
             />
-            <span className="mt-1 block text-[11px] text-ink-500">
+            <span className="mt-1.5 block text-[11px] leading-relaxed text-ink-500">
               GitHub delivers event payloads to the <span className="font-mono">/webhook</span> path
               on this URL.
             </span>
@@ -2252,7 +2252,7 @@ export default function Settings() {
               aria-label="Webhook secret"
               className="field font-mono text-xs"
             />
-            <span className="mt-1 block text-[11px] text-ink-500">
+            <span className="mt-1.5 block text-[11px] leading-relaxed text-ink-500">
               When set, deliveries are verified against this HMAC secret.
             </span>
           </label>
