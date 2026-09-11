@@ -7,28 +7,6 @@ import type { BackendsResponse, Repo, Screen, ScreeningFinding, Task } from "../
 import { qualifiedScreenName } from "../../lib/screeningPrompt";
 import { SEV_COLOR } from "./snacks";
 
-function Ring({ fraction, label }: { fraction: number; label: string }) {
-  const r = 26;
-  const c = 2 * Math.PI * r;
-  const clamped = Math.max(0, Math.min(1, fraction));
-  return (
-    <svg viewBox="0 0 64 64" role="img" aria-label={label} className="h-12 w-12">
-      <circle cx="32" cy="32" r={r} fill="none" stroke="#33271e" strokeWidth="7" />
-      <circle
-        cx="32"
-        cy="32"
-        r={r}
-        fill="none"
-        stroke="#ef9b2f"
-        strokeWidth="7"
-        strokeLinecap="round"
-        strokeDasharray={`${clamped * c} ${c}`}
-        transform="rotate(-90 32 32)"
-      />
-    </svg>
-  );
-}
-
 /** Plain-language status for recent-task links, so the state is not color-only. */
 const STATUS_LABEL: Record<string, string> = {
   queued: "queued",
@@ -70,7 +48,6 @@ export function ControlShelf({
   screens,
   findings,
   backends,
-  concurrency,
   compact = false,
 }: {
   tasks: Task[];
@@ -78,12 +55,9 @@ export function ControlShelf({
   screens: Screen[];
   findings: ScreeningFinding[];
   backends: BackendsResponse | null;
-  concurrency: number;
   /** Stacked rail mode for the mission-control side column. */
   compact?: boolean;
 }) {
-  const active = tasks.filter((t) => t.status === "queued" || t.status === "running").length;
-  const done = tasks.filter((t) => t.status === "done").length;
   const liveScreens = screens.filter(
     (s) => s.enabled && (s.latest_run?.status === "queued" || s.latest_run?.status === "running")
   );
@@ -94,7 +68,7 @@ export function ControlShelf({
       const tb = new Date(b.updated_at).getTime() || 0;
       return tb - ta;
     })
-    .slice(0, 3);
+    .slice(0, 8);
 
   return (
     <div
@@ -105,33 +79,7 @@ export function ControlShelf({
       }
     >
       <section
-        className={`surface flex ${compact ? "min-h-0 min-w-0 flex-col items-start gap-1 overflow-y-auto px-2.5 py-2" : "items-center gap-4 p-4"}`}
-        aria-label="Worker load"
-      >
-        <Ring
-          fraction={concurrency > 0 ? active / concurrency : 0}
-          label={`worker load ${active} of ${concurrency}`}
-        />
-        <div>
-          <h3 className="panel-title">Worker load</h3>
-          <p
-            className={`mt-1 font-mono tabular-nums text-ink-100 ${compact ? "text-xl" : "text-2xl"}`}
-          >
-            {active}
-            <span className="text-sm text-ink-500"> / {concurrency} slots</span>
-          </p>
-          <p className="text-[11px] text-ink-500">
-            {concurrency === 0
-              ? "queue paused"
-              : done > 0
-                ? `${done} brewed to done`
-                : "kettles warming up"}
-          </p>
-        </div>
-      </section>
-
-      <section
-        className={`surface ${compact ? "flex min-h-0 min-w-0 flex-col overflow-y-auto px-2.5 py-2" : "px-3 py-2.5"}`}
+        className={`surface ${compact ? "col-start-1 row-start-1 flex min-h-0 min-w-0 flex-col overflow-y-auto px-2.5 py-2" : "px-3 py-2.5"}`}
         aria-label="Configured backends"
       >
         <div className="flex items-baseline justify-between gap-1">
@@ -177,7 +125,7 @@ export function ControlShelf({
       </section>
 
       <section
-        className={`surface ${compact ? "flex min-h-0 min-w-0 flex-col overflow-y-auto px-2.5 py-2" : "px-3 py-2.5"}`}
+        className={`surface ${compact ? "col-start-1 row-start-2 flex min-h-0 min-w-0 flex-col overflow-y-auto px-2.5 py-2" : "px-3 py-2.5"}`}
         aria-label="Repositories"
       >
         <div className="flex items-baseline justify-between gap-1">
@@ -224,7 +172,7 @@ export function ControlShelf({
 
       {compact ? (
         <section
-          className="surface flex min-h-0 min-w-0 flex-col overflow-y-auto px-2.5 py-2"
+          className="surface col-start-2 row-start-1 row-span-2 flex min-h-0 min-w-0 flex-col overflow-y-auto px-2.5 py-2"
           aria-label="Recent"
         >
           <div className="flex items-baseline justify-between gap-1">
@@ -251,7 +199,9 @@ export function ControlShelf({
                   <Link
                     to={`/tasks/${t.id}`}
                     state={{ from: "mission" }}
-                    aria-label={`Task #${t.id}, ${t.type}, ${STATUS_LABEL[t.status] ?? t.status}`}
+                    aria-label={`Task #${t.id}, ${t.type}, ${STATUS_LABEL[t.status] ?? t.status}${
+                      t.attention === "needs_you" ? ", needs your input" : ""
+                    }`}
                     className="flex items-center gap-2 text-ink-200 hover:text-syrup-300"
                   >
                     <span
@@ -262,6 +212,11 @@ export function ControlShelf({
                     <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-ink-500 text-right">
                       {t.type}
                     </span>
+                    {t.attention === "needs_you" && (
+                      <span className="shrink-0 rounded bg-syrup-500/10 px-1.5 py-0.5 font-mono text-[10px] text-syrup-300">
+                        needs you
+                      </span>
+                    )}
                   </Link>
                 </li>
               ))}

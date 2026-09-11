@@ -382,7 +382,6 @@ export function BrewHouse({
             screens={screens}
             findings={findings}
             backends={backends}
-            concurrency={concurrency}
             compact
           />
 

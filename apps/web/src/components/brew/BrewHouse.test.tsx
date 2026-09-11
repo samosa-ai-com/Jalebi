@@ -298,7 +298,6 @@ describe("BrewHouse", () => {
           screens={SCREENS as never}
           findings={FINDINGS as never}
           backends={{ backends: ["opencode"], enabled: ["opencode"], default: "opencode" }}
-          concurrency={4}
           compact={false}
         />
       </MemoryRouter>
@@ -307,11 +306,14 @@ describe("BrewHouse", () => {
     expect(screen.getByText("owner/repo · Nightly audit")).toBeInTheDocument();
   });
 
-  it("gauges worker load from active tasks over slots", async () => {
+  it("does not render worker load in compact mode and displays recent alongside backends and repos", async () => {
     stubFetch({ ...HANDLERS });
     renderHouse();
-    const ring = await screen.findByRole("img", { name: /worker load 1 of 4/ });
-    expect(ring).toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: "Recent" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Configured backends" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Repositories" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Worker load" })).toBeNull();
+    expect(screen.queryByRole("img", { name: /worker load/ })).toBeNull();
   });
 
   it("renders empty states without catalog data", async () => {
@@ -337,7 +339,6 @@ describe("BrewHouse", () => {
           screens={[]}
           findings={[]}
           backends={{ backends: [], enabled: [], default: "opencode" }}
-          concurrency={4}
           compact={false}
         />
       </MemoryRouter>
@@ -676,13 +677,19 @@ describe("BrewHouse", () => {
     expect(await screen.findByTestId("target-state")).toHaveTextContent('{"from":"mission"}');
   });
 
-  it("renders the recent card in compact mode with the latest 3 tasks by updated_at", async () => {
+  it("renders the recent card in compact mode with the latest 8 tasks by updated_at", async () => {
     stubFetch({ ...HANDLERS });
     const tasks = [
       { ...TASK, id: 10, type: "freeform", updated_at: "2026-09-07T01:00:00" },
       { ...TASK, id: 20, type: "issue_fix", updated_at: "2026-09-07T03:00:00" },
       { ...TASK, id: 30, type: "pr_review", updated_at: "2026-09-07T02:00:00" },
       { ...TASK, id: 40, type: "freeform", updated_at: "2026-09-07T00:30:00" },
+      { ...TASK, id: 50, type: "freeform", updated_at: "2026-09-07T04:00:00" },
+      { ...TASK, id: 60, type: "issue_fix", updated_at: "2026-09-07T05:00:00" },
+      { ...TASK, id: 70, type: "pr_review", updated_at: "2026-09-07T06:00:00" },
+      { ...TASK, id: 80, type: "freeform", updated_at: "2026-09-07T07:00:00" },
+      { ...TASK, id: 90, type: "issue_fix", updated_at: "2026-09-07T08:00:00" },
+      { ...TASK, id: 100, type: "pr_review", updated_at: "2026-09-07T00:10:00" },
     ];
     renderHouse(tasks);
     const card = await screen.findByRole("region", { name: "Recent" });
@@ -691,23 +698,47 @@ describe("BrewHouse", () => {
     expect(list.className).toContain("flex-1");
 
     const items = within(card).getAllByRole("listitem");
-    expect(items).toHaveLength(3);
-    // Ordered by updated_at descending: 20, 30, 10 (40 omitted)
-    expect(within(items[0]).getByText("#20")).toBeInTheDocument();
+    expect(items).toHaveLength(8);
+    // Ordered by updated_at descending: 90, 80, 70, 60, 50, 20, 30, 10 (40 and 100 omitted)
+    expect(within(items[0]).getByText("#90")).toBeInTheDocument();
     expect(within(items[0]).getByText("issue_fix")).toBeInTheDocument();
-    expect(within(items[1]).getByText("#30")).toBeInTheDocument();
-    expect(within(items[1]).getByText("pr_review")).toBeInTheDocument();
-    expect(within(items[2]).getByText("#10")).toBeInTheDocument();
-    expect(within(items[2]).getByText("freeform")).toBeInTheDocument();
+    expect(within(items[1]).getByText("#80")).toBeInTheDocument();
+    expect(within(items[2]).getByText("#70")).toBeInTheDocument();
+    expect(within(items[3]).getByText("#60")).toBeInTheDocument();
+    expect(within(items[4]).getByText("#50")).toBeInTheDocument();
+    expect(within(items[5]).getByText("#20")).toBeInTheDocument();
+    expect(within(items[6]).getByText("#30")).toBeInTheDocument();
+    expect(within(items[7]).getByText("#10")).toBeInTheDocument();
     expect(within(card).queryByText("#40")).toBeNull();
+    expect(within(card).queryByText("#100")).toBeNull();
 
     // Row links to /tasks/:id
     const link = within(items[0]).getByRole("link");
-    expect(link).toHaveAttribute("href", "/tasks/20");
+    expect(link).toHaveAttribute("href", "/tasks/90");
 
     // Header links to /?view=queue
     const headerLink = within(card).getByRole("link", { name: "Recent" });
     expect(headerLink).toHaveAttribute("href", "/?view=queue");
+  });
+
+  it("renders needs you badge and extends aria-label when attention is needs_you", async () => {
+    stubFetch({ ...HANDLERS });
+    renderHouse([
+      { ...TASK, id: 7, type: "freeform", status: "running", attention: "needs_you", updated_at: "2026-09-07T04:00:00" },
+      { ...TASK, id: 8, type: "issue_fix", status: "running", attention: "working", updated_at: "2026-09-07T03:00:00" },
+    ]);
+    const card = await screen.findByRole("region", { name: "Recent" });
+    const item7 = within(card).getByText("#7").closest("li")!;
+    expect(within(item7).getByText("needs you")).toBeInTheDocument();
+    expect(
+      within(item7).getByRole("link", { name: "Task #7, freeform, running, needs your input" })
+    ).toHaveAttribute("href", "/tasks/7");
+
+    const item8 = within(card).getByText("#8").closest("li")!;
+    expect(within(item8).queryByText("needs you")).toBeNull();
+    expect(
+      within(item8).getByRole("link", { name: "Task #8, issue_fix, running" })
+    ).toHaveAttribute("href", "/tasks/8");
   });
 
   it("marks interrupted recent tasks as failures and opens the queue without mission handoff state", async () => {
