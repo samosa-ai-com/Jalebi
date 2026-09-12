@@ -366,6 +366,13 @@ Backend `178` pytest + `15` web vitest pass; ruff/typecheck/eslint clean; `npm r
 - [ ] Ops Deck dispatch presets: clicking `new feature`, `new fix`, or `new review`
       flips to Queue view with corresponding task type pre-selected (`freeform`,
       `issue_fix`, `pr_review`) and `from=mission` state.
+- [ ] Ops Deck status-reactive ambient motion & circuit pulse: root `.ops-deck` reflects task mood via `data-mood`
+      (`idle` = subtle warm syrup 12s, `active` = sky 5s, `attention` = amber 3.5s, `fault` = red 1.8s with flicker),
+      precedence evaluates recent fault (<5m) > attention (`needs_you`) > active (`running`) > idle.
+      Each surface card displays a 1px rotating conic-gradient energy border ring, and the deck
+      perimeter/gutters feature faint circuit pulses (hidden below `xl`). Completed/failed transitions
+      trigger one-shot 2500ms flashes (`celebrate` rainbow or `fault` red) that fall back cleanly to base mood.
+      Under `prefers-reduced-motion: reduce`, all motion freezes and cards retain a calm, static tinted ring.
 - [ ] New-task form: explainer under the header explains the local worktree and
       that the agent cannot push; the footer safety line matches the effective
       publish mode; switching to **PR review** hides Publish mode, shows

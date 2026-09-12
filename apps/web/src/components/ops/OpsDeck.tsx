@@ -9,6 +9,7 @@ import "./ops.css";
 import { OpsStats } from "./OpsStats";
 import { RunnersRail } from "./RunnersRail";
 import { ToolbeltRail } from "./ToolbeltRail";
+import { useDeckMood } from "./useDeckMood";
 import { useMissionData } from "./useMissionData";
 import { WorkerGrid } from "./WorkerGrid";
 
@@ -34,6 +35,7 @@ export function OpsDeck({
   const navigate = useNavigate();
   const [director, setDirector] = useState(false);
   const [highlightedSlot, setHighlightedSlot] = useState<number | null>(null);
+  const { mood, flash } = useDeckMood(tasks);
 
   const {
     now,
@@ -62,11 +64,25 @@ export function OpsDeck({
   });
 
   return (
-    <div className="relative overflow-hidden space-y-3 font-mono animate-fade-up">
+    <div
+      className="ops-deck relative overflow-hidden space-y-3 font-mono animate-fade-up"
+      data-mood={mood}
+      data-flash={flash}
+    >
       {/* Ambient scanline overlay */}
       <div
         aria-hidden="true"
         className="ops-scanline pointer-events-none absolute top-0 left-0 right-0 h-32 opacity-40 select-none"
+      />
+
+      {/* Circuit pulse: travelling perimeter and gutter lights */}
+      <div
+        aria-hidden="true"
+        className="ops-deck-pulse-h pointer-events-none absolute select-none"
+      />
+      <div
+        aria-hidden="true"
+        className="ops-deck-pulse-v pointer-events-none absolute select-none"
       />
 
       {/* 1. Header Bar */}

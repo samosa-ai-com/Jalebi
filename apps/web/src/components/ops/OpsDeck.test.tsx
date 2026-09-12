@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, renderHook, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
@@ -6,6 +6,7 @@ import { getMissionTheme, setMissionTheme } from "../../lib/missionTheme";
 import type { Repo, Task } from "../../types";
 import { jobForType, JOB_LABEL, JobGlyph, JOB_ACCENT, STATUS_LABEL } from "./jobStyle";
 import { OpsDeck } from "./OpsDeck";
+import { useDeckMood } from "./useDeckMood";
 import { WorkerPane } from "./WorkerPane";
 
 const MOCK_TASKS: Task[] = [
@@ -547,4 +548,218 @@ describe("OpsDeck component", () => {
     expect(matches).toHaveLength(1);
     expect(screen.getByText("Step one")).toBeInTheDocument();
   });
+
+  it("OpsDeck root carries data-mood and data-flash attributes", () => {
+    const { container } = render(
+      <MemoryRouter>
+        <OpsDeck
+          tasks={MOCK_TASKS}
+          repos={MOCK_REPOS}
+          onNewTask={vi.fn()}
+        />
+      </MemoryRouter>
+    );
+
+    const deckRoot = container.querySelector(".ops-deck");
+    expect(deckRoot).toBeInTheDocument();
+    expect(deckRoot).toHaveAttribute("data-mood", "attention");
+    expect(deckRoot).toHaveAttribute("data-flash", "none");
+  });
 });
+
+describe("useDeckMood hook", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const baseTask: Task = {
+    id: 1,
+    type: "freeform",
+    repo_id: 1,
+    repo_full_name: "acme/api",
+    source_branch: "main",
+    target_branch: "main",
+    agent_id: null,
+    model: null,
+    cli: "opencode",
+    pat_name: null,
+    prompt: "Test task",
+    status: "done",
+    timeout_minutes: 10,
+    retry_count: 0,
+    pr_number: null,
+    issues: [],
+    prs: [],
+    created_at: "2026-09-11T12:00:00Z",
+    updated_at: "2026-09-11T12:10:00Z",
+    attention: "done",
+    run: null,
+    followups: [],
+    env_vars: [],
+    check_run_id: null,
+    publish_mode: null,
+  };
+
+  it("evaluates to 'idle' when there are no active tasks or recent faults", () => {
+    const { result } = renderHook(() => useDeckMood([]));
+    expect(result.current.mood).toBe("idle");
+    expect(result.current.flash).toBe("none");
+  });
+
+  it("evaluates to 'active' when a running task exists", () => {
+    const tasks: Task[] = [{ ...baseTask, id: 10, status: "running", attention: "working" }];
+    const { result } = renderHook(() => useDeckMood(tasks));
+    expect(result.current.mood).toBe("active");
+  });
+
+  it("evaluates to 'attention' when a task has attention === 'needs_you' (precedence over running)", () => {
+    const tasks: Task[] = [
+      { ...baseTask, id: 10, status: "running", attention: "working" },
+      { ...baseTask, id: 11, status: "queued", attention: "needs_you" },
+    ];
+    const { result } = renderHook(() => useDeckMood(tasks));
+    expect(result.current.mood).toBe("attention");
+  });
+
+  it("evaluates to 'fault' when a failed/timed_out/interrupted task updated within 5 minutes (precedence over attention and running)", () => {
+    const now = Date.now();
+    const recentIso = new Date(now - 60_000).toISOString();
+    const tasks: Task[] = [
+      { ...baseTask, id: 10, status: "running", attention: "working" },
+      { ...baseTask, id: 11, status: "running", attention: "needs_you" },
+      { ...baseTask, id: 12, status: "failed", updated_at: recentIso },
+    ];
+    const { result } = renderHook(() => useDeckMood(tasks));
+    expect(result.current.mood).toBe("fault");
+  });
+
+  it("ignores faults older than 5 minutes and falls back to running/attention/idle", () => {
+    const now = Date.now();
+    const oldIso = new Date(now - 6 * 60_000).toISOString();
+    const tasks: Task[] = [
+      { ...baseTask, id: 10, status: "running", attention: "working" },
+      { ...baseTask, id: 12, status: "failed", updated_at: oldIso },
+    ];
+    const { result } = renderHook(() => useDeckMood(tasks));
+    expect(result.current.mood).toBe("active");
+  });
+
+  it("correctly triggers 'celebrate' flash for 2500ms when done-id set gains a member", () => {
+    const initialTasks: Task[] = [{ ...baseTask, id: 20, status: "running" }];
+    const { result, rerender } = renderHook(({ tasks }) => useDeckMood(tasks), {
+      initialProps: { tasks: initialTasks },
+    });
+
+    expect(result.current.flash).toBe("none");
+
+    const updatedTasks: Task[] = [{ ...baseTask, id: 20, status: "done" }];
+    rerender({ tasks: updatedTasks });
+
+    expect(result.current.flash).toBe("celebrate");
+
+    act(() => {
+      vi.advanceTimersByTime(2400);
+    });
+    expect(result.current.flash).toBe("celebrate");
+
+    act(() => {
+      vi.advanceTimersByTime(100);
+    });
+    expect(result.current.flash).toBe("none");
+  });
+
+  it("correctly triggers 'fault' flash for 2500ms when fault-id set gains a member", () => {
+    const initialTasks: Task[] = [{ ...baseTask, id: 30, status: "running" }];
+    const { result, rerender } = renderHook(({ tasks }) => useDeckMood(tasks), {
+      initialProps: { tasks: initialTasks },
+    });
+
+    expect(result.current.flash).toBe("none");
+
+    const updatedTasks: Task[] = [{ ...baseTask, id: 30, status: "failed" }];
+    rerender({ tasks: updatedTasks });
+
+    expect(result.current.flash).toBe("fault");
+
+    act(() => {
+      vi.advanceTimersByTime(2500);
+    });
+    expect(result.current.flash).toBe("none");
+  });
+
+  it("ensures the most recent transition wins and resets the timer", () => {
+    const initialTasks: Task[] = [
+      { ...baseTask, id: 40, status: "running" },
+      { ...baseTask, id: 41, status: "running" },
+    ];
+    const { result, rerender } = renderHook(({ tasks }) => useDeckMood(tasks), {
+      initialProps: { tasks: initialTasks },
+    });
+
+    rerender({
+      tasks: [
+        { ...baseTask, id: 40, status: "done" },
+        { ...baseTask, id: 41, status: "running" },
+      ],
+    });
+    expect(result.current.flash).toBe("celebrate");
+
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    rerender({
+      tasks: [
+        { ...baseTask, id: 40, status: "done" },
+        { ...baseTask, id: 41, status: "failed" },
+      ],
+    });
+    expect(result.current.flash).toBe("fault");
+
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(result.current.flash).toBe("fault");
+
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(result.current.flash).toBe("none");
+  });
+
+  it("does not flash on the first real snapshot after an initial empty load", () => {
+    const { result, rerender } = renderHook(({ tasks }) => useDeckMood(tasks), {
+      initialProps: { tasks: [] as Task[] },
+    });
+    expect(result.current.flash).toBe("none");
+
+    const doneTasks: Task[] = [{ ...baseTask, id: 50, status: "done" }];
+    rerender({ tasks: doneTasks });
+    expect(result.current.flash).toBe("none");
+
+    // A later genuine completion still flashes.
+    rerender({ tasks: [...doneTasks, { ...baseTask, id: 51, status: "done" }] });
+    expect(result.current.flash).toBe("celebrate");
+  });
+
+  it("falls back from fault once the 5-minute window expires", () => {
+    const now = Date.now();
+    const faulted: Task = {
+      ...baseTask,
+      id: 60,
+      status: "failed",
+      updated_at: new Date(now - 60_000).toISOString(),
+    };
+    const { result, rerender } = renderHook(({ at }) => useDeckMood([faulted], at), {
+      initialProps: { at: now },
+    });
+    expect(result.current.mood).toBe("fault");
+
+    rerender({ at: now + 6 * 60_000 });
+    expect(result.current.mood).toBe("idle");
+  });
+});
+

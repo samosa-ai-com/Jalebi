@@ -303,3 +303,315 @@
   border-color: rgba(239, 68, 68, 0.5);
   background-color: rgba(25, 12, 12, 0.7);
 }
+
+/* ==========================================================================
+   13. Energy Border + Circuit Pulse + Mood Engine
+   ========================================================================== */
+
+@property --ops-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+@keyframes ops-energy-rotate {
+  from {
+    --ops-angle: 0deg;
+  }
+  to {
+    --ops-angle: 360deg;
+  }
+}
+
+/* Mood variable definitions on deck root */
+.ops-deck {
+  --ops-angle: 0deg;
+  --ops-accent: rgba(247, 185, 85, 0.35);
+  --ops-speed: 12s;
+  --ops-opacity: 0.3;
+  --ops-glow: rgba(247, 185, 85, 0.1);
+  position: relative;
+}
+
+.ops-deck[data-mood="idle"] {
+  --ops-accent: rgba(247, 185, 85, 0.35);
+  --ops-speed: 12s;
+  --ops-opacity: 0.3;
+  --ops-glow: rgba(247, 185, 85, 0.1);
+}
+
+.ops-deck[data-mood="active"] {
+  --ops-accent: #38bdf8;
+  --ops-speed: 5s;
+  --ops-opacity: 0.6;
+  --ops-glow: rgba(56, 189, 248, 0.25);
+}
+
+.ops-deck[data-mood="attention"] {
+  --ops-accent: #f59e0b;
+  --ops-speed: 3.5s;
+  --ops-opacity: 0.8;
+  --ops-glow: rgba(245, 158, 11, 0.35);
+}
+
+.ops-deck[data-mood="fault"] {
+  --ops-accent: #ef4444;
+  --ops-speed: 1.8s;
+  --ops-opacity: 0.9;
+  --ops-glow: rgba(239, 68, 68, 0.4);
+}
+
+/* Fault subtle flicker */
+@keyframes ops-fault-flicker {
+  0%, 100% {
+    opacity: var(--ops-opacity);
+  }
+  50% {
+    opacity: calc(var(--ops-opacity) * 0.65);
+  }
+  75% {
+    opacity: calc(var(--ops-opacity) * 0.95);
+  }
+  85% {
+    opacity: calc(var(--ops-opacity) * 0.55);
+  }
+}
+
+/* Per-card energy border (cards + the center worker panes, which are not
+   .surface but carry an ops-pane-* state class). */
+.ops-deck .surface,
+.ops-deck [class*="ops-pane-"] {
+  position: relative;
+}
+
+.ops-deck .surface::before,
+.ops-deck [class*="ops-pane-"]::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: conic-gradient(
+    from var(--ops-angle),
+    var(--ops-accent) 0deg,
+    transparent 60deg,
+    transparent 180deg,
+    var(--ops-accent) 240deg,
+    transparent 300deg,
+    var(--ops-accent) 360deg
+  );
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+  opacity: var(--ops-opacity);
+  transition: opacity 0.4s ease;
+  animation: ops-energy-rotate var(--ops-speed) linear infinite;
+  z-index: 1;
+}
+
+.ops-deck[data-mood="fault"] .surface::before,
+.ops-deck[data-mood="fault"] [class*="ops-pane-"]::before {
+  animation:
+    ops-energy-rotate var(--ops-speed) linear infinite,
+    ops-fault-flicker 1.4s ease-in-out infinite;
+}
+
+/* Deck perimeter circuit pulse (conic ring) */
+.ops-deck::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 0.75rem;
+  padding: 1px;
+  background: conic-gradient(
+    from var(--ops-angle),
+    var(--ops-accent) 0deg,
+    transparent 75deg,
+    transparent 180deg,
+    var(--ops-accent) 255deg,
+    transparent 330deg,
+    var(--ops-accent) 360deg
+  );
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+  opacity: calc(var(--ops-opacity) * 0.4);
+  transition: opacity 0.5s ease;
+  animation: ops-energy-rotate calc(var(--ops-speed) * 1.6) linear infinite;
+  z-index: 2;
+}
+
+/* Travelling seam and gutter circuit pulses */
+.ops-deck-pulse-h {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 1px;
+  width: 96px;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, var(--ops-accent), transparent);
+  opacity: calc(var(--ops-opacity) * 0.8);
+  animation: ops-circuit-sweep-h calc(var(--ops-speed) * 0.85) ease-in-out infinite;
+  z-index: 3;
+}
+
+.ops-deck-pulse-v {
+  position: absolute;
+  top: 0;
+  right: 276px;
+  width: 1px;
+  height: 96px;
+  pointer-events: none;
+  background: linear-gradient(180deg, transparent, var(--ops-accent), transparent);
+  opacity: calc(var(--ops-opacity) * 0.65);
+  animation: ops-circuit-sweep-v calc(var(--ops-speed) * 1.15) ease-in-out infinite;
+  animation-delay: 1.5s;
+  z-index: 3;
+}
+
+@keyframes ops-circuit-sweep-h {
+  0% {
+    transform: translateX(-100px);
+    opacity: 0;
+  }
+  15% {
+    opacity: calc(var(--ops-opacity) * 0.8);
+  }
+  85% {
+    opacity: calc(var(--ops-opacity) * 0.8);
+  }
+  100% {
+    transform: translateX(100vw);
+    opacity: 0;
+  }
+}
+
+@keyframes ops-circuit-sweep-v {
+  0% {
+    transform: translateY(-100px);
+    opacity: 0;
+  }
+  20% {
+    opacity: calc(var(--ops-opacity) * 0.65);
+  }
+  80% {
+    opacity: calc(var(--ops-opacity) * 0.65);
+  }
+  100% {
+    transform: translateY(100vh);
+    opacity: 0;
+  }
+}
+
+/* Hide perimeter pulse and circuit lights below xl breakpoint */
+@media (max-width: 1279px) {
+  .ops-deck::after,
+  .ops-deck-pulse-h,
+  .ops-deck-pulse-v {
+    display: none;
+  }
+}
+
+/* Transient flashes (one-shot sweeps) */
+@keyframes ops-celebrate-sweep {
+  0% {
+    --ops-angle: 0deg;
+    opacity: 1;
+  }
+  100% {
+    --ops-angle: 720deg;
+    opacity: var(--ops-opacity);
+  }
+}
+
+.ops-deck[data-flash="celebrate"] .surface::before,
+.ops-deck[data-flash="celebrate"] [class*="ops-pane-"]::before {
+  background: conic-gradient(
+    from var(--ops-angle),
+    #ef4444,
+    #f59e0b,
+    #10b981,
+    #06b6d4,
+    #3b82f6,
+    #8b5cf6,
+    #ec4899,
+    #ef4444
+  );
+  animation: ops-celebrate-sweep 2.5s cubic-bezier(0.16, 1, 0.3, 1) 1 forwards;
+}
+
+@keyframes ops-fault-sweep {
+  0%, 20%, 45%, 70% {
+    opacity: 1;
+    --ops-angle: 0deg;
+  }
+  10%, 32%, 58% {
+    opacity: 0.2;
+    --ops-angle: 90deg;
+  }
+  85% {
+    opacity: 0.9;
+    --ops-angle: 180deg;
+  }
+  100% {
+    opacity: var(--ops-opacity);
+    --ops-angle: 360deg;
+  }
+}
+
+.ops-deck[data-flash="fault"] {
+  --ops-accent: #ef4444;
+}
+
+.ops-deck[data-flash="fault"] .surface::before,
+.ops-deck[data-flash="fault"] [class*="ops-pane-"]::before {
+  animation: ops-fault-sweep 2.5s ease-out 1 forwards;
+}
+
+/* Reduced motion: freeze rotation/sweeps, retain static calm tinted ring */
+@media (prefers-reduced-motion: reduce) {
+  .ops-deck .surface::before,
+  .ops-deck [class*="ops-pane-"]::before,
+  .ops-deck::after,
+  .ops-deck-pulse-h,
+  .ops-deck-pulse-v {
+    animation: none !important;
+  }
+  .ops-deck-pulse-h,
+  .ops-deck-pulse-v {
+    display: none !important;
+  }
+  .ops-deck .surface::before,
+  .ops-deck [class*="ops-pane-"]::before {
+    opacity: var(--ops-opacity) !important;
+  }
+  /* Flash states keep a calm single-accent tint under reduced motion instead
+     of a frozen rainbow/red sweep. */
+  .ops-deck[data-flash="celebrate"] .surface::before,
+  .ops-deck[data-flash="celebrate"] [class*="ops-pane-"]::before,
+  .ops-deck[data-flash="fault"] .surface::before,
+  .ops-deck[data-flash="fault"] [class*="ops-pane-"]::before {
+    background: conic-gradient(
+      from var(--ops-angle),
+      var(--ops-accent) 0deg,
+      transparent 60deg,
+      transparent 180deg,
+      var(--ops-accent) 240deg,
+      transparent 300deg,
+      var(--ops-accent) 360deg
+    );
+  }
+}
+
