@@ -565,6 +565,39 @@ describe("OpsDeck component", () => {
     expect(deckRoot).toHaveAttribute("data-mood", "attention");
     expect(deckRoot).toHaveAttribute("data-flash", "none");
   });
+
+  it("restores Director mode from localStorage and persists toggles", async () => {
+    localStorage.setItem("jalebi-mission-director-v1", "1");
+    render(
+      <MemoryRouter>
+        <OpsDeck tasks={MOCK_TASKS} repos={MOCK_REPOS} onNewTask={vi.fn()} />
+      </MemoryRouter>
+    );
+
+    const btn = screen.getByRole("button", { name: /director/i });
+    expect(btn).toHaveAttribute("aria-pressed", "true");
+
+    await userEvent.click(btn);
+    expect(localStorage.getItem("jalebi-mission-director-v1")).toBe("0");
+    localStorage.removeItem("jalebi-mission-director-v1");
+  });
+
+  it("Director mode no-ops on an idle deck (no spotlight, no dimming)", () => {
+    localStorage.setItem("jalebi-mission-director-v1", "1");
+    const idleOnly = MOCK_TASKS.filter((t) => t.status !== "running");
+    const { container } = render(
+      <MemoryRouter>
+        <OpsDeck tasks={idleOnly} repos={MOCK_REPOS} onNewTask={vi.fn()} />
+      </MemoryRouter>
+    );
+
+    expect(container.querySelectorAll(".ops-spot").length).toBe(0);
+    const dimmed = [...container.querySelectorAll("div")].some((el) =>
+      typeof el.className === "string" ? el.className.includes("scale-[0.985]") : false
+    );
+    expect(dimmed).toBe(false);
+    localStorage.removeItem("jalebi-mission-director-v1");
+  });
 });
 
 describe("useDeckMood hook", () => {

@@ -60,11 +60,12 @@ export function WorkerGrid({
         }
       }
     });
-    if (targetSlot === -1 && workerSlots.length > 0) {
-      targetSlot = 1;
-    }
+    // -1 when nothing is running: Director mode must no-op on an idle deck
+    // instead of spotlighting an arbitrary core and dimming the rest.
     return targetSlot;
   }, [workerSlots]);
+
+  const hasActiveCore = mostRecentActiveCore >= 1;
 
   const gaugeRadius = 8;
   const gaugeCircumference = 2 * Math.PI * gaugeRadius; // ~50.26
@@ -259,8 +260,9 @@ export function WorkerGrid({
         {Array.from({ length: slots }, (_, i) => {
           const coreNumber = i + 1;
           const isSlotHighlighted = highlightedSlot === coreNumber;
-          const isSpotlightTarget = director && mostRecentActiveCore === coreNumber;
-          const isDimmed = director && mostRecentActiveCore !== coreNumber;
+          const isSpotlightTarget =
+            director && hasActiveCore && mostRecentActiveCore === coreNumber;
+          const isDimmed = director && hasActiveCore && mostRecentActiveCore !== coreNumber;
 
           return (
             <div

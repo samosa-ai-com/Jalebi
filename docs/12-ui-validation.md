@@ -362,7 +362,9 @@ Backend `178` pytest + `15` web vitest pass; ruff/typecheck/eslint clean; `npm r
 - [ ] Ops Deck concurrency link: clicking `{N} cores allocated →` navigates to queue settings
       and preserves mission context (`state: { from: 'mission' }`).
 - [ ] Ops Deck Director mode: toggling Director ON spotlights the active process
-      core while smoothly dimming non-focused cores.
+      core while smoothly dimming non-focused cores; the choice persists across
+      reloads (`jalebi-mission-director-v1`) and no-ops on an idle deck (no
+      spotlight, no dimming when nothing is running).
 - [ ] Ops Deck dispatch presets: clicking `new feature`, `new fix`, or `new review`
       flips to Queue view with corresponding task type pre-selected (`freeform`,
       `issue_fix`, `pr_review`) and `from=mission` state.

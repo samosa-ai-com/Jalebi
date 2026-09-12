@@ -33,7 +33,25 @@ export function OpsDeck({
   onCancel?: (taskId: number) => void;
 }) {
   const navigate = useNavigate();
-  const [director, setDirector] = useState(false);
+  // Persisted per browser, like the theme/view prefs — a focused viewing mode
+  // the owner shouldn't have to re-enable on every visit.
+  const [director, setDirector] = useState(() => {
+    try {
+      return localStorage.getItem("jalebi-mission-director-v1") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const toggleDirector = () =>
+    setDirector((d) => {
+      const next = !d;
+      try {
+        localStorage.setItem("jalebi-mission-director-v1", next ? "1" : "0");
+      } catch {
+        // storage unavailable — keep the in-memory toggle
+      }
+      return next;
+    });
   const [highlightedSlot, setHighlightedSlot] = useState<number | null>(null);
   const { mood, flash } = useDeckMood(tasks);
 
@@ -113,7 +131,7 @@ export function OpsDeck({
           {/* Director Mode Toggle */}
           <button
             type="button"
-            onClick={() => setDirector((d) => !d)}
+            onClick={toggleDirector}
             aria-pressed={director}
             title="Director mode spotlights the most recently active process core"
             className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium transition-all duration-200 cursor-pointer border ${
