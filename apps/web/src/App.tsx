@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { Link, NavLink, Route, Routes, useLocation } from "react-router-dom";
 import { api } from "./api/client";
 import Agents from "./pages/Agents";
@@ -10,6 +10,7 @@ import Skills from "./pages/Skills";
 import TaskDetail from "./pages/TaskDetail";
 import Tasks from "./pages/Tasks";
 import Triggers from "./pages/Triggers";
+import NotificationBell from "./components/NotificationBell";
 
 function JalebiMark({ className }: { className?: string }) {
   return (
@@ -26,14 +27,14 @@ function JalebiMark({ className }: { className?: string }) {
 }
 
 const NAV_ITEMS = [
-  { to: "/", label: "Tasks", end: true },
-  { to: "/repos", label: "Repos", end: false },
-  { to: "/github", label: "GitHub", end: false },
-  { to: "/agents", label: "Agents", end: false },
-  { to: "/skills", label: "Skills", end: false },
-  { to: "/screenings", label: "Screenings", end: false },
-  { to: "/triggers", label: "Triggers", end: false },
-  { to: "/settings", label: "Settings", end: false },
+  { to: "/", label: "Tasks", end: true, group: "tasks" },
+  { to: "/repos", label: "Repos", end: false, group: "repos" },
+  { to: "/github", label: "GitHub", end: false, group: "repos" },
+  { to: "/agents", label: "Agents", end: false, group: "agents" },
+  { to: "/skills", label: "Skills", end: false, group: "agents" },
+  { to: "/screenings", label: "Screenings", end: false, group: "screenings" },
+  { to: "/triggers", label: "Triggers", end: false, group: "screenings" },
+  { to: "/settings", label: "Settings", end: false, group: "settings" },
 ];
 
 const SOON_ITEMS: { to: string; label: string }[] = [];
@@ -106,6 +107,12 @@ function App() {
   const screeningsUnread = useScreeningsUnread();
   return (
     <div className="min-h-screen font-sans text-ink-200">
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-3 focus:left-3 focus:z-50 focus:rounded-md focus:bg-ink-850 focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-ink-100 focus:ring-2 focus:ring-syrup-500 focus:outline-none"
+      >
+        Skip to main content
+      </a>
       <header className="sticky top-0 z-10 border-b border-ink-800/80 bg-ink-950/80 backdrop-blur-md">
         <div className="mx-auto flex max-w-6xl items-center gap-1 px-6 py-3">
           <Link to="/" className="mr-6 flex items-center gap-2.5">
@@ -114,19 +121,27 @@ function App() {
           </Link>
 
           <nav className="flex items-center gap-1">
-            {NAV_ITEMS.map((item) => (
-              <NavLink key={item.to} to={item.to} end={item.end} className={navClass}>
-                {item.label}
-                {item.to === "/screenings" && screeningsUnread > 0 && (
-                  <span
-                    title={`${screeningsUnread} screen(s) with new findings`}
-                    className="ml-1.5 inline-flex min-h-5 min-w-5 items-center justify-center rounded-full bg-syrup-500 px-1 text-[11px] font-semibold text-ink-950"
-                  >
-                    {screeningsUnread}
-                  </span>
-                )}
-              </NavLink>
-            ))}
+            {NAV_ITEMS.map((item, idx) => {
+              const showSeparator = idx > 0 && item.group !== NAV_ITEMS[idx - 1].group;
+              return (
+                <Fragment key={item.to}>
+                  {showSeparator && (
+                    <span aria-hidden="true" className="mx-1 h-5 w-px bg-ink-800" />
+                  )}
+                  <NavLink to={item.to} end={item.end} className={navClass}>
+                    {item.label}
+                    {item.to === "/screenings" && screeningsUnread > 0 && (
+                      <span
+                        title={`${screeningsUnread} screen(s) with new findings`}
+                        className="ml-1.5 inline-flex min-h-5 min-w-5 items-center justify-center rounded-full bg-syrup-500 px-1 text-[11px] font-semibold text-ink-950"
+                      >
+                        {screeningsUnread}
+                      </span>
+                    )}
+                  </NavLink>
+                </Fragment>
+              );
+            })}
           </nav>
 
           <div className="ml-auto flex items-center gap-1">
@@ -135,7 +150,7 @@ function App() {
                 key={item.to}
                 to={item.to}
                 className={({ isActive }) =>
-                  `rounded-lg px-3 py-1.5 text-sm text-ink-600 transition-colors hover:text-ink-400 ${
+                  `rounded-lg px-3 py-1.5 text-sm text-ink-500 transition-colors hover:text-ink-400 ${
                     isActive ? "bg-ink-850 text-ink-400" : ""
                   }`
                 }
@@ -143,6 +158,7 @@ function App() {
                 {item.label}
               </NavLink>
             ))}
+            <NotificationBell />
             <span className="ml-3 flex items-center gap-2 rounded-full border border-ink-800 px-3 py-1.5">
               <HealthDot />
               <span className="font-mono text-[11px] text-ink-500">
@@ -153,7 +169,7 @@ function App() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-6xl px-6 py-8">
+      <main id="main-content" tabIndex={-1} className="mx-auto max-w-6xl px-6 py-8">
         <Routes>
           <Route path="/" element={<Tasks />} />
           <Route path="/tasks/:id" element={<TaskDetail />} />

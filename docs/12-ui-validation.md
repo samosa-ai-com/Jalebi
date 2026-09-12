@@ -142,6 +142,13 @@
 | 6.7 | ntfy topic                                                                                     | Text; reserved for Phase 2 (no effect yet).                                                                                                 | Type a topic → saved.                                                                    | ☐For the NTFY topic, allow entering the base URL as well.                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | 6.8 | Secret patterns                                                                                | Textarea (one regex per line); masked from prompts/output/PRs.                                                                              | Add`AKIA[0-9A-Z]{16}`, create a task containing a matching string → masked everywhere. | ☐Not yet verified.                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | 6.9 | Every save shows a transient "saved" indicator; invalid values show an error and are rejected. | Toggle/number + try an invalid value (e.g.`-1` concurrency).                                                                              | ☐y                                                                                       |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| 6.10 | Simple/Advanced toggle default state and persistence | Header toggle `Advanced` defaults to off; toggling on/off persists under `jalebi-settings-show-advanced-v1` across page reloads. | Inspect toggle state on first load (off); flip ON → reload → stays ON; flip OFF → reload → stays OFF. | ☐ |
+| 6.11 | Advanced settings hidden when toggle is off | Advanced rows/sections are hidden when toggle is off: Timeout, Stall timeout, Artifact retention, Secret patterns, Recovery attempts, Continue prompt, Timeout multiplier, Max timeout, Non-retryable errors, Webhooks section, Model overrides, Progress ping interval, Still running pings, `.env` import, Vacuum DB, restore/delete backups, and prune data. | Verify hidden items do not render when Advanced is OFF; flipping Advanced ON immediately reveals all of them. | ☐ |
+| 6.12 | Search with hidden advanced matches renders hint bar | Searching for an advanced setting while Advanced is OFF renders `<N> matching setting(s) are advanced and hidden. [Show advanced]` directly below filter input; clicking button toggles mode and reveals matches without "no matches" note. | Filter "stall timeout" with Advanced OFF → hint bar renders → click "Show advanced" → Stall timeout setting displays. | ☐ |
+| 6.13 | Section deep linking overrides hidden advanced state | Deep link `?section=<id>` forces the target section open and visible even when Advanced toggle is off (e.g. `?section=webhooks`). | Navigate to `/settings?section=webhooks` with Advanced OFF → Webhooks section renders open. | ☐ |
+| 6.14 | Browser notifications toggle card | Notifications section features "Browser notifications" card with status hints; requesting permission sets `jalebi-browser-notifications-v1`; denied permissions surface "Permission blocked in browser settings" and disable the switch. | Toggle browser notifications ON → grant permission → toggle updates to enabled; test denied mock. | ☐ |
+| 6.15 | Background browser notification dispatch | When enabled and document is backgrounded (`document.hidden`), an increasing unread count triggers a system `Notification`. Clicking focuses window and opens task. | Switch tabs while a task completes/fails → assert system notification fires. | ☐ |
+| 6.16 | Auto-nudge help text and Active backends issues link | Auto-nudge help text explains webhook/CI/review triggers, waiting-on-attention guardrail, and attempt cap; Active backends notice renders link to GitHub issues (`BACKEND_ISSUES_URL`). | Expand Recovery to read Auto-nudge text; expand Agent defaults to click issues link. | ☐ |
 
 ## 7. End-to-end workflows (run these top to bottom)
 
@@ -322,3 +329,85 @@ Backend `178` pytest + `15` web vitest pass; ruff/typecheck/eslint clean; `npm r
 - **FIXED — each saved PAT is now a first-class account.** The GitHub page shows one **Accounts** list: the default account (primary token) plus every named PAT, each with its own live status (login, token type, scopes), masked token, remove, and its **own repository list** with Connect/Disconnect. Add a second account's PAT and its repos appear alongside the default's.
 - **FIXED — repos from any account, in any task.** The task form's repository dropdown is **grouped by account**; picking a repo pre-fills the Credentials with that account (overridable). A task inherits the selected repo's account automatically.
 - **FIXED — per-account git/GitHub ops.** Connected repos remember their account (`repos.pat_name`); the task's git credentials, GitHub calls, PR, review, issue comment, and pruning all use that account's token. Removing an account **deletes** its connected repos and all their tasks (with a confirm dialog + affected-count alert in the UI).
+
+## New-user friendliness (2026-09-10)
+
+- [ ] Top nav renders all links with thin separators between groups
+      (Tasks | Repos/GitHub | Agents/Skills | Screenings/Triggers | Settings);
+      the Screenings unread badge still shows and all links work.
+- [ ] On a fresh install (no accounts), the queue view shows the **Setup**
+      checklist with `1 of 3 done` progressing as account → repo → task are
+      completed; the task step scrolls/focuses the New-task form; **Dismiss**
+      hides it and survives a reload.
+- [ ] The status strip under the Tasks subtitle reads `N running, N queued,
+      N needs you`, or "No tasks yet, nothing is running" when empty.
+- [ ] Main pages (Agents, Skills, Screenings, Triggers, Repos, GitHub,
+      Tasks queue) show a guided `EmptyState` with one clear action; a
+      search that matches nothing still shows the terse no-match text.
+- [ ] Mission Control labels are legible to a newcomer: Cooks (agents),
+      Pantry (skills), Kitchen wire (activity), Karhais (running tasks),
+      Queued tasks, Recent tasks, Spoiled (did not finish).
+- [ ] Mission Control themes: single theme switcher in Tasks page header toggles between
+      'Ops Deck' and 'Halwai', persisted in `localStorage` under `jalebi-mission-theme`;
+      'Ops Deck' is the default theme; Halwai theme is preserved byte-for-byte.
+- [ ] Ops Deck terminal process grid: idle worker cores show terminal prompt
+      `$ core-0N ready` with blinking caret and `+ spin up a job` CTA; queued tasks do not
+      consume a core (cores are reserved for running jobs only; other cores render the idle terminal);
+      queued and blocked tasks appear in the 'Pending jobs' strip with visible 'blocked' badge
+      whenever status is 'blocked' or blocked is true (blocked work stays visible).
+      Running tasks stream live step telemetry into bounded scrolling log (capped at 120 lines,
+      deduped by seq and consecutive identical text) with flowing barber-pole progress stripes,
+      sparkline, and PR link. Tasks in `needs_you` display amber pulsing border, `awaiting input`
+      tag, and prominent `respond →` button.
+- [ ] Ops Deck concurrency link: clicking `{N} cores allocated →` navigates to queue settings
+      and preserves mission context (`state: { from: 'mission' }`).
+- [ ] Ops Deck Director mode: toggling Director ON spotlights the active process
+      core while smoothly dimming non-focused cores; the choice persists across
+      reloads (`jalebi-mission-director-v1`) and no-ops on an idle deck (no
+      spotlight, no dimming when nothing is running).
+- [ ] Ops Deck dispatch presets: clicking `new feature`, `new fix`, or `new review`
+      flips to Queue view with corresponding task type pre-selected (`freeform`,
+      `issue_fix`, `pr_review`) and `from=mission` state.
+- [ ] Ops Deck status-reactive ambient motion & circuit pulse: root `.mission-deck` reflects task mood via `data-mood`
+      (`idle` = warm syrup 8s (clearly visible), `active` = sky 5s, `attention` = amber 3.5s, `fault` = red 1.8s with flicker),
+      precedence evaluates recent fault (<5m) > attention (`needs_you`) > active (`running`) > idle.
+      Each surface card displays a 1px rotating conic-gradient energy border ring, and the deck
+      perimeter/gutters feature faint circuit pulses (hidden below `xl`). Completed/failed transitions
+      trigger one-shot 2500ms flashes (`celebrate` rainbow or `fault` red) that fall back cleanly to base mood.
+      Under `prefers-reduced-motion: reduce`, all motion freezes and cards retain a calm, static tinted ring.
+- [ ] Halwai Shop uses the SAME shared mood engine (`.mission-deck` root, `data-mood`/`data-flash`):
+      its cards show the same status-reactive energy border and circuit pulse as Ops Deck, driven by
+      the same precedence and transient flashes (verify by switching themes with tasks in each state).
+- [ ] New-task form: explainer under the header explains the local worktree and
+      that the agent cannot push; the footer safety line matches the effective
+      publish mode; switching to **PR review** hides Publish mode, shows
+      "reviews do not publish", and a created review task sends no
+      `publish_mode` (verify in the request body).
+
+## Accessibility Manual QA Checks
+
+| # | Check | How to test | Expected behavior | Pass |
+| --- | --- | --- | --- | --- |
+| A.1 | **Keyboard-only walkthrough** | Use only `Tab`, `Shift+Tab`, `Enter`, `Space`, and `Escape` to navigate through the app from `/` through Tasks, Repos, Settings, and Task Detail. | Skip link appears on first `Tab` and jumps to `#main-content`. Focus rings are visible on every focused element. Modals trap focus completely within the dialog; `Escape` closes modals and returns focus to the trigger button. Forms, dropdowns, and buttons can all be activated without a mouse. | ☐ |
+| A.2 | **Screen-reader pass** | Enable VoiceOver (macOS) or NVDA/Orca (Linux/Windows) and navigate through the Tasks queue and Task Detail page. | Page landmarks (`header`, `main`, `nav`) are announced. Status announcements in polite live regions fire upon task transitions (`Task N done`, `Task N needs your input`) without spamming steady-state noise. Modals announce their dialog role and title upon opening. | ☐ |
+| A.3 | **200% zoom** | Set browser zoom to 200% in viewport widths from 1280px down to 1024px. | No content clipped, overlapping, or horizontally broken. Navigation, stat cards, tables, and dialogs wrap gracefully and remain usable without bidirectional scrolling. | ☐ |
+| A.4 | **Reduced motion on** | Enable OS-level reduced motion (`prefers-reduced-motion: reduce`) or emulate in DevTools Rendering panel. | All animations and transitions (fade-up, pulse dots, spinners, ticker drifts) immediately freeze or finish within 0.01ms. Page transitions and dialogs open instantaneously without jarring movement. | ☐ |
+| A.5 | **Contrast spot-check on muted text** | Inspect muted secondary text (`text-ink-500`) and input placeholders (`placeholder:text-ink-500`) across dark background surfaces (`bg-ink-900` / `bg-ink-950`). | Muted text displays `--color-ink-500: #97836f`, yielding at least 5.03:1 contrast ratio against `ink-900` (#1a1410), comfortably exceeding the WCAG AA 4.5:1 requirement. Verify zero `text-ink-600` usages. | ☐ |
+
+- [ ] Settings → Agent defaults: open the Default backend dropdown; the list
+      renders above the Backend health card (not behind it). Same for the
+      Default model dropdown above the Model overrides help box.
+- [ ] Mission Control: clicking a cook opens /agents, clicking an ingredient
+      opens /skills; the compact Recent card shows up to 8 tasks with a
+      status dot and links to each task (header opens the queue, without a
+      mission order banner); the Backends card shows no failed/needs-you line.
+- [ ] Header bell shows the unread count (9+ cap), opens a panel with kind
+      icons/titles/relative times, marks a row read and navigates to its task
+      on click, Mark-all-read clears the badge, Escape/outside-click closes,
+      and "You are all caught up." shows when empty.
+- [ ] With 50+ notifications where older unread rows sit beyond the first
+      page, the badge and Mark-all-read stay visible (count comes from
+      /api/notifications/unread-count, never the visible page).
+- [ ] Run a task to done/failed and confirm exactly one notification row
+      appears; a review ending in an approval question yields needs_input
+      only, never a completion row.

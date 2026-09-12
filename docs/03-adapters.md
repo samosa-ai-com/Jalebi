@@ -152,3 +152,87 @@ Top-level JSON `type` values (one object per line, `--verbose` required) and the
 - `_spawn` builds the subprocess env **from the passed env dict** (not `os.environ.copy()` + overlay), so a key the queue deliberately removed can never leak back in from the server's environment.
 - `resume` now forwards `env` too (previously dropped it) — follow-ups get the same credentials/guards as the original run.
 - **`ANTHROPIC_*` is deliberately passed through** (claude auth: `ANTHROPIC_AUTH_TOKEN` → `ANTHROPIC_API_KEY` → OAuth; the CLI reads `~/.claude.json` too). Jalebi never sets or strips it — the owner's own claude configuration authenticates claude runs, exactly as codex reuses `~/.codex/auth.json`. `GH_*`/`GIT_*`/`JALEBI_GITHUB_TOKEN` stripping is unchanged and applies to every adapter.
+
+## 10. New backends (Sep 2026)
+
+Validated live Sep 2026 (one trivial prompt each, free-tier models) + local
+`--help`. Resume follow-ups and tool-call/diff event shapes are per-docs and
+structurally confirmed unless noted; live resume was exercised only where
+stated. Each adapter records the CLI version it was validated against
+(`VERIFIED_VERSIONS` in `adapters/__init__.py`); `GET /api/backends/health`
+reports per-backend install state, detected version, and drift from the
+verified version (warn-only). A backend whose binary is missing fails its
+runs fast with a clear non-retryable message (`TaskQueue._require_cli`).
+
+- **pi** (`pi --print --mode json --approve`, 0.80.2): resume via
+  `--session <id>` (`--resume` is a TUI picker — never use headlessly).
+  `--model provider/id`; `openrouter/free` is a re-resolving pattern, not a
+  fixed model. **Model failures exit 0** — `stopReason:"error"` on the
+  terminal event is the error signal. Deltas (`message_update`) are silent;
+  `message_end` is authoritative; `thinking` silent. No diff event.
+  `list_models` parses `pi --list-models` (provider/model table).
+- **kilo** (`kilo run --auto --format json`, 7.5.16): OpenCode fork — event
+  model mirrors opencode. `-m` needs the full `provider/model` id
+  (e.g. `kilo/kilo-auto/free`; bare `Auto Free` is rejected). Successful runs
+  end on `step_finish` (`reason:"stop"`) + exit 0; other non-stop reasons map
+  to `error`, except `reason:"tool-calls"` (model stopped with tool calls
+  pending — a step marker; the process exit decides done vs failed).
+  `tool_use` events (live shape: `part.type == "tool"` with
+  `callID`/state) map to `tool_call`. `file`-patch events map to `diff`.
+  `list_models` reads `kilo models`. Resume (`-s`/`--continue`) is
+  per-docs, not live-exercised.
+- **qwen** (`qwen -p … -o stream-json --yolo`, 0.23.1): handshake is
+  `system`/`init` (resume key `session_id`); terminal `result` line
+  (`is_error` discriminator, final text echoed). `-p` deprecated but works.
+  `--yolo` stderr warning silenced via `QWEN_CODE_SUPPRESS_YOLO_WARNING=1`.
+  No wall-clock cap: the queue's per-task timeout + stall watchdog own the
+  deadline. `list_models` reads
+  `~/.qwen/settings.json` `modelProviders` ids (no live catalog call).
+  Resume (`-r`/`-c`), tool events and partial streaming are per-docs, not
+  live-exercised.
+- **cline** (`cline --json --yolo`, 3.0.61): wire schema is
+  `agent_event`/`run_result` (older `say`/`ask` docs are stale). `--yolo` is
+  a hidden `--auto-approve` alias; `-t` is seconds. `-m` needs the full
+  `modelType/model` id. No list-models command and `config --json` needs a
+  TTY, so `list_models` harvests the installed bundle's largest embedded
+  model map (cached by mtime; curated verified ids first, curated-only on
+  any bundle problem). Harvested ids are unattributed (the bundle holds many
+  providers' catalogs) — a dud fails clean with exit 1. **Session id is not
+  in stdout** — `resolve_session` reads the resume key from
+  `cline   history --json` after the run, so the queue persists it and
+  follow-ups resume via `--id`. `content_update` tool pings with an empty
+  chunk are silent; non-empty stdout/stderr chunks become messages. Resume
+  (`--id`) and diff shapes per-docs, not live-exercised.
+- **goose (REMOVED Sep 2026):** the CLI exposes no model catalog and the
+  owner chose removal over a permanently empty dropdown. Historical runs
+  pinned to `goose` fall back to the first enabled backend (see
+  `docs/06-task-queue.md` §4a); the adapter + its tests are deleted.
+- **grok** (`grok -p … --output-format streaming-json`, 1.0.13): first line
+  `available_commands` is the init signal; `thought` silent, `text` chunks
+  emit per-chunk messages, `tool_call` → tool_call, `tool_call_update` →
+  step, `usage` silent. `end` is always last and carries the resume
+  `sessionId` (maps to step so RunHandle captures it; exit 0 → done);
+  non-`end_turn` stops map to `error`. **`-s/--session-id` is create-only**
+  (reusing an id errors) — resume is `-r <id>` only; sessions are
+  cwd-scoped (`--cwd` must match). `--yolo` hidden but valid
+  (`bypassPermissions`; `--always-approve` is the documented alias).
+  `list_models` scrapes `grok models` (only `grok-4.6` at validation).
+  SIGTERM → 143 with the session still resumable (verified live).
+- **commandcode** (`commandcode -p … --output-format json`, 1.50.1): vendor
+  CommandCodeAI. `run_start` carries the resume `sessionId`; deltas silent,
+  `message_end` authoritative, `thinking` silent; terminal `result` line
+  (`subtype` first: success/error/max_turns). `-m` takes full or short model
+  ids (`xiaomi/mimo-v2.5-pro`). `list_models` parses `--list-models`.
+  Resume (`--resume`/`--continue`), signal-kill and `tool_running` frames
+  per-docs, not live-exercised. Caveat: per docs `--yolo` is needed for
+  file-write/shell tools in headless (default blocks them) — UNVERIFIED, so
+  the adapter stays on the verified `--trust` argv.
+- **agy** (`agy -p … --output-format stream-json`, 1.1.27): `init` carries
+  the resume `conversation_id`; `step_update` (`user_input`/`agent_response`
+  with `text_delta`/`tool_call`) streams; terminal `result`
+  (`status:"SUCCESS"` → silent, exit 0 → done). The non-TTY stdout-drop bug
+  does NOT reproduce on 1.1.27. Owner OAuth login is reused headlessly.
+  Default model `gemini-3.8-flash-low` is passed explicitly (never the CLI
+  default). Resume (`--conversation`), kill-during-run and non-default
+  `--model` execution per-flags, not live-exercised. `list_models` parses
+  `agy models`.

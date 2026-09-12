@@ -15,12 +15,14 @@ from sqlalchemy import func, select
 
 from jalebi import (
     artifacts,
+    attention,
     catalog,
     checkruns,
     clock,
     envvars,
     masking,
     messaging,
+    notifications,
     notify,
     prompts,
     reviews,
@@ -29,8 +31,8 @@ from jalebi import (
     tasks,
     worktree_bootstrap,
 )
-from jalebi.adapters import get_adapter
-from jalebi.adapters.types import AgentEvent
+from jalebi.adapters import available_adapters, get_adapter, is_backend_available
+from jalebi.adapters.types import AgentAdapter, AgentEvent
 from jalebi.config import Config
 from jalebi.db import CatalogAgent, Repo, Run, Session, Task, now
 from jalebi.events import TaskEvents
@@ -41,6 +43,11 @@ logger = logging.getLogger(__name__)
 
 MAX_STEPS = 500
 MAX_STEP_TEXT = 2000
+# Consecutive `message` events merge into one timeline step once the buffer
+# reaches this many chars (word-streaming backends like grok would otherwise
+# produce one step per word). The remainder flushes on a non-message event
+# or at stream end, so no text is ever held back past the run.
+_MESSAGE_FLUSH_CHARS = 500
 MAX_DIFF_BYTES = 512 * 1024
 KILL_GRACE_SECONDS = 5
 DEFAULT_TIMEOUT_MINUTES = 60
@@ -365,6 +372,23 @@ class TaskQueue:
         """PR number when the task is based on a PR head sentinel, else None."""
         return tasks.pr_head_source_number(task.source_branch)
 
+    @staticmethod
+    def _task_own_base(task: Task) -> str:
+        """Base for "did the agent commit anything" checks.
+
+        The no-op publish gates must compare the task branch against the
+        branch the worktree was created from — not always the target. A
+        freeform task based on ``source_branch=development`` with
+        ``target_branch=main`` is dozens of commits ahead of ``origin/main``
+        with zero agent commits (this shipped a whole development branch as
+        PR #8 once). PR-head sentinels aren't fetchable refs, so those tasks
+        keep the target comparison (their ``update_pr`` push is a content
+        no-op without agent commits anyway).
+        """
+        if TaskQueue._pr_head_number(task) is not None:
+            return task.target_branch or "main"
+        return TaskQueue._worktree_base(task)
+
     def _ensure_task_worktree(
         self, git: GitWorkspace, task: Task, repo: Repo, token: str | None
     ):
@@ -500,10 +524,42 @@ class TaskQueue:
         *,
         publish: bool = True,
         worktree: Path | None = None,
+        adapter: AgentAdapter | None = None,
     ) -> None:
         """Stream a handle's events to the SSE bus, then finalize run + task."""
         steps: list[dict[str, object]] = []
         last_event_type: str | None = None
+        # Terminal-outcome tracking (see the status computation below).
+        seen_any_event = False
+        seen_content = False
+        saw_error = False
+        # Coalescing buffer: backends like grok emit one `message` event per
+        # word/token. Buffer consecutive message texts and flush a single
+        # merged step (same entry to SSE + steps_json, so the durable timeline
+        # and the run cache never diverge). Flush on a non-message event,
+        # when the buffer reaches _MESSAGE_FLUSH_CHARS, or at stream end.
+        pending_text = ""
+        pending_phase: str | None = None
+
+        def flush_pending() -> None:
+            nonlocal pending_text, pending_phase, last_event_type, seen_content
+            if not pending_text:
+                return
+            # Cap BEFORE masking (same rationale as _step_from_event: bound
+            # the masker's regex work on pathological input).
+            entry = {
+                "type": "message",
+                "phase": pending_phase,
+                "text": masker(pending_text[:MAX_STEP_TEXT]),
+                "ts": clock.to_iso(now()),
+            }
+            self.events.publish(task.id, entry, run_id=run.id)
+            steps.append(entry)
+            last_event_type = "message"
+            seen_content = True
+            pending_text = ""
+            pending_phase = None
+
         for event in handle.events():
             state.last_event = time.monotonic()
             if state.reason == "cancelled" and event.type == "error":
@@ -511,7 +567,30 @@ class TaskQueue:
                 # with a clean cancellation marker so the timeline never shows a
                 # scary error for an intentional cancel.
                 event = AgentEvent(type="message", text="Run cancelled by user.")
+            if event.type == "message" and event.text:
+                text = event.text[:MAX_STEP_TEXT]
+                # Do not let a large next chunk turn a sub-threshold buffer
+                # into a >MAX_STEP_TEXT entry that flush_pending truncates.
+                # Flush the prior text first; both chunks then reach the
+                # durable timeline intact (each event remains independently
+                # bounded before masking).
+                if pending_text and len(pending_text) + len(text) > MAX_STEP_TEXT:
+                    flush_pending()
+                pending_text += text
+                if event.phase is not None:
+                    pending_phase = event.phase
+                state.last_step_text = event.text[:MAX_STEP_TEXT]
+                state.last_phase = event.phase
+                if len(pending_text) >= _MESSAGE_FLUSH_CHARS:
+                    flush_pending()
+                continue
+            flush_pending()
             if event.type in ("step", "message", "tool_call", "done", "error"):
+                if event.type in ("step", "message", "tool_call"):
+                    # Activity that isn't the terminal marker: a stream with
+                    # only a bare `done` keeps the old verdict (this is also
+                    # the shape every synthetic test handle uses).
+                    seen_any_event = True
                 entry = self._step_from_event(event, masker)
                 # Phase 4 T4.3 — durable SSE timeline. events.publish persists
                 # each event on its own short-lived session (never this worker
@@ -521,13 +600,26 @@ class TaskQueue:
                 steps.append(entry)
                 if event.type in ("step", "message", "done", "error"):
                     last_event_type = event.type
+                if event.type == "error":
+                    # Don't break: keep draining so the child is reaped and a
+                    # non-zero exit still surfaces its stderr tail (the
+                    # generator ends after proc.wait()). The stall/timeout
+                    # watchdogs bound a process that never exits. An error
+                    # anywhere in the stream still fails the run (saw_error).
+                    saw_error = True
+                if event.type in ("message", "tool_call", "done") and entry.get("text"):
+                    seen_content = True
                 # Track the latest message text/phase for progress notifications.
                 if event.type in ("message", "tool_call") and entry.get("text"):
                     state.last_step_text = str(entry["text"])
                     phase = entry.get("phase")
                     state.last_phase = str(phase) if phase is not None else None
-            if event.type in ("done", "error"):
+            if event.type == "done" and not saw_error:
+                # A clean terminal event with nothing more to drain for: stop
+                # reading, but the generator already reaped the child
+                # (proc.wait() runs before the synthetic done is yielded).
                 break
+        flush_pending()
 
         with self._running_lock:
             self._running.pop(task.id, None)
@@ -553,7 +645,35 @@ class TaskQueue:
             )
 
         run.session_id = handle.session_id
+        # Backends whose stdout does not carry the session id (e.g. cline)
+        # get a best-effort post-run lookup so follow-ups can resume.
+        if run.session_id is None and adapter is not None and worktree is not None:
+            try:
+                run.session_id = adapter.resolve_session(str(worktree))
+            except Exception:
+                logger.debug("resolve_session failed for task %s", task.id)
         run.finished_at = now()
+
+        empty_done = (
+            last_event_type == "done" and seen_any_event and not seen_content
+        )
+        if empty_done:
+            # The process exited 0 but the agent produced no observable output
+            # (e.g. a banner-only run): that is a failure, not a
+            # success. The marker phrase doubles as a non-retryable pattern
+            # (see settings.DEFAULTS) so auto-recovery doesn't loop on it.
+            # Appended BEFORE the steps_json dump below so it persists.
+            steps.append(
+                {
+                    "type": "error",
+                    "phase": None,
+                    "text": (
+                        "Agent exited without producing any agent output — "
+                        "marking the run failed instead of done."
+                    ),
+                    "ts": clock.to_iso(now()),
+                }
+            )
         run.steps_json = json.dumps(steps[-MAX_STEPS:])
         # T1.6: capture HEAD at run end (with -dirty suffix when the agent left
         # uncommitted material). Best-effort — never block on a transient git issue.
@@ -568,6 +688,8 @@ class TaskQueue:
             if state.reason == "timeout"
             else "cancelled"
             if state.reason == "cancelled"
+            else "failed"
+            if state.reason == "stalled" or saw_error or empty_done
             else "done"
             if last_event_type == "done"
             else "failed"
@@ -588,7 +710,9 @@ class TaskQueue:
         ):
             if self._branch_ahead(task, git):
                 try:
-                    task.pr_number = self._publish(task, repo, token, git, masker=masker)
+                    task.pr_number = self._publish(
+                        task, repo, token, git, masker=masker, session=session
+                    )
                     self._publish_status(session, task, repo, git, token)
                     session.commit()
                 except Exception as exc:
@@ -715,6 +839,67 @@ class TaskQueue:
                         logger.debug("working-tree diff capture failed for task %s", task.id)
                 run.steps_json = json.dumps(steps[-MAX_STEPS:])
 
+        # The terminal run/task state is the primary outcome. Persist it before
+        # opening the notification's independent transaction: auto-publish
+        # checks above may have autoflushed these rows, which otherwise holds a
+        # SQLite writer lock while the auxiliary session tries to insert.
+        session.commit()
+
+        last_msg = attention.last_message_text(steps)
+        if (
+            run.status in attention.WAITING_INPUT_STATUSES
+            and attention.is_explicit_approval_request(last_msg)
+        ):
+            self._notify_in_app(
+                session,
+                task,
+                "needs_input",
+                f"Task #{task.id} is waiting for input",
+                body=last_msg[:200],
+                repo=repo,
+                run_id=run.id,
+            )
+        elif task.status == "needs_approval":
+            self._notify_in_app(
+                session,
+                task,
+                "needs_input",
+                f"Task #{task.id} needs approval",
+                repo=repo,
+                run_id=run.id,
+            )
+        elif task.type != "pr_review" and task.status in ("done", "failed", "timed_out"):
+            kind = "task_done" if task.status == "done" else "task_failed"
+            title = (
+                f"Task #{task.id} done"
+                if task.status == "done"
+                else f"Task #{task.id} timed out"
+                if task.status == "timed_out"
+                else f"Task #{task.id} failed"
+            )
+            self._notify_in_app(
+                session,
+                task,
+                kind,
+                title,
+                repo=repo,
+                run_id=run.id,
+            )
+        elif task.type == "pr_review" and task.status in ("failed", "timed_out"):
+            title = (
+                f"Task #{task.id} timed out"
+                if task.status == "timed_out"
+                else f"Task #{task.id} failed"
+            )
+            self._notify_in_app(
+                session,
+                task,
+                "task_failed",
+                title,
+                repo=repo,
+                run_id=run.id,
+            )
+
     def _resolve_timeout(self, session, task: Task) -> int:
         """Effective per-run timeout: the task's own, escalated by auto-recovery.
 
@@ -749,15 +934,44 @@ class TaskQueue:
 
         Tasks/screens pinned to a backend that the owner later disabled must
         still run instead of 500ing mid-dispatch; the substitution is logged.
+        A cli unknown to the registry (e.g. a backend removed after the pin
+        was stored) falls back the same way.
         """
         enabled = settings.get_setting(session, "enabled_backends")
+        adapters = set(available_adapters())
         if not isinstance(enabled, list) or not enabled:
+            # No list configured: known backends pass through, but an
+            # unknown/removed cli can never dispatch — fail safe.
+            if cli in adapters:
+                return cli
+            logger.warning("backend %s is not installed; running on opencode instead", cli)
+            return "opencode"
+        if cli in enabled and cli in adapters:
             return cli
-        if cli in enabled:
-            return cli
-        fallback = next((c for c in enabled if isinstance(c, str) and c), "opencode")
-        logger.warning("backend %s is disabled; running on %s instead", cli, fallback)
+        # Prefer a fallback the registry still knows; only when every
+        # enabled entry is gone do we keep the legacy first-enabled pick.
+        known = [c for c in enabled if isinstance(c, str) and c and c in adapters]
+        fallback = known[0] if known else next(
+            (c for c in enabled if isinstance(c, str) and c), "opencode"
+        )
+        reason = "not installed" if cli not in adapters else "disabled"
+        logger.warning("backend %s is %s; running on %s instead", cli, reason, fallback)
         return fallback
+
+    @staticmethod
+    def _require_cli(cli: str) -> None:
+        """Fail fast when the resolved backend's binary is missing.
+
+        An enabled-but-uninstalled backend must fail with a clear,
+        non-retryable message — not a spawn crash deep in the run. Called
+        right after the run row exists so the attempt and its reason stay
+        visible on the timeline.
+        """
+        if not is_backend_available(cli):
+            raise RuntimeError(
+                f"{cli} CLI is not installed (not found on PATH) — "
+                "install it or switch backend"
+            )
 
     def _run_task(self, task_id: int) -> None:
         session = Session()
@@ -772,6 +986,9 @@ class TaskQueue:
         repo: Repo | None = None
         token: str | None = None
         git: GitWorkspace | None = None
+        # Bound for the except handler's timeline diagnostic (assigned for
+        # real during setup; None when setup failed before masking existed).
+        masker = None
         try:
             task = session.get(Task, task_id)
             if task is None:
@@ -867,6 +1084,10 @@ class TaskQueue:
             run.pat_name = task.pat_name
             session.commit()
             run_id = run.id
+            # Fail fast on a missing binary now that the attempt is recorded:
+            # a clear, non-retryable message beats a spawn crash with no
+            # worktree or session yet created.
+            self._require_cli(cli)
 
             git = GitWorkspace(self.config)
             git.ensure_mirror(repo.full_name, repo.clone_url, token)
@@ -906,13 +1127,14 @@ class TaskQueue:
                 _kill_proc(state.handle.proc)
 
             self._stream_and_finish(
-                session, task, repo, run, git, token, masker, state.handle, state
+                session, task, repo, run, git, token, masker, state.handle, state,
+                worktree=wt, adapter=adapter,
             )
             session.commit()
             self._complete_status(session, task, repo, run, git, token)
             session.commit()
             self._maybe_recover(session, task, run, repo, state, masker)
-        except Exception:
+        except Exception as exc:
             # Roll back FIRST (see _run_review): the session may be poisoned by
             # a failed flush, and even reading run.id can raise on it. The
             # logger uses the plain-int task_id arg, never the ORM object.
@@ -935,7 +1157,35 @@ class TaskQueue:
                 if run is not None:
                     run.status = "failed"
                     run.finished_at = now()
+                    # Setup failures (missing binary, no token, ...) must say
+                    # so on the timeline — otherwise the run fails with zero
+                    # diagnostic.
+                    try:
+                        fail_steps = json.loads(run.steps_json or "[]")
+                    except (ValueError, TypeError):
+                        fail_steps = []
+                    detail = str(exc).strip() or "run failed during setup"
+                    if masker is not None:
+                        detail = masker(detail)
+                    fail_steps.append(
+                        {
+                            "type": "error",
+                            "phase": None,
+                            "text": detail,
+                            "ts": clock.to_iso(now()),
+                        }
+                    )
+                    run.steps_json = json.dumps(fail_steps[-MAX_STEPS:])
             session.commit()
+            if task is not None and task.status == "failed":
+                self._notify_in_app(
+                    session,
+                    task,
+                    "task_failed",
+                    f"Task #{task.id} failed",
+                    repo=repo,
+                    run_id=run_id,
+                )
             # Close out the commit status so a crashed run doesn't leave a
             # permanently-blocking `pending` on the head SHA (best-effort; the
             # status API is non-fatal). Only when setup got far enough to matter.
@@ -990,6 +1240,7 @@ class TaskQueue:
             # If this reviewer task has an assignment, mark it running (with the run).
             reviews.set_assignment_status(session, task.id, "running", run_id=run.id)
             cli, agent_skills = self._agent_run_opts(session, task, cli)
+            self._require_cli(cli)
             agent = self._catalog_agent(session, task)
             effective_model = task.model or (agent.model if agent is not None else None)
             effective_prompt = task.prompt
@@ -1031,10 +1282,11 @@ class TaskQueue:
                 state,
                 publish=False,
                 worktree=wt,
+                adapter=adapter,
             )
             session.commit()
 
-            self._post_review(
+            posted = self._post_review(
                 session, task, repo, pr_number, wt, run, token, masker
             )
             # Complete AFTER _post_review so a review that failed to post (or a
@@ -1043,7 +1295,16 @@ class TaskQueue:
             # the merge gate.
             self._complete_status(session, task, repo, run, git, token)
             session.commit()
-        except Exception:
+            if posted:
+                self._notify_in_app(
+                    session,
+                    task,
+                    "task_done",
+                    f"Task #{task.id} done",
+                    repo=repo,
+                    run_id=run.id,
+                )
+        except Exception as exc:
             # Roll back FIRST: the session may be poisoned by a failed flush
             # (PendingRollbackError). Everything below uses only plain-int ids
             # and freshly re-fetched rows — never the possibly-stale objects.
@@ -1061,10 +1322,35 @@ class TaskQueue:
             if run is not None:
                 run.status = "failed"
                 run.finished_at = now()
+                # Setup failures must say so on the timeline — otherwise the
+                # review fails with zero diagnostic (masker is a parameter
+                # here, always bound).
+                try:
+                    fail_steps = json.loads(run.steps_json or "[]")
+                except (ValueError, TypeError):
+                    fail_steps = []
+                fail_steps.append(
+                    {
+                        "type": "error",
+                        "phase": None,
+                        "text": masker(str(exc).strip() or "review failed during setup"),
+                        "ts": clock.to_iso(now()),
+                    }
+                )
+                run.steps_json = json.dumps(fail_steps[-MAX_STEPS:])
             if task is not None and task.status not in ("cancelled",):
                 task.status = "failed"
                 task.updated_at = now()
             session.commit()
+            if task is not None and task.status == "failed":
+                self._notify_in_app(
+                    session,
+                    task,
+                    "task_failed",
+                    f"Task #{task.id} failed",
+                    repo=repo,
+                    run_id=run_id,
+                )
             # Best-effort: a crashed review must not leave a forever-`pending`
             # status on the PR head (never raise out of the handler).
             if git is not None and task is not None and run is not None:
@@ -1088,8 +1374,13 @@ class TaskQueue:
         run: Run,
         token: str,
         masker,
-    ) -> None:
+    ) -> bool:
         """Post a ``pr_review`` run's deliverable to GitHub and reconcile the assignment.
+
+        Returns True only when a review was actually posted to the PR; every
+        other path (non-done run, approval-wait skip, no-content flip, post
+        error) returns False so callers never announce a delivery that does
+        not exist.
 
         Shared by the initial review run and follow-up resumes, which both finish
         with ``run.status`` decided and the review written to the review
@@ -1105,10 +1396,20 @@ class TaskQueue:
         """
         if run.status != "done":
             reviews.set_assignment_status(session, task.id, "failed", run_id=run.id)
-            return
+            return False
 
         review_text = self._read_review(worktree)
         if not review_text:
+            if self._is_approval_wait(session, task.id):
+                # Plan-first run awaiting owner approval: post NOTHING to the
+                # PR and leave the assignment running — the approval ask stays
+                # in the timeline; the UI shows needs_you and ntfy pushes
+                # notify_on_needs_approval. The follow-up approval produces
+                # the real review, posted (and reconciled) then.
+                logger.info(
+                    "review for task %s awaiting approval; skipping PR post", task.id
+                )
+                return False
             review_text = self._last_message(session, task.id)
         if not review_text:
             # A done run with no review content has nothing to post. Flip the run
@@ -1133,7 +1434,15 @@ class TaskQueue:
             run.steps_json = json.dumps(steps[-MAX_STEPS:])
             session.commit()
             reviews.set_assignment_status(session, task.id, "failed", run_id=run.id)
-            return
+            self._notify_in_app(
+                session,
+                task,
+                "task_failed",
+                f"Task #{task.id} failed",
+                repo=repo,
+                run_id=run.id,
+            )
+            return False
 
         review_text = masker(review_text)
         review_body = messaging.wrap_pr_review(review_text)
@@ -1155,6 +1464,7 @@ class TaskQueue:
             run.steps_json = json.dumps(steps[-MAX_STEPS:])
             session.commit()
             reviews.set_assignment_status(session, task.id, "posted", run_id=run.id)
+            return True
         except Exception as exc:
             logger.warning("posting review for task %s failed: %s", task.id, exc)
             steps = json.loads(run.steps_json or "[]")
@@ -1176,6 +1486,15 @@ class TaskQueue:
             task.updated_at = now()
             session.commit()
             reviews.set_assignment_status(session, task.id, "failed", run_id=run.id)
+            self._notify_in_app(
+                session,
+                task,
+                "task_failed",
+                f"Task #{task.id} failed",
+                repo=repo,
+                run_id=run.id,
+            )
+            return False
 
     @staticmethod
     def _task_pr_number(task: Task) -> int | None:
@@ -1203,6 +1522,20 @@ class TaskQueue:
                 return step["text"]
         return ""
 
+    @staticmethod
+    def _is_approval_wait(session, task_id: int) -> bool:
+        """True when the latest run ended asking the owner for approval.
+
+        Plan-first agents (e.g. codex obeying a repo AGENTS.md) finish with a
+        plan + approval ask instead of a deliverable. All GitHub posts must
+        stay silent until the owner approves via follow-up — the approval
+        surfaces in the UI as ``needs_you`` (attention branch 1) + the ntfy
+        ``notify_on_needs_approval`` push instead.
+        """
+        return attention.is_explicit_approval_request(
+            TaskQueue._last_message(session, task_id)
+        )
+
     def _notify_enabled(self, session, key: str) -> bool:
         """Whether notifications are configured AND this event type is on."""
         if not str(settings.get_setting(session, "ntfy_topic") or "").strip():
@@ -1222,7 +1555,7 @@ class TaskQueue:
                 message=self._notify_message(task, repo_full_name, state),
                 tags=self._notify_tags(task.status),
                 click=self._notify_click(task.id),
-                actions=[self._notify_open_action(task.id)],
+                actions=self.config.open_actions(f"/tasks/{task.id}", "Open task"),
                 masker=masker,
             )
         except Exception:
@@ -1230,15 +1563,7 @@ class TaskQueue:
 
     def _notify_click(self, task_id: int) -> str:
         """The URL to open when the notification is tapped (the Jalebi task page)."""
-        return f"http://127.0.0.1:{self.config.port}/tasks/{task_id}"
-
-    def _notify_open_action(self, task_id: int) -> dict[str, object]:
-        """A 'view' action button that opens the Jalebi task page."""
-        return {
-            "action": "view",
-            "label": "Open task",
-            "url": f"http://127.0.0.1:{self.config.port}/tasks/{task_id}",
-        }
+        return self.config.primary_link(f"/tasks/{task_id}")
 
     @staticmethod
     def _notify_message(task: Task, repo_full_name: str, state: _RunState) -> str:
@@ -1301,6 +1626,55 @@ class TaskQueue:
             values += [v for v in secret_values if v]
         return masking.build_masker(values, patterns)
 
+    def _notify_in_app(
+        self,
+        session,
+        task: Task,
+        kind: str,
+        title: str,
+        *,
+        body: str | None = None,
+        repo: Repo | None = None,
+        run_id: int | None = None,
+    ) -> None:
+        """Record a notification in an isolated transaction (best effort).
+
+        Terminal task/run mutations remain pending on the worker session until
+        the run completes. Notification persistence must not commit or roll
+        back that session: a database failure here is auxiliary, not a reason
+        to leave the task marked ``running``.
+        """
+        own_session = None
+        try:
+            if body is None:
+                repo_full_name = repo.full_name if repo is not None else ""
+                if not repo_full_name and task.repo_id:
+                    r = session.get(Repo, task.repo_id)
+                    if r is not None:
+                        repo_full_name = r.full_name
+                body = f"{task.type} task in {repo_full_name}".strip()
+            own_session = Session()
+            notifications.notify(
+                own_session,
+                task_id=task.id,
+                run_id=run_id,
+                kind=kind,
+                title=title,
+                body=body,
+            )
+        except Exception:
+            if own_session is not None:
+                try:
+                    own_session.rollback()
+                except Exception:
+                    pass
+            logger.warning(
+                "recording in-app notification for task %s failed", task.id, exc_info=True
+            )
+        finally:
+            if own_session is not None:
+                own_session.close()
+
     def _prior_conversation(self, run) -> str:
         """Extract a compact "prior conversation" from a run's (masked) timeline.
 
@@ -1343,16 +1717,26 @@ class TaskQueue:
         its session format), so it starts a **fresh run seeded with the prior
         conversation** instead.
         """
+        # The user's verbatim text. The agent's custom_instructions are
+        # appended to ``body`` below for the prompt, but the follow-ups row
+        # records what the user actually typed.
+        request_body = body
         session = Session()
         run: Run | None = None
         # Plain-int snapshot for the except handler (see _run_review): reading
         # run.id on a poisoned/expired session can raise, which would skip the
         # run-failed marking and freeze the run at `running`.
         run_id: int | None = None
+        # The resolved model for the follow-ups row when the run fails before
+        # reaching the resolution below (stays None → recorded as NULL).
+        effective_model: str | None = None
         state: _RunState | None = None
         repo: Repo | None = None
         token: str | None = None
         git: GitWorkspace | None = None
+        # Bound for the except handler's timeline diagnostic (assigned for
+        # real during setup; None when setup failed before masking existed).
+        masker = None
         try:
             task = session.get(Task, task_id)
             if task is None:
@@ -1431,6 +1815,7 @@ class TaskQueue:
             run.model = effective_model
             session.commit()
             run_id = run.id
+            self._require_cli(cli)
 
             git = GitWorkspace(self.config)
             git.ensure_mirror(repo.full_name, repo.clone_url, token)
@@ -1497,17 +1882,28 @@ class TaskQueue:
                 state,
                 publish=task.type != "pr_review",
                 worktree=wt,
+                adapter=adapter,
             )
+            posted = False
             if task.type == "pr_review":
                 pr_number = self._task_pr_number(task)
                 if pr_number is not None:
-                    self._post_review(
+                    posted = self._post_review(
                         session, task, repo, pr_number, wt, run, token, masker
                     )
             # Complete AFTER the review post (see _run_review) so a failed review
             # yields a failure status, not a green one.
             self._complete_status(session, task, repo, run, git, token)
             session.commit()
+            if task.type == "pr_review" and posted:
+                self._notify_in_app(
+                    session,
+                    task,
+                    "task_done",
+                    f"Task #{task.id} done",
+                    repo=repo,
+                    run_id=run.id,
+                )
             if not auto:
                 # Auto-recovery resumes are not user follow-ups; only real
                 # follow-ups get a row (the recovery step is on the failed run).
@@ -1515,13 +1911,14 @@ class TaskQueue:
                     session,
                     task.id,
                     prev.id,
-                    body,
+                    request_body,
                     pat_name=pat_name or task.pat_name,
                     model=effective_model,
+                    cli=cli_param,
                 )
             session.commit()
             self._maybe_recover(session, task, run, repo, state, masker)
-        except Exception:
+        except Exception as exc:
             # Roll back FIRST (see _run_review): the session may be poisoned by
             # a failed flush, and even reading run.id can raise on it. The
             # logger uses the plain-int task_id arg, never the ORM object.
@@ -1543,7 +1940,51 @@ class TaskQueue:
                 if run is not None:
                     run.status = "failed"
                     run.finished_at = now()
+                    # Setup failures must say so on the timeline — otherwise
+                    # the follow-up fails with zero diagnostic.
+                    try:
+                        fail_steps = json.loads(run.steps_json or "[]")
+                    except (ValueError, TypeError):
+                        fail_steps = []
+                    detail = str(exc).strip() or "follow-up failed during setup"
+                    if masker is not None:
+                        detail = masker(detail)
+                    fail_steps.append(
+                        {
+                            "type": "error",
+                            "phase": None,
+                            "text": detail,
+                            "ts": clock.to_iso(now()),
+                        }
+                    )
+                    run.steps_json = json.dumps(fail_steps[-MAX_STEPS:])
+            if run_id is not None and not auto:
+                # A failed user follow-up still records its row — otherwise
+                # the attempt leaves no trace in the follow-ups list.
+                try:
+                    tasks.add_followup(
+                        session,
+                        task_id,
+                        run_id,
+                        request_body,
+                        pat_name=pat_name,
+                        model=effective_model,
+                        cli=cli_param,
+                    )
+                except Exception:
+                    logger.debug(
+                        "could not record failed follow-up for task %s", task_id
+                    )
             session.commit()
+            if task is not None and task.status == "failed":
+                self._notify_in_app(
+                    session,
+                    task,
+                    "task_failed",
+                    f"Task #{task.id} failed",
+                    repo=repo,
+                    run_id=run_id,
+                )
             # Best-effort: close out the pending status on a failed follow-up too
             # (never raise out of the handler).
             if (
@@ -1602,18 +2043,22 @@ class TaskQueue:
             patterns = [str(p) for p in raw_patterns] if isinstance(raw_patterns, list) else []
             masker = masking.build_masker(secrets.all_token_values(self.config) + [token], patterns)
             git = GitWorkspace(self.config)
-            # No-op gate: a branch with zero commits ahead of the target has
-            # nothing to publish — refuse instead of pushing an empty PR. A
-            # missing worktree (never ran / no commits) counts as nothing ahead.
+            # No-op gate: the branch must hold the task's OWN commits — compare
+            # against the worktree base, not the target. A task based on
+            # source_branch=development targeting main is a whole branch ahead
+            # of origin/main with zero agent commits (this once shipped a full
+            # development branch as a task PR). A missing worktree (never ran /
+            # no commits) counts as nothing ahead.
             worktree = GitWorkspace.worktree_path(self.config.data_dir, task.id)
+            own_base = self._task_own_base(task)
             try:
-                ahead = git.commits_ahead(worktree, task.target_branch or "main")
+                ahead = git.commits_ahead(worktree, own_base)
             except Exception:
                 ahead = 0
             if ahead <= 0:
                 raise PublishError(
-                    "the task branch has no commits ahead of the target branch — "
-                    "nothing to publish"
+                    "the task branch has no commits ahead of its base "
+                    f"({own_base}) — nothing to publish"
                 )
             # Mode-specific validation (route catches ValueError → 400).
             if mode not in ("new_pr", "update_pr", "push_branch"):
@@ -1639,6 +2084,7 @@ class TaskQueue:
                 mode=mode,
                 target_branch=target_branch,
                 pr_number=pr_number,
+                session=session,
             )
             # ``push_branch`` returns 0 (no PR interaction); leave the existing
             # ``task.pr_number`` untouched in that case. For ``new_pr`` /
@@ -1976,10 +2422,16 @@ class TaskQueue:
             if not head_sha:
                 return
             context = checkruns.status_context(task)
+            # Several tasks can share one (sha, context) — parallel reviewers on
+            # one PR. Post the aggregate so a later success can't overwrite an
+            # earlier failure; a lone task's aggregate is just its own state.
+            aggregate = checkruns.aggregate_state(
+                session, repo.id, head_sha, context, task_id=task.id, state=state
+            )
             client = GitHubClient(token)
             try:
                 github_id = client.set_commit_status(
-                    repo.full_name, head_sha, state, context,
+                    repo.full_name, head_sha, aggregate, context,
                     description=f"Jalebi {task.type} for {repo.full_name}",
                 )
             finally:
@@ -2102,7 +2554,7 @@ class TaskQueue:
                             ),
                             tags=notify.TAGS_CLOCK,
                             click=self._notify_click(task.id),
-                            actions=[self._notify_open_action(task.id)],
+                            actions=self.config.open_actions(f"/tasks/{task.id}", "Open task"),
                             masker=masker,
                         )
                     except Exception:
@@ -2137,7 +2589,7 @@ class TaskQueue:
     def _branch_ahead(self, task: Task, git: GitWorkspace) -> bool:
         worktree = GitWorkspace.worktree_path(self.config.data_dir, task.id)
         try:
-            return git.commits_ahead(worktree, task.target_branch) > 0
+            return git.commits_ahead(worktree, self._task_own_base(task)) > 0
         except Exception:
             return False
 
@@ -2198,6 +2650,7 @@ class TaskQueue:
         mode: str = "new_pr",
         target_branch: str | None = None,
         pr_number: int | None = None,
+        session=None,
     ) -> int:
         # Refuse to push when the worktree HEAD is not on jalebi/<id> (T1.5).
         self._guard_publish_branch(git, task.id)
@@ -2211,7 +2664,7 @@ class TaskQueue:
             return self._publish_push_branch(task, repo, token, git, target_branch)
         if mode != "new_pr":
             raise PublishError(f"unknown publish mode: {mode!r}")
-        return self._publish_new_pr(task, repo, token, git, masker=masker)
+        return self._publish_new_pr(task, repo, token, git, masker=masker, session=session)
 
     def _publish_new_pr(
         self,
@@ -2220,6 +2673,8 @@ class TaskQueue:
         token: str,
         git: GitWorkspace,
         masker=None,
+        *,
+        session=None,
     ) -> int:
         # Ensure the worktree exists (it may have been cleaned for old tasks);
         # _ensure_task_worktree reuses the existing jalebi/<taskId> branch if
@@ -2278,7 +2733,9 @@ class TaskQueue:
                 )
                 # Only a NEWLY created PR gets the issue link comments — reusing
                 # an existing open PR (follow-up pushes) must stay silent.
-                self._comment_on_issues(client, repo.full_name, task, pr_number)
+                self._comment_on_issues(
+                    client, repo.full_name, task, pr_number, session=session
+                )
             return pr_number
         finally:
             client.close()
@@ -2454,10 +2911,27 @@ class TaskQueue:
         return 0
 
     def _comment_on_issues(
-        self, client: GitHubClient, full_name: str, task: Task, pr_number: int
+        self,
+        client: GitHubClient,
+        full_name: str,
+        task: Task,
+        pr_number: int,
+        *,
+        session=None,
     ) -> None:
-        """Comment on each referenced issue that the task opened a PR for it."""
+        """Comment on each referenced issue that the task opened a PR for it.
+
+        Skipped (push + PR still happen) when the run ended asking the owner
+        for approval — an approval ask is not a deliverable to announce.
+        """
         if task.type != "issue_fix":
+            return
+        if session is not None and self._is_approval_wait(session, task.id):
+            logger.info(
+                "task %s awaiting approval; skipping issue link comments for PR #%s",
+                task.id,
+                pr_number,
+            )
             return
         try:
             issue_numbers = json.loads(task.issues_json) if task.issues_json else []

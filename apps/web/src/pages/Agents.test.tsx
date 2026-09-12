@@ -62,6 +62,13 @@ const USAGE = {
   ],
 };
 
+/** Pick an option in a SearchableSelect: open it by label, search, click. */
+async function pick(label: string | RegExp, search: string, option: string | RegExp) {
+  await userEvent.click(await screen.findByLabelText(label));
+  await userEvent.type(screen.getByRole("combobox"), search);
+  await userEvent.click(await screen.findByRole("option", { name: option }));
+}
+
 function makeFetchMock(agents: unknown[] = AGENTS) {
   return vi.fn(async (url: string, init?: RequestInit) => {
     if (String(url).includes("/api/models")) {
@@ -146,17 +153,22 @@ describe("Agents", () => {
     await screen.findByText("security-auditor");
 
     await userEvent.click(screen.getByRole("button", { name: "+ New agent" }));
-    const modelSelect = screen.getByLabelText("Model pin (optional)") as HTMLSelectElement;
-    expect(await screen.findByRole("option", { name: "no pin (CLI default)" })).toBeInTheDocument();
+    await userEvent.click(screen.getByLabelText("Model pin (optional)"));
+    expect(screen.getByRole("option", { name: "no pin (CLI default)" })).toBeInTheDocument();
     expect(
       screen.getByRole("option", { name: "opencode-go/deepseek-v4-flash" })
     ).toBeInTheDocument();
 
     // Picking a model sends it as the pin; picking the empty option clears it.
-    await userEvent.selectOptions(modelSelect, "opencode-go/deepseek-v4-flash");
-    expect(modelSelect.value).toBe("opencode-go/deepseek-v4-flash");
-    await userEvent.selectOptions(modelSelect, "");
-    expect(modelSelect.value).toBe("");
+    await userEvent.click(screen.getByRole("option", { name: "opencode-go/deepseek-v4-flash" }));
+    expect(screen.getByLabelText("Model pin (optional)")).toHaveTextContent(
+      "opencode-go/deepseek-v4-flash"
+    );
+    await userEvent.click(screen.getByLabelText("Model pin (optional)"));
+    await userEvent.click(screen.getByRole("option", { name: "no pin (CLI default)" }));
+    expect(screen.getByLabelText("Model pin (optional)")).toHaveTextContent(
+      "no pin (CLI default)"
+    );
   });
 
   it("toggles an agent's enabled state via edit", async () => {
@@ -208,11 +220,12 @@ describe("Agents", () => {
     await screen.findByText("security-auditor");
     await userEvent.click(screen.getByRole("button", { name: "+ New agent" }));
 
-    const cliSelect = screen.getByLabelText("CLI override (optional)") as HTMLSelectElement;
-    expect(cliSelect.value).toBe("");
-    expect([...cliSelect.options].map((o) => o.value)).toEqual(
-      expect.arrayContaining(["", "opencode", "codex", "claude"])
-    );
+    const cliBtn = screen.getByLabelText("CLI override (optional)");
+    expect(cliBtn).toHaveTextContent("default (global setting)");
+    await userEvent.click(cliBtn);
+    expect(screen.getByRole("option", { name: "opencode" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "codex" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "claude" })).toBeInTheDocument();
   });
 
   it("refetches the Model dropdown when the CLI override changes", async () => {
@@ -222,18 +235,20 @@ describe("Agents", () => {
     await screen.findByText("security-auditor");
     await userEvent.click(screen.getByRole("button", { name: "+ New agent" }));
 
-    const model = screen.getByLabelText("Model pin (optional)") as HTMLSelectElement;
-    expect([...model.options].map((o) => o.value)).toEqual(
-      expect.arrayContaining(["opencode-go/deepseek-v4-flash"])
-    );
+    const modelBtn = screen.getByLabelText("Model pin (optional)");
+    await userEvent.click(modelBtn);
+    expect(screen.getByRole("option", { name: "opencode-go/deepseek-v4-flash" })).toBeInTheDocument();
 
-    await userEvent.selectOptions(screen.getByLabelText("CLI override (optional)"), "codex");
+    await pick("CLI override (optional)", "codex", "codex");
     await waitFor(() => {
-      expect([...model.options].map((o) => o.value)).toEqual(
-        expect.arrayContaining(["gpt-5.4-mini", "gpt-5.5"])
-      );
+      expect(fetchMock.mock.calls.some(([u]) => String(u).includes("cli=codex"))).toBe(true);
     });
-    expect(fetchMock.mock.calls.some(([u]) => String(u).includes("cli=codex"))).toBe(true);
+    await userEvent.click(screen.getByLabelText("Model pin (optional)"));
+    await waitFor(() => {
+      expect(
+        screen.getByRole("option", { name: "gpt-5.4-mini" })
+      ).toBeInTheDocument();
+    });
   });
 
   it("shows usage on rows and toggles enabled without the form", async () => {
@@ -298,11 +313,16 @@ describe("Agents", () => {
     await screen.findByText("security-auditor");
 
     await userEvent.click(screen.getByRole("button", { name: "+ New agent" }));
-    const model = screen.getByLabelText("Model pin (optional)") as HTMLSelectElement;
-    await userEvent.selectOptions(model, "opencode-go/deepseek-v4-flash");
-    expect(model.value).toBe("opencode-go/deepseek-v4-flash");
-    await userEvent.selectOptions(screen.getByLabelText("CLI override (optional)"), "codex");
-    await waitFor(() => expect(model.value).toBe(""));
+    await pick("Model pin (optional)", "deepseek", "opencode-go/deepseek-v4-flash");
+    expect(screen.getByLabelText("Model pin (optional)")).toHaveTextContent(
+      "opencode-go/deepseek-v4-flash"
+    );
+    await pick("CLI override (optional)", "codex", "codex");
+    await waitFor(() =>
+      expect(screen.getByLabelText("Model pin (optional)")).toHaveTextContent(
+        "no pin (CLI default)"
+      )
+    );
   });
 
   it("delete confirmation names the impacted trigger rules", async () => {
@@ -420,7 +440,7 @@ describe("Agents", () => {
     render(<Agents />);
     await screen.findByText("security-auditor");
 
-    await userEvent.selectOptions(screen.getByLabelText("Sort agents"), "newest");
+    await pick("Sort agents", "newest", "Sort: newest");
     const rows = screen.getAllByText(/security-auditor|docs-guru/, { exact: false });
     // docs-guru (08-09) is newer than security-auditor (08-08).
     expect(rows[0].textContent).toContain("docs-guru");
@@ -459,5 +479,14 @@ describe("Agents", () => {
         skills: [],
       });
     });
+  });
+
+  it("shows friendly EmptyState when there are no agents", async () => {
+    const fetchMock = makeFetchMock([]);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Agents />);
+    expect(await screen.findByRole("heading", { name: "No catalog agents yet" })).toBeInTheDocument();
+    expect(screen.getByText(/Create an agent to give tasks a personality/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create agent" })).toBeInTheDocument();
   });
 });

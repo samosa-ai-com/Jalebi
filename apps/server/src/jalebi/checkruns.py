@@ -89,6 +89,70 @@ def latest_for_task(session: Session, task_id: int) -> CheckRun | None:
     )
 
 
+def rows_for_head(session: Session, repo_id: int, head_sha: str, name: str) -> list[CheckRun]:
+    """Every status row Jalebi has written for ``(repo, sha, context)``.
+
+    Distinct from :func:`row_for_head`, which is scoped to one task: multiple
+    tasks (e.g. several reviewers) can target the same head + context.
+    """
+    return list(
+        session.execute(
+            select(CheckRun).where(
+                CheckRun.repo_id == repo_id,
+                CheckRun.head_sha == head_sha,
+                CheckRun.name == name,
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+def _row_state(row: CheckRun) -> str:
+    """A row's GitHub state: its conclusion when completed, else pending."""
+    if row.status == "completed" and row.conclusion:
+        return row.conclusion
+    return STATE_PENDING
+
+
+def aggregate_state(
+    session: Session,
+    repo_id: int,
+    head_sha: str,
+    name: str,
+    *,
+    task_id: int | None = None,
+    state: str | None = None,
+) -> str:
+    """Worst-of state across all tasks sharing ``(repo, sha, context)``.
+
+    A single ``Jalebi / review`` context can be shared by several tasks on one
+    PR (parallel reviewers). Posting each task's own state would let a later
+    success silently overwrite an earlier failure, so the posted state is the
+    aggregate: any ``failure``/``error`` wins, else any non-``success`` keeps it
+    ``pending``, else ``success``. With one task the result is that task's own
+    state — identical to the pre-aggregation behaviour.
+
+    ``task_id``/``state`` override that task's stored row (the queue calls this
+    *before* recording the new state), so an in-flight task is counted with the
+    state about to be posted rather than its previous one.
+    """
+    by_task: dict[int, str] = {row.task_id: _row_state(row) for row in rows_for_head(
+        session, repo_id, head_sha, name
+    )}
+    if task_id is not None and state is not None:
+        by_task[task_id] = state
+    if not by_task:
+        return STATE_PENDING
+    values = set(by_task.values())
+    if STATE_FAILURE in values:
+        return STATE_FAILURE
+    if STATE_ERROR in values:
+        return STATE_ERROR
+    if values == {STATE_SUCCESS}:
+        return STATE_SUCCESS
+    return STATE_PENDING
+
 def row_for_head(session: Session, task_id: int, head_sha: str, context: str) -> CheckRun | None:
     """The existing status row for a task at a given head (registry key)."""
     return (

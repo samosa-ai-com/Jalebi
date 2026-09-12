@@ -97,7 +97,9 @@ describe("Skills", () => {
     render(<Skills />);
     await screen.findByText(/Linked by 1 agent/);
 
-    await userEvent.selectOptions(screen.getByLabelText("Sort skills"), "used");
+    await userEvent.click(screen.getByLabelText("Sort skills"));
+    await userEvent.type(screen.getByRole("combobox"), "most used");
+    await userEvent.click(screen.getByRole("option", { name: "Sort: most used" }));
     const cards = screen.getAllByText(/secure-coding|git-workflow/, { exact: false });
     expect(cards[0].textContent).toContain("secure-coding");
   });
@@ -169,5 +171,13 @@ describe("Skills", () => {
     expect(await screen.findByDisplayValue("Secure Coding")).toBeInTheDocument();
     await userEvent.click(edits[0]);
     expect(await screen.findByDisplayValue("Git Workflow")).toBeInTheDocument();
+  });
+
+  it("shows friendly EmptyState when there are no skills", async () => {
+    vi.stubGlobal("fetch", makeFetchMock([]));
+    render(<Skills />);
+    expect(await screen.findByRole("heading", { name: "No skills yet" })).toBeInTheDocument();
+    expect(screen.getByText(/Create a skill to provide reusable instructions/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create skill" })).toBeInTheDocument();
   });
 });

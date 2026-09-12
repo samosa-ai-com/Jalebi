@@ -1,11 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import { AttentionBadge } from "../components/AttentionBadge";
+import { BrewHouse } from "../components/brew/BrewHouse";
+import type { SnackKind } from "../components/brew/snacks";
+import { OpsDeck } from "../components/ops/OpsDeck";
+import type { JobKind } from "../components/ops/jobStyle";
+import { getMissionTheme, setMissionTheme, type MissionTheme } from "../lib/missionTheme";
 import { DepBadges } from "../components/DepBadges";
+import { EmptyState } from "../components/EmptyState";
+import { OnboardingChecklist } from "../components/OnboardingChecklist";
 import { RunningCard } from "../components/RunningCard";
+import SearchableSelect from "../components/SearchableSelect";
 import { StatusBadge } from "../components/StatusBadge";
 import { useBackends } from "../hooks/useBackends";
+import { groupFpsByScreen } from "../lib/screeningDealt";
+import { useStatusAnnouncer } from "../lib/useStatusAnnouncer";
 import type { Account, CatalogAgent, GithubContext, Repo, SettingsMap, Task } from "../types";
 
 function repoName(repos: Repo[], id: number): string {
@@ -48,35 +58,19 @@ const TASK_TYPES = [
   { value: "pr_review", label: "Review PR" },
 ];
 
-function Select({
-  label,
-  value,
-  onChange,
-  children,
-  placeholder,
-  disabled,
-}: {
-  label: string;
-  value: string | number;
-  onChange: (v: string) => void;
-  children: React.ReactNode;
-  placeholder?: string;
-  disabled?: boolean;
-}) {
-  return (
-    <label className="block">
-      <span className="mb-1.5 block text-xs font-medium text-ink-400">{label}</span>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="field disabled:opacity-50"
-        disabled={disabled}
-      >
-        {placeholder !== undefined && <option value="">{placeholder}</option>}
-        {children}
-      </select>
-    </label>
-  );
+/** Cross-page handoff from Screenings: prefill the New-task form. `dealtFps`
+ * are finding fingerprints marked dealt only after the create POST succeeds
+ * (see handleCreated) — never at navigation time, so abandoning the form
+ * leaves the inbox untouched. */
+export interface ScreeningHandoff {
+  prefill: TaskPrefill;
+  dealtFps?: string[];
+  screeningHandoffId?: string;
+}
+
+function sanitizePrefillType(type: string | undefined): string | undefined {
+  if (!type) return type;
+  return TASK_TYPES.some((t) => t.value === type) ? type : "freeform";
 }
 
 /** Fields a task row can push back into the form via the Clone button. */
@@ -94,6 +88,7 @@ export interface TaskPrefill {
   issueNumber?: string;
   patName?: string;
   envVars?: string[];
+  addressReviews?: boolean;
 }
 
 const TASK_DEFAULTS_KEY = "jalebi-task-defaults";
@@ -114,13 +109,11 @@ function CreateTask({
   accounts,
   onCreated,
   prefill,
-  prefillNonce,
 }: {
   repos: Repo[];
   accounts: Account[];
   onCreated: (id?: number) => void;
   prefill: TaskPrefill | null;
-  prefillNonce: number;
 }) {
   const stored = useMemo(() => loadTaskDefaults(), []);
   const [repoId, setRepoId] = useState<number>(prefill?.repoId ?? 0);
@@ -133,6 +126,11 @@ function CreateTask({
   const [patName, setPatName] = useState(prefill?.patName ?? "");
   const [issueNumber, setIssueNumber] = useState(prefill?.issueNumber ?? "");
   const [prNumber, setPrNumber] = useState(prefill?.prNumber ?? "");
+  // Creation-time "address the review comments on the linked PR" (freeform
+  // only). Defaults to checked as soon as a PR is linked unless the user (or
+  // a prefill) explicitly chose otherwise.
+  const [addressReviews, setAddressReviews] = useState(prefill?.addressReviews ?? false);
+  const [addressTouched, setAddressTouched] = useState(prefill?.addressReviews !== undefined);
   const [publishMode, setPublishMode] = useState<"auto" | "manual" | "">(
     prefill?.publishMode ?? stored.publishMode ?? ""
   );
@@ -141,10 +139,7 @@ function CreateTask({
   const [agentCli, setAgentCli] = useState<string | null>(prefill?.cli ?? stored.cli ?? null);
   const [settings, setSettings] = useState<SettingsMap | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const formRef = useRef<HTMLFormElement>(null);
-  // Clone remounts the form (parent keys on prefillNonce) with the
-  // prefill baked into the initial state above — scroll it into view once.
-  const scrollOnMount = useRef(prefillNonce > 0);
+
   // Clone remounts with branches baked into the initial state — the context
   // fetch must not clobber them back to the repo default on arrival. The
   // flag is consumed by the first context load; picking another repo clears
@@ -185,13 +180,24 @@ function CreateTask({
 
   // Review tasks carry their brief with the agent — instructions optional.
   const promptRequired = type !== "pr_review";
+  const isReview = type === "pr_review";
+  // The backend default when the picker is left blank: issue_fix auto-publishes,
+  // everything else is manual. Derive the summary and the safety line from this
+  // same value so they can never contradict each other.
+  const effectivePublish: "auto" | "manual" =
+    publishMode === "auto" || publishMode === "manual"
+      ? publishMode
+      : type === "issue_fix"
+        ? "auto"
+        : "manual";
+  const isAutoPublish = !isReview && effectivePublish === "auto";
 
   const agentName = agents.find((a) => a.id === agentId)?.name ?? null;
   const advancedSummary = [
     agentCli ?? "…",
     model || "default model",
     agentName ?? "default agent",
-    publishMode === "manual" ? "manual publish" : "auto publish",
+    isReview ? "no publish (review)" : `${effectivePublish} publish`,
     effectivePatName ? `as ${accountLabel(effectivePatName)}` : null,
     envVars.length > 0 ? `${envVars.length} env` : null,
   ]
@@ -233,6 +239,9 @@ function CreateTask({
 
   function selectPr(num: string) {
     setPrNumber(num);
+    // Recommended default: linking a PR opts into addressing its review
+    // comments — unless the user already toggled the checkbox explicitly.
+    if (!addressTouched) setAddressReviews(!!num);
     // Intuitive default: picking a PR bases the work on its head branch and
     // targets its base branch — but only when those branches exist on
     // origin. A fork head missing from origin keeps the current base; the
@@ -268,15 +277,6 @@ function CreateTask({
         setAgentId((cur) => (cur && list.some((x) => x.id === cur) ? cur : ""));
       })
       .catch(() => {});
-  }, []);
-
-  // After a clone remount, bring the form into view (no state is set here).
-  useEffect(() => {
-    if (!scrollOnMount.current) return;
-    const formEl = formRef.current;
-    if (formEl && typeof formEl.scrollIntoView === "function") {
-      formEl.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
   }, []);
 
   useEffect(() => {
@@ -332,6 +332,17 @@ function CreateTask({
               : c.branches[0];
           setSourceBranch(def);
           setTargetBranch(def);
+          // Prefilled PR link (e.g. the Address-reviewers handoff, which
+          // carries no explicit branches): base the work on the PR exactly
+          // like a manual pick would — selectPr only runs on dropdown change.
+          // Same origin-only rule (fork heads keep the default + hint).
+          if (type === "freeform" && prNumber) {
+            const pr = c.prs.find((p) => p.number === Number(prNumber)) ?? null;
+            if (pr) {
+              if (pr.head && c.branches.includes(pr.head)) setSourceBranch(pr.head);
+              if (pr.base && c.branches.includes(pr.base)) setTargetBranch(pr.base);
+            }
+          }
         }
         preserveBranches.current = false;
       })
@@ -376,7 +387,11 @@ function CreateTask({
         pat_name: effectivePatName || undefined,
         issue_number: issueNumber ? Number(issueNumber) : undefined,
         pr_number: prNumber ? Number(prNumber) : undefined,
-        publish_mode: publishMode === "" ? undefined : publishMode,
+        address_reviews: type === "freeform" && prNumber ? addressReviews : undefined,
+        // Reviews never publish: omit any stale mode (e.g. carried in from a
+        // clone or saved defaults) so the backend never persists a contradictory
+        // publish_mode on a pr_review task.
+        publish_mode: isReview || publishMode === "" ? undefined : publishMode,
         reviewers: reviewers.length > 0 ? reviewers : undefined,
         env_vars: envVars,
       });
@@ -399,6 +414,8 @@ function CreateTask({
       setPrompt("");
       setIssueNumber("");
       setPrNumber("");
+      setAddressReviews(false);
+      setAddressTouched(false);
       setEnvVars([]);
       setAgentId("");
       setReviewers([]);
@@ -412,7 +429,11 @@ function CreateTask({
 
   if (repos.length === 0) {
     return (
-      <div className="surface flex flex-col items-start gap-3 p-6 animate-fade-up">
+      <div
+        id="new-task"
+        tabIndex={-1}
+        className="surface flex flex-col items-start gap-3 p-6 animate-fade-up outline-none"
+      >
         <h2 className="panel-title">New task</h2>
         <p className="text-sm text-ink-400">
           No repos connected yet — connect one from the{" "}
@@ -428,8 +449,9 @@ function CreateTask({
   return (
     <form
       onSubmit={submit}
-      ref={formRef}
-      className="surface space-y-4 scroll-mt-4 p-6 animate-fade-up"
+      id="new-task"
+      tabIndex={-1}
+      className="surface space-y-4 p-6 animate-fade-up outline-none"
       style={{ animationDelay: "0.05s" }}
     >
       <div className="flex items-baseline justify-between">
@@ -439,131 +461,131 @@ function CreateTask({
         </span>
       </div>
 
+      <p className="text-xs text-ink-500">
+        {type === "pr_review"
+          ? "The agent reviews this pull request in a read-only copy and posts its comments. It never changes the code or opens a merge."
+          : "The agent works in a private local copy of the repo on its own branch and cannot push. Jalebi publishes the result for you, and merging is always your decision."}
+      </p>
+
       <div className="grid gap-4 sm:grid-cols-2">
-        <label className="block">
-          <span className="mb-1.5 block text-xs font-medium text-ink-400">Repository</span>
-          <select
-            value={effectiveRepoId}
-            onChange={(e) => selectRepo(Number(e.target.value))}
-            className="field"
-          >
-            {(() => {
-              const groups = new Map<string, Repo[]>();
-              for (const r of repos) {
-                const key = r.pat_name ?? "";
-                if (!groups.has(key)) groups.set(key, []);
-                groups.get(key)!.push(r);
-              }
-              return [...groups.entries()].map(([key, list]) => (
-                <optgroup key={key} label={accountLabel(key || null)}>
-                  {list.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {r.full_name}
-                    </option>
-                  ))}
-                </optgroup>
-              ));
-            })()}
-          </select>
-        </label>
-        <Select label="Task type" value={type} onChange={setType}>
-          {TASK_TYPES.map((t) => (
-            <option key={t.value} value={t.value}>
-              {t.label}
-            </option>
-          ))}
-        </Select>
+        <SearchableSelect
+          label="Repository"
+          value={effectiveRepoId}
+          onChange={(v) => selectRepo(Number(v))}
+          options={repos.map((r) => ({
+            value: String(r.id),
+            label: `${accountLabel(r.pat_name)} / ${r.full_name}`,
+          }))}
+        />
+        <SearchableSelect
+          label="Task type"
+          value={type}
+          onChange={(v) => {
+            const next = v as typeof type;
+            setType(next);
+            // Reviews never publish, so drop any publish pin carried over from
+            // another type — the summary and submit must not report a mode.
+            if (next === "pr_review") setPublishMode("");
+          }}
+          options={TASK_TYPES}
+        />
       </div>
 
       {(type === "issue_fix" || type === "pr_review" || type === "freeform") && context && (
         <div className="grid gap-4 sm:grid-cols-2">
           {type === "issue_fix" && (
-            <Select
+            <SearchableSelect
               label="Issue"
               value={issueNumber}
               onChange={setIssueNumber}
               placeholder={context.issues.length ? "Select an issue…" : "No open issues"}
-            >
-              {context.issues.map((i) => (
-                <option key={i.number} value={i.number}>
-                  #{i.number} — {i.title}
-                </option>
-              ))}
-            </Select>
+              options={context.issues.map((i) => ({
+                value: String(i.number),
+                label: `#${i.number} — ${i.title}`,
+              }))}
+            />
           )}
           {type !== "issue_fix" && (
-            <Select
+            <SearchableSelect
               label={type === "pr_review" ? "Pull request" : "Link PR (optional)"}
               value={prNumber}
               onChange={selectPr}
               placeholder={context.prs.length ? "Select a PR…" : "No open PRs"}
-            >
-              {context.prs.map((p) => (
-                <option key={p.number} value={p.number}>
-                  #{p.number} — {p.title}
-                </option>
-              ))}
-            </Select>
+              options={context.prs.map((p) => ({
+                value: String(p.number),
+                label: `#${p.number} — ${p.title}`,
+              }))}
+            />
           )}
         </div>
+      )}
+      {type === "freeform" && prNumber && (
+        <label className="flex cursor-pointer items-start gap-2 text-xs text-ink-400">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={addressReviews}
+            onChange={(e) => {
+              setAddressReviews(e.target.checked);
+              setAddressTouched(true);
+            }}
+          />
+          <span>
+            Address the review comments on this PR — the agent fixes what reviewers said (current
+            comments are embedded; newer ones are fetched live).
+          </span>
+        </label>
       )}
 
       {type === "issue_fix" ? (
         <div className="grid gap-4 sm:grid-cols-2">
-          <Select
+          <SearchableSelect
             label="Target branch (worktree base / PR base)"
             value={targetBranch}
             onChange={setTargetBranch}
             placeholder={
               context ? (context.branches.length ? "default" : "no branches") : "loading…"
             }
-          >
-            {(context?.branches ?? []).map((b) => (
-              <option key={b} value={b}>
-                {b}
-              </option>
-            ))}
-          </Select>
+            options={context?.branches ?? []}
+          />
         </div>
       ) : type === "pr_review" ? null : (
         <div className="space-y-3">
           <div className="grid gap-4 sm:grid-cols-2">
-            <Select
+            <SearchableSelect
               label="Source branch"
               value={sourceBranch}
               onChange={setSourceBranch}
               placeholder={
                 context ? (context.branches.length ? "default" : "no branches") : "loading…"
               }
-            >
-              {(context?.branches ?? []).map((b) => (
-                <option key={b} value={b}>
-                  {b}
-                </option>
-              ))}
-              {(showPrHeadOption || isPrHeadSelected) && selectedPr && (
-                <option value={prHeadValue}>
-                  PR #{selectedPr.number} head
-                  {selectedPr.head_repo
-                    ? ` (${selectedPr.head_repo}:${selectedPr.head})`
-                    : ` (${selectedPr.head})`}
-                </option>
-              )}
-            </Select>
-            <Select
+              options={[
+                ...(context?.branches ?? []),
+                ...(showPrHeadOption || isPrHeadSelected
+                  ? selectedPr
+                    ? [
+                        {
+                          value: prHeadValue,
+                          label:
+                            `PR #${selectedPr.number} head` +
+                            (selectedPr.head_repo
+                              ? ` (${selectedPr.head_repo}:${selectedPr.head})`
+                              : ` (${selectedPr.head})`),
+                        },
+                      ]
+                    : []
+                  : []),
+              ]}
+            />
+            <SearchableSelect
               label="Target branch (PR base)"
               value={targetBranch}
               onChange={setTargetBranch}
               placeholder={
                 context ? (context.branches.length ? "default" : "no branches") : "loading…"
               }
-            >
-              {(context?.branches ?? []).map((b) => (
-                <option key={b} value={b}>
-                  {b}
-                </option>
-              ))}
-            </Select>
+              options={context?.branches ?? []}
+            />
           </div>
           {showPrHeadOption && selectedPr && !isPrHeadSelected && (
             <p className="text-[11px] leading-relaxed text-ink-500">
@@ -643,65 +665,74 @@ function CreateTask({
           className="flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left"
         >
           <span className="shrink-0 text-xs font-medium text-ink-400">
-            Advanced {showAdvanced ? "▾" : "▸"}
+            Advanced options {showAdvanced ? "▾" : "▸"}
           </span>
           <span className="truncate font-mono text-[11px] text-ink-500">{advancedSummary}</span>
         </button>
         {showAdvanced && (
           <div className="space-y-4 px-4 pb-4">
             <div className="grid gap-4 sm:grid-cols-4">
-              <Select
+              <SearchableSelect
                 label="Agent"
                 value={agentId}
                 onChange={setAgentId}
                 placeholder="Default build agent"
-              >
-                {agents.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name} ({a.id})
-                  </option>
-                ))}
-              </Select>
-              <Select
+                options={agents.map((a) => ({ value: a.id, label: `${a.name} (${a.id})` }))}
+              />
+              <SearchableSelect
                 label="Backend"
                 value={agentCli ?? ""}
-                onChange={setAgentCli}
+                onChange={(v) => {
+                  setAgentCli(v);
+                  // A new backend means a new model list — drop the old pick
+                  // so a stale id from another backend is never submitted.
+                  setModel("");
+                }}
                 disabled={settingsLoading}
-              >
-                {backendOptions.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-              </Select>
-              <Select label="Model" value={model} onChange={setModel} placeholder="default model">
-                {models.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-              </Select>
-              <Select
+                options={backendOptions}
+              />
+              <SearchableSelect
+                label="Model"
+                value={model}
+                onChange={setModel}
+                placeholder="default model"
+                options={models}
+                allowCustom
+                staleHint="Not in this backend's known list — will be sent as-is."
+              />
+              <SearchableSelect
                 label="Credentials"
                 value={patName}
                 onChange={setPatName}
                 placeholder="Inherit repo account"
-              >
-                {accounts.map((a) => (
-                  <option key={a.name} value={a.name}>
-                    {a.login ?? a.name} ({a.masked})
-                  </option>
-                ))}
-              </Select>
-              <Select
-                label="Publish mode"
-                value={publishMode}
-                onChange={(v) => setPublishMode(v as "auto" | "manual" | "")}
-                placeholder="Auto (by type)"
-              >
-                <option value="auto">Auto — publish when done</option>
-                <option value="manual">Manual — I publish</option>
-              </Select>
+                options={accounts.map((a) => ({
+                  value: a.name,
+                  label: `${a.login ?? a.name} (${a.masked})`,
+                }))}
+              />
+              {type === "pr_review" ? (
+                <p className="text-[11px] text-ink-500">
+                  Review tasks do not publish a pull request — the review is posted as comments on
+                  the PR.
+                </p>
+              ) : (
+                <div>
+                  <SearchableSelect
+                    label="Publish mode"
+                    value={publishMode}
+                    onChange={(v) => setPublishMode(v as "auto" | "manual" | "")}
+                    placeholder="Auto (by type)"
+                    options={[
+                      { value: "auto", label: "Auto — publish when done" },
+                      { value: "manual", label: "Manual — I publish" },
+                    ]}
+                  />
+                  <p className="mt-1.5 text-[11px] text-ink-500">
+                    Auto publishes when the task finishes, Manual waits for you to review and click
+                    Publish.
+                  </p>
+                </div>
+              )}
             </div>
 
             {availableEnvVars.length > 0 && (
@@ -784,13 +815,22 @@ function CreateTask({
 
       {error && <p className="text-xs text-red-400">{error}</p>}
 
-      <div className="flex justify-end">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-xs text-ink-500">
+          {type === "pr_review"
+            ? "Review tasks only post comments — nothing is pushed or published. You can cancel while it runs."
+            : `The task can be cancelled while it runs. ${
+                isAutoPublish
+                  ? "A pull request will be published automatically when the task finishes."
+                  : "Publishing a pull request is a separate step you control."
+              }`}
+        </p>
         <button
           type="submit"
           disabled={
             busy || settingsLoading || !effectiveRepoId || (promptRequired && !prompt.trim())
           }
-          className="btn-primary"
+          className="btn-primary shrink-0 self-end sm:self-auto"
         >
           {busy ? "Creating…" : settingsLoading ? "Loading…" : "Create"}
         </button>
@@ -858,7 +898,16 @@ function GhLink({ repo, kind, number }: { repo: string; kind: "pull" | "issues";
 
 export default function Tasks() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const urlView = searchParams.get("view");
+  const fromMission =
+    (location.state as { from?: string } | null)?.from === "mission" ||
+    searchParams.get("from") === "mission" ||
+    searchParams.get("action") === "new";
+
   const [tasks, setTasks] = useState<Task[]>([]);
+  const statusAnnouncement = useStatusAnnouncer(tasks);
   const [repos, setRepos] = useState<Repo[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -875,6 +924,28 @@ export default function Tasks() {
   const [lastLoaded, setLastLoaded] = useState<Date | null>(null);
   const [prefill, setPrefill] = useState<TaskPrefill | null>(null);
   const [prefillNonce, setPrefillNonce] = useState(0);
+  // Finding fingerprints carried by a screening handoff — marked dealt only
+  // after the new task's create POST succeeds (never at navigation time, so
+  // abandoning the form leaves the inbox untouched).
+  const [pendingDealtFps, setPendingDealtFps] = useState<string[]>([]);
+  // One-shot ids of consumed screening handoffs (guards re-apply on
+  // re-render; the state entry itself is cleared with a replace navigation).
+  const consumedHandoffs = useRef<Set<string>>(new Set());
+  const view: "queue" | "mission" = (() => {
+    if (urlView === "mission" || urlView === "queue") return urlView;
+    try {
+      return localStorage.getItem("jalebi-tasks-view") === "mission" ? "mission" : "queue";
+    } catch {
+      return "queue";
+    }
+  })();
+
+  const [missionTheme, setMissionThemeState] = useState<MissionTheme>(() => getMissionTheme());
+
+  const handleMissionThemeChange = useCallback((nextTheme: MissionTheme) => {
+    setMissionTheme(nextTheme);
+    setMissionThemeState(nextTheme);
+  }, []);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const load = useCallback(() => {
@@ -907,6 +978,41 @@ export default function Tasks() {
     },
     []
   );
+
+  // Screening → New-task handoff (one-shot). Applies even while Tasks stays
+  // mounted: setPrefill + nonce remount re-seeds the form (same mechanism as
+  // Clone/Mission-order). The entry is cleared with a replace navigation so
+  // refresh/back never re-injects a stale prompt; unrelated state keys (e.g.
+  // `from`) survive. A handoff id guards StrictMode double-effects.
+  useEffect(() => {
+    const raw = location.state as (Partial<ScreeningHandoff> & Record<string, unknown>) | null;
+    if (raw == null || typeof raw !== "object" || raw.prefill == null) return;
+    const pf = raw.prefill as TaskPrefill;
+    if (typeof pf !== "object" || (pf.prompt != null && typeof pf.prompt !== "string")) return;
+    const id = typeof raw.screeningHandoffId === "string" ? raw.screeningHandoffId : null;
+    if (id !== null && consumedHandoffs.current.has(id)) return;
+    if (id !== null) consumedHandoffs.current.add(id);
+    const fps = Array.isArray(raw.dealtFps)
+      ? raw.dealtFps.filter((x) => typeof x === "string")
+      : [];
+    setPrefill({ ...pf, type: sanitizePrefillType(pf.type) });
+    setPrefillNonce((n) => n + 1);
+    setPendingDealtFps(fps);
+    // The form lives in the queue view only (mission renders BrewHouse
+    // instead) — flip to it, same as a mission-control order does. Replace
+    // keeps Back pointed at Screenings instead of a stale prefill entry.
+    try {
+      localStorage.setItem("jalebi-tasks-view", "queue");
+    } catch {
+      /* private-mode storage — non-fatal */
+    }
+    const { prefill: _dropP, dealtFps: _dropD, screeningHandoffId: _dropI, ...rest } = raw;
+    navigate("/?view=queue", {
+      replace: true,
+      state: Object.keys(rest).length > 0 ? rest : null,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.state]);
 
   const stats = useMemo(() => {
     const running = tasks.filter((t) => t.status === "queued" || t.status === "running").length;
@@ -987,6 +1093,60 @@ export default function Tasks() {
     setSelected(new Set());
   }
 
+  function selectView(v: "queue" | "mission") {
+    try {
+      localStorage.setItem("jalebi-tasks-view", v);
+    } catch {
+      /* private-mode storage — non-fatal */
+    }
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.set("view", v);
+        next.delete("from");
+        next.delete("action");
+        return next;
+      },
+      { replace: false }
+    );
+    try {
+      if (typeof window !== "undefined") {
+        window.scrollTo({ top: 0, behavior: "instant" as ScrollBehavior });
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // Mission-control order buttons flip to the queue, pre-select the
+  // task type matching the ordered snack or job kind, and push history without scrolling.
+  function handleMissionOrder(kind?: SnackKind | JobKind) {
+    const type =
+      kind === "samosa" || kind === "fix"
+        ? "issue_fix"
+        : kind === "pakora" || kind === "review"
+          ? "pr_review"
+          : "freeform";
+    setPrefill({ type });
+    setPendingDealtFps([]);
+    setPrefillNonce((n) => n + 1);
+    try {
+      localStorage.setItem("jalebi-tasks-view", "queue");
+    } catch {
+      /* ignore */
+    }
+    // Push new history entry with view=queue and from=mission
+    // Zero scrolling!
+    navigate("/?view=queue&from=mission", { state: { from: "mission" } });
+    try {
+      if (typeof window !== "undefined") {
+        window.scrollTo({ top: 0, behavior: "instant" as ScrollBehavior });
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
   function handleDismissAttention(taskId: number) {
     setTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, attention: "done" } : t)));
     api.dismissAttention(taskId).catch((e) => {
@@ -1003,9 +1163,11 @@ export default function Tasks() {
   }
 
   function handleClone(t: Task) {
+    // Persisted types outside the manual dropdown (screen_finding,
+    // triggered) fall back to freeform so the type select stays valid.
     setPrefill({
       repoId: t.repo_id,
-      type: t.type,
+      type: sanitizePrefillType(t.type) ?? "freeform",
       prompt: t.prompt,
       sourceBranch: t.source_branch ?? undefined,
       targetBranch: t.target_branch ?? undefined,
@@ -1013,6 +1175,7 @@ export default function Tasks() {
       cli: t.cli ?? undefined,
       model: t.model ?? undefined,
       publishMode: (t.publish_mode as "auto" | "manual" | "") ?? "",
+      addressReviews: t.address_reviews ?? undefined,
       prNumber:
         t.prs?.[0] != null
           ? String(t.prs[0])
@@ -1024,11 +1187,27 @@ export default function Tasks() {
       envVars: t.env_vars ?? undefined,
     });
     setPrefillNonce((n) => n + 1);
+    // A clone replaces any screening handoff in the form.
+    setPendingDealtFps([]);
   }
 
   function handleCreated(id?: number) {
     load();
+    setError(null);
     if (id === undefined) return;
+    // The screening handoff's findings become dealt only now — the create
+    // POST succeeded. Best-effort: a mark failure never blocks the task;
+    // the error tells the owner to mark from Screenings instead.
+    if (pendingDealtFps.length > 0) {
+      const fps = pendingDealtFps;
+      setPendingDealtFps([]);
+      const byScreen = groupFpsByScreen(fps);
+      Promise.all([...byScreen].map(([sid, list]) => api.markDealt(sid, list))).catch(() => {
+        setError(
+          "Task created, but its findings could not be marked dealt — mark them from Screenings."
+        );
+      });
+    }
     setFlash(id);
     if (flashTimer.current) clearTimeout(flashTimer.current);
     flashTimer.current = setTimeout(() => setFlash(null), 10000);
@@ -1088,6 +1267,22 @@ export default function Tasks() {
     }
   }
 
+  const handleStartTask = useCallback(() => {
+    const el = document.getElementById("new-task");
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth" });
+      el.focus();
+    }
+  }, []);
+
+  const reassuranceText = useMemo(() => {
+    if (tasks.length === 0) return "No tasks yet, nothing is running";
+    const running = tasks.filter((t) => t.status === "running").length;
+    const queued = tasks.filter((t) => t.status === "queued").length;
+    const needsYou = tasks.filter((t) => t.attention === "needs_you").length;
+    return `${running} running, ${queued} queued, ${needsYou} needs you`;
+  }, [tasks]);
+
   const statCards: { label: string; value: number; accent: string; filter: FilterId }[] = [
     { label: "Total", value: stats.total, accent: "text-ink-100", filter: "all" },
     { label: "Needs you", value: stats.needsYou, accent: "text-syrup-300", filter: "needs_you" },
@@ -1098,168 +1293,523 @@ export default function Tasks() {
 
   return (
     <div className="space-y-6">
-      <header className="animate-fade-up">
-        <h1 className="text-3xl font-bold tracking-tight text-ink-100">Tasks</h1>
-        <p className="mt-1 text-sm text-ink-500">
-          Your agent queue — what&apos;s running, what&apos;s done, what needs a decision.
-        </p>
+      <div className="sr-only" role="status" aria-live="polite">
+        {statusAnnouncement}
+      </div>
+      <header className="flex flex-wrap items-start justify-between gap-3 animate-fade-up">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight text-ink-100">Tasks</h1>
+          <p className="mt-1 text-sm text-ink-500">
+            Your agent queue — what&apos;s running, what&apos;s done, what needs a decision.
+          </p>
+          {view === "queue" && (
+            <p className="mt-1 text-xs text-ink-500">
+              {reassuranceText}
+            </p>
+          )}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {view === "mission" && (
+            <div
+              role="group"
+              aria-label="Mission theme"
+              className="flex overflow-hidden rounded-full border border-ink-800 text-xs"
+            >
+              {(["ops", "brew"] as const).map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => handleMissionThemeChange(t)}
+                  aria-pressed={missionTheme === t}
+                  className={`px-3 py-1 transition-colors cursor-pointer ${
+                    missionTheme === t
+                      ? "bg-ink-800 font-semibold text-ink-100"
+                      : "text-ink-400 hover:bg-ink-850 hover:text-ink-200"
+                  }`}
+                >
+                  {t === "ops" ? "Ops Deck" : "Halwai"}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <div
+            role="group"
+            aria-label="Tasks view"
+            className="flex overflow-hidden rounded-full border border-ink-800 text-sm"
+          >
+            {(["queue", "mission"] as const).map((v) => (
+              <button
+                key={v}
+                type="button"
+                onClick={() => selectView(v)}
+                aria-pressed={view === v}
+                className={`px-3.5 py-1 transition-colors ${
+                  view === v
+                    ? "bg-syrup-500 font-semibold text-ink-950"
+                    : "text-ink-400 hover:bg-ink-850 hover:text-ink-100"
+                }`}
+              >
+                {v === "queue" ? "Queue" : "Mission control"}
+              </button>
+            ))}
+          </div>
+        </div>
       </header>
 
-      <div
-        className="grid grid-cols-2 gap-3 sm:grid-cols-5 animate-fade-up"
-        style={{ animationDelay: "0.05s" }}
-      >
-        {statCards.map((c) => (
-          <button
-            key={c.label}
-            type="button"
-            onClick={() => selectFilter(c.filter)}
-            title={`Show ${c.label.toLowerCase()} tasks`}
-            className={`surface px-5 py-4 text-left transition-colors hover:border-ink-600 ${
-              filter === c.filter ? "border-syrup-500/50" : ""
-            }`}
-          >
-            <span className="block text-xs font-medium uppercase tracking-wider text-ink-500">
-              {c.label}
-            </span>
-            <span className={`mt-1 block font-mono text-3xl font-medium tabular-nums ${c.accent}`}>
-              {c.value}
-            </span>
-          </button>
-        ))}
-      </div>
-
-      {/* Phase 4 T4.4 — live "running now" panel: one card per
-          queued/running task, scroll-bounded for long queues. */}
-      {visible.some((t) => t.status === "running" || t.status === "queued") && (
-        <div className="max-h-[24rem] space-y-2 overflow-y-auto">
-          {visible
-            .filter((t) => t.status === "running" || t.status === "queued")
-            .map((t) => (
-              <RunningCard
-                key={t.id}
-                task={t}
-                repoName={t.repo_full_name ?? repoName(repos, t.repo_id)}
-                onCancel={() => handleCancel(t.id)}
-              />
-            ))}
-        </div>
-      )}
-
-      <CreateTask
-        key={prefillNonce}
-        repos={repos}
-        accounts={accounts}
-        onCreated={handleCreated}
-        prefill={prefill}
-        prefillNonce={prefillNonce}
-      />
-
-      {flash != null && (
-        <p className="rounded-xl border border-green-500/30 bg-green-500/10 px-4 py-2.5 text-sm text-green-300">
-          Task{" "}
-          <Link to={`/tasks/${flash}`} className="font-mono underline underline-offset-2">
-            #{flash}
-          </Link>{" "}
-          created — it will pick up a worker shortly.
-          <button
-            type="button"
-            onClick={() => setFlash(null)}
-            className="ml-3 text-xs text-green-400/70 hover:text-green-300"
-          >
-            Dismiss
-          </button>
-        </p>
-      )}
-
-      {error && (
-        <p className="text-sm text-red-400">
-          {error}{" "}
-          <button type="button" onClick={load} className="underline underline-offset-2">
-            Retry
-          </button>
-        </p>
-      )}
-
-      <section className="surface animate-fade-up" style={{ animationDelay: "0.1s" }}>
-        <div className="flex flex-wrap items-center gap-2 border-b border-ink-800 px-4 py-3">
-          {FILTERS.map((f) => (
-            <button
-              key={f.id}
-              onClick={() => selectFilter(f.id)}
-              className={`rounded-full px-3.5 py-1 text-sm transition-colors ${
-                filter === f.id
-                  ? "bg-syrup-500 text-ink-950 font-semibold"
-                  : "text-ink-400 hover:bg-ink-850 hover:text-ink-100"
-              }`}
-            >
-              {f.label} ({filterCounts[f.id]})
-            </button>
-          ))}
-          <select
-            value={repoFilter}
-            onChange={(e) => {
-              setRepoFilter(e.target.value);
-              setPage(0);
-            }}
-            aria-label="Filter by repository"
-            className="field !w-auto !py-1 text-sm"
-          >
-            <option value="">All repos</option>
-            {repoNames.map((n) => (
-              <option key={n} value={n}>
-                {n}
-              </option>
-            ))}
-          </select>
-          <input
-            value={query}
-            onChange={(e) => {
-              setQuery(e.target.value);
-              setPage(0);
-            }}
-            placeholder="Search tasks…"
-            className="field ml-auto w-48 !py-1 text-sm"
+      {view === "mission" ? (
+        missionTheme === "ops" ? (
+          <OpsDeck
+            tasks={tasks}
+            repos={repos}
+            onNewTask={handleMissionOrder}
+            onCancel={handleCancel}
           />
-        </div>
+        ) : (
+          <BrewHouse
+            tasks={tasks}
+            repos={repos}
+            onNewTask={handleMissionOrder}
+            onCancel={handleCancel}
+          />
+        )
+      ) : (
+        <>
+          <OnboardingChecklist
+            accounts={accounts.length}
+            repos={repos.length}
+            tasks={tasks.length}
+            onStartTask={handleStartTask}
+          />
 
-        <div className="flex flex-wrap items-center gap-2 border-b border-ink-800 px-4 py-2 text-xs text-ink-500">
-          {selected.size > 0 ? (
-            <>
-              <span className="font-mono">{selected.size} selected</span>
+          <div
+            className="grid grid-cols-2 gap-3 sm:grid-cols-5 animate-fade-up"
+            style={{ animationDelay: "0.05s" }}
+          >
+            {statCards.map((c) => (
               <button
+                key={c.label}
                 type="button"
-                onClick={() => void handleBulkDismiss()}
-                disabled={bulkBusy}
-                className="btn-ghost !px-2 !py-1 disabled:opacity-40"
+                onClick={() => selectFilter(c.filter)}
+                title={`Show ${c.label.toLowerCase()} tasks`}
+                className={`surface px-5 py-4 text-left transition-colors hover:border-ink-600 ${
+                  filter === c.filter ? "border-syrup-500/50" : ""
+                }`}
               >
-                Dismiss attention
+                <span className="block text-xs font-medium uppercase tracking-wider text-ink-500">
+                  {c.label}
+                </span>
+                <span
+                  className={`mt-1 block font-mono text-3xl font-medium tabular-nums ${c.accent}`}
+                >
+                  {c.value}
+                </span>
               </button>
-              <button
-                type="button"
-                onClick={() => void handleBulkDelete()}
-                disabled={bulkBusy}
-                className="btn-ghost !px-2 !py-1 text-red-300 disabled:opacity-40"
-              >
-                {bulkBusy ? "Working…" : "Delete"}
-              </button>
-              <button
-                type="button"
-                onClick={() => setSelected(new Set())}
-                className="btn-ghost !px-2 !py-1"
-              >
-                Clear
-              </button>
-            </>
-          ) : (
-            <span>
-              {visible.length} task{visible.length === 1 ? "" : "s"}
-              {lastLoaded ? ` · updated ${timeAgo(lastLoaded.toISOString())}` : ""}
-            </span>
+            ))}
+          </div>
+
+          {/* Phase 4 T4.4 — live "running now" panel: one card per
+          queued/running task, scroll-bounded for long queues. */}
+          {visible.some((t) => t.status === "running" || t.status === "queued") && (
+            <div className="max-h-[24rem] space-y-2 overflow-y-auto">
+              {visible
+                .filter((t) => t.status === "running" || t.status === "queued")
+                .map((t) => (
+                  <RunningCard
+                    key={t.id}
+                    task={t}
+                    repoName={t.repo_full_name ?? repoName(repos, t.repo_id)}
+                    onCancel={() => handleCancel(t.id)}
+                  />
+                ))}
+            </div>
           )}
-          <span className="ml-auto flex items-center gap-2">
+
+          {fromMission && (
+            <div className="flex items-center justify-between rounded-xl border border-syrup-500/30 bg-syrup-950/20 px-4 py-2.5 text-xs text-syrup-300 animate-fade-up">
+              <span className="flex items-center gap-2">
+                <span className="h-1.5 w-1.5 rounded-full bg-syrup-400" />
+                <span>Ordering from Mission Control</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  selectView("mission");
+                  navigate("/?view=mission");
+                }}
+                className="inline-flex items-center gap-1 font-semibold text-syrup-400 hover:text-syrup-200 transition-colors"
+              >
+                <span>←</span>
+                <span>Back to Mission control</span>
+              </button>
+            </div>
+          )}
+
+          <CreateTask
+            key={prefillNonce}
+            repos={repos}
+            accounts={accounts}
+            onCreated={handleCreated}
+            prefill={prefill}
+          />
+
+          {flash != null && (
+            <div className="rounded-xl border border-green-500/30 bg-green-500/10 px-4 py-2.5 text-sm text-green-300 flex flex-wrap items-center justify-between gap-2">
+              <span>
+                Task{" "}
+                <Link to={`/tasks/${flash}`} className="font-mono underline underline-offset-2">
+                  #{flash}
+                </Link>{" "}
+                created — it will pick up a worker shortly.
+              </span>
+              <div className="flex items-center gap-3 text-xs">
+                {fromMission && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      selectView("mission");
+                      navigate("/?view=mission");
+                    }}
+                    className="font-medium text-green-300 hover:text-green-100 underline underline-offset-2"
+                  >
+                    Back to Mission control →
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setFlash(null)}
+                  className="text-xs text-green-400/70 hover:text-green-300"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          )}
+
+          {error && (
+            <p className="text-sm text-red-400">
+              {error}{" "}
+              <button type="button" onClick={load} className="underline underline-offset-2">
+                Retry
+              </button>
+            </p>
+          )}
+
+          <section className="surface animate-fade-up" style={{ animationDelay: "0.1s" }}>
+            <div className="flex flex-wrap items-center gap-2 border-b border-ink-800 px-4 py-3">
+              {FILTERS.map((f) => (
+                <button
+                  key={f.id}
+                  onClick={() => selectFilter(f.id)}
+                  className={`rounded-full px-3.5 py-1 text-sm transition-colors ${
+                    filter === f.id
+                      ? "bg-syrup-500 text-ink-950 font-semibold"
+                      : "text-ink-400 hover:bg-ink-850 hover:text-ink-100"
+                  }`}
+                >
+                  {f.label} ({filterCounts[f.id]})
+                </button>
+              ))}
+              <SearchableSelect
+                label="Filter by repository"
+                value={repoFilter}
+                onChange={(v) => {
+                  setRepoFilter(v);
+                  setPage(0);
+                }}
+                placeholder="All repos"
+                options={repoNames}
+              />
+              <input
+                value={query}
+                onChange={(e) => {
+                  setQuery(e.target.value);
+                  setPage(0);
+                }}
+                placeholder="Search tasks…"
+                className="field ml-auto w-48 !py-1 text-sm"
+              />
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 border-b border-ink-800 px-4 py-2 text-xs text-ink-500">
+              {selected.size > 0 ? (
+                <>
+                  <span className="font-mono">{selected.size} selected</span>
+                  <button
+                    type="button"
+                    onClick={() => void handleBulkDismiss()}
+                    disabled={bulkBusy}
+                    className="btn-ghost !px-2 !py-1 disabled:opacity-40"
+                  >
+                    Dismiss attention
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleBulkDelete()}
+                    disabled={bulkBusy}
+                    className="btn-ghost !px-2 !py-1 text-red-300 disabled:opacity-40"
+                  >
+                    {bulkBusy ? "Working…" : "Delete"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelected(new Set())}
+                    className="btn-ghost !px-2 !py-1"
+                  >
+                    Clear
+                  </button>
+                </>
+              ) : (
+                <span>
+                  {visible.length} task{visible.length === 1 ? "" : "s"}
+                  {lastLoaded ? ` · updated ${timeAgo(lastLoaded.toISOString())}` : ""}
+                </span>
+              )}
+              <span className="ml-auto flex items-center gap-2">
+                {pageCount > 1 && (
+                  <>
+                    <button
+                      disabled={page === 0}
+                      onClick={() => setPage((p) => p - 1)}
+                      className="btn-ghost !px-2 !py-1 disabled:opacity-40"
+                    >
+                      ← Prev
+                    </button>
+                    <span className="font-mono">
+                      {page + 1} / {pageCount}
+                    </span>
+                    <button
+                      disabled={page >= pageCount - 1}
+                      onClick={() => setPage((p) => p + 1)}
+                      className="btn-ghost !px-2 !py-1 disabled:opacity-40"
+                    >
+                      Next →
+                    </button>
+                  </>
+                )}
+                <button type="button" onClick={load} className="btn-ghost !px-2 !py-1">
+                  Refresh
+                </button>
+              </span>
+            </div>
+
+            <div className="max-h-[60vh] overflow-y-auto">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 z-10 bg-ink-900">
+                  <tr className="text-left text-xs uppercase tracking-wider text-ink-500">
+                    <th className="px-4 pt-3 pb-2 font-medium">
+                      <input
+                        type="checkbox"
+                        aria-label="Select tasks on this page"
+                        checked={pageRows.length > 0 && pageRows.every((t) => selected.has(t.id))}
+                        onChange={() => toggleSelectPage(pageRows.map((t) => t.id))}
+                        className="accent-syrup-500"
+                      />
+                    </th>
+                    <th
+                      className="cursor-pointer select-none px-4 pt-3 pb-2 font-medium hover:text-ink-300"
+                      onClick={() => toggleSort("id")}
+                    >
+                      ID {sortKey === "id" ? (sortDesc ? "↓" : "↑") : ""}
+                    </th>
+                    <th
+                      className="cursor-pointer select-none px-4 pb-2 font-medium hover:text-ink-300"
+                      onClick={() => toggleSort("status")}
+                    >
+                      Status {sortKey === "status" ? (sortDesc ? "↓" : "↑") : ""}
+                    </th>
+                    <th
+                      className="cursor-pointer select-none px-4 pb-2 font-medium hover:text-ink-300"
+                      onClick={() => toggleSort("repo")}
+                    >
+                      Repo {sortKey === "repo" ? (sortDesc ? "↓" : "↑") : ""}
+                    </th>
+                    <th className="px-4 pb-2 font-medium">Prompt</th>
+                    <th className="px-4 pb-2 font-medium">PR / Issues</th>
+                    <th
+                      className="cursor-pointer select-none px-4 pb-2 font-medium hover:text-ink-300"
+                      onClick={() => toggleSort("updated_at")}
+                    >
+                      Updated {sortKey === "updated_at" ? (sortDesc ? "↓" : "↑") : ""}
+                    </th>
+                    <th className="px-4 pb-2 font-medium">
+                      <span className="sr-only">Actions</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pageRows.length === 0 && (
+                    <tr>
+                      <td colSpan={8} className="p-6">
+                        {query || repoFilter ? (
+                          <div className="py-4 text-center text-sm text-ink-500">
+                            No tasks{filter !== "all" ? ` in “${filter}”` : ""} matching your
+                            search.
+                          </div>
+                        ) : filter === "all" && tasks.length === 0 ? (
+                          <EmptyState
+                            icon="📋"
+                            title="No tasks yet"
+                            description={
+                              repos.length === 0
+                                ? "Create your first task above, or connect a repository first."
+                                : "Create your first task above to start an agent run."
+                            }
+                            action={
+                              repos.length === 0 ? (
+                                <Link to="/repos" className="btn-primary">
+                                  Connect repository
+                                </Link>
+                              ) : undefined
+                            }
+                          />
+                        ) : (
+                          <div className="py-4 text-center text-sm text-ink-500">
+                            {EMPTY_STATE[filter]}
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  )}
+                  {pageRows.map((t) => {
+                    const rn = t.repo_full_name ?? repoName(repos, t.repo_id);
+                    const expanded = expandedPrompt === t.id;
+                    const failed =
+                      t.status === "failed" ||
+                      t.status === "timed_out" ||
+                      t.status === "interrupted";
+                    return (
+                      <tr
+                        key={t.id}
+                        onClick={() => navigate(`/tasks/${t.id}`)}
+                        className="cursor-pointer border-t border-ink-800/70 transition-colors hover:bg-ink-875/50"
+                      >
+                        <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            aria-label={`Select task #${t.id}`}
+                            checked={selected.has(t.id)}
+                            onChange={() => toggleSelected(t.id)}
+                            className="accent-syrup-500"
+                          />
+                        </td>
+                        <td className="px-4 py-3">
+                          <Link
+                            to={`/tasks/${t.id}`}
+                            onClick={(e) => e.stopPropagation()}
+                            className="font-mono text-syrup-400 hover:text-syrup-300"
+                          >
+                            #{t.id}
+                          </Link>
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <StatusBadge status={t.status} />
+                            {t.attention === "needs_you" && (
+                              <AttentionBadge attention={t.attention} />
+                            )}
+                            <DepBadges
+                              dependsOn={t.depends_on}
+                              blockedBy={t.blocked_by}
+                              blocking={t.blocking}
+                              blocked={t.blocked}
+                            />
+                            {t.attention === "needs_you" && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  handleDismissAttention(t.id);
+                                }}
+                                className="inline-flex items-center min-h-6 rounded px-1.5 py-0.5 text-[10px] font-medium text-ink-400 ring-1 ring-ink-700/60 hover:bg-ink-800 hover:text-ink-200 transition-colors"
+                                title="Dismiss attention for this task"
+                              >
+                                Dismiss
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <RepoChip name={rn} />
+                        </td>
+                        <td
+                          className={`max-w-xs cursor-pointer px-4 py-3 text-ink-300 ${expanded ? "" : "truncate"}`}
+                          title={expanded ? "Collapse" : t.prompt}
+                          role="button"
+                          tabIndex={0}
+                          aria-expanded={expanded}
+                          aria-label={expanded ? "Collapse prompt" : "Expand prompt"}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setExpandedPrompt(expanded ? null : t.id);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setExpandedPrompt(expanded ? null : t.id);
+                            }
+                          }}
+                        >
+                          {t.prompt}
+                        </td>
+                        <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {(t.prs?.length ? t.prs : t.pr_number ? [t.pr_number] : []).map((n) => (
+                              <GhLink key={`p${n}`} repo={rn} kind="pull" number={n} />
+                            ))}
+                            {(t.issues ?? []).map((n) => (
+                              <GhLink key={`i${n}`} repo={rn} kind="issues" number={n} />
+                            ))}
+                            {!t.prs?.length && !t.issues?.length && (
+                              <span className="text-ink-500">–</span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-ink-500">
+                          {timeAgo(t.updated_at)}
+                        </td>
+                        <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => handleClone(t)}
+                              title="Clone — pre-fill the form from this task"
+                              className="inline-flex items-center justify-center min-h-6 min-w-6 rounded px-1.5 py-0.5 font-mono text-xs text-ink-400 hover:bg-ink-800 hover:text-ink-200"
+                            >
+                              ⧉
+                            </button>
+                            {failed && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  api
+                                    .rerunTask(t.id)
+                                    .then(() => load())
+                                    .catch((e) =>
+                                      setError(
+                                        e instanceof Error ? e.message : "failed to re-run task"
+                                      )
+                                    );
+                                }}
+                                title="Re-run this task"
+                                className="inline-flex items-center justify-center min-h-6 min-w-6 rounded px-1.5 py-0.5 font-mono text-xs text-ink-400 hover:bg-ink-800 hover:text-ink-200"
+                              >
+                                ↻
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
             {pageCount > 1 && (
-              <>
+              <div className="flex items-center justify-end gap-2 border-t border-ink-800 px-4 py-3 text-xs text-ink-500">
                 <button
                   disabled={page === 0}
                   onClick={() => setPage((p) => p - 1)}
@@ -1277,226 +1827,11 @@ export default function Tasks() {
                 >
                   Next →
                 </button>
-              </>
+              </div>
             )}
-            <button type="button" onClick={load} className="btn-ghost !px-2 !py-1">
-              Refresh
-            </button>
-          </span>
-        </div>
-
-        <div className="max-h-[60vh] overflow-y-auto">
-          <table className="w-full text-sm">
-            <thead className="sticky top-0 z-10 bg-ink-900">
-              <tr className="text-left text-xs uppercase tracking-wider text-ink-500">
-                <th className="px-4 pt-3 pb-2 font-medium">
-                  <input
-                    type="checkbox"
-                    aria-label="Select tasks on this page"
-                    checked={pageRows.length > 0 && pageRows.every((t) => selected.has(t.id))}
-                    onChange={() => toggleSelectPage(pageRows.map((t) => t.id))}
-                    className="accent-syrup-500"
-                  />
-                </th>
-                <th
-                  className="cursor-pointer select-none px-4 pt-3 pb-2 font-medium hover:text-ink-300"
-                  onClick={() => toggleSort("id")}
-                >
-                  ID {sortKey === "id" ? (sortDesc ? "↓" : "↑") : ""}
-                </th>
-                <th
-                  className="cursor-pointer select-none px-4 pb-2 font-medium hover:text-ink-300"
-                  onClick={() => toggleSort("status")}
-                >
-                  Status {sortKey === "status" ? (sortDesc ? "↓" : "↑") : ""}
-                </th>
-                <th
-                  className="cursor-pointer select-none px-4 pb-2 font-medium hover:text-ink-300"
-                  onClick={() => toggleSort("repo")}
-                >
-                  Repo {sortKey === "repo" ? (sortDesc ? "↓" : "↑") : ""}
-                </th>
-                <th className="px-4 pb-2 font-medium">Prompt</th>
-                <th className="px-4 pb-2 font-medium">PR / Issues</th>
-                <th
-                  className="cursor-pointer select-none px-4 pb-2 font-medium hover:text-ink-300"
-                  onClick={() => toggleSort("updated_at")}
-                >
-                  Updated {sortKey === "updated_at" ? (sortDesc ? "↓" : "↑") : ""}
-                </th>
-                <th className="px-4 pb-2 font-medium">
-                  <span className="sr-only">Actions</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {pageRows.length === 0 && (
-                <tr>
-                  <td colSpan={8} className="px-4 py-8 text-center text-ink-600">
-                    {query || repoFilter ? (
-                      <>No tasks{filter !== "all" ? ` in “${filter}”` : ""} matching your search.</>
-                    ) : (
-                      EMPTY_STATE[filter]
-                    )}
-                  </td>
-                </tr>
-              )}
-              {pageRows.map((t) => {
-                const rn = t.repo_full_name ?? repoName(repos, t.repo_id);
-                const expanded = expandedPrompt === t.id;
-                const failed =
-                  t.status === "failed" || t.status === "timed_out" || t.status === "interrupted";
-                return (
-                  <tr
-                    key={t.id}
-                    onClick={() => navigate(`/tasks/${t.id}`)}
-                    className="cursor-pointer border-t border-ink-800/70 transition-colors hover:bg-ink-875/50"
-                  >
-                    <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
-                      <input
-                        type="checkbox"
-                        aria-label={`Select task #${t.id}`}
-                        checked={selected.has(t.id)}
-                        onChange={() => toggleSelected(t.id)}
-                        className="accent-syrup-500"
-                      />
-                    </td>
-                    <td className="px-4 py-3">
-                      <Link
-                        to={`/tasks/${t.id}`}
-                        onClick={(e) => e.stopPropagation()}
-                        className="font-mono text-syrup-400 hover:text-syrup-300"
-                      >
-                        #{t.id}
-                      </Link>
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <StatusBadge status={t.status} />
-                        {t.attention === "needs_you" && <AttentionBadge attention={t.attention} />}
-                        {/* DepBadges renders Links — stop them bubbling to the row nav. */}
-                        <span onClick={(e) => e.stopPropagation()}>
-                          <DepBadges
-                            dependsOn={t.depends_on}
-                            blockedBy={t.blocked_by}
-                            blocking={t.blocking}
-                            blocked={t.blocked}
-                          />
-                        </span>
-                        {t.attention === "needs_you" && (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              handleDismissAttention(t.id);
-                            }}
-                            className="rounded px-1.5 py-0.5 text-[10px] font-medium text-ink-400 ring-1 ring-ink-700/60 hover:bg-ink-800 hover:text-ink-200 transition-colors"
-                            title="Dismiss attention for this task"
-                          >
-                            Dismiss
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3">
-                      <RepoChip name={rn} />
-                    </td>
-                    <td
-                      className={`max-w-xs cursor-pointer px-4 py-3 text-ink-300 ${expanded ? "" : "truncate"}`}
-                      title={expanded ? "Collapse" : t.prompt}
-                      role="button"
-                      tabIndex={0}
-                      aria-expanded={expanded}
-                      aria-label={expanded ? "Collapse prompt" : "Expand prompt"}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setExpandedPrompt(expanded ? null : t.id);
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          setExpandedPrompt(expanded ? null : t.id);
-                        }
-                      }}
-                    >
-                      {t.prompt}
-                    </td>
-                    <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        {(t.prs?.length ? t.prs : t.pr_number ? [t.pr_number] : []).map((n) => (
-                          <GhLink key={`p${n}`} repo={rn} kind="pull" number={n} />
-                        ))}
-                        {(t.issues ?? []).map((n) => (
-                          <GhLink key={`i${n}`} repo={rn} kind="issues" number={n} />
-                        ))}
-                        {!t.prs?.length && !t.issues?.length && (
-                          <span className="text-ink-600">–</span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-ink-500">
-                      {timeAgo(t.updated_at)}
-                    </td>
-                    <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
-                      <div className="flex items-center gap-1">
-                        <button
-                          type="button"
-                          onClick={() => handleClone(t)}
-                          title="Clone — pre-fill the form from this task"
-                          className="rounded px-1.5 py-0.5 font-mono text-xs text-ink-400 hover:bg-ink-800 hover:text-ink-200"
-                        >
-                          ⧉
-                        </button>
-                        {failed && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              api
-                                .rerunTask(t.id)
-                                .then(() => load())
-                                .catch((e) =>
-                                  setError(e instanceof Error ? e.message : "failed to re-run task")
-                                );
-                            }}
-                            title="Re-run this task"
-                            className="rounded px-1.5 py-0.5 font-mono text-xs text-ink-400 hover:bg-ink-800 hover:text-ink-200"
-                          >
-                            ↻
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-
-        {pageCount > 1 && (
-          <div className="flex items-center justify-end gap-2 border-t border-ink-800 px-4 py-3 text-xs text-ink-500">
-            <button
-              disabled={page === 0}
-              onClick={() => setPage((p) => p - 1)}
-              className="btn-ghost !px-2 !py-1 disabled:opacity-40"
-            >
-              ← Prev
-            </button>
-            <span className="font-mono">
-              {page + 1} / {pageCount}
-            </span>
-            <button
-              disabled={page >= pageCount - 1}
-              onClick={() => setPage((p) => p + 1)}
-              className="btn-ghost !px-2 !py-1 disabled:opacity-40"
-            >
-              Next →
-            </button>
-          </div>
-        )}
-      </section>
+          </section>
+        </>
+      )}
     </div>
   );
 }

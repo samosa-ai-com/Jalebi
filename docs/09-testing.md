@@ -21,7 +21,7 @@ After any code change, run the relevant tests and build before marking work done
 
 ## 2. Test layout
 
-- **Server (`apps/server/tests/`, pytest):** `test_health`, `test_config`, `test_clock` (the app wall clock: local default, IANA override, offset-suffixed serialization), `test_schema` (migrations match models via `compare_metadata`), `test_settings` (defaults incl. bounded `retry_policy`, round-trip, cross-session persistence, **`seed_defaults` materializes all keys at startup without overwriting user values**, full-restart persistence), `test_api_settings` (incl. merged `ntfy_topic` validation, notify toggles, removed `ntfy_url`, `retry_policy` cap/pattern validation), `test_api_data` (usage, backup round-trip + snapshot consistency, vacuum, prune dry-run→execute + orphans), `test_reliability` (incl. **bounded recovery**: cap give-up with single notification, non-retryable fast-fail, always-failing task notifies twice then stops), `test_secrets` (strict no-fallback resolution), `test_github` (client, incl. fork-PR metadata: `head_repo`/`head_sha`/`is_fork`/`maintainer_can_modify`), `test_api_github` (equal-account model), `test_repos`, `test_api_repos` (connect requires an account), `test_git_workspace` (local git repos, incl. real `refs/pull/N` review worktree, PR-head fix worktree + fork-head merge, stale-branch reset, prune of missing-but-registered worktrees, and publish-time `merge_origin_into` clean + conflict-abort + no-merge-in-progress raise), `test_opencode_adapter` (incl. no server-env leak in `_spawn`), `test_codex_adapter` (parse mapping incl. the notices-not-fatal invariant, `turn.failed` JSON unwrap, sandbox-probe both branches, **sandbox fallback logs a one-time warning**, models-cache read incl. **`supported_in_api` preference**, spawn wrapper), `test_claude_adapter` (no-auth `is_error` discriminator, init session capture, `result` terminal mapping, spawn wrapper), `test_runhandle`, `test_masking`, `test_prompts` (incl. **catalog personality + `@path` skill links**), `test_worktree_bootstrap` (incl. `external_directory: deny` guard, **per-CLI gh-guards — codex `.codex/rules/default.rules` (with `match`/`not_match` self-tests) + claude `.claude/settings.json` + the `PreToolUse` external-dir hook (`.claude/hooks/jalebi_deny_external.py`, unit-tested with hook JSON payloads), `CLAUDE.md` write for claude runs, all three guards skip repo-owned files (no-clobber) + remove_guard content-match cleanup, pre-commit hook rejects staged claude settings/skills, agent skills materialized to all three roots (`.claude`/`.codex`/`.agents`)/pruned when unused/excluded from git add**), `test_catalog` (service CRUD, slug/definition/skills validation, enable-only listing, file materialization), `test_api_catalog` (routes + task-creation with an agent), `test_reviews` (assign → one pr_review task per reviewer, kind/enabled validation, default prompt, status transitions, assignment dict, dedupe + partial-cleanup), `test_api_reviews` (assign endpoint, reviewers-on-create, kind validation, no-PR 409, address-reviewers follow-up embeds masked reviews, pr_number-column fallback), `test_webhooks` (signature verify, event-context extraction, rule CRUD + branch/author/label matching, delivery dedup, dispatch for start_review/triage_issue/create_task/rerun_review), `test_api_webhooks` (POST /webhook end-to-end incl. dedup + signature 403 + unconnected-repo ignore + **write-only webhook_secret + password-requires-secret + triage masking + concurrent redelivery race**, /api/triggers CRUD + validation, webhook status, replay-with-dedup, registration-without-URL 409, `/api/models?cli=` per-backend + unknown→empty + override), `test_artifacts`, `test_queue` (incl. selected-account agent env, dirty-tree surfacing, per-task publish mode, issue_fix single-target worktree base, publish conflict → needs_approval, issue comment on new-PR only, manual-publish no-op gate, **terminal + progress ntfy notifications, env-var injection into agent env, env-var value masking, catalog agent cli/model/custom-instructions/skills applied at run time + disabled-agent fallback, reviewer assignment lifecycle (posted on success, failed on posting error / non-done run)**), `test_cron` (5-field matcher: single/list/range/step values, invalid expressions, `datetime` wrapper + day-of-week shift), `test_screening` (findings parse incl. fenced/prose/bad input + string-literal bracket handling + severity normalization, run loop with fake adapter over a real git remote, baseline dedup + force, no-account failure, findings/output masking, error-event → failed, ntfy on findings when enabled / skipped when disabled, CRUD validation, scheduler `_due_screens` + `tick` with a fixed clock, unpinned screen resolves `default_backend` while a pinned one wins, default model applied only on the default backend), `test_api_screening` (templates, CRUD + validation, runs history, async run-now), `test_check_runs` (state mapping, status context, type+flag gating, pr_review pending→terminal on the PR head, issue_fix status set completed at publish, status API failure is non-fatal), `test_api_repos` (incl. `PATCH /api/repos/<id>` check_runs_enabled toggle + validation), `test_followups` (incl. follow-up backend override → fresh-session fork seeded with the prior conversation; same-backend resumes), `test_reliability`, `test_api_tasks` (incl. publish-mode defaults/override, oversized-prompt rejection, delete, account required, publish 409 on conflict/no-op, `env_vars` on create, PR-head sentinel validation + PR-base target resolution), `test_publish_modes` (incl. fork-PR `update_pr`: push to fork URL with head-SHA lease, maintainer-edits-off refusal, fork conflict propagation), `test_envvars` (service + routes: upsert/scope/`.env` import incl. empty/multiline/skipped-line reporting/masked API), `test_notify` (endpoint parsing, JSON publishing to server root, masked send, silent failure), `test_api_notify` (test endpoint), `test_sse`, `test_spa`. Fixtures in `conftest.py`: `config` (tmp data dir), `app` (via `create_app(config)`), `client` (Flask test client), `session`, `engine`. (~807 tests; `uv run pytest`.))
+- **Server (`apps/server/tests/`, pytest):** `test_health`, `test_config`, `test_clock` (the app wall clock: local default, IANA override, offset-suffixed serialization), `test_schema` (migrations match models via `compare_metadata`), `test_settings` (defaults incl. bounded `retry_policy`, round-trip, cross-session persistence, **`seed_defaults` materializes all keys at startup without overwriting user values**, full-restart persistence), `test_api_settings` (incl. merged `ntfy_topic` validation, notify toggles, removed `ntfy_url`, `retry_policy` cap/pattern validation), `test_api_data` (usage, backup round-trip + snapshot consistency, vacuum, prune dry-run→execute + orphans), `test_reliability` (incl. **bounded recovery**: cap give-up with single notification, non-retryable fast-fail, always-failing task notifies twice then stops), `test_secrets` (strict no-fallback resolution), `test_github` (client, incl. fork-PR metadata: `head_repo`/`head_sha`/`is_fork`/`maintainer_can_modify`), `test_api_github` (equal-account model), `test_repos`, `test_api_repos` (connect requires an account), `test_git_workspace` (local git repos, incl. real `refs/pull/N` review worktree, PR-head fix worktree + fork-head merge, stale-branch reset, prune of missing-but-registered worktrees, and publish-time `merge_origin_into` clean + conflict-abort + no-merge-in-progress raise), `test_opencode_adapter` (incl. no server-env leak in `_spawn`), `test_codex_adapter` (parse mapping incl. the notices-not-fatal invariant, `turn.failed` JSON unwrap, sandbox-probe both branches, **sandbox fallback logs a one-time warning**, models-cache read incl. **`supported_in_api` preference**, spawn wrapper), `test_claude_adapter` (no-auth `is_error` discriminator, init session capture, `result` terminal mapping, spawn wrapper), `test_runhandle`, `test_masking`, `test_prompts` (incl. **catalog personality + `@path` skill links**), `test_address_reviews` (creation-time flag: bool/linked-PR/freeform validation, embedded vs self-fetch fallback prompt, legacy no-section default), `test_worktree_bootstrap` (incl. `external_directory: deny` guard, **per-CLI gh-guards — codex `.codex/rules/default.rules` (with `match`/`not_match` self-tests) + claude `.claude/settings.json` + the `PreToolUse` external-dir hook (`.claude/hooks/jalebi_deny_external.py`, unit-tested with hook JSON payloads), `CLAUDE.md` write for claude runs, all three guards skip repo-owned files (no-clobber) + remove_guard content-match cleanup, pre-commit hook rejects staged claude settings/skills, agent skills materialized to all three roots (`.claude`/`.codex`/`.agents`)/pruned when unused/excluded from git add**), `test_catalog` (service CRUD, slug/definition/skills validation, enable-only listing, file materialization), `test_api_catalog` (routes + task-creation with an agent), `test_reviews` (assign → one pr_review task per reviewer, kind/enabled validation, default prompt, status transitions, assignment dict, dedupe + partial-cleanup), `test_api_reviews` (assign endpoint, reviewers-on-create, kind validation, no-PR 409, address-reviewers follow-up embeds masked reviews, pr_number-column fallback), `test_webhooks` (signature verify, event-context extraction, rule CRUD + branch/author/label matching, delivery dedup, dispatch for start_review/triage_issue/create_task/rerun_review), `test_api_webhooks` (POST /webhook end-to-end incl. dedup + signature 403 + unconnected-repo ignore + **write-only webhook_secret + password-requires-secret + triage masking + concurrent redelivery race**, /api/triggers CRUD + validation, webhook status, replay-with-dedup, registration-without-URL 409, `/api/models?cli=` per-backend + unknown→empty + override), `test_artifacts`, `test_queue` (incl. selected-account agent env, dirty-tree surfacing, per-task publish mode, issue_fix single-target worktree base, publish conflict → needs_approval, issue comment on new-PR only, manual-publish no-op gate, **terminal + progress ntfy notifications, env-var injection into agent env, env-var value masking, catalog agent cli/model/custom-instructions/skills applied at run time + disabled-agent fallback, reviewer assignment lifecycle (posted on success, failed on posting error / non-done run)**), `test_cron` (5-field matcher: single/list/range/step values, invalid expressions, `datetime` wrapper + day-of-week shift), `test_screening` (findings parse incl. fenced/prose/bad input + string-literal bracket handling + severity normalization, run loop with fake adapter over a real git remote, baseline dedup + force, no-account failure, findings/output masking, error-event → failed, ntfy on findings when enabled / skipped when disabled, CRUD validation, scheduler `_due_screens` + `tick` with a fixed clock, unpinned screen resolves `default_backend` while a pinned one wins, default model applied only on the default backend), `test_api_screening` (templates, CRUD + validation, runs history, async run-now), `test_check_runs` (state mapping, status context, type+flag gating, pr_review pending→terminal on the PR head, issue_fix status set completed at publish, status API failure is non-fatal), `test_api_repos` (incl. `PATCH /api/repos/<id>` check_runs_enabled toggle + validation), `test_followups` (incl. follow-up backend override → fresh-session fork seeded with the prior conversation; same-backend resumes), `test_reliability`, `test_api_tasks` (incl. publish-mode defaults/override, oversized-prompt rejection, delete, account required, publish 409 on conflict/no-op, `env_vars` on create, PR-head sentinel validation + PR-base target resolution), `test_publish_modes` (incl. fork-PR `update_pr`: push to fork URL with head-SHA lease, maintainer-edits-off refusal, fork conflict propagation), `test_envvars` (service + routes: upsert/scope/`.env` import incl. empty/multiline/skipped-line reporting/masked API), `test_notify` (endpoint parsing, JSON publishing to server root, masked send, silent failure), `test_api_notify` (test endpoint), `test_sse`, `test_spa`. Fixtures in `conftest.py`: `config` (tmp data dir), `app` (via `create_app(config)`), `client` (Flask test client), `session`, `engine`. (~807 tests; `uv run pytest`.))
 - **Web (`apps/web/src`, vitest + RTL):** `App.test.tsx` (shell), `pages/Tasks.test.tsx`, `pages/TaskDetail.test.tsx` (incl. run-end diff rendering with file label + stats, run history rows with status/duration/markers), `pages/Github.test.tsx`, `pages/Settings.test.tsx` (collapsible sections, blur-only IDE saves, custom IDE with zero detections, recovery-attempt save, stale-model warning, Data section), `pages/Repos.test.tsx` (incl. the check-runs toggle), `pages/Screenings.test.tsx` (incl. template-selection visibility, scope-branch dropdown, cron presets, edit-from-card, the in-flight "Running…" state, and the UNTRUSTED finding→task prompt),            `pages/Agents.test.tsx` (incl. the CLI override + model-pin dropdown options), `pages/Triggers.test.tsx` (rule form validation, agent picker, stale-form remount, delivery expansion + replay outcome, log filter). (144 tests; `npm test -w @jalebi/web`.)
 
 ## 3. Test strategy per layer (PRD §13)
@@ -50,7 +50,22 @@ After any code change, run the relevant tests and build before marking work done
 - Manual smoke tests (e.g. end-to-end task → PR) run against `example-smoke-repo` and are cleaned up afterwards (PR closed, branch deleted).
 - The `gh` CLI is authorized **only** for local git operations on the Jalebi repo itself (staging, committing, pushing to `Rishabh-Bajpai/Jalebi`) — never for testing/verification against the testing account.
 
-## 6. Reference
+## 6. Runaway guardrails (no test may eat the machine)
+
+- Every test is bounded by `pytest-timeout` (`timeout = 120`, signal method,
+  configured in `apps/server/pyproject.toml`): a hanging test FAILS at 120s
+  instead of looping forever. Serial full-suite wall time is ~60-90s, so 120s
+  per test is generous — if the timeout ever fires, treat it as a hung-test
+  bug, not a slow box.
+- For unattended runs add a shell backstop too: `timeout 900 uv run pytest`.
+- Prefer `uv run pytest -n auto` for speed; serial `uv run pytest` is the
+  correctness baseline.
+- If a run ever needs killing: kill only the `pytest`/`uv run pytest` PIDs.
+  NEVER kill the daemon — its PID is in `~/.jalebi/server.pid` (port 2052).
+  To find the hanging test, re-run with `-vv` and read the last test name
+  before the stall (or the `Timeout` failure line).
+
+## 7. Reference
 
 - PRD §13 (non-functional requirements — testability), §17.2 (no `gh` CLI), §17.3 (testing repo & account).
 
@@ -386,3 +401,135 @@ After any code change, run the relevant tests and build before marking work done
   Ruff `src/` clean (one pre-existing I001 in `tests/test_api_catalog.py`
   untouched); `tsc --noEmit`, production build clean (the Vite
   large-chunk warning remains).
+
+- **Brew House round (web +12):** `components/brew/BrewHouse.test.tsx`
+  (new, 12 tests) — kettle brews active task, idle slots, station click
+  navigates, needs-you pulse, cold-kettles + paused-queue + empty-catalog
+  states, skill rack glow, agent live counts, backends + default badge,
+  live screens + findings ticker, worker-load ring. Classic Tasks view
+  untouched (toggle defaults to queue; existing `Tasks.test.tsx` unmodified).
+- **Suite totals now:** web **239 passed** (12 new; no backend changes).
+
+- **Halwai Shop v2 (web +5 net):** `FryStation` (ex-`KettleStation`) and
+  `MasalaDabba` (ex-`SpiceRack`) rewritten, `SweetShelf` + `snacks.ts` new;
+  `BrewHouse.test.tsx` 17 tests — snack-per-type, strike-a-match + menu
+  order callbacks, thali counts, served-ticker links, idle chatter,
+  7-day shelf rendering. Shared `snackForType` moved to `snacks.ts`
+  (react-refresh zero-warning rule). Classic view untouched.
+- **Suite totals now:** web **244 passed** (no backend changes).
+
+- **Halwai polish round (web +2):** chakli → pakora snack swap, centered
+  kadhai strip, brushed-steel dabba + hammered thali + stacked-jalebi
+  7-day shelf, "Today's menu" + "(spice box)" wording, personality chatter
+  with hover-aware auto-scroll; `BrewHouse.test.tsx` 19 tests.
+- **Suite totals now:** web **246 passed** (no backend changes).
+
+- **Halwai v3 round (owner UX pass):** in-flow below-row chatter (Codex
+  pick — no clipping, no auto-scroll needed), double-spiral jalebi glyph
+  (AGY spec) at larger sizes, unexplained thali center motif removed,
+  brushed-steel dabba rework (AGY spec: rim arcs, bowl glints, mound
+  highlights), centered kadhai strip, pakora naming, "Today's menu" +
+  "(spice box)", engineering menu board (glyph + count + real task type;
+  order buttons pre-select the type via prefill remount), compacted
+  single-viewport layout; `BrewHouse.test.tsx` 19 + `Tasks.test.tsx` +1
+  (mission order prefill).
+- **Suite totals now:** web **247 passed** (no backend changes).
+
+- **Halwai revamp round (owner: cooks + ingredients + real stats):**
+  `MasalaDabba`/`SweetShelf` deleted; new `ShopFloor` (karhai grid +
+  order tickets + serving counter), `CooksRail`, `Pantry`, `StatsBoard`;
+  `FryStation` gains per-stove status badges + cook/ingredient pins
+  (enriched SR labels), `ControlShelf` gains compact rail mode; Settings
+  sections deep-link (`?section=` force-open + scroll + flash, still
+  collapsible; burner/backend/IDE links point at queue/agent/ide);
+  AGY review (approve-with-nits) fixed before commit: deep-link
+  lock-open, flash CSS moved global, bar-key collisions, unguarded
+  `skill_ids`, ticker dup links hidden from AT, coil transition in
+  reduced-motion; `BrewHouse.test.tsx` 24 (keyboard, sorting, spoiled),
+  `Settings.test.tsx` +1 (deep-link + collapse), `TaskDetail.test.tsx`
+  +1 (IDE href). Classic view untouched.
+- **Suite totals now:** web **253 passed** (no backend changes).
+
+- **Mission no-scroll round (owner: everything visible, no scrolling):**
+  Today's menu moved out of the right rail into a single-row strip above
+  the karhais (`ShopFloor` owns it via `menu` + `onNewTaskKind`);
+  `StatsBoard` compressed to one 4-number row + short bars;
+  `ControlShelf` compact renders 2×2 minis (smaller ring text, 2 live
+  screens); `BrewHouse.test.tsx` +1 (menu-above-floor order),
+  `Tasks.test.tsx` mission prefill updated to the chip name.
+- **Suite totals now:** web **254 passed** (no backend changes).
+
+- **Screenshot review round (throwaway 2062 instance, seeded demo data):
+  fixed from real screenshots — stove SVG capped (`h-48`), 7-day bars
+  actually render (`items-stretch` + `justify-end` columns; % heights
+  need a definite parent), avg `whitespace-nowrap`, mini headers never
+  wrap (compact links collapse to `→` with labels), menu chips share
+  the strip (`flex-1` + truncate, tighter padding), rails narrowed to
+  210/280 so all three chips fit. Verified 1600×900: no page scroll.
+
+- **Owner-screenshot round (live 2-burner view, big void below floor):
+  ** columns now fixed to `xl:h-[calc(100vh-16rem)]` so the floor fills
+  the viewport; `FryStation` is `flex h-full flex-col` with the SVG at
+  `min-h-40 flex-1` (karhais grow into the space); menu chips dropped
+  the redundant `New →` (whole chip orders); rails 230/270 for cook
+  names. Measured 227→871 of 900px, stoves 358px, docH ≈ vh.
+
+- **Whitespace + badge-overflow round (owner live screenshot):**
+  leftover space distributes between cards (ops grid `flex-1` +
+  `content-between`; floor section `flex-1` with `auto-rows-fr` stove
+  rows); `default` badge stacks under its backend in compact minis
+  (was bursting the card → page h-scrollbar); minis `min-w-0`;
+  columns sized `calc(100vh-260px)` to absorb main's pb-8 — measured
+  docH == vh, zero scrollbars either axis at 1600×900.
+
+- **Giant-stove round (stretch without a cap cropped the pots):
+  ** stoves back to fixed sizes (`h-48`, `h-36` compact past 2 slots);
+  floor section `justify-between` spreads leftover as gaps; grid keeps
+  `min-h` + internal scroll fallback. Verified 1920×1080, 2 burners:
+  docH == vh, no scrollbars.
+
+- **Screening batch + New-task handoff (web +5 net, Codex REJECT → fixed):**
+  `FindingTaskComposer` deleted; single/batch "New task" buttons navigate
+  to `/` with location-state `ScreeningHandoff` (prefill + dealt
+  fingerprints + id), consumed one-shot in `Tasks.tsx` (validate, nonce
+  remount, replace-clear; `from` preserved) with dealt marked only in
+  `handleCreated` after the POST succeeds. Tasks created as `freeform` +
+  explicit `publishMode: "manual"` (documented semantic change from
+  `screen_finding`; clone normalizes legacy `screen_finding`/`triggered`
+  to `freeform`). Batch gate requires one repo + one effective target
+  branch (`scope_branch || repo.default_branch`) with inline reasons;
+  selection keyed `run:screen:items-index` via a render-scope map, cleared
+  on refetch. Dealt helpers moved to `lib/screeningDealt.ts` (fingerprint
+  semantics unchanged). Codex blockers fixed: nonce/re-inject (#1),
+  dealt-at-navigation (#2, now dealt-on-success), freeform documentation
+  (#3), effective-branch gate (#4). `Screenings.test.tsx` +3 net (handoff
+  payload + no-POST, combined batch prompt, mixed-repo refusal, bulk
+  dealt), `Tasks.test.tsx` +2 (handoff prefill + dealt-on-create,
+  clone normalization).
+- **Suite totals now:** server untouched, web **271 passed** (repo-qualified
+  screen names: `qualifiedScreenName` in `lib/screeningPrompt.ts` + batch
+  prompt headers; dropdown/rows/cards/banner/delete/tickers qualified;
+  `Screenings.test.tsx` syncs + same-name-two-repos dropdown test,
+  `BrewHouse.test.tsx` ticker assertion; no backend changes; production DB
+  never touched; `tsc`, eslint, prettier, build clean — Vite large-chunk
+  warning remains, pre-existing).
+
+- **Open-findings rerun context (server +13, web +2):** `screening_dealt`
+  table (migration `e7f8a9b0c1d2`, verified upgrade→downgrade→upgrade on a
+  scratch DB, single head) + dealt endpoints + engine known-open context
+  (repo-wide, current screen first, 20-item/400-char caps, fenced UNTRUSTED
+  section, delimiter sanitization) + dealt-filtered ntfy. AGY
+  APPROVE-WITH-CHANGES, all adopted except repo-wide scoping (owner chose
+  repo-wide over same-screen-only; current-screen-first ordering is the
+  compromise): canonical fingerprint column (SQLite NULL-UNIQUE trap),
+  ntfy filter, delimiter escaping, async flash/rollback/import-flag,
+  explicit catch on handoff mark, POST-reopen. `test_screening_dealt.py`
+  (13: fingerprint parity, validation, idempotent mark/reopen, cascade,
+  assembly incl. cross-screen dedupe + caps + omitted, fencing, prompt
+  omission, end-to-end prompt capture, notify skip, full API roundtrip).
+  Web: `lib/screeningDealt.ts` API-backed (legacy import-once + cache),
+  dealt endpoints in `client.ts`, optimistic UI with rollback in inbox +
+  history, handoff marks via API with visible error; tests for import,
+  rollback, and handoff-mark-via-API.
+- **Suite totals now:** server **944 passed**, web **274 passed**
+  (273 + 1 handoff-mark-failure path). Production DB never touched; scratch DB only.

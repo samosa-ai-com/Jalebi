@@ -1,6 +1,15 @@
+import time
+from email.utils import formatdate
+
 import pytest
 
-from jalebi.github import GitHubClient, GitHubError, GitHubNotFound
+from jalebi.github import (
+    RATE_LIMIT_MAX_RETRIES,
+    RATE_LIMIT_MAX_WAIT,
+    GitHubClient,
+    GitHubError,
+    GitHubNotFound,
+)
 
 
 def make_client(token: str = "ghp_test") -> GitHubClient:
@@ -508,3 +517,143 @@ def test_list_open_prs_raises_on_401(monkeypatch) -> None:
     )
     with pytest.raises(GitHubUnauthorized):
         client.list_open_prs("owner/repo")
+
+
+# -- rate-limit backoff --------------------------------------------------------
+
+
+def _seq_request(seq):
+    """Fake ``_http.request`` returning queued responses, then repeating the last."""
+    def fake(method, path, **kwargs):
+        return seq.pop(0) if len(seq) > 1 else seq[0]
+    return fake
+
+
+def test_retry_wait_classifies_only_rate_limits() -> None:
+    assert GitHubClient._retry_wait(200, {}) is None
+    assert GitHubClient._retry_wait(403, {}) is None  # ordinary 403 → no retry
+    assert GitHubClient._retry_wait(403, {"X-RateLimit-Remaining": "0"}) == 1.0
+    assert GitHubClient._retry_wait(403, {"Retry-After": "2"}) == 2.0  # secondary limit
+    assert GitHubClient._retry_wait(429, {}) == 1.0
+    assert GitHubClient._retry_wait(429, {"Retry-After": "3"}) == 3.0
+    assert GitHubClient._retry_wait(429, {"Retry-After": "-5"}) == 0.0  # never negative
+
+
+def test_retry_wait_parses_http_date_and_handles_malformed_headers(monkeypatch) -> None:
+    monkeypatch.setattr("jalebi.github.time.time", lambda: 100.0)
+    retry_at = formatdate(110.0, usegmt=True)
+    assert GitHubClient._retry_wait(429, {"Retry-After": retry_at}) == 10.0
+    assert GitHubClient._retry_wait(429, {"Retry-After": "not-a-date"}) == 1.0
+    assert GitHubClient._retry_wait(
+        403, {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "not-a-time"}
+    ) == 1.0
+
+
+def test_send_retries_429_then_succeeds(monkeypatch) -> None:
+    sleeps: list[float] = []
+    monkeypatch.setattr("jalebi.github.time.sleep", lambda s: sleeps.append(s))
+    client = make_client()
+    calls = 0
+
+    def fake(method, path, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return _make_response(429, None, {"Retry-After": "2"})
+        return _make_response(200, {"ok": True})
+
+    monkeypatch.setattr(client._http, "request", fake)
+    status, body, _ = client._request("GET", "/x")
+    assert status == 200 and body == {"ok": True}
+    assert calls == 2
+    assert sleeps == [2.0]
+
+
+def test_send_retries_primary_403_and_caps_wait(monkeypatch) -> None:
+    sleeps: list[float] = []
+    monkeypatch.setattr("jalebi.github.time.sleep", lambda s: sleeps.append(s))
+    client = make_client()
+    reset = str(int(time.time()) + 3600)
+    monkeypatch.setattr(
+        client._http,
+        "request",
+        _seq_request(
+            [
+                _make_response(
+                    403, None, {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": reset}
+                ),
+                _make_response(200, {"ok": True}),
+            ]
+        ),
+    )
+    status, _, _ = client._request("GET", "/x")
+    assert status == 200
+    assert sleeps == [RATE_LIMIT_MAX_WAIT]
+
+
+def test_send_does_not_retry_plain_403(monkeypatch) -> None:
+    sleeps: list[float] = []
+    calls = 0
+
+    def fake(method, path, **kwargs):
+        nonlocal calls
+        calls += 1
+        return _make_response(403, None)
+
+    monkeypatch.setattr("jalebi.github.time.sleep", lambda s: sleeps.append(s))
+    client = make_client()
+    monkeypatch.setattr(client._http, "request", fake)
+    status, _, _ = client._request("GET", "/x")
+    assert status == 403 and calls == 1 and sleeps == []
+
+
+def test_send_does_not_retry_rate_limited_write(monkeypatch) -> None:
+    calls = 0
+
+    def fake(method, path, **kwargs):
+        nonlocal calls
+        calls += 1
+        return _make_response(429, None, {"Retry-After": "1"})
+
+    client = make_client()
+    monkeypatch.setattr(client._http, "request", fake)
+    status, _, _ = client._request("POST", "/x", json={"value": True})
+    assert status == 429
+    assert calls == 1
+
+
+def test_send_gives_up_after_max_retries(monkeypatch) -> None:
+    sleeps: list[float] = []
+    calls = 0
+
+    def fake(method, path, **kwargs):
+        nonlocal calls
+        calls += 1
+        return _make_response(429, None, {"Retry-After": "1"})
+
+    monkeypatch.setattr("jalebi.github.time.sleep", lambda s: sleeps.append(s))
+    client = make_client()
+    monkeypatch.setattr(client._http, "request", fake)
+    status, _, _ = client._request("GET", "/x")
+    assert status == 429
+    assert calls == RATE_LIMIT_MAX_RETRIES + 1
+    assert len(sleeps) == RATE_LIMIT_MAX_RETRIES
+
+
+def test_request_etag_retries_rate_limit(monkeypatch) -> None:
+    sleeps: list[float] = []
+    monkeypatch.setattr("jalebi.github.time.sleep", lambda s: sleeps.append(s))
+    client = make_client()
+    monkeypatch.setattr(
+        client._http,
+        "request",
+        _seq_request(
+            [
+                _make_response(429, None, {"Retry-After": "1"}),
+                _make_response(200, {"n": 1}, {"ETag": 'W/"a"'}),
+            ]
+        ),
+    )
+    body, etag, not_modified = client._request_etag("/repos/o/r/pulls")
+    assert body == {"n": 1} and etag == 'W/"a"' and not_modified is False
+    assert sleeps == [1.0]

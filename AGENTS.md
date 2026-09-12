@@ -81,8 +81,8 @@ This is critical and repeated: **all GitHub interaction in this project goes thr
 
 ### 3.4 Scope requirements (PRD §F1) — document, don't guess
 
-- Classic PAT: `repo`.
-- Fine-grained: Contents read/write, Pull requests read/write, Issues read/write, Metadata read, Commit statuses read/write.
+- Classic PAT (`repo`) — recommended: `repo` also covers reading GitHub Actions runs/logs (used to inspect a failing workflow and fix it).
+- Fine-grained: Contents read/write, Pull requests read/write, Issues read/write, Metadata read, Commit statuses read/write, Actions read (to read failed workflow logs).
 
 ---
 
@@ -167,7 +167,7 @@ Jalebi/
 │   │   │   ├── app.py             # create_app factory (+ SPA serving) + CLI entrypoint
 │   │   │   ├── config.py          # env → Config (host/port/data_dir/db_url)
 │   │   │   ├── db.py              # SQLAlchemy engine/session + Phase-0 models
-│   │   │   ├── migrations/        # Alembic env.py + versions/ (current head: c2d3e4f5a6b7)
+│   │   │   ├── migrations/        # Alembic env.py + versions/ (current head: b4c5d6e7f8a9)
 │   │   │   ├── secrets.py         # 0600 secrets.json (named PAT vault; no primary)
 │   │   │   ├── github.py          # thin httpx GitHub client (validate/PR/repos/issues/review)
 │   │   │   ├── git_workspace.py   # bare mirrors + worktrees + review worktrees + token-authenticated push

@@ -42,6 +42,7 @@ export interface Followup {
   body: string;
   pat_name: string | null;
   model: string | null;
+  cli: string | null;
   created_at: string;
 }
 
@@ -73,6 +74,7 @@ export interface Task {
   timeout_minutes: number;
   retry_count: number;
   pr_number: number | null;
+  address_reviews?: boolean;
   publish_mode: "auto" | "manual" | null;
   check_run_id: number | null;
   issues: number[];
@@ -249,6 +251,18 @@ export interface BackendsResponse {
   backends: string[];
   enabled: string[];
   default: string;
+}
+
+export interface BackendHealth {
+  cli: string;
+  installed: boolean;
+  version: string | null;
+  verified: string | null;
+  version_match: boolean;
+}
+
+export interface BackendsHealthResponse {
+  backends: BackendHealth[];
 }
 
 export interface BackupInfo {
@@ -471,3 +485,19 @@ export interface ScreenTemplate {
   cadence_cron: string;
   system_prompt: string;
 }
+
+export interface TaskNotification {
+  id: number;
+  task_id: number;
+  run_id: number | null;
+  kind: string;
+  title: string;
+  body: string | null;
+  read_at: string | null;
+  created_at: string | null;
+  repo_id?: number | null;
+  type?: string | null;
+  status?: string | null;
+  pr_number?: number | null;
+}
+

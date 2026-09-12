@@ -2,6 +2,7 @@ import type {
   AgentUsage,
   BackupInfo,
   BackendsResponse,
+  BackendsHealthResponse,
   CatalogAgent,
   CatalogSkill,
   DataUsage,
@@ -26,6 +27,7 @@ import type {
   SkillUsage,
   SseEvent,
   Task,
+  TaskNotification,
   RestorePreview,
   TimezoneList,
   TokensResponse,
@@ -64,6 +66,7 @@ export interface CreateTaskInput {
   pat_name?: string;
   issue_number?: number;
   pr_number?: number;
+  address_reviews?: boolean;
   publish_mode?: "auto" | "manual";
   reviewers?: string[];
   env_vars?: string[];
@@ -73,6 +76,7 @@ export const api = {
   getHealth: () => request<Health>("/api/health"),
   getSettings: () => request<SettingsMap>("/api/settings"),
   getBackends: () => request<BackendsResponse>("/api/backends"),
+  getBackendsHealth: () => request<BackendsHealthResponse>("/api/backends/health"),
   getTimezones: () => request<TimezoneList>("/api/timezones"),
   getModels: (cli?: string) =>
     request<{ cli: string; models: string[] }>(
@@ -218,6 +222,25 @@ export const api = {
       method: "POST",
     }),
   getScreenRuns: (id: number) => request<ScreeningRun[]>(`/api/screenings/${id}/runs`),
+  getDealt: (screenId: number) =>
+    request<{ screen_id: number; fingerprints: string[] }>(
+      `/api/screenings/dealt?screen_id=${screenId}`
+    ),
+  markDealt: (screenId: number, fps: string[]) =>
+    request<{ screen_id: number; marked: number }>(`/api/screenings/dealt`, {
+      method: "POST",
+      body: JSON.stringify({ screen_id: screenId, fps }),
+    }),
+  reopenDealt: (screenId: number, fps: string[]) =>
+    request<{ screen_id: number; reopened: number }>(`/api/screenings/dealt/reopen`, {
+      method: "POST",
+      body: JSON.stringify({ screen_id: screenId, fps }),
+    }),
+  importDealt: (screenId: number, fps: string[]) =>
+    request<{ screen_id: number; marked: number }>(`/api/screenings/dealt/import`, {
+      method: "POST",
+      body: JSON.stringify({ screen_id: screenId, fps }),
+    }),
   getRecentFindings: (params?: { limit?: number; severity?: string; screen_id?: number }) => {
     const q = new URLSearchParams();
     if (params?.limit !== undefined) q.set("limit", String(params.limit));
@@ -316,7 +339,11 @@ export const api = {
     request<{ status: string }>(`/api/tasks/${id}/cancel`, { method: "POST" }),
   dismissAttention: (id: number) =>
     request<Task>(`/api/tasks/${id}/dismiss-attention`, { method: "POST" }),
-  rerunTask: (id: number) => request<Task>(`/api/tasks/${id}/rerun`, { method: "POST" }),
+  rerunTask: (id: number, opts?: { cli?: string | null; model?: string | null }) =>
+    request<Task>(`/api/tasks/${id}/rerun`, {
+      method: "POST",
+      body: Object.keys(opts ?? {}).length ? JSON.stringify(opts) : undefined,
+    }),
   deleteTask: (id: number) =>
     request<{ deleted: number }>(`/api/tasks/${id}`, { method: "DELETE" }),
   publishTask: (
@@ -400,6 +427,19 @@ export const api = {
     `/api/tasks/${taskId}/artifacts/${artifactId}/download`,
   artifactContentUrl: (taskId: number, artifactId: number) =>
     `/api/tasks/${taskId}/artifacts/${artifactId}/content`,
+  getNotifications: (opts?: { unreadOnly?: boolean; limit?: number; beforeId?: number }) => {
+    const q = new URLSearchParams();
+    if (opts?.unreadOnly !== undefined) q.set("unread_only", String(opts.unreadOnly));
+    if (opts?.limit !== undefined) q.set("limit", String(opts.limit));
+    if (opts?.beforeId !== undefined) q.set("before_id", String(opts.beforeId));
+    const qs = q.toString();
+    return request<TaskNotification[]>(`/api/notifications${qs ? `?${qs}` : ""}`);
+  },
+  getUnreadCount: () => request<{ unread: number }>("/api/notifications/unread-count"),
+  markNotificationRead: (id: number) =>
+    request<TaskNotification>(`/api/notifications/${id}/read`, { method: "POST" }),
+  markAllNotificationsRead: () =>
+    request<{ marked: number }>("/api/notifications/read-all", { method: "POST" }),
 };
 
 /** Optional hooks for an SSE subscription (all no-ops by default). */
@@ -427,6 +467,9 @@ export function taskEvents(
   const url = `/api/tasks/${taskId}/events${
     typeof afterSeq === "number" ? `?after_seq=${afterSeq}` : ""
   }`;
+  if (typeof EventSource === "undefined") {
+    return () => {};
+  }
   const source = new EventSource(url);
   source.onmessage = (message) => {
     let event: SseEvent;

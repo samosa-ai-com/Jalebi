@@ -228,7 +228,11 @@ def build_agent_md(
             f"({pr.get('html_url', '')})",
             f"- Base: `{pr.get('base') or '?'}` ← Head: `{pr.get('head') or '?'}`",
         ]
-        if reviews:
+        # The checkbox is authoritative: reviews are embedded as an instruction
+        # only when the task was created with address_reviews. A linked PR
+        # without the flag still gets the PR block below (description only) —
+        # background context, never an order.
+        if reviews and getattr(task, "address_reviews", False):
             parts += [
                 "",
                 "### PR review comments to address",
@@ -246,6 +250,22 @@ def build_agent_md(
                     "  --- END UNTRUSTED DATA ---",
                     "  ```",
                 ]
+        elif getattr(task, "address_reviews", False):
+            # Creation-time flag with no reviews fetched (none yet, or the
+            # fetch failed): the instruction is still guaranteed — the agent
+            # pulls the live comments itself with the token.
+            parts += [
+                "",
+                "### PR review comments to address",
+                "Address the review comments on this PR: fix the code, and commit "
+                "your changes (Jalebi pushes). No comments were pre-fetched, so "
+                "fetch the current ones yourself with the GitHub token first:",
+                "",
+                "  ```",
+                '  curl -H "Authorization: Bearer $JALEBI_GITHUB_TOKEN" '
+                f"https://api.github.com/repos/{repo.full_name}/pulls/{pr.get('number')}/reviews",
+                "  ```",
+            ]
         parts += [
             "",
             "  ```",

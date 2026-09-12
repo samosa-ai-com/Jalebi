@@ -12,7 +12,14 @@ from flask import Flask, Response, current_app, g, jsonify, request, send_from_d
 from flask.typing import ResponseReturnValue
 
 from jalebi import artifacts, clock, db, ide, masking, notify, secrets, seed_catalog, settings
-from jalebi.adapters import ADAPTERS, available_adapters, get_adapter
+from jalebi.adapters import (
+    ADAPTERS,
+    VERIFIED_VERSIONS,
+    available_adapters,
+    cli_version,
+    get_adapter,
+    is_backend_available,
+)
 from jalebi.config import Config, load_config, repo_root
 from jalebi.poller import Poller
 from jalebi.queue import TaskQueue
@@ -20,6 +27,7 @@ from jalebi.routes.catalog import bp as catalog_bp
 from jalebi.routes.data import bp as data_bp
 from jalebi.routes.envvars import bp as envvars_bp
 from jalebi.routes.github import bp as github_bp
+from jalebi.routes.notifications import bp as notifications_bp
 from jalebi.routes.repos import bp as repos_bp
 from jalebi.routes.screening import bp as screening_bp
 from jalebi.routes.skills import bp as skills_bp
@@ -195,12 +203,13 @@ def _serve_spa(web_dist: Path, filename: str) -> ResponseReturnValue:
 
 
 def _basic_auth_gate() -> ResponseReturnValue | None:
-    """Require Basic auth on everything except /api/health when a password is set.
+    """Require Basic auth on everything except /api/health.
 
-    PRD §F13: an optional UI password (``JALEBI_PASSWORD``) protects the app if it
-    is ever exposed via a tunnel. Localhost-only installs leave it unset → no gate.
-    The username is ignored (any user with the password passes); the password is
-    compared in constant time to avoid a timing side channel.
+    Since the mandatory-password hardening, ``main()`` refuses to start the
+    server at all without ``JALEBI_PASSWORD`` (no unauthenticated install is
+    possible, even on localhost-only binds). The username is ignored (any
+    user with the password passes); the password is compared in constant time
+    to avoid a timing side channel.
 
     Wrong-password attempts are pushed to the configured ntfy topic (throttled
     per client so a brute-force scan can't flood the channel).
@@ -231,8 +240,13 @@ def _basic_auth_gate() -> ResponseReturnValue | None:
     )
 
 
-# -- failed-login ntfy push (throttled) -----------------------------------
+# -- backend health cache (5-minute TTL) --------------------------------------
+# Version probes spawn a subprocess per backend; cache them so the Settings
+# page can't stall the request thread on a cold machine.
+_backends_health_cache: dict = {"at": 0.0, "rows": None}
 
+
+# -- failed-login ntfy push (throttled) -----------------------------------
 # One push per client per window, so a brute-force scan can't spam the channel.
 _FAILED_LOGIN_WINDOW_SECONDS = 60
 _failed_login_pushes: dict[str, float] = {}
@@ -301,7 +315,10 @@ def _notify_failed_login() -> None:
                     detail,
                     tags="warning",
                     priority=3,
-                    click=f"http://127.0.0.1:{config.port}/",
+                    click=config.primary_link("/"),
+                    actions=config.open_actions("/", "Open Jalebi")
+                    if len(config.public_links()) > 1
+                    else None,
                     masker=masker,
                 )
             except Exception:
@@ -364,6 +381,7 @@ def create_app(config: Config | None = None) -> Flask:
     app.register_blueprint(triggers_bp)
     app.register_blueprint(webhooks_bp)
     app.register_blueprint(screening_bp)
+    app.register_blueprint(notifications_bp)
 
     @app.teardown_appcontext
     def close_session(_exc) -> None:
@@ -442,6 +460,45 @@ def create_app(config: Config | None = None) -> Flask:
             }
         )
 
+    @app.get("/api/backends/health")
+    def backends_health() -> ResponseReturnValue:
+        """Per-backend install/version drift check (read-only, for Settings).
+
+        ``installed`` = binary on PATH; ``version`` = best-effort
+        ``<bin> --version`` (None when missing/unparseable); ``verified`` =
+        the version parsing was validated against; ``version_match`` is a
+        same-version-or-patch-ahead comparison. A drift only warns — newer
+        CLIs usually still work, and parsers degrade to verbatim text.
+        Results are cached for 5 minutes: version probes run subprocesses
+        that can each take seconds on a cold machine.
+        """
+        now_ts = time.monotonic()
+        cached = _backends_health_cache["rows"]
+        if cached is not None and now_ts - _backends_health_cache["at"] < 300:
+            return jsonify({"backends": cached})
+        rows = []
+        for cli in list(ADAPTERS):
+            installed = is_backend_available(cli)
+            version = cli_version(cli) if installed else None
+            verified = VERIFIED_VERSIONS.get(cli)
+            match = (
+                version is not None
+                and verified is not None
+                and (version == verified or version.startswith(verified + "."))
+            )
+            rows.append(
+                {
+                    "cli": cli,
+                    "installed": installed,
+                    "version": version,
+                    "verified": verified,
+                    "version_match": match,
+                }
+            )
+        _backends_health_cache["rows"] = rows
+        _backends_health_cache["at"] = now_ts
+        return jsonify({"backends": rows})
+
     @app.post("/api/settings")
     def update_settings() -> ResponseReturnValue:
         payload = request.get_json(silent=True)
@@ -507,14 +564,8 @@ def create_app(config: Config | None = None) -> Flask:
             "**If you can read this**, your ntfy configuration works.\n\n"
             "Markdown, priorities, tags and a tap-action are enabled.",
             tags=notify.TAGS_OK,
-            click=f"http://127.0.0.1:{config.port}/",
-            actions=[
-                {
-                    "action": "view",
-                    "label": "Open Jalebi",
-                    "url": f"http://127.0.0.1:{config.port}/",
-                }
-            ],
+            click=config.primary_link("/"),
+            actions=config.open_actions("/", "Open Jalebi"),
             masker=masker,
         )
         if not ok:
@@ -582,8 +633,15 @@ def create_app(config: Config | None = None) -> Flask:
 
 
 def main() -> None:
-    """Run the development server, bound to localhost only."""
+    """Run the development server on the configured host (0.0.0.0 by default)."""
     config = load_config()
+    if not config.password:
+        logger.error(
+            "JALEBI_PASSWORD (or OPENCODE_SERVER_PASSWORD) is required — "
+            "refusing to start without a UI password on %s",
+            config.host,
+        )
+        raise SystemExit(2)
     app = create_app(config)
     queue = app.config["JALEBI_QUEUE"]
     with app.app_context():

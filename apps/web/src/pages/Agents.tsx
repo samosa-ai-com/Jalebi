@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
+import { EmptyState } from "../components/EmptyState";
+import SearchableSelect from "../components/SearchableSelect";
 import { useBackends } from "../hooks/useBackends";
 import { AVATARS, avatarFor, avatarUrl, suggestAvatar } from "../lib/agentAvatars";
 import type { AgentUsage, CatalogAgent, LibrarySkill } from "../types";
@@ -158,7 +160,7 @@ function AgentForm({
             className="field font-mono"
           />
           {!isEdit && (
-            <span className="mt-1 block text-[11px] text-ink-600">
+            <span className="mt-1 block text-[11px] text-ink-500">
               Lowercase letters/digits with single hyphens. Permanent — tasks and rules reference
               it.
             </span>
@@ -173,22 +175,19 @@ function AgentForm({
             className="field"
           />
         </label>
-        <label className="block">
-          <span className="mb-1.5 block text-xs font-medium text-ink-400">Kind</span>
-          <select
+        <div>
+          <SearchableSelect
+            label="Kind"
             value={form.kind}
-            onChange={(e) => set({ kind: e.target.value as "general" | "reviewer" })}
-            className="field"
-          >
-            <option value="general">general</option>
-            <option value="reviewer">reviewer</option>
-          </select>
-          <span className="mt-1 block text-[11px] text-ink-600">
+            onChange={(v) => set({ kind: v as "general" | "reviewer" })}
+            options={["general", "reviewer"]}
+          />
+          <span className="mt-1 block text-[11px] text-ink-500">
             {form.kind === "reviewer"
               ? "Reviewer: runs the PR review workflow and is selectable in trigger rules."
               : "General: plain build agent for issue_fix / freeform tasks."}
           </span>
-        </label>
+        </div>
       </div>
 
       <label className="block">
@@ -206,7 +205,7 @@ function AgentForm({
       <div>
         <span className="mb-1.5 block text-xs font-medium text-ink-400">
           Profile picture{" "}
-          <span className="text-ink-600">
+          <span className="text-ink-500">
             auto-suggested from name/description: {suggested} (override anytime)
           </span>
         </span>
@@ -243,53 +242,33 @@ function AgentForm({
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <label className="block">
-          <span className="mb-1.5 block text-xs font-medium text-ink-400">
-            CLI override (optional)
-          </span>
-          <select
-            value={form.cli ?? ""}
-            onChange={(e) => {
-              set({ cli: e.target.value });
-              // The old model pin belonged to the old backend — drop it rather
-              // than running an invalid combination (the server does the same).
-              set({ model: "" });
-            }}
-            className="field"
-          >
-            <option value="">default (global setting)</option>
-            {backendOptions.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="block">
-          <span className="mb-1.5 block text-xs font-medium text-ink-400">
-            Model pin (optional)
-          </span>
-          <select
+        <SearchableSelect
+          label="CLI override (optional)"
+          value={form.cli ?? ""}
+          onChange={(v) => {
+            set({ cli: v });
+            // The old model pin belonged to the old backend — drop it rather
+            // than running an invalid combination (the server does the same).
+            set({ model: "" });
+          }}
+          placeholder="default (global setting)"
+          options={backendOptions}
+        />
+        <div>
+          <SearchableSelect
+            label="Model pin (optional)"
             value={form.model ?? ""}
-            onChange={(e) => set({ model: e.target.value || "" })}
-            className="field font-mono"
-          >
-            <option value="">no pin (CLI default)</option>
-            {models.map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
-            ))}
-            {form.model && !models.includes(form.model) && (
-              <option value={form.model}>{form.model}</option>
-            )}
-          </select>
+            onChange={(v) => set({ model: v || "" })}
+            placeholder="no pin (CLI default)"
+            options={models}
+            allowCustom
+          />
           {modelsError && (
             <span className="mt-1 block text-[11px] text-amber-400">
               Model list failed to load ({modelsError}) — a saved pin still applies.
             </span>
           )}
-        </label>
+        </div>
       </div>
 
       <label className="block">
@@ -309,7 +288,7 @@ function AgentForm({
         <span className="mb-1.5 block text-xs font-medium text-ink-400">
           Skills (from the library only
           {library !== null && (
-            <span className="text-ink-600">
+            <span className="text-ink-500">
               {" "}
               · {(form.skill_ids ?? []).length} of {library.length} selected
             </span>
@@ -383,7 +362,7 @@ function AgentForm({
               })}
           </div>
         )}
-        <span className="mt-1 block text-[11px] text-ink-600">
+        <span className="mt-1 block text-[11px] text-ink-500">
           To add or edit a skill itself, use the Skills section.
         </span>
       </div>
@@ -391,7 +370,7 @@ function AgentForm({
       <label className="block">
         <span className="mb-1.5 block text-xs font-medium text-ink-400">
           Custom instructions (appended to the task prompt){" "}
-          <span className="text-ink-600">
+          <span className="text-ink-500">
             {form.custom_instructions.length.toLocaleString()}/20,000
           </span>
         </span>
@@ -485,7 +464,7 @@ function AgentRow({
                 .join(", ")}`}
           </p>
         ) : (
-          <p className="mt-1.5 text-[11px] text-ink-600">Usage unavailable.</p>
+          <p className="mt-1.5 text-[11px] text-ink-500">Usage unavailable.</p>
         )}
         {agent.personality_md && (
           <p className="mt-2 line-clamp-2 text-xs text-ink-400">{agent.personality_md}</p>
@@ -612,16 +591,16 @@ export default function Agents() {
           placeholder="Search id, name, description…"
           className="field max-w-xs !py-1.5 text-sm"
         />
-        <select
+        <SearchableSelect
+          label="Sort agents"
           value={sort}
-          onChange={(e) => setSort(e.target.value as "name" | "kind" | "newest")}
-          className="field max-w-44 !py-1.5 text-sm"
-          aria-label="Sort agents"
-        >
-          <option value="name">Sort: name</option>
-          <option value="kind">Sort: kind</option>
-          <option value="newest">Sort: newest</option>
-        </select>
+          onChange={(v) => setSort(v as "name" | "kind" | "newest")}
+          options={[
+            { value: "name", label: "Sort: name" },
+            { value: "kind", label: "Sort: kind" },
+            { value: "newest", label: "Sort: newest" },
+          ]}
+        />
         {(["all", "general", "reviewer"] as const).map((k) => (
           <button
             key={k}
@@ -667,16 +646,30 @@ export default function Agents() {
       )}
 
       {visible.length === 0 && !showForm ? (
-        <div className="surface flex flex-col items-start gap-3 p-6 animate-fade-up">
-          <h2 className="panel-title">
-            {agents.length === 0 ? "No catalog agents yet" : "No agents match"}
-          </h2>
-          <p className="text-sm text-ink-400">
-            {agents.length === 0
-              ? "Create an agent to give tasks a personality, skills, and optional model/CLI pins."
-              : "Try a different search or clear the filters."}
-          </p>
-        </div>
+        agents.length === 0 ? (
+          <EmptyState
+            icon="🤖"
+            title="No catalog agents yet"
+            description="Create an agent to give tasks a personality, skills, and optional model/CLI pins."
+            action={
+              <button
+                type="button"
+                onClick={() => {
+                  setEditing(null);
+                  setShowForm(true);
+                }}
+                className="btn-primary"
+              >
+                Create agent
+              </button>
+            }
+          />
+        ) : (
+          <div className="surface flex flex-col items-start gap-3 p-6 animate-fade-up">
+            <h2 className="panel-title">No agents match</h2>
+            <p className="text-sm text-ink-400">Try a different search or clear the filters.</p>
+          </div>
+        )
       ) : (
         <div className="grid gap-3 sm:grid-cols-2">
           {visible.map((a) => (

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { api } from "../api/client";
+import { useFocusTrap } from "../lib/useFocusTrap";
 
 export type PublishMode = "new_pr" | "update_pr" | "push_branch";
 
@@ -46,6 +47,7 @@ export default function PublishDialog({
   onClose,
   onPublished,
 }: PublishDialogProps) {
+  const dialogRef = useFocusTrap<HTMLDivElement>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Hold the latest onClose in a ref so the Escape-key effect registers once
@@ -84,15 +86,21 @@ export default function PublishDialog({
   }
 
   return createPortal(
-    <div
-      role="dialog"
-      aria-modal="true"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) closeIfIdle();
-      }}
-    >
-      <div className="surface w-full max-w-md space-y-4 p-5 animate-fade-up">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+      <button
+        type="button"
+        className="fixed inset-0 cursor-default border-0 bg-transparent"
+        tabIndex={-1}
+        aria-label="Close dialog"
+        onClick={closeIfIdle}
+      />
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        tabIndex={-1}
+        className="surface relative z-10 w-full max-w-md space-y-4 p-5 animate-fade-up"
+      >
         <div>
           <h2 className="text-sm font-semibold text-ink-100">{MODE_LABEL[options.mode]}</h2>
           <p className="mt-1 text-xs text-ink-400">

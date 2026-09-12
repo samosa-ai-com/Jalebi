@@ -101,3 +101,8 @@ class AgentAdapter:
 
     def parse(self, line: str) -> list[AgentEvent]:
         raise NotImplementedError
+
+    def resolve_session(self, cwd: str) -> str | None:
+        """Best-effort post-run session lookup (for backends whose stdout does
+        not carry the session id, e.g. cline's history lookup). Optional."""
+        return None

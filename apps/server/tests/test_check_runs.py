@@ -201,6 +201,65 @@ def test_status_context():
     assert status_context(review) == "Jalebi / review"
 
 
+def test_aggregate_state_worstof(session, repo_row):
+    t1 = _create_pr_review(session, repo_row)
+    t2 = _create_pr_review(session, repo_row)
+    sha, ctx = "deadbeef", "Jalebi / review"
+
+    def record(task, state, gid):
+        checkruns.record_status(
+            session,
+            task_id=task.id,
+            run_id=None,
+            repo_id=repo_row.id,
+            head_sha=sha,
+            context=ctx,
+            state=state,
+            github_check_id=gid,
+        )
+
+    record(t1, STATE_PENDING, 1)
+    assert checkruns.aggregate_state(session, repo_row.id, sha, ctx) == STATE_PENDING
+    record(t1, STATE_SUCCESS, 2)
+    record(t2, STATE_PENDING, 3)
+    assert checkruns.aggregate_state(session, repo_row.id, sha, ctx) == STATE_PENDING
+    record(t2, STATE_FAILURE, 4)
+    assert checkruns.aggregate_state(session, repo_row.id, sha, ctx) == STATE_FAILURE
+    record(t1, STATE_ERROR, 5)
+    # failure outranks error
+    assert checkruns.aggregate_state(session, repo_row.id, sha, ctx) == STATE_FAILURE
+    record(t2, STATE_SUCCESS, 6)
+    # error alone still blocks
+    assert checkruns.aggregate_state(session, repo_row.id, sha, ctx) == STATE_ERROR
+    record(t1, STATE_SUCCESS, 7)
+    assert checkruns.aggregate_state(session, repo_row.id, sha, ctx) == STATE_SUCCESS
+    # An in-flight task's state overrides its stored row (queue passes it pre-record).
+    assert (
+        checkruns.aggregate_state(
+            session, repo_row.id, sha, ctx, task_id=t1.id, state=STATE_PENDING
+        )
+        == STATE_PENDING
+    )
+
+
+def test_set_status_posts_aggregate_for_shared_pr(app, session, repo_row, monkeypatch):
+    """Two reviewers on one PR: a later success must not mask an earlier failure."""
+    q = app.config["JALEBI_QUEUE"]
+    client = RecordingGitHubClient("t")
+    monkeypatch.setattr("jalebi.queue.GitHubClient", lambda token: client)
+    t1 = _create_pr_review(session, repo_row)
+    t2 = _create_pr_review(session, repo_row)
+    q._set_status(session, t1, repo_row, None, None, "t", STATE_SUCCESS, force_head="abc123")
+    assert client.status_calls[-1]["state"] == STATE_SUCCESS
+    q._set_status(session, t2, repo_row, None, None, "t", STATE_PENDING, force_head="abc123")
+    assert client.status_calls[-1]["state"] == STATE_PENDING  # t1's success not overwritten
+    q._set_status(session, t2, repo_row, None, None, "t", STATE_FAILURE, force_head="abc123")
+    assert client.status_calls[-1]["state"] == STATE_FAILURE
+    # t1 re-posting success must NOT mask t2's failure.
+    q._set_status(session, t1, repo_row, None, None, "t", STATE_SUCCESS, force_head="abc123")
+    assert client.status_calls[-1]["state"] == STATE_FAILURE
+
+
 def test_status_enabled_gates_by_type_and_flag(session, repo_row):
     fix = tasks.create_task(
         session, type_="issue_fix", repo_id=repo_row.id, prompt="x", pat_name="test", issues=[1]

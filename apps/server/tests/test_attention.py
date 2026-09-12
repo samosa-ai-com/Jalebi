@@ -55,9 +55,18 @@ PHRASES = (
     "let me know",
     "need your",
     "your approval",
+    "please approve",
+    "approval needed",
     "should i",
+    "shall i proceed",
+    "should i proceed",
+    "may i proceed",
     "do you want",
     "want me to",
+    "go-ahead",
+    "go ahead",
+    "ready to proceed",
+    "waiting on your",
     "approval",
 )
 
@@ -70,6 +79,11 @@ def test_trailing_question_marks_waiting() -> None:
     assert attention.is_waiting_message("Shall I proceed?") is True
     assert attention.is_waiting_message("Proceed?") is True
     assert attention.is_waiting_message("Proceeding now.") is False
+
+
+def test_explicit_approval_request_excludes_ordinary_questions() -> None:
+    assert attention.is_explicit_approval_request("Does that cover the issue?") is False
+    assert attention.is_explicit_approval_request("Please approve the plan above.") is True
 
 
 @pytest.mark.parametrize("phrase", PHRASES)
@@ -92,6 +106,17 @@ def test_looks_great_false() -> None:
 
 def test_approve_is_not_approval() -> None:
     assert attention.is_waiting_message("I'll approve the merge when the checks pass.") is False
+
+
+def test_codex_plan_approval_ask_is_waiting() -> None:
+    # Task 68 (codex): plan-first run ending in an approval ask with no
+    # question mark — previously missed, so no needs_you ever fired.
+    assert (
+        attention.is_waiting_message(
+            "Please approve the review plan above, and I'll begin."
+        )
+        is True
+    )
 
 
 def test_empty_and_whitespace_false() -> None:
@@ -343,4 +368,3 @@ def test_attention_for_dismissed_attention_returns_done() -> None:
     task.context_json = json.dumps({"attention_dismissed": True})
     run = _run_with_status(status="failed")
     assert _attn.attention_for(cast(Task, task), cast(Run, run), None) == "done"
-

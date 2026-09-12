@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Tasks from "./Tasks";
 
@@ -74,7 +74,16 @@ const DEFAULT_HANDLERS = {
     ],
   },
   "/api/github/context": { issues: [], prs: [], branches: ["main", "dev"] },
+  "/api/backends": { enabled: ["opencode", "codex", "claude"], default: "opencode" },
+  "/api/screenings": [],
 };
+
+/** Pick an option in a SearchableSelect: open it by label, search, click. */
+async function pick(label: string | RegExp, search: string, option: string | RegExp) {
+  await userEvent.click(await screen.findByLabelText(label));
+  await userEvent.type(screen.getByRole("combobox"), search);
+  await userEvent.click(await screen.findByRole("option", { name: option }));
+}
 
 describe("Tasks", () => {
   afterEach(() => {
@@ -90,7 +99,7 @@ describe("Tasks", () => {
       </MemoryRouter>
     );
     expect(await screen.findByText("do the thing")).toBeInTheDocument();
-    expect(screen.getAllByText("owner/repo").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/owner\/repo/).length).toBeGreaterThan(0);
     expect(screen.getByText("done")).toBeInTheDocument();
   });
 
@@ -166,7 +175,7 @@ describe("Tasks", () => {
     );
 
     await screen.findByText("New task");
-    await userEvent.selectOptions(screen.getByLabelText("Task type"), "issue_fix");
+    await pick("Task type", "issue", "Issue fix");
     expect(
       await screen.findByLabelText("Target branch (worktree base / PR base)")
     ).toBeInTheDocument();
@@ -182,7 +191,7 @@ describe("Tasks", () => {
     );
 
     await screen.findByText("New task");
-    await userEvent.selectOptions(screen.getByLabelText("Task type"), "pr_review");
+    await pick("Task type", "review", "Review PR");
     expect(screen.queryByLabelText("Source branch")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Target branch (PR base)")).not.toBeInTheDocument();
     expect(
@@ -229,11 +238,105 @@ describe("Tasks", () => {
     );
 
     await screen.findByText("New task");
-    const picker = await screen.findByLabelText("Link PR (optional)");
+    await userEvent.click(await screen.findByLabelText("Link PR (optional)"));
     expect(screen.getByRole("option", { name: /#1 — Phase 1/ })).toBeInTheDocument();
 
-    await userEvent.selectOptions(picker, "1");
-    expect(picker).toHaveValue("1");
+    await userEvent.click(screen.getByRole("option", { name: /#1 — Phase 1/ }));
+    expect(screen.getByLabelText("Link PR (optional)")).toHaveTextContent(/#1/);
+  });
+
+  it("linking a PR defaults the address-reviews checkbox to checked and sends it", async () => {
+    const fetchMock = stubFetch({
+      ...DEFAULT_HANDLERS,
+      "/api/github/context": {
+        issues: [],
+        prs: [
+          {
+            number: 1,
+            title: "Phase 1",
+            html_url: "u",
+            state: "open",
+            base: "main",
+            head: "phase-1",
+            author: "me",
+          },
+        ],
+        branches: ["main", "dev"],
+      },
+    });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+
+    await screen.findByText("New task");
+    // No linked PR yet → no checkbox.
+    expect(screen.queryByLabelText(/Address the review comments/)).toBeNull();
+
+    await pick("Link PR (optional)", "#1", /#1/);
+    const box = (await screen.findByLabelText(/Address the review comments/)) as HTMLInputElement;
+    expect(box.checked).toBe(true);
+
+    await userEvent.type(screen.getByPlaceholderText("Instructions…"), "fix it");
+    await userEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      const postCall = fetchMock.mock.calls.find(
+        (call) => call[0] === "/api/tasks" && call[1]?.method === "POST"
+      );
+      expect(postCall).toBeTruthy();
+      expect(JSON.parse(postCall![1]!.body as string)).toMatchObject({
+        pr_number: 1,
+        address_reviews: true,
+      });
+    });
+  });
+
+  it("unchecking address-reviews sends false", async () => {
+    const fetchMock = stubFetch({
+      ...DEFAULT_HANDLERS,
+      "/api/github/context": {
+        issues: [],
+        prs: [
+          {
+            number: 2,
+            title: "Phase 2",
+            html_url: "u",
+            state: "open",
+            base: "main",
+            head: "phase-2",
+            author: "me",
+          },
+        ],
+        branches: ["main", "dev"],
+      },
+    });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+
+    await screen.findByText("New task");
+    await pick("Link PR (optional)", "#2", /#2/);
+    const box = (await screen.findByLabelText(/Address the review comments/)) as HTMLInputElement;
+    await userEvent.click(box);
+    expect(box.checked).toBe(false);
+
+    await userEvent.type(screen.getByPlaceholderText("Instructions…"), "fix it");
+    await userEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      const postCall = fetchMock.mock.calls.find(
+        (call) => call[0] === "/api/tasks" && call[1]?.method === "POST"
+      );
+      expect(postCall).toBeTruthy();
+      expect(JSON.parse(postCall![1]!.body as string)).toMatchObject({
+        pr_number: 2,
+        address_reviews: false,
+      });
+    });
   });
 
   it("fork PR offers a PR-head worktree base and sends the sentinel on create", async () => {
@@ -264,16 +367,16 @@ describe("Tasks", () => {
     );
 
     await screen.findByText("New task");
-    const picker = await screen.findByLabelText("Link PR (optional)");
-    await userEvent.selectOptions(picker, "7");
+    await pick("Link PR (optional)", "#7", /#7/);
 
     const useHead = await screen.findByRole("button", {
       name: /Base the worktree on PR #7 head/,
     });
     await userEvent.click(useHead);
 
-    const source = screen.getByLabelText("Source branch") as HTMLSelectElement;
-    expect(source.value).toBe("pr/7/head");
+    const sourceBtn = screen.getByLabelText("Source branch");
+    expect(sourceBtn).toHaveTextContent(/PR #7 head/);
+    await userEvent.click(sourceBtn);
     expect(screen.getByRole("option", { name: /PR #7 head/ })).toBeInTheDocument();
 
     await userEvent.type(screen.getByPlaceholderText("Instructions…"), "address reviews");
@@ -291,6 +394,57 @@ describe("Tasks", () => {
         target_branch: "main",
       });
     });
+  });
+
+  it("task-detail handoff prefill bases branches on the linked PR", async () => {
+    stubFetch({
+      ...DEFAULT_HANDLERS,
+      "/api/github/context": {
+        issues: [],
+        prs: [
+          {
+            number: 9,
+            title: "Fix",
+            html_url: "u",
+            state: "open",
+            base: "main",
+            head: "dev",
+            author: "me",
+          },
+        ],
+        branches: ["main", "dev"],
+      },
+    });
+    const router = createMemoryRouter([{ path: "/", element: <Tasks /> }], {
+      initialEntries: [
+        {
+          pathname: "/",
+          search: "?view=queue",
+          state: {
+            prefill: {
+              repoId: 1,
+              type: "freeform",
+              prNumber: "9",
+              prompt: "Address the review comments on PR #9.",
+              addressReviews: true,
+            },
+            from: "task-detail",
+          },
+        },
+      ],
+    });
+    render(<RouterProvider router={router} />);
+
+    await screen.findByText("New task");
+    // The handoff carries no branches — context load must base the work on
+    // the PR (head/base), not the repo default.
+    await waitFor(() => {
+      expect(screen.getByLabelText("Source branch")).toHaveTextContent("dev");
+    });
+    expect(screen.getByLabelText("Target branch (PR base)")).toHaveTextContent("main");
+    expect(
+      (screen.getByLabelText(/Address the review comments/) as HTMLInputElement).checked
+    ).toBe(true);
   });
 
   it("shows env-var chips and sends selected env_vars on create", async () => {
@@ -361,7 +515,7 @@ describe("Tasks", () => {
     // The Backend select lives behind the Advanced toggle; changing it
     // updates the caption and the model list.
     await userEvent.click(screen.getByRole("button", { name: /Advanced/ }));
-    await userEvent.selectOptions(screen.getByLabelText("Backend"), "claude");
+    await pick("Backend", "claude", "claude");
     await waitFor(() => {
       expect(screen.getByText("claude · runs in a local worktree")).toBeInTheDocument();
     });
@@ -422,10 +576,110 @@ describe("Tasks", () => {
       </MemoryRouter>
     );
     await screen.findByText("New task");
-    const typeSelect = screen.getByLabelText("Task type") as HTMLSelectElement;
-    const values = [...typeSelect.options].map((o) => o.value);
-    expect(values).toContain("freeform");
-    expect(values).not.toContain("screen_finding");
+    await userEvent.click(screen.getByLabelText("Task type"));
+    expect(screen.getByRole("option", { name: "Freeform" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "screen_finding" })).not.toBeInTheDocument();
+  });
+
+  it("renders new-user friendliness explainer under New task header", async () => {
+    stubFetch({ ...DEFAULT_HANDLERS });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    await screen.findByText("New task");
+    expect(
+      screen.getByText(/The agent works in a private local copy of the repo on its own branch and cannot push/)
+    ).toBeInTheDocument();
+    // Fresh freeform defaults to manual publish — the summary must agree.
+    expect(screen.getByText(/manual publish/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Jalebi publishes the result for you, and merging is always your decision/)
+    ).toBeInTheDocument();
+  });
+
+  it("shows review-specific read-only guidance for pr_review tasks", async () => {
+    stubFetch({ ...DEFAULT_HANDLERS });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    await screen.findByText("New task");
+    await pick("Task type", "review", /Review/);
+    // Reviews never publish — neither the summary nor the guidance may claim one.
+    expect(screen.getByText(/no publish \(review\)/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/reviews this pull request in a read-only copy and posts its comments/)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Review tasks only post comments — nothing is pushed or published/)
+    ).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /Advanced options/ }));
+    expect(
+      screen.getByText(/Review tasks do not publish a pull request/)
+    ).toBeInTheDocument();
+  });
+
+  it("renders safety line near submit button reflecting publish mode and type semantics", async () => {
+    stubFetch({ ...DEFAULT_HANDLERS });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    await screen.findByText("New task");
+    // Freeform defaults to manual publish
+    expect(screen.getByText(/The task can be cancelled while it runs/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Publishing a pull request is a separate step you control/)
+    ).toBeInTheDocument();
+
+    // Switching to issue_fix defaults to auto publish
+    await pick("Task type", "issue", "Issue fix");
+    expect(
+      screen.getByText(/A pull request will be published automatically when the task finishes/)
+    ).toBeInTheDocument();
+
+    // Opening Advanced options and explicitly choosing manual publish
+    await userEvent.click(screen.getByRole("button", { name: /Advanced options/ }));
+    await pick("Publish mode", "manual", /Manual/);
+    expect(
+      screen.getByText(/Publishing a pull request is a separate step you control/)
+    ).toBeInTheDocument();
+
+    // Explicitly choosing auto publish
+    await pick("Publish mode", "auto", /Auto/);
+    expect(
+      screen.getByText(/A pull request will be published automatically when the task finishes/)
+    ).toBeInTheDocument();
+  });
+
+  it("renames Advanced toggle to 'Advanced options' and shows Publish mode helper text when expanded", async () => {
+    stubFetch({ ...DEFAULT_HANDLERS });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    await screen.findByText("New task");
+    const toggle = screen.getByRole("button", { name: /Advanced options/ });
+    expect(toggle).toBeInTheDocument();
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(
+      screen.queryByText(
+        "Auto publishes when the task finishes, Manual waits for you to review and click Publish."
+      )
+    ).not.toBeInTheDocument();
+
+    await userEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(
+      screen.getByText(
+        "Auto publishes when the task finishes, Manual waits for you to review and click Publish."
+      )
+    ).toBeInTheDocument();
   });
 });
 
@@ -626,7 +880,7 @@ describe("Tasks page (queue overhaul)", () => {
       </MemoryRouter>
     );
     expect(await screen.findByText("first repo task")).toBeInTheDocument();
-    await userEvent.selectOptions(screen.getByLabelText("Filter by repository"), "owner/other");
+    await pick("Filter by repository", "owner/other", "owner/other");
     expect(screen.getByText("second repo task")).toBeInTheDocument();
     expect(screen.queryByText("first repo task")).not.toBeInTheDocument();
   });
@@ -714,16 +968,15 @@ describe("Tasks page (queue overhaul)", () => {
     );
     expect(await screen.findByText("custom branch work")).toBeInTheDocument();
     await userEvent.click(screen.getByTitle("Clone — pre-fill the form from this task"));
-    // The clone remounts the form, which re-fires the context fetch. Wait
-    // for the "dev" options to render (proof the fetch RESOLVED, not just
-    // fired) plus a macrotask beat, so the check runs after the clobber
-    // window instead of passing vacuously on the pre-fetch render.
+    // The clone remounts the form, which re-fires the context fetch. Open the
+    // source picker and wait for the "dev" option (proof the fetch RESOLVED,
+    // not just fired) plus a macrotask beat, so the check runs after the
+    // clobber window instead of passing vacuously on the pre-fetch render.
+    await userEvent.click(await screen.findByLabelText("Source branch"));
     await screen.findAllByRole("option", { name: "dev" });
     await new Promise((r) => setTimeout(r, 50));
-    expect((screen.getByLabelText("Source branch") as HTMLSelectElement).value).toBe("dev");
-    expect((screen.getByLabelText("Target branch (PR base)") as HTMLSelectElement).value).toBe(
-      "dev"
-    );
+    expect(screen.getByLabelText("Source branch")).toHaveTextContent("dev");
+    expect(screen.getByLabelText("Target branch (PR base)")).toHaveTextContent("dev");
   });
 
   it("running-card Cancel calls the cancel endpoint and reloads", async () => {
@@ -832,7 +1085,7 @@ describe("Tasks page (queue overhaul)", () => {
     );
     await screen.findByText("New task");
     expect(screen.queryByLabelText("Backend")).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: /Advanced/ }));
+    await userEvent.click(screen.getByRole("button", { name: /Advanced options/ }));
     expect(screen.getByLabelText("Backend")).toBeInTheDocument();
   });
 
@@ -861,12 +1114,9 @@ describe("Tasks page (queue overhaul)", () => {
       </MemoryRouter>
     );
     await screen.findByText("New task");
-    const picker = await screen.findByLabelText("Link PR (optional)");
-    await userEvent.selectOptions(picker, "3");
-    expect((screen.getByLabelText("Source branch") as HTMLSelectElement).value).toBe("feature-x");
-    expect((screen.getByLabelText("Target branch (PR base)") as HTMLSelectElement).value).toBe(
-      "dev"
-    );
+    await pick("Link PR (optional)", "#3", /#3/);
+    expect(screen.getByLabelText("Source branch")).toHaveTextContent("feature-x");
+    expect(screen.getByLabelText("Target branch (PR base)")).toHaveTextContent("dev");
   });
 
   it("pr_review submits without instructions, sending a default prompt", async () => {
@@ -894,9 +1144,9 @@ describe("Tasks page (queue overhaul)", () => {
       </MemoryRouter>
     );
     await screen.findByText("New task");
-    await userEvent.selectOptions(screen.getByLabelText("Task type"), "pr_review");
+    await pick("Task type", "review", "Review PR");
     expect(screen.getByText(/optional — the reviewer already knows/)).toBeInTheDocument();
-    await userEvent.selectOptions(screen.getByLabelText("Pull request"), "4");
+    await pick("Pull request", "#4", /#4/);
     // No instructions typed — Create must still be enabled.
     const create = screen.getByRole("button", { name: "Create" });
     expect(create).not.toBeDisabled();
@@ -908,6 +1158,81 @@ describe("Tasks page (queue overhaul)", () => {
       expect(postCall).toBeTruthy();
       const body = JSON.parse(postCall![1]!.body as string) as Record<string, unknown>;
       expect(body).toMatchObject({ type: "pr_review", pr_number: 4, prompt: "Review PR #4." });
+      // Reviews never publish — no mode may be sent.
+      expect(body).not.toHaveProperty("publish_mode");
+    });
+  });
+
+  it("omits a stale publish mode when a review task is prefilled with one", async () => {
+    const fetchMock = stubFetch(DEFAULT_HANDLERS);
+    render(
+      <MemoryRouter
+        initialEntries={[
+          {
+            pathname: "/",
+            state: {
+              prefill: {
+                repoId: 1,
+                type: "pr_review",
+                prNumber: "4",
+                prompt: "Review PR #4.",
+                publishMode: "auto",
+              },
+            },
+          },
+        ]}
+      >
+        <Tasks />
+      </MemoryRouter>
+    );
+    await screen.findByText("New task");
+    await userEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => {
+      const postCall = fetchMock.mock.calls.find(
+        (call) => call[0] === "/api/tasks" && call[1]?.method === "POST"
+      );
+      expect(postCall).toBeTruthy();
+      const body = JSON.parse(postCall![1]!.body as string) as Record<string, unknown>;
+      expect(body.type).toBe("pr_review");
+      expect(body).not.toHaveProperty("publish_mode");
+    });
+  });
+
+  it("mission order buttons flip back with the matching type pre-selected (Ops Deck and Halwai)", async () => {
+    stubFetch({
+      ...DEFAULT_HANDLERS,
+      "/api/settings": { default_backend: "opencode", default_model: "x", concurrency: 4 },
+      "/api/agents": [],
+      "/api/skills": [],
+      "/api/backends": { backends: ["opencode"], enabled: ["opencode"], default: "opencode" },
+      "/api/screenings": [],
+      "/api/screenings/findings": [],
+    });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    await screen.findByText("New task");
+    await userEvent.click(screen.getByRole("button", { name: "Mission control" }));
+
+    // Default theme is Ops Deck
+    expect(await screen.findByRole("heading", { name: "Ops Deck" })).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole("button", { name: /new fix/i }));
+    await waitFor(() => {
+      expect(screen.getByLabelText("Task type")).toHaveTextContent("Issue fix");
+    });
+
+    // Flip back to Mission control and switch to Halwai theme
+    await userEvent.click(screen.getByRole("button", { name: "Mission control" }));
+    const halwaiBtn = screen.getAllByRole("button", { name: "Halwai" })[0];
+    await userEvent.click(halwaiBtn);
+    expect(await screen.findByRole("heading", { name: "Halwai shop" })).toBeInTheDocument();
+
+    // Halwai order buttons flip back with matching type
+    await userEvent.click(await screen.findByRole("button", { name: /samosa.*issue_fix/ }));
+    await waitFor(() => {
+      expect(screen.getByLabelText("Task type")).toHaveTextContent("Issue fix");
     });
   });
 
@@ -932,4 +1257,407 @@ describe("Tasks page (queue overhaul)", () => {
     const link = await screen.findByRole("link", { name: "#99" });
     expect(link).toHaveAttribute("href", "/tasks/99");
   });
+
+  it("shows Back to Mission control banner and switches view when clicked", async () => {
+    stubFetch(DEFAULT_HANDLERS);
+    render(
+      <MemoryRouter
+        initialEntries={[
+          { pathname: "/", search: "?view=queue&from=mission", state: { from: "mission" } },
+        ]}
+      >
+        <Tasks />
+      </MemoryRouter>
+    );
+    const backBtn = await screen.findByRole("button", { name: /Back to Mission control/i });
+    expect(backBtn).toBeInTheDocument();
+    await userEvent.click(backBtn);
+    expect(screen.getByRole("heading", { name: "Ops Deck" })).toBeInTheDocument();
+  });
+
+  it("persists theme switch between Ops Deck and Halwai", async () => {
+    stubFetch({
+      ...DEFAULT_HANDLERS,
+      "/api/settings": { default_backend: "opencode", default_model: "x", concurrency: 4 },
+      "/api/agents": [],
+      "/api/skills": [],
+      "/api/backends": { backends: ["opencode"], enabled: ["opencode"], default: "opencode" },
+      "/api/screenings": [],
+      "/api/screenings/findings": [],
+    });
+    render(
+      <MemoryRouter initialEntries={[{ pathname: "/", search: "?view=mission" }]}>
+        <Tasks />
+      </MemoryRouter>
+    );
+    expect(await screen.findByRole("heading", { name: "Ops Deck" })).toBeInTheDocument();
+    expect(localStorage.getItem("jalebi-mission-theme")).toBeNull();
+
+    // Toggle to Halwai
+    const halwaiBtns = screen.getAllByRole("button", { name: "Halwai" });
+    await userEvent.click(halwaiBtns[0]);
+    expect(await screen.findByRole("heading", { name: "Halwai shop" })).toBeInTheDocument();
+    expect(localStorage.getItem("jalebi-mission-theme")).toBe("brew");
+
+    // Toggle back to Ops Deck
+    const opsBtns = screen.getAllByRole("button", { name: "Ops Deck" });
+    await userEvent.click(opsBtns[0]);
+    expect(await screen.findByRole("heading", { name: "Ops Deck" })).toBeInTheDocument();
+    expect(localStorage.getItem("jalebi-mission-theme")).toBe("ops");
+  });
+
+  it("Ops Deck quick-launch buttons pre-select freeform and review task types", async () => {
+    stubFetch({
+      ...DEFAULT_HANDLERS,
+      "/api/settings": { default_backend: "opencode", default_model: "x", concurrency: 4 },
+      "/api/agents": [],
+      "/api/skills": [],
+      "/api/backends": { backends: ["opencode"], enabled: ["opencode"], default: "opencode" },
+      "/api/screenings": [],
+      "/api/screenings/findings": [],
+    });
+    render(
+      <MemoryRouter initialEntries={[{ pathname: "/", search: "?view=mission" }]}>
+        <Tasks />
+      </MemoryRouter>
+    );
+    expect(await screen.findByRole("heading", { name: "Ops Deck" })).toBeInTheDocument();
+
+    // Click new feature
+    await userEvent.click(screen.getByRole("button", { name: /new feature/i }));
+    await waitFor(() => {
+      expect(screen.getByLabelText("Task type")).toHaveTextContent("Freeform");
+    });
+
+    // Go back to mission and click new review
+    await userEvent.click(screen.getByRole("button", { name: "Mission control" }));
+    await userEvent.click(screen.getByRole("button", { name: /new review/i }));
+    await waitFor(() => {
+      expect(screen.getByLabelText("Task type")).toHaveTextContent("Review PR");
+    });
+  });
+
+  it("Ops Deck idle core 'spin up a job' button dispatches to Queue", async () => {
+    stubFetch({
+      ...DEFAULT_HANDLERS,
+      "/api/tasks": [],
+      "/api/settings": { default_backend: "opencode", default_model: "x", concurrency: 2 },
+      "/api/agents": [],
+      "/api/skills": [],
+      "/api/backends": { backends: ["opencode"], enabled: ["opencode"], default: "opencode" },
+      "/api/screenings": [],
+      "/api/screenings/findings": [],
+    });
+    render(
+      <MemoryRouter initialEntries={[{ pathname: "/", search: "?view=mission" }]}>
+        <Tasks />
+      </MemoryRouter>
+    );
+    expect(await screen.findByRole("heading", { name: "Ops Deck" })).toBeInTheDocument();
+
+    const spinUpBtn = await screen.findByRole("button", { name: /Spin up a job on core 1/i });
+    await userEvent.click(spinUpBtn);
+    await waitFor(() => {
+      expect(screen.getByText("New task")).toBeInTheDocument();
+    });
+  });
+
+  it("Ops Deck toggles Director mode on and off", async () => {
+    stubFetch({
+      ...DEFAULT_HANDLERS,
+      "/api/settings": { default_backend: "opencode", default_model: "x", concurrency: 2 },
+      "/api/agents": [],
+      "/api/skills": [],
+      "/api/backends": { backends: ["opencode"], enabled: ["opencode"], default: "opencode" },
+      "/api/screenings": [],
+      "/api/screenings/findings": [],
+    });
+    render(
+      <MemoryRouter initialEntries={[{ pathname: "/", search: "?view=mission" }]}>
+        <Tasks />
+      </MemoryRouter>
+    );
+    expect(await screen.findByRole("heading", { name: "Ops Deck" })).toBeInTheDocument();
+
+    const directorBtn = screen.getByRole("button", { name: /Director/i });
+    expect(directorBtn).toHaveAttribute("aria-pressed", "false");
+    expect(directorBtn).toHaveTextContent("OFF");
+
+    await userEvent.click(directorBtn);
+    expect(directorBtn).toHaveAttribute("aria-pressed", "true");
+    expect(directorBtn).toHaveTextContent("ON");
+
+    await userEvent.click(directorBtn);
+    expect(directorBtn).toHaveAttribute("aria-pressed", "false");
+    expect(directorBtn).toHaveTextContent("OFF");
+  });
+
+  it("Ops Deck keeps blocked tasks visible and displays queued jobs in pending strip without occupying cores", async () => {
+    stubFetch({
+      ...DEFAULT_HANDLERS,
+      "/api/tasks": [
+        { ...TASKS[0], id: 101, status: "running", prompt: "Running job" },
+        { ...TASKS[0], id: 102, status: "queued", prompt: "Queued job" },
+        { ...TASKS[0], id: 103, status: "blocked", blocked: true, prompt: "Blocked job" },
+      ],
+      "/api/settings": { default_backend: "opencode", default_model: "x", concurrency: 3 },
+      "/api/agents": [],
+      "/api/skills": [],
+      "/api/backends": { backends: ["opencode"], enabled: ["opencode"], default: "opencode" },
+      "/api/screenings": [],
+      "/api/screenings/findings": [],
+    });
+    render(
+      <MemoryRouter initialEntries={[{ pathname: "/", search: "?view=mission" }]}>
+        <Tasks />
+      </MemoryRouter>
+    );
+    expect(await screen.findByRole("heading", { name: "Ops Deck" })).toBeInTheDocument();
+
+    // Queued and blocked tasks appear in the Pending jobs strip
+    const pendingGroup = screen.getByRole("group", { name: "Pending jobs" });
+    expect(pendingGroup).toBeInTheDocument();
+    expect(pendingGroup).toHaveTextContent("#102");
+    expect(pendingGroup).toHaveTextContent("#103");
+    expect(pendingGroup).toHaveTextContent("blocked");
+
+    // Only running task (101) occupies a core. With concurrency=3 and 1 running task, idle cores exist.
+    const idleButtons = screen.getAllByRole("button", { name: /spin up a job/i });
+    expect(idleButtons.length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("CORE-01")).toBeInTheDocument();
+    expect(screen.getAllByText("#101").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("applies a screening handoff prefill and marks findings dealt only on create", async () => {
+    const prompt = 'Fix this high finding from the "Security posture" screen.';
+    const fp = JSON.stringify([7, "Secret in config", "config.py", 3]);
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/tasks" && init?.method === "POST") {
+        return { ok: true, json: async () => ({ ...TASKS[0], id: 99 }) };
+      }
+      const handler = Object.entries({ ...DEFAULT_HANDLERS, "/api/tasks": [] }).find(([n]) =>
+        url.includes(n)
+      );
+      const value = handler ? handler[1] : [];
+      return { ok: true, json: async () => value };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const router = createMemoryRouter([{ path: "/", element: <Tasks /> }], {
+      initialEntries: [
+        {
+          pathname: "/",
+          state: {
+            prefill: { repoId: 1, type: "freeform", prompt, publishMode: "manual" },
+            dealtFps: [fp],
+            screeningHandoffId: "test-handoff-1",
+            from: "screenings",
+          },
+        },
+      ],
+    });
+    render(<RouterProvider router={router} />);
+    // The prompt is injected into the form for review before anything exists.
+    expect(await screen.findByDisplayValue(prompt)).toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.filter((call) => call[0] === "/api/tasks" && call[1]?.method === "POST")
+    ).toHaveLength(0);
+    expect(
+      fetchMock.mock.calls.filter(
+        (call) => String(call[0]).startsWith("/api/screenings/dealt") && call[1]?.method === "POST"
+      )
+    ).toHaveLength(0);
+    await userEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => {
+      const postCall = fetchMock.mock.calls.find(
+        (call) => call[0] === "/api/tasks" && call[1]?.method === "POST"
+      );
+      expect(postCall).toBeTruthy();
+      const body = JSON.parse(postCall![1]!.body as string) as Record<string, unknown>;
+      expect(body).toMatchObject({ repo_id: 1, type: "freeform", prompt });
+    });
+    // Only the successful create marks the finding dealt — via the API.
+    await waitFor(() => {
+      const markCall = fetchMock.mock.calls.find(
+        (call) => call[0] === "/api/screenings/dealt" && call[1]?.method === "POST"
+      );
+      expect(markCall).toBeTruthy();
+      const body = JSON.parse(markCall![1]!.body as string) as Record<string, unknown>;
+      expect(body).toMatchObject({ screen_id: 7, fps: [fp] });
+    });
+    // The handoff entry is replace-cleared (no refresh re-inject) while
+    // unrelated keys like `from` survive.
+    await waitFor(() => {
+      expect(router.state.location.state).toEqual({ from: "screenings" });
+    });
+  });
+
+  it("still creates the task when the handoff dealt-mark fails, showing an error", async () => {
+    const prompt = "Fix this high finding.";
+    const fp = JSON.stringify([7, "Secret in config", "config.py", 3]);
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/tasks" && init?.method === "POST") {
+        return { ok: true, json: async () => ({ ...TASKS[0], id: 99 }) };
+      }
+      if (String(url).startsWith("/api/screenings/dealt") && init?.method === "POST") {
+        return { ok: false, json: async () => ({ error: "db locked" }) };
+      }
+      const handler = Object.entries({ ...DEFAULT_HANDLERS, "/api/tasks": [] }).find(([n]) =>
+        url.includes(n)
+      );
+      const value = handler ? handler[1] : [];
+      return { ok: true, json: async () => value };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const router = createMemoryRouter([{ path: "/", element: <Tasks /> }], {
+      initialEntries: [
+        {
+          pathname: "/",
+          state: {
+            prefill: { repoId: 1, type: "freeform", prompt, publishMode: "manual" },
+            dealtFps: [fp],
+            screeningHandoffId: "test-handoff-2",
+            from: "screenings",
+          },
+        },
+      ],
+    });
+    render(<RouterProvider router={router} />);
+    expect(await screen.findByDisplayValue(prompt)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Create" }));
+    // The task itself is created…
+    expect(await screen.findByRole("link", { name: "#99" })).toHaveAttribute("href", "/tasks/99");
+    // …and the failed mark surfaces without blocking it.
+    expect(await screen.findByText(/could not be marked dealt/)).toBeInTheDocument();
+  });
+
+  it("flips from Mission control to the queue so the handoff form is visible", async () => {
+    const prompt = "Fix this high finding from mission view.";
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/tasks" && init?.method === "POST") {
+        return { ok: true, json: async () => ({ ...TASKS[0], id: 99 }) };
+      }
+      const handler = Object.entries({ ...DEFAULT_HANDLERS, "/api/tasks": [] }).find(([n]) =>
+        url.includes(n)
+      );
+      const value = handler ? handler[1] : [];
+      return { ok: true, json: async () => value };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    localStorage.setItem("jalebi-tasks-view", "mission");
+    const router = createMemoryRouter([{ path: "/", element: <Tasks /> }], {
+      initialEntries: [
+        {
+          pathname: "/",
+          state: {
+            prefill: { repoId: 1, type: "freeform", prompt, publishMode: "manual" },
+            dealtFps: [],
+            screeningHandoffId: "test-handoff-3",
+            from: "screenings",
+          },
+        },
+      ],
+    });
+    render(<RouterProvider router={router} />);
+    // Despite the stored mission view, the New-task form shows the prompt…
+    expect(await screen.findByDisplayValue(prompt)).toBeInTheDocument();
+    // …and the URL carries the queue view.
+    await waitFor(() => {
+      expect(router.state.location.search).toContain("view=queue");
+    });
+  });
+
+  it("normalizes a cloned screen_finding type to freeform", async () => {
+    const legacy = { ...TASKS[0], id: 7, type: "screen_finding", prompt: "old audit fix" };
+    stubFetch({ ...DEFAULT_HANDLERS, "/api/tasks": [legacy] });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    await screen.findByText("old audit fix");
+    await userEvent.click(screen.getByTitle(/Clone/));
+    await waitFor(() => {
+      expect(screen.getByLabelText("Task type")).toHaveTextContent("Freeform");
+    });
+  });
+
+  it("shows the status reassurance strip with zero tasks", async () => {
+    stubFetch({ ...DEFAULT_HANDLERS, "/api/tasks": [] });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    expect(await screen.findByText("No tasks yet, nothing is running")).toBeInTheDocument();
+  });
+
+  it("shows the status reassurance strip with computed counts", async () => {
+    const mixed = [
+      { ...TASKS[0], id: 1, status: "running", attention: "normal" },
+      { ...TASKS[0], id: 2, status: "queued", attention: "needs_you" },
+      { ...TASKS[0], id: 3, status: "done", attention: "needs_you" },
+    ];
+    stubFetch({ ...DEFAULT_HANDLERS, "/api/tasks": mixed });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    // 1 running, 1 queued, 2 needs_you
+    expect(await screen.findByText("1 running, 1 queued, 2 needs you")).toBeInTheDocument();
+  });
+
+  it("renders the onboarding checklist in queue view and scrolls/focuses new-task form", async () => {
+    window.HTMLElement.prototype.scrollIntoView = vi.fn();
+    stubFetch({ ...DEFAULT_HANDLERS, "/api/tasks": [] });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    expect(await screen.findByText("Setup")).toBeInTheDocument();
+    const taskBtn = screen.getByRole("button", { name: "Create your first task" });
+    const newTaskContainer = document.getElementById("new-task");
+    expect(newTaskContainer).toBeInTheDocument();
+
+    await userEvent.click(taskBtn);
+    expect(window.HTMLElement.prototype.scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth" });
+    expect(document.activeElement).toBe(newTaskContainer);
+  });
+
+  it("renders friendly EmptyState when the task queue is empty", async () => {
+    stubFetch({ ...DEFAULT_HANDLERS, "/api/tasks": [] });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    expect(await screen.findByRole("heading", { name: "No tasks yet" })).toBeInTheDocument();
+    expect(screen.getByText(/Create your first task above/)).toBeInTheDocument();
+  });
+
+  it("points to /repos in EmptyState when no repos are connected", async () => {
+    stubFetch({ ...DEFAULT_HANDLERS, "/api/tasks": [], "/api/repos": [] });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    expect(await screen.findByRole("heading", { name: "No tasks yet" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Connect repository" })).toHaveAttribute("href", "/repos");
+  });
+
+  it("renders a polite status live region for screen readers", async () => {
+    stubFetch(DEFAULT_HANDLERS);
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    const liveRegion = await screen.findByRole("status");
+    expect(liveRegion).toBeInTheDocument();
+    expect(liveRegion).toHaveAttribute("aria-live", "polite");
+    expect(liveRegion.className).toMatch(/\bsr-only\b/);
+  });
 });
+

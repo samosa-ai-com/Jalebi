@@ -1,7 +1,9 @@
 """Thin GitHub REST client (httpx) with PAT scope validation."""
 
+import time
 import urllib.parse
 from dataclasses import dataclass, field
+from email.utils import parsedate_to_datetime
 from typing import Any, Literal
 
 import httpx
@@ -10,12 +12,21 @@ API_BASE_URL = "https://api.github.com"
 DEFAULT_TIMEOUT = 10.0
 MAX_PAGINATION_PAGES = 10  # bound Link-header following (10×per_page)
 
+# Rate-limit backoff. GitHub returns 429 (or 403 with a rate-limit signal) when
+# a burst of concurrent tasks exhausts the shared PAT budget; these retries keep
+# a transient limit from failing a task. Capped so a worker never sleeps for the
+# full reset window of an exhausted hourly quota.
+RATE_LIMIT_MAX_RETRIES = 3
+RATE_LIMIT_MAX_WAIT = 60.0
+_RATE_LIMIT_DEFAULT_WAIT = 1.0  # 429 with neither Retry-After nor Reset
+
 REQUIRED_CLASSIC_SCOPES = ("repo",)
 
 FINE_GRAINED_NOTE = (
     "fine-grained token: GitHub does not expose an enumerable scope list. "
     "Verify Contents (RW), Pull requests (RW), Issues (RW), Metadata (read), "
-    "and Commit statuses (RW) in the GitHub UI."
+    "Commit statuses (RW), and Actions (read — to read failed workflow logs), "
+    "in the GitHub UI."
 )
 
 TokenType = Literal["classic", "fine-grained", "unknown"]
@@ -88,9 +99,70 @@ class GitHubClient:
     def close(self) -> None:
         self._http.close()
 
+    @staticmethod
+    def _retry_wait(status: int, headers: dict[str, str]) -> float | None:
+        """Seconds to wait before retrying a rate-limited response, or None.
+
+        Only *rate-limit* responses are retried — never an ordinary 403 (e.g.
+        insufficient scope), which would just burn attempts. A 429 always
+        qualifies; a 403 qualifies only when it carries a rate-limit signal:
+        ``X-RateLimit-Remaining: 0`` (primary limit) or a ``Retry-After``
+        header (secondary limit). The wait is ``Retry-After`` when present,
+        else the ``X-RateLimit-Reset`` epoch, else a small default for 429.
+        Capped at ``RATE_LIMIT_MAX_WAIT`` so a worker never blocks for the
+        remainder of an exhausted hourly quota.
+        """
+        if status not in (429, 403):
+            return None
+        lowered = {k.lower(): v for k, v in headers.items()}
+        retry_after = lowered.get("retry-after")
+        remaining = lowered.get("x-ratelimit-remaining")
+        if status == 403 and remaining != "0" and retry_after is None:
+            return None
+        wait: float
+        if retry_after is not None:
+            try:
+                wait = float(retry_after)
+            except ValueError:
+                try:
+                    wait = parsedate_to_datetime(retry_after).timestamp() - time.time()
+                except (TypeError, ValueError, IndexError, OverflowError):
+                    wait = _RATE_LIMIT_DEFAULT_WAIT
+        elif remaining == "0":
+            reset = lowered.get("x-ratelimit-reset")
+            if reset is not None:
+                try:
+                    wait = max(0.0, float(reset) - time.time())
+                except ValueError:
+                    wait = _RATE_LIMIT_DEFAULT_WAIT
+            else:
+                wait = _RATE_LIMIT_DEFAULT_WAIT
+        else:
+            wait = _RATE_LIMIT_DEFAULT_WAIT
+        return min(max(wait, 0.0), RATE_LIMIT_MAX_WAIT)
+
+    def _send(self, method: str, path: str, **kwargs) -> httpx.Response:
+        """Issue one request, retrying safe reads after bounded rate limits.
+
+        GitHub documents rate-limit responses but does not offer an
+        idempotency guarantee for every write endpoint under secondary limits.
+        Retrying only GET/HEAD avoids duplicating owner-visible mutations; a
+        rate-limited write surfaces normally for the caller to retry.
+        """
+        resp = self._http.request(method, path, **kwargs)
+        if method.upper() not in {"GET", "HEAD"}:
+            return resp
+        for _ in range(RATE_LIMIT_MAX_RETRIES):
+            wait = self._retry_wait(resp.status_code, dict(resp.headers))
+            if wait is None:
+                return resp
+            time.sleep(wait)
+            resp = self._http.request(method, path, **kwargs)
+        return resp
+
     def _request(self, method: str, path: str, **kwargs) -> tuple[int, Any, dict[str, str]]:
         """Issue a request; returns ``(status_code, json_body, headers)``."""
-        resp = self._http.request(method, path, **kwargs)
+        resp = self._send(method, path, **kwargs)
         try:
             body = resp.json()
         except ValueError:
@@ -383,7 +455,7 @@ class GitHubClient:
             kwargs["params"] = params
         if etag:
             kwargs["headers"] = {"If-None-Match": etag}
-        resp = self._http.request("GET", path, **kwargs)
+        resp = self._send("GET", path, **kwargs)
         if resp.status_code == 401:
             raise GitHubUnauthorized(f"HTTP 401 on GET {path}")
         if resp.status_code == 304:

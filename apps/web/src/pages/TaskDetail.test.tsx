@@ -1,6 +1,6 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import TaskDetail from "./TaskDetail";
 
@@ -56,6 +56,26 @@ const REPOS = [
     last_checked_at: null,
   },
 ];
+
+/** Pick an option in a SearchableSelect: open it by label, search, click. */
+async function pick(label: string | RegExp, search: string, option: string | RegExp) {
+  await userEvent.click(await screen.findByLabelText(label));
+  await userEvent.type(screen.getByRole("combobox"), search);
+  await userEvent.click(await screen.findByRole("option", { name: option }));
+}
+
+/** Scoped variant for selects inside a dialog (labels repeat the composer). */
+async function pickIn(
+  container: HTMLElement,
+  label: string | RegExp,
+  search: string,
+  option: string | RegExp
+) {
+  const scope = within(container);
+  await userEvent.click(await scope.findByLabelText(label));
+  await userEvent.type(screen.getByRole("combobox"), search);
+  await userEvent.click(await screen.findByRole("option", { name: option }));
+}
 
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
@@ -184,7 +204,7 @@ describe("TaskDetail", () => {
     expect(await screen.findByText("Follow-up")).toBeInTheDocument();
     expect(screen.getByText(/Resume refreshes remote refs first/)).toBeInTheDocument();
 
-    await userEvent.type(screen.getByPlaceholderText(/Address the reviewer comments/), "do more");
+    await userEvent.type(screen.getByPlaceholderText(/Add a regression test/), "do more");
     await userEvent.click(screen.getByRole("button", { name: "Send follow-up" }));
 
     await waitFor(() => {
@@ -209,18 +229,15 @@ describe("TaskDetail", () => {
     renderDetail();
     await screen.findByText("Follow-up");
 
-    const backend = screen.getByLabelText("Backend") as HTMLSelectElement;
-    expect(backend.value).toBe("opencode");
+    const backend = screen.getByLabelText("Backend");
+    expect(backend).toHaveTextContent("opencode");
     // No note when the backend matches the task's own.
     expect(screen.queryByText(/fresh session/)).not.toBeInTheDocument();
 
-    await userEvent.selectOptions(backend, "codex");
+    await pick("Backend", "codex", "codex");
     expect(screen.getByText(/fresh session/)).toBeInTheDocument();
 
-    await userEvent.type(
-      screen.getByPlaceholderText(/Address the reviewer comments/),
-      "switch backend"
-    );
+    await userEvent.type(screen.getByPlaceholderText(/Add a regression test/), "switch backend");
     await userEvent.click(screen.getByRole("button", { name: "Send follow-up" }));
 
     await waitFor(() => {
@@ -252,13 +269,13 @@ describe("TaskDetail", () => {
     await screen.findByText("Follow-up");
 
     // Default selection is the "Reuse task backend" option (value="").
-    const backend = screen.getByLabelText("Backend") as HTMLSelectElement;
-    expect(backend.value).toBe("");
+    const backend = screen.getByLabelText("Backend");
+    expect(backend).toHaveTextContent("Reuse task backend");
     // No note — the resolved backend is the same.
     expect(screen.queryByText(/fresh session/)).not.toBeInTheDocument();
 
     // Picker is "opencode" — different from the resolved "codex" → note shows.
-    await userEvent.selectOptions(backend, "opencode");
+    await pick("Backend", "opencode", "opencode");
     expect(screen.getByText(/fresh session/)).toBeInTheDocument();
   });
 
@@ -439,6 +456,110 @@ describe("TaskDetail", () => {
     expect(await screen.findByRole("button", { name: "Re-run" })).toBeInTheDocument();
   });
 
+  it("initializes rerun dialog from the task's current backend and model", async () => {
+    const failedTask = {
+      ...TASK,
+      status: "failed",
+      cli: "codex",
+      model: "gpt-4o",
+      run: { ...RUN, status: "failed", cli: "codex", model: "gpt-4o" },
+    };
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/runs")) {
+        return { ok: true, json: async () => [failedTask.run] };
+      }
+      if (url.includes("/api/tasks")) {
+        return { ok: true, json: async () => failedTask };
+      }
+      if (url.includes("/api/models?cli=codex")) {
+        return { ok: true, json: async () => ({ cli: "codex", models: ["gpt-5", "o3"] }) };
+      }
+      if (url.includes("/api/models")) {
+        return { ok: true, json: async () => ({ cli: "opencode", models: ["m1"] }) };
+      }
+      if (url.includes("/api/github/tokens")) {
+        return { ok: true, json: async () => ({ accounts: [] }) };
+      }
+      return { ok: true, json: async () => REPOS };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderDetail();
+    await userEvent.click(await screen.findByRole("button", { name: "Re-run" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByLabelText("Backend")).toHaveTextContent("codex");
+    expect(within(dialog).getByLabelText("Model")).toHaveTextContent("gpt-4o");
+    await userEvent.click(within(dialog).getByLabelText("Model"));
+    expect(within(dialog).getByRole("option", { name: "gpt-4o" })).toBeInTheDocument();
+  });
+
+  it("rerun reloads the page state and clears the model when switching backend", async () => {
+    const failedTask = {
+      ...TASK,
+      status: "failed",
+      cli: "opencode",
+      model: "anthropic/claude-3-7-sonnet",
+      run: {
+        ...RUN,
+        status: "failed",
+        cli: "opencode",
+        model: "anthropic/claude-3-7-sonnet",
+      },
+    };
+    const queuedTask = {
+      ...failedTask,
+      status: "queued",
+      cli: "codex",
+      model: null,
+      updated_at: "2026-08-06T10:03:00",
+    };
+    let taskReads = 0;
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/runs")) {
+        return { ok: true, json: async () => [failedTask.run] };
+      }
+      if (url === "/api/tasks/7/rerun" && init?.method === "POST") {
+        return { ok: true, json: async () => queuedTask };
+      }
+      if (url === "/api/tasks/7") {
+        taskReads += 1;
+        return { ok: true, json: async () => (taskReads >= 2 ? queuedTask : failedTask) };
+      }
+      if (url.includes("/api/models?cli=codex")) {
+        return { ok: true, json: async () => ({ cli: "codex", models: ["gpt-5", "o3"] }) };
+      }
+      if (url.includes("/api/models")) {
+        return { ok: true, json: async () => ({ cli: "opencode", models: ["m1"] }) };
+      }
+      if (url.includes("/api/github/tokens")) {
+        return { ok: true, json: async () => ({ accounts: [] }) };
+      }
+      return { ok: true, json: async () => REPOS };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderDetail();
+    await userEvent.click(await screen.findByRole("button", { name: "Re-run" }));
+
+    const dialog = await screen.findByRole("dialog");
+    await pickIn(dialog as HTMLElement, "Backend", "codex", "codex");
+    // Clearing the model: open the picker and choose the Default placeholder.
+    await userEvent.click(within(dialog as HTMLElement).getByLabelText("Model"));
+    await userEvent.click(screen.getByRole("option", { name: "Default" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Re-run" }));
+
+    await waitFor(() => {
+      const rerun = fetchMock.mock.calls.find(
+        (call) => call[0] === "/api/tasks/7/rerun" && call[1]?.method === "POST"
+      );
+      expect(rerun).toBeTruthy();
+      expect(JSON.parse(rerun![1]!.body as string)).toEqual({ cli: "codex", model: null });
+    });
+    await waitFor(() => expect(screen.getAllByText("queued").length).toBeGreaterThan(0));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
   it("surfaces a publish error inline instead of swallowing it", async () => {
     const needsApproval = {
       ...TASK,
@@ -520,7 +641,7 @@ describe("TaskDetail", () => {
 
     renderDetail();
     await screen.findByText("Follow-up");
-    await userEvent.type(screen.getByPlaceholderText(/Address the reviewer comments/), "do more");
+    await userEvent.type(screen.getByPlaceholderText(/Add a regression test/), "do more");
     await userEvent.click(screen.getByRole("button", { name: "Send follow-up" }));
 
     await waitFor(() => expect(screen.getByText("running")).toBeInTheDocument(), { timeout: 5000 });
@@ -634,6 +755,169 @@ describe("TaskDetail", () => {
     expect(await screen.findByRole("button", { name: "Address reviewers" })).toBeInTheDocument();
   });
 
+  it("Address reviewers opens the New-task form prefilled (no follow-up POST)", async () => {
+    const fixTask = {
+      ...TASK,
+      type: "issue_fix",
+      repo_id: 1,
+      pr_number: 9,
+      prs: [9],
+      status: "done",
+      run: { ...RUN, status: "done" },
+      reviewers: [],
+    };
+    const fetchMock = stubFetch(fixTask);
+    vi.stubGlobal("EventSource", FakeEventSource);
+
+    const captured: {
+      current: { pathname: string; search: string; state: unknown } | null;
+    } = { current: null };
+    function Probe() {
+      const loc = useLocation();
+      captured.current = { pathname: loc.pathname, search: loc.search, state: loc.state };
+      return null;
+    }
+    render(
+      <MemoryRouter initialEntries={["/tasks/7"]}>
+        <Routes>
+          <Route path="/tasks/:id" element={<TaskDetail />} />
+          <Route path="/" element={<Probe />} />
+        </Routes>
+      </MemoryRouter>
+    );
+    await screen.findByText("Follow-up");
+    await userEvent.click(await screen.findByRole("button", { name: "Address reviewers" }));
+
+    await waitFor(() => expect(captured.current?.pathname).toBe("/"));
+    expect(captured.current?.search).toBe("?view=queue");
+    const state = captured.current?.state as {
+      prefill: Record<string, unknown>;
+      from: string;
+    };
+    expect(state.from).toBe("task-detail");
+    expect(state.prefill).toMatchObject({
+      repoId: 1,
+      type: "freeform",
+      prNumber: "9",
+      addressReviews: true,
+    });
+    expect(String(state.prefill.prompt)).toContain("PR #9");
+    // Handoff only — nothing is posted until the user submits the new form.
+    expect(fetchMock.mock.calls.filter((c) => c[1]?.method === "POST")).toEqual([]);
+  });
+
+  function stubFetchWithCi(
+    task: Record<string, unknown>,
+    ci: { ok: boolean; state: string; message: string }
+  ) {
+    const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
+      if (url.includes("/publish-check")) {
+        return {
+          ok: true,
+          json: async () => ({
+            status: ci.ok ? "ready" : "attention",
+            base_ref: "main",
+            checks: [{ name: "ci", ...ci }],
+          }),
+        };
+      }
+      if (url.endsWith("/runs")) return { ok: true, json: async () => [task.run ?? RUN] };
+      if (url.includes("/api/tasks")) return { ok: true, json: async () => task };
+      if (url.includes("/api/settings")) {
+        return {
+          ok: true,
+          json: async () => ({ default_backend: "opencode", default_model: "m1" }),
+        };
+      }
+      if (url.includes("/api/github/tokens")) {
+        return { ok: true, json: async () => ({ accounts: [] }) };
+      }
+      if (url.includes("/api/models")) {
+        return { ok: true, json: async () => ({ cli: "opencode", models: ["m1"] }) };
+      }
+      return { ok: true, json: async () => REPOS };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  it("Fix failed CI opens the New-task form prefilled with the PR-head base", async () => {
+    const fixTask = {
+      ...TASK,
+      type: "issue_fix",
+      repo_id: 1,
+      pr_number: 9,
+      prs: [9],
+      target_branch: "main",
+      status: "done",
+      run: { ...RUN, status: "done" },
+      reviewers: [],
+    };
+    const fetchMock = stubFetchWithCi(fixTask, {
+      ok: false,
+      state: "failure",
+      message: "CI is failing",
+    });
+    vi.stubGlobal("EventSource", FakeEventSource);
+
+    const captured: {
+      current: { pathname: string; search: string; state: unknown } | null;
+    } = { current: null };
+    function Probe() {
+      const loc = useLocation();
+      captured.current = { pathname: loc.pathname, search: loc.search, state: loc.state };
+      return null;
+    }
+    render(
+      <MemoryRouter initialEntries={["/tasks/7"]}>
+        <Routes>
+          <Route path="/tasks/:id" element={<TaskDetail />} />
+          <Route path="/" element={<Probe />} />
+        </Routes>
+      </MemoryRouter>
+    );
+    await screen.findByText("Follow-up");
+    await userEvent.click(await screen.findByRole("button", { name: "Fix failed CI" }));
+
+    await waitFor(() => expect(captured.current?.pathname).toBe("/"));
+    expect(captured.current?.search).toBe("?view=queue");
+    const state = captured.current?.state as {
+      prefill: Record<string, unknown>;
+      from: string;
+    };
+    expect(state.from).toBe("task-detail");
+    expect(state.prefill).toMatchObject({
+      repoId: 1,
+      type: "freeform",
+      prNumber: "9",
+      sourceBranch: "pr/9/head",
+      targetBranch: "main",
+      publishMode: "manual",
+    });
+    expect(String(state.prefill.prompt)).toContain("PR #9");
+    // Handoff only — nothing is posted until the user submits the new form.
+    expect(fetchMock.mock.calls.filter((c) => c[1]?.method === "POST")).toEqual([]);
+  });
+
+  it("hides Fix failed CI when CI is not failing", async () => {
+    stubFetchWithCi(
+      {
+        ...TASK,
+        repo_id: 1,
+        pr_number: 9,
+        prs: [9],
+        status: "done",
+        run: { ...RUN, status: "done" },
+      },
+      { ok: true, state: "success", message: "CI is green" }
+    );
+    vi.stubGlobal("EventSource", FakeEventSource);
+
+    renderDetail();
+    expect(await screen.findByText("CI is green")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Fix failed CI" })).toBeNull();
+  });
+
   it("shows the waiting card for a waiting_input run", async () => {
     const waitingTask = {
       ...TASK,
@@ -705,9 +989,7 @@ describe("TaskDetail", () => {
     await screen.findByText("Agent is waiting for your input");
     await userEvent.click(screen.getByRole("button", { name: "Reply in follow-up" }));
 
-    const textarea = screen.getByPlaceholderText(
-      /Address the reviewer comments/
-    ) as HTMLTextAreaElement;
+    const textarea = screen.getByPlaceholderText(/Add a regression test/) as HTMLTextAreaElement;
     expect(textarea.value.startsWith("> ")).toBe(true);
   });
 
@@ -924,12 +1206,12 @@ describe("TaskDetail", () => {
       // Advanced → Update existing PR → the picker shows the repo's open PRs.
       await userEvent.click(screen.getByRole("button", { name: "Advanced" }));
       await userEvent.click(screen.getByRole("radio", { name: /Update existing PR/ }));
-      const select = screen.getByRole("combobox", { name: "Pull request to update" });
+      await userEvent.click(screen.getByRole("button", { name: "Pull request to update" }));
       expect(screen.getByRole("option", { name: /#1 — Phase 1/ })).toBeInTheDocument();
       expect(screen.getByRole("option", { name: /#5 — Housekeeping/ })).toBeInTheDocument();
 
       // Pick a different open PR and run the publish.
-      await userEvent.selectOptions(select, "5");
+      await userEvent.click(screen.getByRole("option", { name: /#5 — Housekeeping/ }));
       await userEvent.click(screen.getByRole("button", { name: "Run" }));
       const confirm = await screen.findByRole("button", { name: "Confirm" });
       await userEvent.click(confirm);
@@ -975,9 +1257,10 @@ describe("TaskDetail", () => {
       await screen.findByRole("button", { name: "Push to PR #9" });
       await userEvent.click(screen.getByRole("button", { name: "Advanced" }));
       await userEvent.click(screen.getByRole("radio", { name: /Update existing PR/ }));
-      const select = screen.getByRole("combobox", { name: "Pull request to update" });
+      await userEvent.click(screen.getByRole("button", { name: "Pull request to update" }));
       expect(screen.getByRole("option", { name: "PR #9" })).toBeInTheDocument();
-      expect(select).toHaveTextContent(/couldn't load PRs/);
+      // The load failure surfaces as the picker's placeholder row.
+      expect(screen.getByRole("option", { name: /couldn't load PRs/ })).toBeInTheDocument();
 
       await userEvent.click(screen.getByRole("button", { name: "Run" }));
       const confirm = await screen.findByRole("button", { name: "Confirm" });
@@ -1308,6 +1591,10 @@ describe("TaskDetail (Phase 4 T6 — open worktree)", () => {
     const btn = screen.getByText("Open worktree") as HTMLButtonElement;
     expect(btn.disabled).toBe(true);
     expect(screen.getByText("configure IDE in Settings")).toBeInTheDocument();
+    expect(screen.getByText("configure IDE in Settings").closest("a")).toHaveAttribute(
+      "href",
+      "/settings?section=ide"
+    );
   });
 });
 
@@ -1603,5 +1890,77 @@ describe("TaskDetail improvements", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("renders '← Back to Mission control' when arriving with from: mission", async () => {
+    stubFetchPlus(TASK);
+    vi.stubGlobal("EventSource", FakeEventSource);
+    render(
+      <MemoryRouter initialEntries={[{ pathname: "/tasks/7", state: { from: "mission" } }]}>
+        <Routes>
+          <Route path="/tasks/:id" element={<TaskDetail />} />
+        </Routes>
+      </MemoryRouter>
+    );
+    expect(
+      await screen.findByRole("link", { name: /Back to Mission control/i })
+    ).toBeInTheDocument();
+  });
+
+  it("announces a status transition in polite live region", async () => {
+    let currentTask: Record<string, unknown> = {
+      ...TASK,
+      status: "running",
+      attention: "working",
+    };
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/runs")) {
+        return { ok: true, json: async () => [currentTask.run ?? RUN] };
+      }
+      if (url.includes("/files")) {
+        return { ok: true, json: async () => ({ path: "", entries: [] }) };
+      }
+      if (url.includes("/api/tasks")) {
+        return { ok: true, json: async () => currentTask };
+      }
+      if (url.includes("/api/settings")) {
+        return {
+          ok: true,
+          json: async () => ({ default_backend: "opencode", default_model: "m1" }),
+        };
+      }
+      if (url.includes("/api/github/tokens")) {
+        return { ok: true, json: async () => ({ accounts: [] }) };
+      }
+      if (url.includes("/api/models")) {
+        return { ok: true, json: async () => ({ cli: "opencode", models: ["m1"] }) };
+      }
+      return { ok: true, json: async () => REPOS };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("EventSource", FakeEventSource);
+
+    renderDetail();
+    expect(await screen.findByText("fix the bug")).toBeInTheDocument();
+    const liveRegion = screen.getByRole("status");
+    expect(liveRegion).toHaveTextContent("");
+
+    await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));
+    const source = FakeEventSource.instances[FakeEventSource.instances.length - 1];
+
+    // Transition task to done
+    currentTask = {
+      ...TASK,
+      status: "done",
+      attention: "done",
+      run: { ...RUN, status: "done" },
+    };
+    act(() => {
+      source.emit({ type: "stream_end" });
+    });
+
+    await waitFor(() => {
+      expect(liveRegion).toHaveTextContent("Task 7 done");
+    });
   });
 });

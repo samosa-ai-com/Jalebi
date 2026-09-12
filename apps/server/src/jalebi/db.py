@@ -147,6 +147,12 @@ class Task(Base):
     # "auto" | "manual" | None (None → fall back to the global auto_publish setting).
     # issue_fix defaults to "auto"; freeform/screen_finding/triggered default to "manual".
     publish_mode: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Creation-time "address the review comments on the linked PR" (freeform
+    # only): the run prompt always carries the address-reviews instruction,
+    # even when no reviews were fetched at creation time.
+    address_reviews: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=sa.text("0")
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now)
 
@@ -185,6 +191,7 @@ class Followup(Base):
     body: Mapped[str] = mapped_column(Text, nullable=False)
     pat_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cli: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now)
 
 
@@ -453,6 +460,36 @@ class ScreeningRun(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class ScreeningDealt(Base):
+    """Owner-handled screening findings (Phase 4 batch work + rerun context).
+
+    One row = "this finding is dealt with" (task created from it, accepted
+    risk, or manually dismissed). Keyed by the canonical fingerprint
+    ``[screening_id, title, file, line]`` serialized exactly like the
+    frontend ``findingFp`` (``file`` NULL coerces to ``""``, ``line`` NULL
+    stays ``null``) and stored as a NOT NULL string — SQLite treats NULLs as
+    distinct in UNIQUE constraints, so the raw columns cannot be the key.
+    ``title``/``file``/``line`` are kept as nullable auxiliary columns for
+    inspection only. Deleting a screen cascades its dealt rows.
+    """
+
+    __tablename__ = "screening_dealt"
+    __table_args__ = (
+        UniqueConstraint("screening_id", "fingerprint", name="uq_screening_dealt_fp"),
+        Index("ix_screening_dealt_screening_id", "screening_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    screening_id: Mapped[int] = mapped_column(
+        ForeignKey("screenings.id", ondelete="CASCADE"), nullable=False
+    )
+    fingerprint: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    file: Mapped[str | None] = mapped_column(Text, nullable=True)
+    line: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now)
+
+
 class CheckRun(Base):
     """Jalebi's registry of the commit statuses it set (PRD F15).
 
@@ -585,6 +622,49 @@ class Nudge(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=now, server_default=sa.text("CURRENT_TIMESTAMP")
     )
+
+
+# ---- Task notifications --------------------------------------------------
+
+
+class Notification(Base):
+    """A persistent in-app notification row (PRD task-notification backend).
+
+    Records task lifecycle events: terminal outcomes (done, failed, timed_out)
+    and input requests (needs_approval, waiting_for_input).
+    """
+
+    __tablename__ = "notifications"
+    __table_args__ = (
+        Index("ix_notifications_task_id_created_at", "task_id", "created_at"),
+        Index("ix_notifications_created_at", "created_at"),
+        # At most one unread notification of a kind may exist per task. The
+        # partial index lets a later lifecycle event create a fresh row after
+        # the owner has read the previous one.
+        Index(
+            "uq_notifications_unread_task_kind",
+            "task_id",
+            "kind",
+            unique=True,
+            sqlite_where=sa.text("read_at IS NULL"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    task_id: Mapped[int] = mapped_column(
+        ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False
+    )
+    run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("runs.id", ondelete="CASCADE"), nullable=True
+    )
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    body: Mapped[str | None] = mapped_column(Text, nullable=True)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=now, server_default=sa.text("CURRENT_TIMESTAMP")
+    )
+
 
 
 _engine: Engine | None = None

@@ -57,6 +57,7 @@
 | `retry_count` | int, default 0 | |
 | `pr_number` | int null | |
 | `publish_mode` | text null | `'auto'` \| `'manual'` \| NULL (fall back to the global `auto_publish` setting). `issue_fix` defaults to `auto`; freeform/manual types to `manual`. |
+| `address_reviews` | bool, default false | creation-time "address the review comments on the linked PR" (freeform only; 400 otherwise or without `pr_number`). Guarantees the address-reviews instruction in the run prompt even when no reviews were fetched at creation (agent self-fetches). |
 | `check_run_id` | int null | **no FK yet**; check_runs table arrives in Phase 2 |
 | `created_at` | datetime | naive local (app timezone, see `jalebi/clock.py`) |
 | `updated_at` | datetime | naive local (app timezone, see `jalebi/clock.py`) |
@@ -94,7 +95,8 @@ Index: `task_id`.
 | `body` | text | |
 | `pat_name` | text null | account override for the resume |
 | `model` | text null | model override for the resume |
-| `created_at` | datetime | |
+| `cli` | text null | backend override for the resume (NULL = task backend reused) |
+| `created_at` | datetime | application timestamp (`screening.py` is the sole writer) |
 
 Index: `task_id`.
 
@@ -216,6 +218,26 @@ the owner converts findings into `screen_finding` tasks. See `docs/07`.
 Index: `screening_id`. A screen skips a tick when its last terminal run
 (`done`/`failed`) audited the same `head_sha` (baseline dedup).
 
+### `screening_dealt` (Phase 4 — rerun context)
+
+Owner-handled findings. One row = dealt (task created, accepted risk, or
+manually dismissed). The key is the canonical `fingerprint`
+`[screening_id, title, file, line]` (compact JSON, `file` NULL → `""`),
+stored — never recomputed from nullable columns (SQLite treats NULLs as
+distinct in UNIQUE constraints).
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | int PK | |
+| `screening_id` | int FK → screenings (CASCADE) | |
+| `fingerprint` | text, NOT NULL | canonical key; `UNIQUE(screening_id, fingerprint)` |
+| `title` / `file` / `line` | text / text / int, null | auxiliary, inspection only |
+| `created_at` | datetime | |
+
+Index: `screening_id`. Powers two behaviors: the audit prompt's known-open
+context (`get_open_findings`) and dealt filtering in ntfy notifications.
+Migration: `e7f8a9b0c1d2`; the current schema head is `b4c5d6e7f8a9`. See `docs/07`.
+
 ### `check_runs` (Phase 2 — PRD F15)
 
 Jalebi's **registry of the commit statuses it set** (commit statuses, not GitHub check runs — the check-runs API is GitHub-App only). One row per `(task_id, head_sha, context)`.
@@ -289,6 +311,26 @@ list, FK-less by design — unknown slugs refused at write time, skipped at run
 time). Deleting a linked skill is refused (409 + linking agents). Seed content
 is versioned (`catalog_seed_version` setting) — see `docs/15-catalog.md` §8.
 
+### `notifications` (task-notification backend)
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | int PK | |
+| `task_id` | int FK → tasks | `ON DELETE CASCADE`, not null |
+| `run_id` | int null FK → runs | `ON DELETE CASCADE`, nullable |
+| `kind` | text | `task_done` \| `task_failed` \| `needs_input` |
+| `title` | text | notification headline |
+| `body` | text null | short summary or agent message snippet |
+| `read_at` | datetime null | null means unread |
+| `created_at` | datetime | default now, server_default `CURRENT_TIMESTAMP` |
+
+Indexes: `(task_id, created_at)`, `(created_at)`, and the partial unique
+`(task_id, kind) WHERE read_at IS NULL`. The last is the database-enforced
+unread-dedup invariant: reading a notification permits a later event of the
+same kind to create a new row.
+
+Indexes: `(task_id, created_at)`, `(created_at)`.
+
 ## 3. Relationships (Phase 0 + Phase 1 catalog + reviewers)
 
 ```
@@ -297,6 +339,8 @@ tasks 1───* runs
 tasks 1───* followups
 runs  1───* followups  (run_id nullable)
 runs  1───* artifacts
+tasks 1───* notifications
+runs  0───* notifications  (run_id nullable)
 repos 0───* env_vars   (repo_id nullable = global)
 tasks 0───1 catalog_agents  (agent_id slug, FK-less by design)
 catalog_agents *───* catalog_skills  (skill_ids_json ordered slug list, FK-less)
@@ -335,3 +379,8 @@ None — all Phase-0/1/2 tables are materialized. (Phase 3 adds no new tables.)
 
 - **Delete cascade (`tasks.delete_tasks_cascade`):** TaskDependency → Followup → ReviewAssignment → **CheckRun** → Artifact → Run → Task, plus the task's `task_events` rows (deleted by the caller in prune; the task-delete route relies on FK CASCADE for events). `check_runs.task_id`/`run_id` carry **no** `ON DELETE CASCADE` (the SQLite batch-rebuild hazard), so check runs are deleted explicitly — deleting a task that ever reported a commit status would otherwise `IntegrityError` under `PRAGMA foreign_keys=ON`.
   - `tasks.status` widened to include `"blocked"` (T4.1). A blocked task sits with deps unmet; cleared by `cascade_unblock` when the last unsatisfied dep finishes.
+
+- **Task Notifications (`a2b3c4d5e6f7_notifications.py` + `b4c5d6e7f8a9_notification_dedup.py`):**
+  - `notifications(id PK, task_id FK→tasks ON DELETE CASCADE, run_id FK→runs ON DELETE CASCADE, kind, title, body, read_at, created_at)`
+  - Indexes: `(task_id, created_at)`, `(created_at)`, and partial-unique `(task_id, kind) WHERE read_at IS NULL` (the migration first retains the newest row of any historic duplicate group).
+  - Records persistent notifications on terminal states (`task_done`, `task_failed`) and input requests (`needs_input`). Unread deduplication on `(task_id, kind)` avoids retry spam; bounded retention automatically prunes older rows keeping the newest 500.

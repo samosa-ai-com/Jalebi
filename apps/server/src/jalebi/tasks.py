@@ -80,6 +80,7 @@ def create_task(
     env_vars: list[str] | None = None,
     timeout_minutes: int = 60,
     publish_mode: str | None = None,
+    address_reviews: bool = False,
     masker: Callable[[str], str] | None = None,
 ) -> Task:
     """Validate and insert a new task, returning it (status = ``queued``)."""
@@ -87,6 +88,10 @@ def create_task(
         raise ValueError(f"invalid task type: {type_}")
     if publish_mode not in (None, "auto", "manual"):
         raise ValueError("publish_mode must be 'auto', 'manual', or None")
+    if address_reviews and type_ != "freeform":
+        raise ValueError("address_reviews is only valid for freeform tasks")
+    if address_reviews and not prs:
+        raise ValueError("address_reviews requires a linked PR")
     repo = session.get(Repo, repo_id)
     if repo is None:
         raise ValueError(f"repo {repo_id} not found")
@@ -132,6 +137,7 @@ def create_task(
         status="queued",
         timeout_minutes=timeout_minutes,
         publish_mode=publish_mode,
+        address_reviews=address_reviews,
     )
     session.add(task)
     session.commit()
@@ -177,9 +183,12 @@ def add_followup(
     body: str,
     pat_name: str | None = None,
     model: str | None = None,
+    cli: str | None = None,
 ) -> Followup:
     """Persist a follow-up against ``run_id`` (the run it resumes)."""
-    row = Followup(task_id=task_id, run_id=run_id, body=body, pat_name=pat_name, model=model)
+    row = Followup(
+        task_id=task_id, run_id=run_id, body=body, pat_name=pat_name, model=model, cli=cli
+    )
     session.add(row)
     session.commit()
     session.refresh(row)
@@ -271,6 +280,7 @@ def task_to_dict(
         "retry_count": task.retry_count,
         "pr_number": task.pr_number,
         "publish_mode": task.publish_mode,
+        "address_reviews": bool(task.address_reviews),
         "check_run_id": task.check_run_id,
         "issues": json.loads(task.issues_json) if task.issues_json else [],
         "prs": json.loads(task.prs_json) if task.prs_json else [],
@@ -289,6 +299,7 @@ def task_to_dict(
                 "body": f.body,
                 "pat_name": f.pat_name,
                 "model": f.model,
+                "cli": f.cli,
                 "created_at": clock.to_iso(f.created_at),
             }
             for f in (followups or [])

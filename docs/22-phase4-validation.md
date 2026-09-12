@@ -127,8 +127,50 @@
 - [ ] **Dismissal re-arm:** dismiss attention, then rerun/follow-up → the
       new run's attention is live again (not stuck `done`).
 
-## 9. Known limitations (do NOT expect these yet)
+## 8b. Backend-reliability + searchable-dropdowns QA (tasks 68–75 follow-ups)
 
+- [ ] Every dropdown filters as you type (models, backends, repos, branches,
+      screens, skills, timezones); keyboard Up/Down/Enter/Escape works.
+- [ ] Switching backend in any form clears the model picker; a model id that
+      is not in the new backend's list shows a warning instead of submitting
+      silently (custom-value entry covers catalog-less backends).
+- [ ] A grok-style word stream shows a handful of merged message steps, not
+      hundreds; collapsed tool calls show `tool — summary` one-liners.
+- [ ] Rerun dialog with a different backend/model actually runs the new
+      backend (run row carries it); a rerun after attempt-cap exhaustion
+      still auto-recovers once.
+- [ ] Follow-up with a backend switch shows the backend badge on its row;
+      a failed follow-up still appears in the follow-ups list.
+
+## 8c. Fix failed CI + classic-token guidance (2026-09-10)
+
+- [ ] GitHub page "Add a GitHub account" recommends a **classic `repo`** token
+      (covers Actions logs) and notes fine-grained needs **Actions: read**.
+- [ ] The missing-scopes help matches that recommendation.
+- [ ] On a task with an open PR whose CI is failing, the Publish readiness
+      panel's `ci` row shows **Fix failed CI**; it is absent when CI is green
+      or no PR is linked.
+- [ ] Clicking it opens the New-task form prefilled: `freeform`, same repo,
+      PR linked, source `pr/<N>/head`, task's target branch, manual publish,
+      and a prompt instructing the agent to fetch the failed Actions run with
+      `$JALEBI_GITHUB_TOKEN`. No follow-up is posted.
+- [ ] Submitting that form runs an agent that can read the failed run's logs
+      (classic `repo` PAT) and updates the existing PR on publish (`update_pr`).
+
+## 8d. Mission-control bounded-card layout (2026-09-10)
+
+- [ ] On a wide (`xl`) screen, each Mission Control card keeps its own height:
+      the right rail is stats (auto) / control shelf (1.4fr) / Kitchen wire (0.7fr),
+      so the four 2×2 control-shelf cards stay readable and the wire stays short.
+- [ ] With 10+ backends, the Backends card shows its first rows without scrolling
+      the whole page, and the Kitchen wire still shows its header + a few events.
+- [ ] Enable many backends (e.g. 15+). The **Backends** card keeps its size and
+      scrolls internally; the **Kitchen wire** below it keeps its height.
+- [ ] Many cooks / many skills scroll inside the Cooks and Pantry cards.
+- [ ] Many burners (high `concurrency`) scroll inside the shop-floor pot grid.
+- [ ] No card's content pushes another card off-screen or to near-zero height.
+
+## 9. Known limitations (do NOT expect these yet)
 - `test_check_runs.py:331` may flake under full-suite load (isolated green).
 - Fork push needs maintainer-edit permission; otherwise `new_pr` fallback.
 - Claude Code adapter: unit-tested only (no live auth on dev machine).

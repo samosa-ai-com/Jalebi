@@ -1,10 +1,69 @@
 """Environment and data-directory configuration."""
 
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
+
+
+def _parse_base(candidate: str) -> tuple[str, str] | None:
+    """Validate a URL base → ``(hostname, base)`` or ``None`` when unusable.
+
+    Uses ``urlsplit`` so schemeless typos (``http://``), path-only junk
+    (``/``), IPv6 hosts (``http://[::1]:2052`` → label ``::1``), and
+    ``user:pass@host`` forms are all handled without string surgery.
+    """
+    candidate = candidate.strip()
+    if not candidate:
+        return None
+    base = candidate if "://" in candidate else "http://" + candidate
+    try:
+        parts = urlsplit(base)
+        host = parts.hostname
+    except ValueError:
+        return None
+    if not host:
+        return None
+    # A query/fragment on the base would corrupt every appended path (ntfy
+    # tap-links), so only scheme + host + path survive.
+    return host, f"{parts.scheme}://{parts.netloc}{parts.path}".rstrip("/")
+
+
+def parse_public_urls(raw: str) -> list[tuple[str, str]]:
+    """Parse ``JALEBI_PUBLIC_URLS`` into an ordered ``[(label, base_url)]`` list.
+
+    Format: comma-separated ``Label=url`` entries (``LAN=http://192.0.2.1:2052``);
+    a bare URL without a label gets its hostname as the label. Anything before
+    the first ``=`` counts as a label unless it looks like a URL itself (contains
+    ``://`` or ``/``) — so labels may contain dots/parens (``Laptop.local=…``)
+    while bare URLs with query strings (``http://host/?a=b``) are never split.
+    Junk entries are skipped (logged) so a typo can never break startup or
+    notifications.
+    """
+    links: list[tuple[str, str]] = []
+    for item in (raw or "").split(","):
+        item = item.strip()
+        if not item:
+            continue
+        label, candidate = "", item
+        head, sep, tail = item.partition("=")
+        if sep and not head.strip():
+            logger.warning("ignoring malformed public URL in JALEBI_PUBLIC_URLS: %r", item)
+            continue
+        if sep and "://" not in head and "/" not in head:
+            label, candidate = head.strip(), tail.strip()
+        parsed = _parse_base(candidate)
+        if parsed is None:
+            logger.warning("ignoring malformed public URL in JALEBI_PUBLIC_URLS: %r", item)
+            continue
+        host, base = parsed
+        links.append((label or host, base))
+    return links
 
 _REPO_ROOT: Path | None = None
 
@@ -35,6 +94,37 @@ class Config:
     port: int = 2052
     data_dir: Path = field(default_factory=lambda: Path.home() / ".jalebi")
     password: str = ""
+    public_urls: str = ""
+
+    def public_links(self) -> list[tuple[str, str]]:
+        """Ordered ``[(label, base_url)]`` from ``JALEBI_PUBLIC_URLS`` ([] when unset)."""
+        return parse_public_urls(self.public_urls)
+
+    def primary_link(self, path: str) -> str:
+        """Tap-to-open URL: first configured public URL, else loopback."""
+        if not path.startswith("/"):
+            path = "/" + path
+        links = self.public_links()
+        base = links[0][1] if links else f"http://127.0.0.1:{self.port}"
+        return base + path
+
+    def open_actions(self, path: str, single_label: str) -> list[dict[str, object]]:
+        """ntfy ``view`` buttons for a notification path.
+
+        Zero/one configured URL → exactly one button with the caller's legacy
+        label (payloads unchanged from before). Multiple URLs → one button per
+        URL (``Open (<label>)``), capped at 3 — the most ntfy renders.
+        """
+        if not path.startswith("/"):
+            path = "/" + path
+        links = self.public_links()
+        if len(links) <= 1:
+            base = links[0][1] if links else f"http://127.0.0.1:{self.port}"
+            return [{"action": "view", "label": single_label, "url": base + path}]
+        return [
+            {"action": "view", "label": f"Open ({label})", "url": base + path}
+            for label, base in links[:3]
+        ]
 
     @property
     def db_url(self) -> str:
@@ -70,9 +160,13 @@ def load_config() -> Config:
         host=os.environ.get("JALEBI_HOST", "0.0.0.0"),
         port=port,
         data_dir=Path(os.environ.get("JALEBI_DATA_DIR") or Path.home() / ".jalebi"),
-        # Optional UI password (PRD §F13): gate the API + SPA behind Basic auth
-        # when the app might be exposed via a tunnel. Localhost-only default: off.
+        # Mandatory UI password (PRD §F13): gates the API + SPA behind Basic auth.
+        # The server binds to 0.0.0.0 by default for LAN access, so a password
+        # is required at startup — main() refuses to start when this is empty.
         password=os.environ.get("JALEBI_PASSWORD")
         or os.environ.get("OPENCODE_SERVER_PASSWORD")
         or "",
+        # Optional LAN/Tailscale/tunnel URLs for notification tap-links
+        # (comma-separated `Label=url`; first is primary). Unset → loopback.
+        public_urls=os.environ.get("JALEBI_PUBLIC_URLS") or "",
     )

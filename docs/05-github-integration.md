@@ -13,8 +13,8 @@
 
 ## 2. Required scopes & validation (PRD §F1)
 
-- **Classic PAT:** `repo`.
-- **Fine-grained:** Contents read/write, Pull requests read/write, Issues read/write, Metadata read, **Commit statuses read/write** (for check runs).
+- **Classic PAT (`repo`) — recommended:** `repo` also covers reading GitHub Actions runs/logs, so an agent can inspect a failing workflow and fix it. No extra scope is needed.
+- **Fine-grained:** Contents read/write, Pull requests read/write, Issues read/write, Metadata read, **Commit statuses read/write** (for check runs), and **Actions read** (to read failed workflow logs — the "Fix failed CI" flow).
 
 `GitHubClient.validate_token()` calls `GET /user` and classifies the result:
 
@@ -27,6 +27,8 @@ Validation is explicit (endpoints below), **not** run at startup — the server 
 ## 3. Client & endpoints (implemented)
 
 `GitHubClient` (`jalebi/github.py`, httpx, `base_url=https://api.github.com`, `_request` seam for tests):
+
+- **Rate-limit backoff:** `_request`/`_request_etag` route through `_send`, which retries a rate-limited **GET/HEAD** response with a bounded wait. A **429** always qualifies; a **403** qualifies only when it carries a rate-limit signal (`X-RateLimit-Remaining: 0` for the primary limit, or a `Retry-After` header for the secondary limit). Wait = numeric or HTTP-date `Retry-After`, else `X-RateLimit-Reset − now`, else 1 s, capped at `RATE_LIMIT_MAX_WAIT` (60 s), up to `RATE_LIMIT_MAX_RETRIES` (3) retries. Writes are deliberately not replayed: GitHub does not provide an idempotency guarantee for every secondary-rate-limit response, so the caller receives it and the owner can retry safely. This matters under concurrency: every task on a repo shares one PAT's budget.
 
 - `validate_token() -> TokenInfo` (`valid`, `login`, `token_type`, `granted_scopes`, `missing_scopes`, `note`, `error`).
 - `get_repo(full_name)` → `{full_name, default_branch, clone_url, private}`; raises `GitHubNotFound` on 404.

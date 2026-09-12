@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
+import { EmptyState } from "../components/EmptyState";
+import SearchableSelect from "../components/SearchableSelect";
 import type { Repo } from "../types";
 
 function timeAgo(iso: string | null): string {
@@ -35,7 +37,7 @@ function RepoRow({
           <span className="text-ink-500">{owner}/</span>
           {name}
         </span>
-        <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-[11px] text-ink-600">
+        <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-[11px] text-ink-500">
           <span>{repo.default_branch}</span>
           {repo.pat_name && <span title="Bound GitHub account">@{repo.pat_name}</span>}
           <span
@@ -44,7 +46,7 @@ function RepoRow({
                 ? "Webhook registered — events push in real time"
                 : "No webhook — register one on the Triggers page for real-time events"
             }
-            className={repo.webhook_registered ? "text-green-400" : "text-ink-600"}
+            className={repo.webhook_registered ? "text-green-400" : "text-ink-500"}
           >
             webhook: {repo.webhook_registered ? "on" : "off"}
           </span>
@@ -52,7 +54,7 @@ function RepoRow({
           <span title="Last poller check">checked {timeAgo(repo.last_checked_at)}</span>
         </span>
       </span>
-      <span className="hidden font-mono text-[11px] text-ink-600 sm:block">#{repo.id}</span>
+      <span className="hidden font-mono text-[11px] text-ink-500 sm:block">#{repo.id}</span>
       <button
         type="button"
         title={
@@ -212,28 +214,26 @@ export default function Repos() {
           placeholder="Search repositories…"
           className="field max-w-xs !py-1.5 text-sm"
         />
-        <select
+        <SearchableSelect
+          label="Filter by account"
+          hideLabel
           value={accountFilter}
-          onChange={(e) => setAccountFilter(e.target.value)}
-          className="field max-w-44 !py-1.5 text-sm"
-          aria-label="Filter by account"
-        >
-          <option value="all">All accounts</option>
-          {accounts.map((a) => (
-            <option key={a} value={a}>
-              @{a}
-            </option>
-          ))}
-        </select>
-        <select
+          onChange={setAccountFilter}
+          options={[
+            { value: "all", label: "All accounts" },
+            ...accounts.map((a) => ({ value: a, label: `@${a}` })),
+          ]}
+        />
+        <SearchableSelect
+          label="Sort repos"
+          hideLabel
           value={sort}
-          onChange={(e) => setSort(e.target.value as SortKey)}
-          className="field max-w-44 !py-1.5 text-sm"
-          aria-label="Sort repos"
-        >
-          <option value="name">Sort: name</option>
-          <option value="checked">Sort: recently checked</option>
-        </select>
+          onChange={(v) => setSort(v as SortKey)}
+          options={[
+            { value: "name", label: "Sort: name" },
+            { value: "checked", label: "Sort: recently checked" },
+          ]}
+        />
       </div>
 
       <section className="surface animate-fade-up" style={{ animationDelay: "0.1s" }}>
@@ -244,21 +244,26 @@ export default function Repos() {
           </h2>
         </div>
         {loading && repos.length === 0 ? (
-          <div className="px-6 py-10 text-center text-sm text-ink-600">Loading repositories…</div>
+          <div className="px-6 py-10 text-center text-sm text-ink-500">Loading repositories…</div>
         ) : visible.length === 0 ? (
-          <div className="px-6 py-10 text-center text-sm text-ink-600">
-            {repos.length === 0 ? (
-              <>
-                Nothing connected yet. Pick one from the{" "}
-                <Link to="/github" className="link">
-                  GitHub page
-                </Link>
-                .
-              </>
-            ) : (
-              "No repositories match the current search or filters."
-            )}
-          </div>
+          repos.length === 0 ? (
+            <div className="p-6">
+              <EmptyState
+                icon="📦"
+                title="Nothing connected yet"
+                description="Connect a repository to enable code reviews, scheduled screenings, and agent tasks."
+                action={
+                  <Link to="/github" className="btn-primary">
+                    Connect on GitHub
+                  </Link>
+                }
+              />
+            </div>
+          ) : (
+            <div className="px-6 py-10 text-center text-sm text-ink-500">
+              No repositories match the current search or filters.
+            </div>
+          )
         ) : (
           <ul className="divide-y divide-ink-800/70">
             {visible.map((r) => (
@@ -287,11 +292,11 @@ export default function Repos() {
                 <li key={r.id} className="flex items-center gap-3 px-6 py-3.5">
                   <span className="h-2 w-2 shrink-0 rounded-full bg-ink-700" />
                   <span className="min-w-0 flex-1 font-mono text-sm text-ink-500">
-                    <span className="text-ink-600">{owner}/</span>
+                    <span className="text-ink-500">{owner}/</span>
                     {name}
                   </span>
                   {r.pat_name && (
-                    <span className="font-mono text-[11px] text-ink-600">@{r.pat_name}</span>
+                    <span className="font-mono text-[11px] text-ink-500">@{r.pat_name}</span>
                   )}
                   <button
                     onClick={() => reconnect(r.id)}

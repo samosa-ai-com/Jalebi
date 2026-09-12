@@ -54,6 +54,8 @@ describe("Github", () => {
       </MemoryRouter>
     );
     expect(await screen.findByText("Add a GitHub account")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "No GitHub accounts yet" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add an account below" })).toBeInTheDocument();
   });
 
   it("shows each equal account with its repos and connect uses the account name", async () => {
@@ -449,10 +451,9 @@ describe("Github page (repo controls)", () => {
     await screen.findByText("hello");
     expect(await screen.findByText("Repositories (2)")).toBeInTheDocument();
 
-    await userEvent.selectOptions(
-      screen.getByLabelText("Sort repositories for primary"),
-      "connected"
-    );
+    await userEvent.click(screen.getByLabelText("Sort repositories for primary"));
+    await userEvent.type(screen.getByRole("combobox"), "connected");
+    await userEvent.click(screen.getByRole("option", { name: "Sort: connected first" }));
     const items = screen.getAllByRole("listitem");
     expect(items[0].textContent).toContain("acct1/world");
 

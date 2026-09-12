@@ -51,6 +51,25 @@ DEFAULTS: dict[str, object] = {
             "unauthorized",
             "no GitHub token",
             "has no resumable session",
+            # Provider quota/limit failures never clear on retry (a grok free
+            # plan burned 4 attempts re-running into the same usage wall).
+            "usage limit",
+            "rate limit",
+            "too many requests",
+            "quota",
+            "429",
+            "insufficient",
+            "credit",
+            "payment required",
+            "try again later",
+            # The queue's own empty-run marker (exit-0 with zero agent
+            # output): re-running the same prompt reproduces it.
+            "without producing any agent output",
+            # Enabled-but-uninstalled backends fail fast with this marker
+            # (see TaskQueue._require_cli) — reinstalling can't be retried
+            # into existence.
+            "not installed",
+            "not found on PATH",
         ],
     },
     # No-output threshold before a run is declared stalled (and auto-recovered).
@@ -121,6 +140,48 @@ def seed_defaults(session: Session) -> int:
             session.add(Setting(key=key, value=json.dumps(value)))
             added += 1
     if added:
+        session.commit()
+    # Sub-key backfill: a dict-valued default seeded before a sub-key existed
+    # (e.g. retry_policy gained non_retryable_patterns and quota entries long
+    # after the row was created) keeps its stored row but gains the missing
+    # sub-keys. Stored sub-keys are never overwritten, so owner edits survive.
+    # The retry-policy pattern list is an exception: its shipped members are
+    # safety guards owned by the application, so new defaults are unioned into
+    # an existing list while owner-added members keep their original order.
+    backfilled = False
+    for key, value in DEFAULTS.items():
+        if not isinstance(value, dict):
+            continue
+        row = session.execute(select(Setting).where(Setting.key == key)).scalar_one_or_none()
+        if row is None:
+            continue
+        try:
+            stored = json.loads(row.value)
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(stored, dict):
+            continue
+        missing = {
+            sub: json.loads(json.dumps(subval))
+            for sub, subval in value.items()
+            if sub not in stored
+        }
+        if missing:
+            stored.update(missing)
+            row.value = json.dumps(stored)
+            backfilled = True
+        if key == "retry_policy":
+            default_patterns = value.get("non_retryable_patterns")
+            stored_patterns = stored.get("non_retryable_patterns")
+            if isinstance(default_patterns, list) and isinstance(stored_patterns, list):
+                additions = [
+                    pattern for pattern in default_patterns if pattern not in stored_patterns
+                ]
+                if additions:
+                    stored["non_retryable_patterns"] = [*stored_patterns, *additions]
+                    row.value = json.dumps(stored)
+                    backfilled = True
+    if backfilled:
         session.commit()
     return added
 

@@ -48,7 +48,18 @@ def test_ntfy_topic_accepts_topic_or_url(client: FlaskClient) -> None:
 def test_enabled_backends_validated_and_listed(client: FlaskClient) -> None:
     """enabled_backends: non-empty known subset; default must stay enabled."""
     body = client.get("/api/backends").get_json()
-    assert body["backends"] == ["opencode", "codex", "claude"]
+    assert body["backends"] == [
+        "opencode",
+        "codex",
+        "claude",
+        "pi",
+        "kilo",
+        "qwen",
+        "cline",
+        "grok",
+        "commandcode",
+        "agy",
+    ]
     assert body["enabled"] == ["opencode", "codex", "claude"]
     assert body["default"] == "opencode"
 
@@ -261,3 +272,24 @@ def test_models_endpoint_cli_query_param(client: FlaskClient, monkeypatch) -> No
     body = client.get("/api/models").get_json()
     assert body["cli"] == "opencode"
     assert body["models"] == ["m1"]
+
+
+def test_backends_health_reports_install_and_drift(client: FlaskClient) -> None:
+    """GET /api/backends/health lists every registry backend with install
+    state, detected version, and verified-version match (goose is gone)."""
+    body = client.get("/api/backends/health").get_json()
+    rows = {r["cli"]: r for r in body["backends"]}
+    assert "goose" not in rows
+    assert set(rows) == {
+        "opencode", "codex", "claude", "pi", "kilo",
+        "qwen", "cline", "grok", "commandcode", "agy",
+    }
+    for row in rows.values():
+        assert set(row) == {"cli", "installed", "version", "verified", "version_match"}
+    # opencode is installed in this environment; an unknown cli is not.
+    assert rows["opencode"]["installed"] is True
+    assert rows["opencode"]["version"]
+    from jalebi.adapters import cli_version, is_backend_available
+
+    assert is_backend_available("definitely-not-a-cli") is False
+    assert cli_version("definitely-not-a-cli") is None

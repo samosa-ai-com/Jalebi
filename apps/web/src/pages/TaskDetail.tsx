@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Link, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { api, taskEvents } from "../api/client";
 import { StatusBadge } from "../components/StatusBadge";
 import { AttentionBadge } from "../components/AttentionBadge";
@@ -8,11 +8,15 @@ import { DepBadges } from "../components/DepBadges";
 import FileBrowser from "../components/FileBrowser";
 import Markdown from "../components/Markdown";
 import { MergeReadinessPanel } from "../components/MergeReadinessPanel";
+import SearchableSelect from "../components/SearchableSelect";
 import WaitingCard from "../components/WaitingCard";
 import PublishDialog from "../components/PublishDialog";
 import { parseUnifiedDiff } from "../lib/unifiedDiff";
+import { summarizeToolCall } from "../lib/toolCallSummary";
 import { avatarFor, avatarUrl } from "../lib/agentAvatars";
 import { useInView } from "../lib/useInView";
+import { useFocusTrap } from "../lib/useFocusTrap";
+import { useStatusAnnouncer } from "../lib/useStatusAnnouncer";
 import { useBackends } from "../hooks/useBackends";
 import type {
   Account,
@@ -119,7 +123,9 @@ function CopyButton({ text, label }: { text: string; label: string }) {
       if (timer.current) clearTimeout(timer.current);
     };
   }, []);
-  async function copy() {
+  async function copy(e: React.MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
     try {
       await navigator.clipboard.writeText(text);
       setCopied(true);
@@ -289,34 +295,21 @@ function PublishButton({
               <span>Update existing PR (push to its head branch)</span>
             </label>
             {advancedMode === "update_pr" && (
-              <select
-                aria-label="Pull request to update"
-                className="select ml-6 w-fit"
+              <SearchableSelect
+                label="Pull request to update"
                 value={advancedPr ?? ""}
-                onChange={(e) => setPickedPr(e.target.value === "" ? "" : Number(e.target.value))}
-              >
-                <option value="">— pick a PR —</option>
-                {prOptions.map((o) => (
-                  <option key={o.number} value={o.number}>
-                    {o.label}
-                  </option>
-                ))}
-                {openPrs === null && prOptions.length === 0 && (
-                  <option value="" disabled>
-                    loading PRs…
-                  </option>
-                )}
-                {prsLoadFailed && (
-                  <option value="" disabled>
-                    couldn't load PRs
-                  </option>
-                )}
-                {openPrs !== null && !prsLoadFailed && prOptions.length === 0 && (
-                  <option value="" disabled>
-                    no open PRs in this repo
-                  </option>
-                )}
-              </select>
+                onChange={(v) => setPickedPr(v === "" ? "" : Number(v))}
+                placeholder={
+                  prsLoadFailed
+                    ? "couldn't load PRs"
+                    : openPrs === null && prOptions.length === 0
+                      ? "loading PRs…"
+                      : prOptions.length === 0
+                        ? "no open PRs in this repo"
+                        : "— pick a PR —"
+                }
+                options={prOptions.map((o) => ({ value: String(o.number), label: o.label }))}
+              />
             )}
             <label className="flex items-center gap-2">
               <input
@@ -364,20 +357,7 @@ function PublishButton({
 }
 
 function ToolCallEntry({ step }: { step: SseEvent }) {
-  let title = step.text ?? "";
-  let details = step.text ?? "";
-  try {
-    const data = JSON.parse(step.text ?? "{}");
-    const tool = data.tool ?? "";
-    title = data.title ? `${tool} — ${data.title}` : tool || (step.text ?? "");
-    details = JSON.stringify(
-      { tool: data.tool, input: data.input, output: data.output, status: data.status },
-      null,
-      2
-    );
-  } catch {
-    // keep raw text as both title and details
-  }
+  const { title, details } = summarizeToolCall(step.text);
   return (
     <details className="group">
       <summary className="cursor-pointer select-none font-mono text-xs text-chai-300 hover:text-chai-200">
@@ -401,7 +381,7 @@ function TimelineItem({ step, index }: { step: SseEvent; index: number }) {
       <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ring-2 ring-ink-950 ${dot}`} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <span className="font-mono text-[11px] text-ink-600">{step.ts?.slice(11, 19) ?? ""}</span>
+          <span className="font-mono text-[11px] text-ink-500">{step.ts?.slice(11, 19) ?? ""}</span>
           <span
             className={`rounded px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide ${
               STEP_STYLE[step.type] ?? "bg-ink-700/30 text-ink-300"
@@ -564,26 +544,26 @@ function FollowUpComposer({
     }
   }
 
-  async function addressReviewers() {
-    if (busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      // "Address the reviewers": resume the fixer with the PR's review comments
-      // fetched + embedded by the server (F7.6).
-      await api.postFollowup(task.id, "Address the reviewers' comments.", {
-        include_reviews: true,
-        pat_name: patName || undefined,
-        model: model || undefined,
-        cli: cli || undefined,
-      });
-      setText("");
-      onSent();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "failed to send follow-up");
-    } finally {
-      setBusy(false);
-    }
+  const navigate = useNavigate();
+
+  function addressReviewers() {
+    // Handoff, not a follow-up: open the New-task form prefilled so a fresh
+    // freeform task addresses the PR's review comments (creation-time flag).
+    // The follow-up path (include_reviews) stays available server-side.
+    const pr = task.prs?.[0] ?? task.pr_number ?? null;
+    if (pr == null) return;
+    navigate("/?view=queue", {
+      state: {
+        prefill: {
+          repoId: task.repo_id,
+          type: "freeform",
+          prNumber: String(pr),
+          prompt: `Address the review comments on PR #${pr}.`,
+          addressReviews: true,
+        },
+        from: "task-detail",
+      },
+    });
   }
 
   return (
@@ -595,39 +575,37 @@ function FollowUpComposer({
       </p>
       <form onSubmit={submit} className="space-y-3">
         <div className="grid gap-3 sm:grid-cols-2">
-          <label className="block">
-            <span className="mb-1.5 block text-xs font-medium text-ink-400">Credentials</span>
-            <select value={patName} onChange={(e) => setPatName(e.target.value)} className="field">
-              <option value="">Reuse task account</option>
-              {accounts.map((a) => (
-                <option key={a.name} value={a.name}>
-                  {a.login ?? a.name} ({a.masked})
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="block">
-            <span className="mb-1.5 block text-xs font-medium text-ink-400">Backend</span>
-            <select value={cli} onChange={(e) => setCli(e.target.value)} className="field">
-              <option value="">Reuse task backend</option>
-              {backendOptions.map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="block">
-            <span className="mb-1.5 block text-xs font-medium text-ink-400">Model</span>
-            <select value={model} onChange={(e) => setModel(e.target.value)} className="field">
-              <option value="">Reuse task model</option>
-              {models.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
-            </select>
-          </label>
+          <SearchableSelect
+            label="Credentials"
+            value={patName}
+            onChange={setPatName}
+            placeholder="Reuse task account"
+            options={accounts.map((a) => ({
+              value: a.name,
+              label: `${a.login ?? a.name} (${a.masked})`,
+            }))}
+          />
+          <SearchableSelect
+            label="Backend"
+            value={cli}
+            onChange={(v) => {
+              setCli(v);
+              // A new backend means a new model list — drop the old pick so
+              // a stale id from another backend is never submitted.
+              setModel("");
+            }}
+            placeholder="Reuse task backend"
+            options={backendOptions}
+          />
+          <SearchableSelect
+            label="Model"
+            value={model}
+            onChange={setModel}
+            placeholder="Reuse task model"
+            options={models}
+            allowCustom
+            staleHint="Not in this backend's known list — will be sent as-is."
+          />
         </div>
         {backendChanged && (
           <p className="text-xs text-amber-300">
@@ -639,10 +617,10 @@ function FollowUpComposer({
           value={text}
           onChange={(e) => setText(e.target.value)}
           rows={3}
-          placeholder="e.g. Address the reviewer comments, then update the README…"
+          placeholder="e.g. Add a regression test, then update the README…"
           className="field resize-y"
         />
-        <p className="text-[11px] leading-relaxed text-ink-600">
+        <p className="text-[11px] leading-relaxed text-ink-500">
           Resume refreshes remote refs first, then continues your worktree&apos;s local commits;
           review worktrees move to the current PR head.
         </p>
@@ -651,12 +629,11 @@ function FollowUpComposer({
           {showAddressReviewers && (
             <button
               type="button"
-              disabled={busy}
               onClick={addressReviewers}
               className="btn-ghost text-xs"
-              title="Resume the fixer with the PR's current review comments (fetched + embedded)"
+              title="Open the New-task form to address this PR's review comments in a fresh task"
             >
-              {busy ? "Sending…" : "Address reviewers"}
+              Address reviewers
             </button>
           )}
           <button type="submit" disabled={busy || !text.trim()} className="btn-primary">
@@ -668,10 +645,26 @@ function FollowUpComposer({
         <ol className="mt-4 space-y-2 border-t border-ink-800 pt-3">
           {followups.map((f) => (
             <li key={f.id} className="flex gap-2 text-sm">
-              <span className="shrink-0 font-mono text-[11px] leading-6 text-ink-600">
+              <span className="shrink-0 font-mono text-[11px] leading-6 text-ink-500">
                 {f.created_at.slice(11, 19)}
               </span>
-              <span className="text-ink-300">{f.body}</span>
+              <div className="min-w-0">
+                {(f.cli || f.model) && (
+                  <div className="mb-0.5 flex flex-wrap gap-1">
+                    {f.cli && (
+                      <span className="rounded bg-ink-800 px-1.5 py-px font-mono text-[10px] text-syrup-300">
+                        {f.cli}
+                      </span>
+                    )}
+                    {f.model && (
+                      <span className="rounded bg-ink-800 px-1.5 py-px font-mono text-[10px] text-ink-400">
+                        {f.model}
+                      </span>
+                    )}
+                  </div>
+                )}
+                <span className="text-ink-300">{f.body}</span>
+              </div>
             </li>
           ))}
         </ol>
@@ -782,7 +775,7 @@ function ArtifactPreview({
 }) {
   const [content, setContent] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
-  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const dialogRef = useFocusTrap<HTMLDivElement>();
   const ext = extOf(artifact.path);
   const isImage = IMAGE_EXTENSIONS.has(ext);
   const isText = TEXT_EXTENSIONS.has(ext);
@@ -807,10 +800,7 @@ function ArtifactPreview({
   }, [taskId, artifact.id, isText]);
 
   useEffect(() => {
-    // Focus the dialog and close on Escape. The listener is registered once
-    // because onClose is a stable useCallback.
-    const node = dialogRef.current;
-    node?.focus();
+    // Close on Escape. The listener is registered once because onClose is a stable useCallback.
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
@@ -819,18 +809,21 @@ function ArtifactPreview({
   }, [onClose]);
 
   return createPortal(
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-ink-950/80 p-4"
-      onClick={onClose}
-    >
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink-950/80 p-4">
+      <button
+        type="button"
+        className="fixed inset-0 cursor-default border-0 bg-transparent"
+        tabIndex={-1}
+        aria-label="Close preview"
+        onClick={onClose}
+      />
       <div
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label={artifact.path}
         tabIndex={-1}
-        className="surface flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden outline-none"
-        onClick={(e) => e.stopPropagation()}
+        className="surface relative z-10 flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden outline-none"
       >
         <div className="flex items-center gap-3 border-b border-ink-800 px-5 py-3">
           <h3 className="min-w-0 flex-1 truncate font-mono text-sm text-ink-100">
@@ -839,7 +832,7 @@ function ArtifactPreview({
           <a href={api.artifactUrl(taskId, artifact.id)} className="btn-ghost !px-3 !py-1 text-xs">
             Download
           </a>
-          <button onClick={onClose} className="btn-ghost !px-2 !py-1 text-xs">
+          <button onClick={onClose} className="btn-ghost !px-2 !py-1 min-h-6 min-w-6 text-xs">
             ✕
           </button>
         </div>
@@ -941,7 +934,7 @@ function DiffFileSection({
         {file.additions > 0 && <span className="ml-2 text-green-400">+{file.additions}</span>}
         {file.deletions > 0 && <span className="ml-2 text-red-400">−{file.deletions}</span>}
         {!file.binary && (
-          <span className="ml-2" onClick={(e) => e.preventDefault()}>
+          <span className="ml-2">
             <CopyButton text={rawText} label={`${pathLabel(file)} diff`} />
           </span>
         )}
@@ -1029,10 +1022,175 @@ function DiffSection({ taskId, run, isLatest }: { taskId: number; run: Run; isLa
   );
 }
 
+/** Rerun dialog: lets the user override the backend/model when re-running a task. */
+function RerunDialog({
+  taskId,
+  task,
+  open,
+  onClose,
+  onRerun,
+  cli,
+  model,
+  models,
+  setCli,
+  setModel,
+}: {
+  taskId: number;
+  task: Task;
+  open: boolean;
+  onClose: () => void;
+  onRerun: (updated: Task) => void;
+  cli: string;
+  model: string;
+  models: string[];
+  setCli: (v: string) => void;
+  setModel: (v: string) => void;
+}) {
+  const dialogRef = useFocusTrap<HTMLDivElement>(open);
+  const backendOptions = useBackends();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const resolvedTaskCli = task.cli ?? "opencode";
+  const modelOptions =
+    model && !models.includes(model)
+      ? [model, ...models.filter((candidate) => candidate !== model)]
+      : models;
+
+  useEffect(() => {
+    if (!open) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape" && !busy) onClose();
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [open, busy, onClose]);
+
+  async function handleRerun() {
+    setBusy(true);
+    setError(null);
+    try {
+      const updated = await api.rerunTask(taskId, {
+        cli: cli || null,
+        model: model || null,
+      });
+      onRerun(updated);
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "rerun failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!open) return null;
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+      <button
+        type="button"
+        className="fixed inset-0 cursor-default border-0 bg-transparent"
+        tabIndex={-1}
+        aria-label="Close dialog"
+        onClick={onClose}
+      />
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        tabIndex={-1}
+        className="surface relative z-10 w-full max-w-md space-y-4 p-5 animate-fade-up"
+      >
+        <div>
+          <h2 className="text-sm font-semibold text-ink-100">Re-run task</h2>
+          <p className="mt-1 text-xs text-ink-400">
+            Rerun this task. Optionally switch the backend or model to
+            address model-specific failures (e.g. rate limits).
+          </p>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <SearchableSelect
+            label="Backend"
+            value={cli}
+            onChange={(v) => {
+              setCli(v);
+              setModel("");
+            }}
+            placeholder={`Default (${resolvedTaskCli})`}
+            options={backendOptions}
+          />
+          <SearchableSelect
+            label="Model"
+            value={model}
+            onChange={setModel}
+            placeholder="Default"
+            options={modelOptions}
+            allowCustom
+            staleHint="Not in this backend's known list — will be sent as-is."
+          />
+        </div>
+
+        {error && <p className="text-xs text-red-400">{error}</p>}
+
+        <div className="flex justify-end gap-2">
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={onClose}
+            disabled={busy}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn-primary disabled:opacity-40"
+            onClick={handleRerun}
+            disabled={busy}
+          >
+            {busy ? "Re-running…" : "Re-run"}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
 export default function TaskDetail() {
   const { id } = useParams();
+  const location = useLocation();
+  const fromMission = (location.state as { from?: string } | null)?.from === "mission";
   const taskId = Number(id);
   const [task, setTask] = useState<Task | null>(null);
+  const announcerTasks = useMemo(() => (task ? [task] : []), [task]);
+  const statusAnnouncement = useStatusAnnouncer(announcerTasks);
+  const navigate = useNavigate();
+
+  function fixFailedCi() {
+    // Handoff to a fresh freeform task based on the PR head, so the agent can
+    // fetch the failing GitHub Actions run (a classic `repo` PAT covers Actions
+    // logs) and push the fix back onto the PR. `pr/<N>/head` starts the worktree
+    // at the current head, fork-aware, and defaults publish to update_pr.
+    const pr = task?.prs?.[0] ?? task?.pr_number ?? null;
+    if (pr == null) return;
+    navigate("/?view=queue", {
+      state: {
+        prefill: {
+          repoId: task?.repo_id,
+          type: "freeform",
+          prNumber: String(pr),
+          sourceBranch: `pr/${pr}/head`,
+          targetBranch: task?.target_branch || undefined,
+          publishMode: "manual" as const,
+          prompt:
+            `CI is failing on PR #${pr}. Fetch the failed GitHub Actions run and its logs ` +
+            `with the token in $JALEBI_GITHUB_TOKEN (curl -L against api.github.com), ` +
+            `diagnose the root cause, fix the code, and run the failing check locally. ` +
+            `Keep the change minimal.`,
+        },
+        from: "task-detail",
+      },
+    });
+  }
   const [runs, setRuns] = useState<Run[]>([]);
   const [repos, setRepos] = useState<Repo[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -1054,6 +1212,11 @@ export default function TaskDetail() {
     branch?: string;
     pr_number?: number;
   } | null>(null);
+  // Rerun dialog: backend/model override for re-runs.
+  const [rerunDialogOpen, setRerunDialogOpen] = useState(false);
+  const [rerunCli, setRerunCli] = useState("");
+  const [rerunModel, setRerunModel] = useState("");
+  const [rerunModels, setRerunModels] = useState<string[]>([]);
   // Agent chip (avatar + name for task.agent_id; best-effort, hidden otherwise).
   const [agentName, setAgentName] = useState<string | null>(null);
   const [agentAvatar, setAgentAvatar] = useState<string | null>(null);
@@ -1135,6 +1298,20 @@ export default function TaskDetail() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Fetch models when the rerun backend selector changes.
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getModels(rerunCli || undefined)
+      .then((m) => {
+        if (!cancelled) setRerunModels(m.models ?? []);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [rerunCli]);
 
   // Cancel / Re-run / Publish: serialized, with errors surfaced inline instead of
   // silently swallowed (D-4). The ref check is synchronous so two clicks in the
@@ -1415,8 +1592,26 @@ export default function TaskDetail() {
       .finally(() => setIdeBusy(false));
   };
 
-  if (error) return <p className="text-red-400">{error}</p>;
-  if (!task) return <p className="text-ink-500">Loading…</p>;
+  if (error) {
+    return (
+      <div className="space-y-6 animate-fade-up">
+        <div className="sr-only" role="status" aria-live="polite">
+          {statusAnnouncement}
+        </div>
+        <p className="text-red-400">{error}</p>
+      </div>
+    );
+  }
+  if (!task) {
+    return (
+      <div className="space-y-6 animate-fade-up">
+        <div className="sr-only" role="status" aria-live="polite">
+          {statusAnnouncement}
+        </div>
+        <p className="text-ink-500">Loading…</p>
+      </div>
+    );
+  }
 
   const repoName =
     task.repo_full_name ??
@@ -1464,10 +1659,17 @@ export default function TaskDetail() {
 
   return (
     <div className="space-y-6 animate-fade-up">
+      <div className="sr-only" role="status" aria-live="polite">
+        {statusAnnouncement}
+      </div>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-3">
-          <Link to="/" className="text-sm text-ink-500 transition-colors hover:text-syrup-300">
-            ← Tasks
+          <Link
+            to={fromMission ? "/?view=mission" : "/"}
+            state={fromMission ? { from: "mission" } : undefined}
+            className="text-sm text-ink-500 transition-colors hover:text-syrup-300 flex items-center gap-1"
+          >
+            {fromMission ? "← Back to Mission control" : "← Tasks"}
           </Link>
           <h1 className="text-2xl font-bold tracking-tight text-ink-100">Task #{task.id}</h1>
           <StatusBadge status={task.status} />
@@ -1484,7 +1686,7 @@ export default function TaskDetail() {
                 <button
                   type="button"
                   onClick={handleDismissAttention}
-                  className="rounded px-1.5 py-0.5 text-[10px] font-medium text-ink-400 ring-1 ring-ink-700/60 hover:bg-ink-800 hover:text-ink-200 transition-colors"
+                  className="inline-flex items-center min-h-6 rounded px-1.5 py-0.5 text-[10px] font-medium text-ink-400 ring-1 ring-ink-700/60 hover:bg-ink-800 hover:text-ink-200 transition-colors"
                   title="Dismiss attention for this task"
                 >
                   Dismiss
@@ -1559,7 +1761,7 @@ export default function TaskDetail() {
             </button>
           ) : (
             <Link
-              to="/settings"
+              to="/settings?section=ide"
               className="inline-flex items-center gap-1.5 rounded-lg border border-dashed border-ink-800 px-3 py-1.5 text-xs text-ink-500 transition-colors hover:border-ink-700 hover:text-ink-400"
               title="Configure IDE in Settings to open worktrees directly"
             >
@@ -1667,11 +1869,11 @@ export default function TaskDetail() {
 
         <dl className="mt-4 grid grid-cols-2 gap-x-6 gap-y-2 border-t border-ink-800 pt-4 text-xs sm:grid-cols-4">
           <div>
-            <dt className="text-ink-600">Type</dt>
+            <dt className="text-ink-500">Type</dt>
             <dd className="mt-0.5 font-mono text-ink-300">{task.type}</dd>
           </div>
           <div>
-            <dt className="text-ink-600">Publish</dt>
+            <dt className="text-ink-500">Publish</dt>
             <dd className="mt-0.5 font-mono text-ink-300">
               {task.publish_mode === "auto"
                 ? "auto"
@@ -1681,22 +1883,22 @@ export default function TaskDetail() {
             </dd>
           </div>
           <div>
-            <dt className="text-ink-600">Branch</dt>
+            <dt className="text-ink-500">Branch</dt>
             <dd className="mt-0.5 font-mono text-ink-300">
               {task.target_branch || "—"} ← {task.source_branch || "default"}
             </dd>
           </div>
           <div>
-            <dt className="text-ink-600">Timeout</dt>
+            <dt className="text-ink-500">Timeout</dt>
             <dd className="mt-0.5 font-mono text-ink-300">{task.timeout_minutes}m</dd>
           </div>
           <div>
-            <dt className="text-ink-600">Retries</dt>
+            <dt className="text-ink-500">Retries</dt>
             <dd className="mt-0.5 font-mono text-ink-300">{task.retry_count}</dd>
           </div>
           {task.triggered_by && (
             <div>
-              <dt className="text-ink-600">Started by</dt>
+              <dt className="text-ink-500">Started by</dt>
               <dd
                 className="mt-0.5 font-mono text-ink-300"
                 title={`delivery ${task.triggered_by.delivery_id}`}
@@ -1711,7 +1913,13 @@ export default function TaskDetail() {
 
       <div className="flex flex-wrap gap-2">
         {(task.status === "needs_approval" || canManualPublish(task)) && (
-          <MergeReadinessPanel taskId={task.id} refreshKey={task.updated_at} />
+          <MergeReadinessPanel
+            taskId={task.id}
+            refreshKey={task.updated_at}
+            onFixCi={
+              (task.prs?.length ?? 0) > 0 || task.pr_number != null ? fixFailedCi : undefined
+            }
+          />
         )}
       </div>
 
@@ -1722,7 +1930,15 @@ export default function TaskDetail() {
           </Action>
         )}
         {TERMINAL.has(task.status) && task.status !== "needs_approval" && (
-          <Action onClick={() => runAction(() => api.rerunTask(task.id))} disabled={actionBusy}>
+          <Action
+            onClick={() => {
+              setRerunCli(task.cli ?? "");
+              setRerunModel(task.model ?? "");
+              setRerunModels([]);
+              setRerunDialogOpen(true);
+            }}
+            disabled={actionBusy}
+          >
             Re-run
           </Action>
         )}
@@ -1776,7 +1992,7 @@ export default function TaskDetail() {
         />
       ) : (
         !TERMINAL.has(task.status) && (
-          <p className="text-xs text-ink-600">
+          <p className="text-xs text-ink-500">
             Follow-ups open when this run finishes
             {task.status === "queued" ? " and a run starts" : ""}.
           </p>
@@ -1846,7 +2062,7 @@ export default function TaskDetail() {
                     key={t}
                     type="button"
                     onClick={() => setTlType(t)}
-                    className={`rounded-full border px-2 py-0.5 font-mono text-[10px] transition-colors ${
+                    className={`inline-flex items-center min-h-6 rounded-full border px-2 py-0.5 font-mono text-[10px] transition-colors ${
                       tlType === t
                         ? "border-syrup-500 text-syrup-300"
                         : "border-ink-800 text-ink-400 hover:text-ink-100"
@@ -1859,7 +2075,7 @@ export default function TaskDetail() {
             </div>
             <ol className="space-y-3 text-sm">
               {filteredTimeline.length === 0 && (
-                <li className="text-ink-600">
+                <li className="text-ink-500">
                   {tlActive ? "No steps match the current filter." : "No steps yet."}
                 </li>
               )}
@@ -1886,7 +2102,7 @@ export default function TaskDetail() {
                 </span>
               </div>
             </div>
-            <pre className="whitespace-pre-wrap font-mono text-xs leading-relaxed text-ink-300">
+            <div className="whitespace-pre-wrap font-mono text-xs leading-relaxed text-ink-300">
               {consoleLines.length === 0 ? "No output yet." : ""}
               {consoleLines.map((line) => (
                 <div key={line.seq ?? `${line.ts ?? "?"}-${line.type}`} className="flex gap-2">
@@ -1897,12 +2113,18 @@ export default function TaskDetail() {
                   >
                     {line.type === "tool_call" ? "⚙" : "›"}
                   </span>
-                  <span className={line.type === "tool_call" ? "text-chai-300" : "text-ink-300"}>
-                    {line.text}
-                  </span>
+                  {line.type === "tool_call" ? (
+                    <span className="min-w-0 flex-1 truncate text-chai-300" title={line.text ?? ""}>
+                      {summarizeToolCall(line.text).title}
+                    </span>
+                  ) : (
+                    <div className="min-w-0 flex-1 text-ink-300">
+                      <Markdown>{line.text ?? ""}</Markdown>
+                    </div>
+                  )}
                 </div>
               ))}
-            </pre>
+            </div>
           </div>
         </section>
       </div>
@@ -1994,6 +2216,23 @@ export default function TaskDetail() {
               await api.getTask(task.id).then((t) => setTask(t));
             });
           }}
+        />
+      )}
+      {rerunDialogOpen && task && (
+        <RerunDialog
+          taskId={task.id}
+          task={task}
+          open={rerunDialogOpen}
+          onClose={() => setRerunDialogOpen(false)}
+          onRerun={(updated) => {
+            setTask(updated);
+            load();
+          }}
+          cli={rerunCli}
+          model={rerunModel}
+          models={rerunModels}
+          setCli={setRerunCli}
+          setModel={setRerunModel}
         />
       )}
     </div>

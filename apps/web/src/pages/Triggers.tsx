@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
+import { EmptyState } from "../components/EmptyState";
+import SearchableSelect from "../components/SearchableSelect";
 import type {
   CatalogAgent,
   DeliveryRuleResult,
@@ -160,54 +162,32 @@ function RuleForm({
       </div>
 
       <div className="grid gap-4 sm:grid-cols-3">
-        <label className="block">
-          <span className="mb-1.5 block text-xs font-medium text-ink-400">Repo</span>
-          <select
+        <div>
+          <SearchableSelect
+            label="Repo"
             value={repoId}
-            onChange={(e) => setRepoId(Number(e.target.value))}
-            className="field"
+            onChange={(v) => setRepoId(Number(v))}
             disabled={!!editing || noRepos}
-          >
-            {repos.map((r) => (
-              <option key={r.id} value={r.id}>
-                {r.full_name}
-              </option>
-            ))}
-          </select>
+            options={repos.map((r) => ({ value: String(r.id), label: r.full_name }))}
+          />
           {noRepos && (
             <span className="mt-1 block text-xs text-amber-400">
               No connected repos — connect one on the Repos page first.
             </span>
           )}
-        </label>
-        <label className="block">
-          <span className="mb-1.5 block text-xs font-medium text-ink-400">Event</span>
-          <select
-            value={event}
-            onChange={(e) => setEvent(e.target.value)}
-            className="field font-mono"
-          >
-            {EVENTS.map((e) => (
-              <option key={e} value={e}>
-                {e}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="block">
-          <span className="mb-1.5 block text-xs font-medium text-ink-400">Action</span>
-          <select
-            value={action}
-            onChange={(e) => setAction(e.target.value)}
-            className="field font-mono"
-          >
-            {ACTIONS.map((a) => (
-              <option key={a} value={a}>
-                {a}
-              </option>
-            ))}
-          </select>
-        </label>
+        </div>
+        <SearchableSelect
+          label="Event"
+          value={event}
+          onChange={setEvent}
+          options={EVENTS}
+        />
+        <SearchableSelect
+          label="Action"
+          value={action}
+          onChange={setAction}
+          options={ACTIONS}
+        />
       </div>
       <p className="text-xs leading-relaxed text-ink-500">{ACTION_HELP[action]}</p>
 
@@ -222,7 +202,7 @@ function RuleForm({
             placeholder="main"
             className="field font-mono"
           />
-          <span className="mt-1 block text-[11px] text-ink-600">
+          <span className="mt-1 block text-[11px] text-ink-500">
             Matches the head or base branch (for push: the pushed ref). Clearing a saved filter
             removes it.
           </span>
@@ -237,7 +217,7 @@ function RuleForm({
             placeholder="octocat"
             className="field font-mono"
           />
-          <span className="mt-1 block text-[11px] text-ink-600">
+          <span className="mt-1 block text-[11px] text-ink-500">
             PR/issue author login. Needs a PR or issue payload — never matches push.
           </span>
         </label>
@@ -253,7 +233,7 @@ function RuleForm({
           placeholder="bug, frontend"
           className="field"
         />
-        <span className="mt-1 block text-[11px] text-ink-600">
+        <span className="mt-1 block text-[11px] text-ink-500">
           All listed labels must be present. Needs a PR or issue payload — never matches push.
         </span>
       </label>
@@ -409,17 +389,17 @@ function DeliveryRow({ d, onReplayed }: { d: EventDelivery; onReplayed: () => vo
           <span className="font-mono text-ink-300">{d.event}</span>
           {d.action && <span className="text-ink-500">· {d.action}</span>}
           <span className="text-ink-500">{d.repo_full_name ?? "—"}</span>
-          <span className="font-mono text-ink-600" title={d.received_at}>
+          <span className="font-mono text-ink-500" title={d.received_at}>
             {whenLabel}
           </span>
-          <span className="text-ink-600">{open ? "▾" : "▸"}</span>
+          <span className="text-ink-500">{open ? "▾" : "▸"}</span>
         </button>
         <span className="ml-auto flex items-center gap-2">
           {outcome && <span className="text-ink-500">{outcome}</span>}
           <button
             onClick={replay}
             disabled={busy}
-            className="btn-ghost !px-2 !py-0.5 disabled:opacity-50"
+            className="btn-ghost !px-2 !py-0.5 min-h-6 disabled:opacity-50"
           >
             {busy ? "replaying…" : "replay"}
           </button>
@@ -440,7 +420,7 @@ function DeliveryRow({ d, onReplayed }: { d: EventDelivery; onReplayed: () => vo
                 rule #{r.rule_id} · {r.action}
               </span>
               <span className="ml-2 text-ink-500">{workSummary(r)}</span>
-              {r.note && <span className="ml-2 text-ink-600">({r.note})</span>}
+              {r.note && <span className="ml-2 text-ink-500">({r.note})</span>}
               <ul className="ml-4 mt-1 space-y-0.5">
                 {r.work.map((w, i) => (
                   <li key={i} className={w.type === "error" ? "text-red-400" : "text-ink-400"}>
@@ -666,9 +646,25 @@ export default function Triggers() {
           <h2 className="panel-title">Trigger rules</h2>
         </div>
         {rules.length === 0 ? (
-          <p className="px-4 py-6 text-sm text-ink-500">
-            No rules yet — create one to auto-start work on a GitHub event.
-          </p>
+          <div className="p-4">
+            <EmptyState
+              icon="⚡"
+              title="No trigger rules yet"
+              description="Create a rule to auto-start agent work when GitHub events arrive."
+              action={
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditing(null);
+                    setShowForm(true);
+                  }}
+                  className="btn-primary"
+                >
+                  Create rule
+                </button>
+              }
+            />
+          </div>
         ) : (
           <ul className="max-h-96 divide-y divide-ink-800/70 overflow-y-auto">
             {rules.map((rule) => (
@@ -744,17 +740,16 @@ export default function Triggers() {
         <div className="flex flex-wrap items-center gap-2 border-b border-ink-800 px-4 py-3">
           <h2 className="panel-title">Delivery log</h2>
           <span className="ml-auto flex items-center gap-2">
-            <select
+            <SearchableSelect
+              label="Filter by status"
+              hideLabel
               value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="field !w-auto !py-1 text-xs"
-              aria-label="Filter by status"
-            >
-              <option value="all">all statuses</option>
-              <option value="matched">matched</option>
-              <option value="failed">failed</option>
-              <option value="ignored">ignored</option>
-            </select>
+              onChange={setStatusFilter}
+              options={["all", "matched", "failed", "ignored"].map((s) => ({
+                value: s,
+                label: s === "all" ? "all statuses" : s,
+              }))}
+            />
             <input
               value={logQuery}
               onChange={(e) => setLogQuery(e.target.value)}

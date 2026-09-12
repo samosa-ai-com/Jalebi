@@ -227,6 +227,8 @@ def create_task() -> ResponseReturnValue:
         return jsonify({"error": f"unsupported agent cli: {cli}"}), 400
 
     model = payload.get("model")
+    if model is not None and not isinstance(model, str):
+        return jsonify({"error": "`model` must be a string"}), 400
 
     raw_timeout = payload.get("timeout_minutes")
     if isinstance(raw_timeout, int) and raw_timeout > 0:
@@ -267,6 +269,17 @@ def create_task() -> ResponseReturnValue:
     publish_mode = payload.get("publish_mode")
     if publish_mode is None:
         publish_mode = "auto" if type_ == "issue_fix" else "manual"
+
+    # Creation-time "address the review comments on the linked PR" (freeform
+    # only): guarantees the address-reviews instruction in the run prompt even
+    # when no reviews were fetched at creation time.
+    address_reviews = payload.get("address_reviews", False)
+    if not isinstance(address_reviews, bool):
+        return jsonify({"error": "address_reviews must be a boolean"}), 400
+    if address_reviews and type_ != "freeform":
+        return jsonify({"error": "address_reviews is only valid for freeform tasks"}), 400
+    if address_reviews and pr_number is None:
+        return jsonify({"error": "address_reviews requires a linked pr_number"}), 400
 
     pat_name = payload.get("pat_name")
     if pat_name is not None and not _valid_pat(config, pat_name):
@@ -358,6 +371,7 @@ def create_task() -> ResponseReturnValue:
             env_vars=env_vars,
             timeout_minutes=timeout_minutes,
             publish_mode=publish_mode,
+            address_reviews=address_reviews,
             masker=masker,
         )
     except ValueError as exc:
@@ -435,6 +449,28 @@ def rerun_task(task_id: int) -> ResponseReturnValue:
             ),
             409,
         )
+    payload = request.get_json(silent=True)
+    if payload is None:
+        payload = {}
+    if not isinstance(payload, dict):
+        return jsonify({"error": "expected a JSON object"}), 400
+    if "cli" in payload:
+        cli = payload.get("cli")
+        if cli in (None, ""):
+            task.cli = None
+        elif cli not in available_adapters():
+            return jsonify({"error": f"unsupported agent cli: {cli}"}), 400
+        else:
+            task.cli = cli
+    if "model" in payload:
+        raw_model = payload.get("model")
+        if raw_model is not None and not isinstance(raw_model, str):
+            return jsonify({"error": "`model` must be a string"}), 400
+        task.model = raw_model or None
+    # A fresh attempt gets a fresh recovery budget: without this, a task that
+    # hit the attempt cap fails its rerun once and immediately gives up
+    # again with zero auto-recovery.
+    task.retry_count = 0
     task.status = "queued"
     task.updated_at = now()
     session.commit()
@@ -620,23 +656,24 @@ def followup_task(task_id: int) -> ResponseReturnValue:
     task = tasks.get_task(session, task_id)
     if task is None:
         return jsonify({"error": "task not found"}), 404
+
+    # Input validation before state checks: malformed overrides are a 400
+    # even when the task couldn't resume anyway.
+    pat_name = payload.get("pat_name") if isinstance(payload, dict) else None
+    if pat_name is not None and not _valid_pat(config, pat_name):
+        return jsonify({"error": f"unknown PAT: {pat_name}"}), 400
+    model = payload.get("model") if isinstance(payload, dict) else None
+    if model is not None and not isinstance(model, str):
+        return jsonify({"error": "`model` must be a string"}), 400
+    cli = payload.get("cli") if isinstance(payload, dict) else None
+    if cli is not None and cli not in available_adapters():
+        return jsonify({"error": f"unsupported agent cli: {cli}"}), 400
+
     if task.status in ("queued", "running"):
         return jsonify({"error": f"cannot follow up on a task in state {task.status}"}), 409
     prev = tasks.latest_resumable_run(session, task_id)
     if prev is None:
         return jsonify({"error": "no resumable session for this task"}), 409
-
-    # Optional follow-up account override: when omitted, the follow-up resumes
-    # under the task's own account (no default/fallback exists).
-    pat_name = payload.get("pat_name") if isinstance(payload, dict) else None
-    if pat_name is not None and not _valid_pat(config, pat_name):
-        return jsonify({"error": f"unknown PAT: {pat_name}"}), 400
-    model = payload.get("model") if isinstance(payload, dict) else None
-    # Optional backend override: a backend different from the task's own starts
-    # a fresh session seeded with the prior conversation (see queue._run_followup).
-    cli = payload.get("cli") if isinstance(payload, dict) else None
-    if cli is not None and cli not in available_adapters():
-        return jsonify({"error": f"unsupported agent cli: {cli}"}), 400
 
     masker = _masker(session)
 

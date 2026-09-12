@@ -84,7 +84,7 @@ export default function WaitingCard({
         )}
         {!ideConfigured && (
           <Link
-            to="/settings"
+            to="/settings?section=ide"
             className="text-[11px] text-ink-500 underline-offset-2 hover:text-ink-300 hover:underline"
           >
             configure IDE in Settings

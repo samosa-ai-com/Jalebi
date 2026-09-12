@@ -1,5 +1,7 @@
 import os
 import subprocess
+import threading
+import time as _time
 from pathlib import Path
 
 import pytest
@@ -52,6 +54,50 @@ def test_naming_helpers() -> None:
     assert GitWorkspace.mirror_path(Path("/d"), FULL_NAME) == Path("/d/repos/owner__repo.git")
     assert GitWorkspace.worktree_path(Path("/d"), 7) == Path("/d/ws/task-7")
     assert GitWorkspace.task_branch(7) == "jalebi/7"
+
+
+def test_repo_lock_is_shared_across_instances(config: Config) -> None:
+    """Two GitWorkspace instances must expose the SAME per-repo lock.
+
+    Every caller builds a fresh GitWorkspace, so instance-level locks would not
+    serialize two workers fetching into the same bare mirror.
+    """
+    a = GitWorkspace(config)
+    b = GitWorkspace(config)
+    assert a._lock_for(FULL_NAME) is b._lock_for(FULL_NAME)
+    assert a._lock_for(FULL_NAME) is not a._lock_for("other/repo")
+
+
+def test_repo_lock_serializes_concurrent_operations(config: Config, monkeypatch) -> None:
+    """The shared lock must actually exclude overlapping git operations."""
+    active = 0
+    max_active = 0
+    counter_lock = threading.Lock()
+
+    def fake_run_git(*args, **kwargs):
+        nonlocal active, max_active
+        with counter_lock:
+            active += 1
+            max_active = max(max_active, active)
+        _time.sleep(0.02)
+        with counter_lock:
+            active -= 1
+        return ""
+
+    monkeypatch.setattr("jalebi.git_workspace._run_git", fake_run_git)
+    a = GitWorkspace(config)
+    b = GitWorkspace(config)
+
+    def run(g):
+        with g._lock_for(FULL_NAME):
+            fake_run_git()
+
+    threads = [threading.Thread(target=run, args=(g,)) for g in (a, b)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert max_active == 1
 
 
 def test_mirror_clone(ws: GitWorkspace, remote: str) -> None:

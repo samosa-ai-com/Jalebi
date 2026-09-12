@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
+import { EmptyState } from "../components/EmptyState";
+import SearchableSelect from "../components/SearchableSelect";
 import type { Account, GithubRepo, Repo } from "../types";
 
 function ScopeChip({ scope }: { scope: string }) {
@@ -14,7 +16,7 @@ function AccountStatus({ account }: { account: Account }) {
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
       <div>
-        <p className="text-xs text-ink-600">Account</p>
+        <p className="text-xs text-ink-500">Account</p>
         <p className="mt-0.5 font-mono text-sm text-ink-100">
           {account.login ?? "—"}
           <span className="ml-2 rounded bg-ink-850 px-1.5 py-0.5 font-mono text-[10px] text-ink-400">
@@ -23,13 +25,13 @@ function AccountStatus({ account }: { account: Account }) {
         </p>
       </div>
       <div>
-        <p className="text-xs text-ink-600">Status</p>
+        <p className="text-xs text-ink-500">Status</p>
         <p className={`mt-0.5 text-sm ${account.valid ? "text-ink-100" : "text-red-400"}`}>
           {account.valid ? "valid & authorized" : (account.error ?? "invalid")}
         </p>
       </div>
       <div>
-        <p className="text-xs text-ink-600">Token</p>
+        <p className="text-xs text-ink-500">Token</p>
         <p className="mt-0.5 font-mono text-sm text-ink-300">
           {account.token_type ?? "unknown"} · {account.masked}
         </p>
@@ -68,6 +70,13 @@ function AddAccountForm({ onAdded }: { onAdded: () => void }) {
         <p className="mt-1 text-sm text-ink-400">
           Each saved PAT is its own account — its repos appear below and are selectable when
           creating tasks. All accounts are equal; the one you pick for a task is the one used.
+        </p>
+        <p className="mt-2 text-xs leading-relaxed text-ink-500">
+          Recommended: a <span className="font-mono">classic</span> token with the{" "}
+          <span className="font-mono">repo</span> scope. It also covers reading GitHub Actions
+          logs, which the reviewer and “Fix failed CI” use. A fine-grained token works too, but
+          add <span className="font-mono">Actions: read</span> for CI logs (plus Contents, Pull
+          requests, Issues, Metadata, and Commit statuses).
         </p>
       </div>
       <div className="grid gap-2 sm:grid-cols-[1fr_2fr_auto] sm:items-center">
@@ -396,6 +405,29 @@ export default function Github() {
         <p className="text-sm text-ink-500 animate-fade-up">Loading accounts…</p>
       )}
 
+      {!loadingAccounts && accounts.length === 0 && (
+        <EmptyState
+          icon="🐙"
+          title="No GitHub accounts yet"
+          description="Add a personal access token below to connect repositories and run agent tasks."
+          action={
+            <button
+              type="button"
+              onClick={() => {
+                const input = document.querySelector<HTMLInputElement>(
+                  'input[placeholder*="label"]'
+                );
+                input?.focus();
+                input?.scrollIntoView({ behavior: "smooth" });
+              }}
+              className="btn-primary"
+            >
+              Add an account below
+            </button>
+          }
+        />
+      )}
+
       {accounts.map((account) => {
         const open = openAccounts.has(account.name);
         return (
@@ -438,10 +470,10 @@ export default function Github() {
                 <AccountStatus account={account} />
 
                 <div>
-                  <p className="mb-2 text-xs text-ink-600">Granted scopes</p>
+                  <p className="mb-2 text-xs text-ink-500">Granted scopes</p>
                   <div className="flex flex-wrap gap-1.5">
                     {account.granted_scopes.length === 0 ? (
-                      <span className="text-sm text-ink-600">none</span>
+                      <span className="text-sm text-ink-500">none</span>
                     ) : (
                       account.granted_scopes.map((s) => <ScopeChip key={s} scope={s} />)
                     )}
@@ -463,7 +495,10 @@ export default function Github() {
                     </div>
                     <p className="mt-1.5 text-[11px] text-ink-500">
                       Without these, Jalebi can&apos;t review, comment, push, or report commit
-                      statuses. Create a token with the required scopes at{" "}
+                      statuses. A <span className="font-mono">classic</span> token needs only the{" "}
+                      <span className="font-mono">repo</span> scope (it also covers reading
+                      Actions logs); a fine-grained token needs the permissions here plus{" "}
+                      <span className="font-mono">Actions: read</span> for CI logs. Create one at{" "}
                       <a
                         href="https://github.com/settings/tokens"
                         target="_blank"
@@ -478,7 +513,7 @@ export default function Github() {
                 )}
 
                 <div className="border-t border-ink-800 pt-3">
-                  <p className="mb-2 text-xs text-ink-600">
+                  <p className="mb-2 text-xs text-ink-500">
                     Repositories ({visibleRepos(account.name).length}
                     {visibleRepos(account.name).length !==
                       (reposByAccount.get(account.name) ?? []).length &&
@@ -496,9 +531,9 @@ export default function Github() {
                   {loadingRepos &&
                   (reposByAccount.get(account.name) ?? []).length === 0 &&
                   !repoErrors.get(account.name) ? (
-                    <p className="text-sm text-ink-600">Loading repositories…</p>
+                    <p className="text-sm text-ink-500">Loading repositories…</p>
                   ) : visibleRepos(account.name).length === 0 ? (
-                    <p className="text-sm text-ink-600">
+                    <p className="text-sm text-ink-500">
                       {(reposByAccount.get(account.name) ?? []).length === 0
                         ? "No repositories listed for this account."
                         : "No repositories match the current search or filters."}
@@ -512,19 +547,20 @@ export default function Github() {
                           placeholder="Search repositories…"
                           className="field max-w-55 !py-1 text-xs"
                         />
-                        <select
+                        <SearchableSelect
+                          label={`Sort repositories for ${account.name}`}
+                          hideLabel
                           value={controlsFor(account.name).sort}
-                          onChange={(e) =>
+                          onChange={(v) =>
                             setControl(account.name, {
-                              sort: e.target.value as "name" | "connected",
+                              sort: v as "name" | "connected",
                             })
                           }
-                          className="field max-w-44 !py-1 text-xs"
-                          aria-label={`Sort repositories for ${account.name}`}
-                        >
-                          <option value="name">Sort: name</option>
-                          <option value="connected">Sort: connected first</option>
-                        </select>
+                          options={[
+                            { value: "name", label: "Sort: name" },
+                            { value: "connected", label: "Sort: connected first" },
+                          ]}
+                        />
                         {(["all", "connected", "not"] as const).map((s) => (
                           <button
                             key={s}
@@ -562,7 +598,7 @@ export default function Github() {
                                     <span className="text-ink-500">{owner}/</span>
                                     {repo}
                                   </a>
-                                  <span className="ml-2 font-mono text-[11px] text-ink-600">
+                                  <span className="ml-2 font-mono text-[11px] text-ink-500">
                                     {r.private ? "private" : "public"} · {r.default_branch ?? "—"}
                                   </span>
                                 </span>

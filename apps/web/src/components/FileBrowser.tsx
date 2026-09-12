@@ -179,7 +179,7 @@ function FileBrowser({
       ) : (
         <ul className="divide-y divide-ink-800/60">
           {entries === null || entries.length === 0 ? (
-            <li className="py-6 text-center text-sm text-ink-600">No files here.</li>
+            <li className="py-6 text-center text-sm text-ink-500">No files here.</li>
           ) : (
             entries.map((entry) => (
               <li key={entry.path}>
