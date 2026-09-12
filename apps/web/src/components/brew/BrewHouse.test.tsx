@@ -178,6 +178,15 @@ describe("BrewHouse", () => {
     expect(floor).toBeInTheDocument();
   });
 
+  it("carries the shared mission mood attributes on its root", async () => {
+    stubFetch({ ...HANDLERS });
+    const { container } = renderHouse();
+    const root = container.querySelector(".mission-deck");
+    expect(root).toBeInTheDocument();
+    expect(root).toHaveAttribute("data-mood");
+    expect(root).toHaveAttribute("data-flash");
+  });
+
   it("bounds a long backends list so it scrolls inside its card", async () => {
     const many = Array.from({ length: 30 }, (_, i) => `backend-${i}`);
     stubFetch({

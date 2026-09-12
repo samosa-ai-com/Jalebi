@@ -14,6 +14,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { api } from "../../api/client";
 import { avatarFor, avatarUrl } from "../../lib/agentAvatars";
 import { qualifiedScreenName } from "../../lib/screeningPrompt";
+import { useDeckMood } from "../../lib/useDeckMood";
 import type {
   BackendsResponse,
   CatalogAgent,
@@ -25,6 +26,7 @@ import type {
   Task,
 } from "../../types";
 import "./brew.css";
+import "../../lib/missionMood.css";
 import { ControlShelf } from "./ControlShelf";
 import { CooksRail, type CookSlot } from "./CooksRail";
 import { KitchenWire } from "./KitchenWire";
@@ -57,6 +59,7 @@ export function BrewHouse({
   onCancel?: (taskId: number) => void;
 }) {
   const navigate = useNavigate();
+  const { mood, flash } = useDeckMood(tasks);
   const [now, setNow] = useState(() => Date.now());
   const [highlightedSlot, setHighlightedSlot] = useState<number | null>(null);
   const [agents, setAgents] = useState<CatalogAgent[]>([]);
@@ -237,7 +240,16 @@ export function BrewHouse({
   });
 
   return (
-    <div className="space-y-3 animate-fade-up">
+    <div
+      className="mission-deck relative overflow-hidden space-y-3 animate-fade-up"
+      data-mood={mood}
+      data-flash={flash}
+    >
+      {/* Travelling light along the top seam (shared mood engine) */}
+      <div
+        aria-hidden="true"
+        className="mission-deck-pulse-h pointer-events-none absolute select-none"
+      />
       <div className="surface flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-2">
         <img src="/samosa.png" alt="Samosa AI" className="h-6 w-6 object-contain" />
         <h2 className="panel-title">Halwai shop</h2>

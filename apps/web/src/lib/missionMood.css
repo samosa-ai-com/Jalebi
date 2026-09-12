@@ -1,0 +1,288 @@
+/**
+ * Mission Control — shared status-reactive "energy border" + circuit-pulse CSS.
+ *
+ * Theme-agnostic: applies to any root carrying `.mission-deck` with a
+ * `data-mood` (idle/active/attention/fault) and optional `data-flash`
+ * (celebrate/fault) attribute. Used by BOTH the Ops Deck and the Halwai Shop
+ * so their ambient motion is identical and maintained in one place.
+ *
+ * Only compositor-friendly properties are animated (transform, opacity,
+ * background-position, and the --mission-angle custom property). Global
+ * `prefers-reduced-motion` handling in index.css also neutralises this, and
+ * an explicit block below keeps a calm static tint when motion is reduced.
+ */
+
+@property --mission-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+@keyframes mission-energy-rotate {
+  from {
+    --mission-angle: 0deg;
+  }
+  to {
+    --mission-angle: 360deg;
+  }
+}
+
+/* Mood variable definitions on deck root.
+   Idle must be clearly alive at a glance, not a whisper: a visible warm
+   amber current circling every card. */
+.mission-deck {
+  --mission-angle: 0deg;
+  --mission-accent: rgba(247, 185, 85, 0.72);
+  --mission-speed: 8s;
+  --mission-opacity: 0.72;
+  --mission-glow: rgba(247, 185, 85, 0.25);
+  position: relative;
+}
+
+.mission-deck[data-mood="idle"] {
+  --mission-accent: rgba(247, 185, 85, 0.72);
+  --mission-speed: 8s;
+  --mission-opacity: 0.72;
+  --mission-glow: rgba(247, 185, 85, 0.25);
+}
+
+.mission-deck[data-mood="active"] {
+  --mission-accent: #38bdf8;
+  --mission-speed: 5s;
+  --mission-opacity: 0.6;
+  --mission-glow: rgba(56, 189, 248, 0.25);
+}
+
+.mission-deck[data-mood="attention"] {
+  --mission-accent: #f59e0b;
+  --mission-speed: 3.5s;
+  --mission-opacity: 0.8;
+  --mission-glow: rgba(245, 158, 11, 0.35);
+}
+
+.mission-deck[data-mood="fault"] {
+  --mission-accent: #ef4444;
+  --mission-speed: 1.8s;
+  --mission-opacity: 0.9;
+  --mission-glow: rgba(239, 68, 68, 0.4);
+}
+
+/* Fault subtle flicker */
+@keyframes mission-fault-flicker {
+  0%, 100% {
+    opacity: var(--mission-opacity);
+  }
+  50% {
+    opacity: calc(var(--mission-opacity) * 0.65);
+  }
+  75% {
+    opacity: calc(var(--mission-opacity) * 0.95);
+  }
+  85% {
+    opacity: calc(var(--mission-opacity) * 0.55);
+  }
+}
+
+/* Per-card energy border (cards + the center worker panes, which are not
+   .surface but carry an ops-pane-* state class). */
+.mission-deck .surface,
+.mission-deck [class*="ops-pane-"] {
+  position: relative;
+}
+
+.mission-deck .surface::before,
+.mission-deck [class*="ops-pane-"]::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: conic-gradient(
+    from var(--mission-angle),
+    var(--mission-accent) 0deg,
+    transparent 60deg,
+    transparent 180deg,
+    var(--mission-accent) 240deg,
+    transparent 300deg,
+    var(--mission-accent) 360deg
+  );
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+  opacity: var(--mission-opacity);
+  transition: opacity 0.4s ease;
+  animation: mission-energy-rotate var(--mission-speed) linear infinite;
+  z-index: 1;
+}
+
+.mission-deck[data-mood="fault"] .surface::before,
+.mission-deck[data-mood="fault"] [class*="ops-pane-"]::before {
+  animation:
+    mission-energy-rotate var(--mission-speed) linear infinite,
+    mission-fault-flicker 1.4s ease-in-out infinite;
+}
+
+/* Deck perimeter circuit pulse (conic ring) */
+.mission-deck::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 0.75rem;
+  padding: 1px;
+  background: conic-gradient(
+    from var(--mission-angle),
+    var(--mission-accent) 0deg,
+    transparent 75deg,
+    transparent 180deg,
+    var(--mission-accent) 255deg,
+    transparent 330deg,
+    var(--mission-accent) 360deg
+  );
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+  opacity: calc(var(--mission-opacity) * 0.6);
+  transition: opacity 0.5s ease;
+  animation: mission-energy-rotate calc(var(--mission-speed) * 1.6) linear infinite;
+  z-index: 2;
+}
+
+/* Travelling light along the top seam */
+.mission-deck-pulse-h {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 1px;
+  width: 96px;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, var(--mission-accent), transparent);
+  opacity: calc(var(--mission-opacity) * 0.8);
+  animation: mission-circuit-sweep-h calc(var(--mission-speed) * 0.85) ease-in-out infinite;
+  z-index: 3;
+}
+
+@keyframes mission-circuit-sweep-h {
+  0% {
+    transform: translateX(-100px);
+    opacity: 0;
+  }
+  15% {
+    opacity: calc(var(--mission-opacity) * 0.8);
+  }
+  85% {
+    opacity: calc(var(--mission-opacity) * 0.8);
+  }
+  100% {
+    transform: translateX(100vw);
+    opacity: 0;
+  }
+}
+
+/* Hide perimeter ring and top-seam light below xl breakpoint */
+@media (max-width: 1279px) {
+  .mission-deck::after,
+  .mission-deck-pulse-h {
+    display: none;
+  }
+}
+
+/* Transient flashes (one-shot sweeps) */
+@keyframes mission-celebrate-sweep {
+  0% {
+    --mission-angle: 0deg;
+    opacity: 1;
+  }
+  100% {
+    --mission-angle: 720deg;
+    opacity: var(--mission-opacity);
+  }
+}
+
+.mission-deck[data-flash="celebrate"] .surface::before,
+.mission-deck[data-flash="celebrate"] [class*="ops-pane-"]::before {
+  background: conic-gradient(
+    from var(--mission-angle),
+    #ef4444,
+    #f59e0b,
+    #10b981,
+    #06b6d4,
+    #3b82f6,
+    #8b5cf6,
+    #ec4899,
+    #ef4444
+  );
+  animation: mission-celebrate-sweep 2.5s cubic-bezier(0.16, 1, 0.3, 1) 1 forwards;
+}
+
+@keyframes mission-fault-sweep {
+  0%, 20%, 45%, 70% {
+    opacity: 1;
+    --mission-angle: 0deg;
+  }
+  10%, 32%, 58% {
+    opacity: 0.2;
+    --mission-angle: 90deg;
+  }
+  85% {
+    opacity: 0.9;
+    --mission-angle: 180deg;
+  }
+  100% {
+    opacity: var(--mission-opacity);
+    --mission-angle: 360deg;
+  }
+}
+
+.mission-deck[data-flash="fault"] {
+  --mission-accent: #ef4444;
+}
+
+.mission-deck[data-flash="fault"] .surface::before,
+.mission-deck[data-flash="fault"] [class*="ops-pane-"]::before {
+  animation: mission-fault-sweep 2.5s ease-out 1 forwards;
+}
+
+/* Reduced motion: freeze rotation/sweeps, retain static calm tinted ring */
+@media (prefers-reduced-motion: reduce) {
+  .mission-deck .surface::before,
+  .mission-deck [class*="ops-pane-"]::before,
+  .mission-deck::after,
+  .mission-deck-pulse-h {
+    animation: none !important;
+  }
+  .mission-deck-pulse-h {
+    display: none !important;
+  }
+  .mission-deck .surface::before,
+  .mission-deck [class*="ops-pane-"]::before {
+    opacity: var(--mission-opacity) !important;
+  }
+  /* Flash states keep a calm single-accent tint under reduced motion instead
+     of a frozen rainbow/red sweep. */
+  .mission-deck[data-flash="celebrate"] .surface::before,
+  .mission-deck[data-flash="celebrate"] [class*="ops-pane-"]::before,
+  .mission-deck[data-flash="fault"] .surface::before,
+  .mission-deck[data-flash="fault"] [class*="ops-pane-"]::before {
+    background: conic-gradient(
+      from var(--mission-angle),
+      var(--mission-accent) 0deg,
+      transparent 60deg,
+      transparent 180deg,
+      var(--mission-accent) 240deg,
+      transparent 300deg,
+      var(--mission-accent) 360deg
+    );
+  }
+}

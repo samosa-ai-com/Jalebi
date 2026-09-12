@@ -6,7 +6,7 @@ import { getMissionTheme, setMissionTheme } from "../../lib/missionTheme";
 import type { Repo, Task } from "../../types";
 import { jobForType, JOB_LABEL, JobGlyph, JOB_ACCENT, STATUS_LABEL } from "./jobStyle";
 import { OpsDeck } from "./OpsDeck";
-import { useDeckMood } from "./useDeckMood";
+import { useDeckMood } from "../../lib/useDeckMood";
 import { WorkerPane } from "./WorkerPane";
 
 const MOCK_TASKS: Task[] = [

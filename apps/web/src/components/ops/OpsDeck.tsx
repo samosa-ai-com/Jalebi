@@ -6,10 +6,11 @@ import { ControlShelf } from "../brew/ControlShelf";
 import { EventStream } from "./EventStream";
 import type { JobKind } from "./jobStyle";
 import "./ops.css";
+import "../../lib/missionMood.css";
 import { OpsStats } from "./OpsStats";
 import { RunnersRail } from "./RunnersRail";
 import { ToolbeltRail } from "./ToolbeltRail";
-import { useDeckMood } from "./useDeckMood";
+import { useDeckMood } from "../../lib/useDeckMood";
 import { useMissionData } from "./useMissionData";
 import { WorkerGrid } from "./WorkerGrid";
 
@@ -83,7 +84,7 @@ export function OpsDeck({
 
   return (
     <div
-      className="ops-deck relative overflow-hidden space-y-3 font-mono animate-fade-up"
+      className="ops-deck mission-deck relative overflow-hidden space-y-3 font-mono animate-fade-up"
       data-mood={mood}
       data-flash={flash}
     >
@@ -96,7 +97,7 @@ export function OpsDeck({
       {/* Circuit pulse: travelling light along the top seam */}
       <div
         aria-hidden="true"
-        className="ops-deck-pulse-h pointer-events-none absolute select-none"
+        className="mission-deck-pulse-h pointer-events-none absolute select-none"
       />
 
       {/* 1. Header Bar */}
