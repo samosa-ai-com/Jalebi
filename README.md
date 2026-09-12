@@ -1,6 +1,6 @@
 # 🦦 Jalebi
 
-### Your repos, on your command. Your own coding-agent dashboard.
+### Your repos. Your agents. Your rules.
 
 **Jalebi is a private, self-hosted, localhost-only web app that works like Google's Jules: connect your GitHub account, create tasks (fix issue, review PR, implement feature, audit security), watch the agent work through a live step-by-step timeline, and follow up in the same session.**
 
