@@ -1,4 +1,4 @@
-# 🍯 Jalebi
+# 🦦 Jalebi
 
 ### Your repos, on your command. Your own coding-agent dashboard.
 
@@ -75,7 +75,7 @@ Every other reviewer ships **its own AI harness in someone else's cloud**. Jaleb
 
 And it is still a full-power agent, not a comment bot: it clones into isolated per-task worktrees, runs with full power and network access for its backends, opens and updates real PRs (`Closes #N`), follows up in the same agent session, auto-starts reviews from webhooks, runs scheduled notify-only audits, and gates merges with commit statuses — while your code stays on your machine (only GitHub API calls and your chosen model provider ever see it), filesystem isolation holds per task, and GitHub-level guards (PAT vault, masking, `gh` ban, publish guards) hold per action. 🆓 FREE (AGPL-3.0) with UNLIMITED tasks, repos, and runs — private, and yours.
 
-|  | **🍯 Jalebi** | **Google Jules** | **CodeRabbit** | **Greptile / Qodo Merge / Copilot review** | **Open-source (PR-Agent, Reviewdog, Danger)** |
+|  | **🦦 Jalebi** | **Google Jules** | **CodeRabbit** | **Greptile / Qodo Merge / Copilot review** | **Open-source (PR-Agent, Reviewdog, Danger)** |
 |---|---|---|---|---|---|
 | Hosting & privacy | ✅ Self-hosted, localhost-only. Code stays local except GitHub API + your provider | ❌️ Google Cloud VM. Code leaves your machine for Google's cloud | ❌️ Vendor cloud. Code goes through CodeRabbit's cloud (no self-host) | ⚠️ Vendor cloud (enterprise self-host/VPC on top tiers only) | ✅ Self-hosted. You run it, you hold the code |
 | AI harness | 🏆 **None — auto-uses your already-configured CLIs. Zero setup, zero reinstalls** | ❌️ Google's own harness, Gemini-only | ❌️ Their harness, their models | ❌️ Their harness, their models | ⚠️ PR-Agent: BYO API keys, one LLM call per command. Reviewdog/Danger: linter orchestration, no AI reasoning |
