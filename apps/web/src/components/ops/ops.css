@@ -469,20 +469,6 @@
   z-index: 3;
 }
 
-.ops-deck-pulse-v {
-  position: absolute;
-  top: 0;
-  right: 276px;
-  width: 1px;
-  height: 96px;
-  pointer-events: none;
-  background: linear-gradient(180deg, transparent, var(--ops-accent), transparent);
-  opacity: calc(var(--ops-opacity) * 0.65);
-  animation: ops-circuit-sweep-v calc(var(--ops-speed) * 1.15) ease-in-out infinite;
-  animation-delay: 1.5s;
-  z-index: 3;
-}
-
 @keyframes ops-circuit-sweep-h {
   0% {
     transform: translateX(-100px);
@@ -500,28 +486,10 @@
   }
 }
 
-@keyframes ops-circuit-sweep-v {
-  0% {
-    transform: translateY(-100px);
-    opacity: 0;
-  }
-  20% {
-    opacity: calc(var(--ops-opacity) * 0.65);
-  }
-  80% {
-    opacity: calc(var(--ops-opacity) * 0.65);
-  }
-  100% {
-    transform: translateY(100vh);
-    opacity: 0;
-  }
-}
-
-/* Hide perimeter pulse and circuit lights below xl breakpoint */
+/* Hide perimeter pulse and circuit light below xl breakpoint */
 @media (max-width: 1279px) {
   .ops-deck::after,
-  .ops-deck-pulse-h,
-  .ops-deck-pulse-v {
+  .ops-deck-pulse-h {
     display: none;
   }
 }
@@ -587,12 +555,10 @@
   .ops-deck .surface::before,
   .ops-deck [class*="ops-pane-"]::before,
   .ops-deck::after,
-  .ops-deck-pulse-h,
-  .ops-deck-pulse-v {
+  .ops-deck-pulse-h {
     animation: none !important;
   }
-  .ops-deck-pulse-h,
-  .ops-deck-pulse-v {
+  .ops-deck-pulse-h {
     display: none !important;
   }
   .ops-deck .surface::before,

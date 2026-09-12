@@ -75,14 +75,10 @@ export function OpsDeck({
         className="ops-scanline pointer-events-none absolute top-0 left-0 right-0 h-32 opacity-40 select-none"
       />
 
-      {/* Circuit pulse: travelling perimeter and gutter lights */}
+      {/* Circuit pulse: travelling light along the top seam */}
       <div
         aria-hidden="true"
         className="ops-deck-pulse-h pointer-events-none absolute select-none"
-      />
-      <div
-        aria-hidden="true"
-        className="ops-deck-pulse-v pointer-events-none absolute select-none"
       />
 
       {/* 1. Header Bar */}
