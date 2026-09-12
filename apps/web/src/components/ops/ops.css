@@ -326,18 +326,20 @@
 /* Mood variable definitions on deck root */
 .ops-deck {
   --ops-angle: 0deg;
-  --ops-accent: rgba(247, 185, 85, 0.35);
-  --ops-speed: 12s;
-  --ops-opacity: 0.3;
-  --ops-glow: rgba(247, 185, 85, 0.1);
+  --ops-accent: rgba(247, 185, 85, 0.72);
+  --ops-speed: 8s;
+  --ops-opacity: 0.72;
+  --ops-glow: rgba(247, 185, 85, 0.25);
   position: relative;
 }
 
+/* Idle must be clearly alive at a glance, not a whisper: a visible warm
+   amber current circling every card. */
 .ops-deck[data-mood="idle"] {
-  --ops-accent: rgba(247, 185, 85, 0.35);
-  --ops-speed: 12s;
-  --ops-opacity: 0.3;
-  --ops-glow: rgba(247, 185, 85, 0.1);
+  --ops-accent: rgba(247, 185, 85, 0.72);
+  --ops-speed: 8s;
+  --ops-opacity: 0.72;
+  --ops-glow: rgba(247, 185, 85, 0.25);
 }
 
 .ops-deck[data-mood="active"] {
@@ -447,7 +449,7 @@
     linear-gradient(#fff 0 0);
   mask-composite: exclude;
   pointer-events: none;
-  opacity: calc(var(--ops-opacity) * 0.4);
+  opacity: calc(var(--ops-opacity) * 0.6);
   transition: opacity 0.5s ease;
   animation: ops-energy-rotate calc(var(--ops-speed) * 1.6) linear infinite;
   z-index: 2;
