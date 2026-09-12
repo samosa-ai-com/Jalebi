@@ -6,7 +6,7 @@
 | **Status**         | Draft v1.2 — reconciled with the shipped implementation (Phases 0–2 complete)                                                                    |
 | **Date**           | 2026-08-09                                                                                                                                      |
 | **Owner**          | Samosa AI (`samosa-ai-com`)                                                                                                                     |
-| **Repo**           | `Rishabh-Bajpai/Jalebi` (current home). This PRD lives in the Jalebi repo.                                                                       |
+| **Repo**           | `samosa-ai-com/Jalebi`. This PRD lives in the Jalebi repo.                                                                                      |
 | **Versioning**     | Follow this file; feature set is additive                                                                                                       |
 
 > **Reading note (2026-08-09):** this document was reconciled against the shipped

@@ -662,7 +662,7 @@ describe("Settings (recovery + data)", () => {
 
     const link = await screen.findByRole("link", { name: /^here$/i });
     expect(link).toBeInTheDocument();
-    expect(link).toHaveAttribute("href", "https://github.com/Rishabh-Bajpai/Jalebi/issues/new");
+    expect(link).toHaveAttribute("href", "https://github.com/samosa-ai-com/Jalebi/issues/new");
     expect(link).toHaveAttribute("target", "_blank");
     expect(link).toHaveAttribute("rel", "noreferrer");
     expect(

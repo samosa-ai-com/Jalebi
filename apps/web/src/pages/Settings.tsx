@@ -594,7 +594,7 @@ function IDESettings({
 
 const AGENT_CLIS = ["opencode", "codex", "claude", "pi", "kilo", "qwen", "cline", "grok", "commandcode", "agy"];
 
-const BACKEND_ISSUES_URL = "https://github.com/Rishabh-Bajpai/Jalebi/issues/new";
+const BACKEND_ISSUES_URL = "https://github.com/samosa-ai-com/Jalebi/issues/new";
 
 // Where each backend's built-in model list comes from, and how to change
 // it. Rendered under the Model overrides row so owners know which lists are

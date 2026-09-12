@@ -48,7 +48,7 @@ After any code change, run the relevant tests and build before marking work done
 - **All GitHub interaction for testing goes through `JALEBI_GITHUB_TOKEN`** (via the app's httpx client, `curl -H "Authorization: Bearer $JALEBI_GITHUB_TOKEN"`, or git with the token) — **never `gh`** (PRD §17.2, AGENTS.md §3.3).
 - The token is for a **dedicated testing repo/account**: `example-account` (test repos include **`example-smoke-repo`**, created for Jalebi smoke tests). Never point tests at production/user repos.
 - Manual smoke tests (e.g. end-to-end task → PR) run against `example-smoke-repo` and are cleaned up afterwards (PR closed, branch deleted).
-- The `gh` CLI is authorized **only** for local git operations on the Jalebi repo itself (staging, committing, pushing to `Rishabh-Bajpai/Jalebi`) — never for testing/verification against the testing account.
+- The `gh` CLI is authorized **only** for local git operations on the Jalebi repo itself (staging, committing, pushing to `samosa-ai-com/Jalebi`) — never for testing/verification against the testing account.
 
 ## 6. Runaway guardrails (no test may eat the machine)
 
