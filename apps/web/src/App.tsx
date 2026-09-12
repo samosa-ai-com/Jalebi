@@ -14,15 +14,13 @@ import NotificationBell from "./components/NotificationBell";
 
 function JalebiMark({ className }: { className?: string }) {
   return (
-    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
-      <path
-        d="M12 9.5a2.5 2.5 0 1 1-2.5 2.5 3.5 3.5 0 1 1 3.5-3.5 4.5 4.5 0 1 1-4.5 4.5 5.5 5.5 0 1 1 5.5-5.5 6.5 6.5 0 1 1-6.5 6.5"
-        stroke="currentColor"
-        strokeWidth="2.2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
+    <img
+      src="/jalebi-logo.svg"
+      alt=""
+      aria-hidden="true"
+      draggable={false}
+      className={className}
+    />
   );
 }
 
@@ -116,7 +114,7 @@ function App() {
       <header className="sticky top-0 z-10 border-b border-ink-800/80 bg-ink-950/80 backdrop-blur-md">
         <div className="mx-auto flex max-w-6xl items-center gap-1 px-6 py-3">
           <Link to="/" className="mr-6 flex items-center gap-2.5">
-            <JalebiMark className="h-7 w-7 text-syrup-500" />
+            <JalebiMark className="h-7 w-7" />
             <span className="text-xl font-bold tracking-tight text-ink-100">Jalebi</span>
           </Link>
 
