@@ -48,3 +48,6 @@ apps/server/.coverage
 
 # Reference clones of third-party open-source repos (study only — never commit)
 reference/
+
+# Live dev journal (private working notes — never commit)
+HANDOFF.md
