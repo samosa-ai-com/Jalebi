@@ -3,6 +3,7 @@
 import time
 import urllib.parse
 from dataclasses import dataclass, field
+from email.utils import parsedate_to_datetime
 from typing import Any, Literal
 
 import httpx
@@ -123,7 +124,10 @@ class GitHubClient:
             try:
                 wait = float(retry_after)
             except ValueError:
-                wait = _RATE_LIMIT_DEFAULT_WAIT
+                try:
+                    wait = parsedate_to_datetime(retry_after).timestamp() - time.time()
+                except (TypeError, ValueError, IndexError, OverflowError):
+                    wait = _RATE_LIMIT_DEFAULT_WAIT
         elif remaining == "0":
             reset = lowered.get("x-ratelimit-reset")
             if reset is not None:
@@ -138,12 +142,16 @@ class GitHubClient:
         return min(max(wait, 0.0), RATE_LIMIT_MAX_WAIT)
 
     def _send(self, method: str, path: str, **kwargs) -> httpx.Response:
-        """Issue one request, retrying rate limits with a bounded backoff.
+        """Issue one request, retrying safe reads after bounded rate limits.
 
-        Retrying is safe for POST/DELETE too: GitHub returns a rate-limit
-        response *before* executing the action, so no side effect is repeated.
+        GitHub documents rate-limit responses but does not offer an
+        idempotency guarantee for every write endpoint under secondary limits.
+        Retrying only GET/HEAD avoids duplicating owner-visible mutations; a
+        rate-limited write surfaces normally for the caller to retry.
         """
         resp = self._http.request(method, path, **kwargs)
+        if method.upper() not in {"GET", "HEAD"}:
+            return resp
         for _ in range(RATE_LIMIT_MAX_RETRIES):
             wait = self._retry_wait(resp.status_code, dict(resp.headers))
             if wait is None:

@@ -122,6 +122,28 @@ def test_seed_defaults_backfills_missing_subkeys(session: OrmSession) -> None:
     assert "continue_prompt" in policy
 
 
+def test_seed_defaults_merges_new_retry_patterns_into_existing_list(session: OrmSession) -> None:
+    """Code-owned retry guards reach old installs without dropping owner additions."""
+    old_patterns = [
+        "model not found",
+        "invalid model",
+        "unknown model",
+        "authentication failed",
+        "unauthorized",
+        "no GitHub token",
+        "has no resumable session",
+        "my provider outage",
+    ]
+    set_setting(session, "retry_policy", {"non_retryable_patterns": old_patterns})
+    seed_defaults(session)
+    policy = get_setting(session, "retry_policy")
+    assert isinstance(policy, dict)
+    patterns = policy["non_retryable_patterns"]
+    assert patterns[: len(old_patterns)] == old_patterns
+    assert "usage limit" in patterns
+    assert "429" in patterns
+
+
 def test_all_settings_survive_full_restart(session: OrmSession) -> None:
     """A simulated app restart (fresh engine/session) reads every stored
     configuration back — nothing 'washes away'."""

@@ -25,8 +25,14 @@ def list_notifications() -> ResponseReturnValue:
     else:
         limit = 50
 
+    before_id = request.args.get("before_id", type=int)
+    if "before_id" in request.args and (before_id is None or before_id <= 0):
+        return jsonify({"error": "before_id must be a positive integer"}), 400
+
     session = db.get_session()
-    items = notifications.list_notifications(session, unread_only=unread_only, limit=limit)
+    items = notifications.list_notifications(
+        session, unread_only=unread_only, limit=limit, before_id=before_id
+    )
     return jsonify(items)
 
 

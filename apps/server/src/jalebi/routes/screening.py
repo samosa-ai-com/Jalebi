@@ -277,7 +277,7 @@ def dealt_list_route() -> ResponseReturnValue:
     return jsonify({"screen_id": screen_id, "fingerprints": fps})
 
 
-def _dealt_body() -> tuple[tuple[int, list[str]] | None, ResponseReturnValue | None]:
+def _dealt_body() -> tuple[tuple[int, object] | None, ResponseReturnValue | None]:
     """Validate a {screen_id, fps} dealt body.
 
     Returns ``((screen_id, fps), None)`` on success, ``(None, error)`` to
@@ -289,11 +289,7 @@ def _dealt_body() -> tuple[tuple[int, list[str]] | None, ResponseReturnValue | N
     screen_id = payload.get("screen_id")
     if isinstance(screen_id, bool) or not isinstance(screen_id, int):
         return None, (jsonify({"error": "screen_id must be an integer"}), 400)
-    try:
-        fps = screening.validate_fingerprints(payload.get("fps"))
-    except screening.ScreeningError as exc:
-        return None, (jsonify({"error": str(exc)}), 400)
-    return (screen_id, fps), None
+    return (screen_id, payload.get("fps")), None
 
 
 @bp.post("/dealt")
@@ -303,10 +299,14 @@ def dealt_mark_route() -> ResponseReturnValue:
     if error is not None:
         return error
     assert parsed is not None
-    screen_id, fps = parsed
+    screen_id, raw_fps = parsed
     session = db.get_session()
     if screening.get_screen(session, screen_id) is None:
         return jsonify({"error": "screen not found"}), 404
+    try:
+        fps = screening.validate_fingerprints(screen_id, raw_fps)
+    except screening.ScreeningError as exc:
+        return jsonify({"error": str(exc)}), 400
     marked = screening.mark_findings_dealt(session, screen_id, fps)
     return jsonify({"screen_id": screen_id, "marked": marked})
 
@@ -318,10 +318,14 @@ def dealt_reopen_route() -> ResponseReturnValue:
     if error is not None:
         return error
     assert parsed is not None
-    screen_id, fps = parsed
+    screen_id, raw_fps = parsed
     session = db.get_session()
     if screening.get_screen(session, screen_id) is None:
         return jsonify({"error": "screen not found"}), 404
+    try:
+        fps = screening.validate_fingerprints(screen_id, raw_fps)
+    except screening.ScreeningError as exc:
+        return jsonify({"error": str(exc)}), 400
     reopened = screening.reopen_findings_dealt(session, screen_id, fps)
     return jsonify({"screen_id": screen_id, "reopened": reopened})
 

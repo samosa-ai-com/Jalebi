@@ -3,6 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import type { TaskNotification } from "../types";
 
+const PAGE_SIZE = 50;
+
 function timeAgo(iso: string | null | undefined): string {
   if (!iso) return "—";
   const zoned = /([zZ]|[+-]\d{2}:?\d{2})$/.test(iso);
@@ -78,6 +80,8 @@ export default function NotificationBell() {
   const [open, setOpen] = useState(false);
   const [unread, setUnread] = useState(0);
   const [notifications, setNotifications] = useState<TaskNotification[]>([]);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const navigate = useNavigate();
@@ -166,15 +170,17 @@ export default function NotificationBell() {
     return () => clearInterval(timer);
   }, [refreshCount]);
 
-  // Latest page of notifications while the panel is open.
+  // Latest page of notifications while the panel is open. Loading the latest
+  // page again also incorporates newly-arrived lifecycle events.
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
     const fetchList = async () => {
       try {
-        const list = await api.getNotifications();
+        const list = await api.getNotifications({ limit: PAGE_SIZE });
         if (!cancelled && Array.isArray(list)) {
           setNotifications(list);
+          setHasMore(list.length === PAGE_SIZE);
         }
       } catch {
         // best effort, keep previous state
@@ -187,6 +193,26 @@ export default function NotificationBell() {
       clearInterval(timer);
     };
   }, [open ]);
+
+  const handleLoadMore = async () => {
+    const beforeId = notifications.at(-1)?.id;
+    if (!beforeId || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const older = await api.getNotifications({ limit: PAGE_SIZE, beforeId });
+      if (Array.isArray(older)) {
+        setNotifications((current) => {
+          const known = new Set(current.map((n) => n.id));
+          return [...current, ...older.filter((n) => !known.has(n.id))];
+        });
+        setHasMore(older.length === PAGE_SIZE);
+      }
+    } catch {
+      // Best effort: keep the already-visible page and allow a retry.
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   const hasUnread = unread > 0;
 
@@ -304,6 +330,16 @@ export default function NotificationBell() {
                   )}
                 </button>
               ))
+            )}
+            {hasMore && (
+              <button
+                type="button"
+                onClick={handleLoadMore}
+                disabled={loadingMore}
+                className="w-full px-4 py-2 text-xs font-medium text-syrup-400 hover:bg-ink-850 hover:text-syrup-300 disabled:cursor-wait disabled:opacity-60"
+              >
+                {loadingMore ? "Loading…" : "Load older notifications"}
+              </button>
             )}
           </div>
         </div>

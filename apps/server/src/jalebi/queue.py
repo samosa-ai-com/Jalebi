@@ -568,7 +568,15 @@ class TaskQueue:
                 # scary error for an intentional cancel.
                 event = AgentEvent(type="message", text="Run cancelled by user.")
             if event.type == "message" and event.text:
-                pending_text += event.text[:MAX_STEP_TEXT]
+                text = event.text[:MAX_STEP_TEXT]
+                # Do not let a large next chunk turn a sub-threshold buffer
+                # into a >MAX_STEP_TEXT entry that flush_pending truncates.
+                # Flush the prior text first; both chunks then reach the
+                # durable timeline intact (each event remains independently
+                # bounded before masking).
+                if pending_text and len(pending_text) + len(text) > MAX_STEP_TEXT:
+                    flush_pending()
+                pending_text += text
                 if event.phase is not None:
                     pending_phase = event.phase
                 state.last_step_text = event.text[:MAX_STEP_TEXT]
@@ -599,7 +607,7 @@ class TaskQueue:
                     # watchdogs bound a process that never exits. An error
                     # anywhere in the stream still fails the run (saw_error).
                     saw_error = True
-                if event.type in ("message", "tool_call", "diff", "done") and entry.get("text"):
+                if event.type in ("message", "tool_call", "done") and entry.get("text"):
                     seen_content = True
                 # Track the latest message text/phase for progress notifications.
                 if event.type in ("message", "tool_call") and entry.get("text"):
@@ -675,16 +683,13 @@ class TaskQueue:
         except Exception:
             logger.debug("git_sha_end capture failed for task %s", task.id)
 
-        empty_done = (
-            last_event_type == "done" and seen_any_event and not seen_content
-        )
         final_status: str = (
             "timed_out"
             if state.reason == "timeout"
             else "cancelled"
             if state.reason == "cancelled"
             else "failed"
-            if saw_error or empty_done
+            if state.reason == "stalled" or saw_error or empty_done
             else "done"
             if last_event_type == "done"
             else "failed"
@@ -722,14 +727,6 @@ class TaskQueue:
                         }
                     )
                     run.steps_json = json.dumps(steps[-MAX_STEPS:])
-                    self._notify_in_app(
-                        session,
-                        task,
-                        "needs_input",
-                        f"Task #{task.id} needs approval",
-                        repo=repo,
-                        run_id=run.id,
-                    )
 
         # Push a terminal notification (done/failed/timed_out/cancelled or a
         # needs_approval publish failure), with the agent's final message. The
@@ -842,10 +839,16 @@ class TaskQueue:
                         logger.debug("working-tree diff capture failed for task %s", task.id)
                 run.steps_json = json.dumps(steps[-MAX_STEPS:])
 
+        # The terminal run/task state is the primary outcome. Persist it before
+        # opening the notification's independent transaction: auto-publish
+        # checks above may have autoflushed these rows, which otherwise holds a
+        # SQLite writer lock while the auxiliary session tries to insert.
+        session.commit()
+
         last_msg = attention.last_message_text(steps)
         if (
             run.status in attention.WAITING_INPUT_STATUSES
-            and attention.is_waiting_message(last_msg)
+            and attention.is_explicit_approval_request(last_msg)
         ):
             self._notify_in_app(
                 session,
@@ -857,7 +860,14 @@ class TaskQueue:
                 run_id=run.id,
             )
         elif task.status == "needs_approval":
-            pass  # Already notified when assigned above
+            self._notify_in_app(
+                session,
+                task,
+                "needs_input",
+                f"Task #{task.id} needs approval",
+                repo=repo,
+                run_id=run.id,
+            )
         elif task.type != "pr_review" and task.status in ("done", "failed", "timed_out"):
             kind = "task_done" if task.status == "done" else "task_failed"
             title = (
@@ -928,22 +938,23 @@ class TaskQueue:
         was stored) falls back the same way.
         """
         enabled = settings.get_setting(session, "enabled_backends")
+        adapters = set(available_adapters())
         if not isinstance(enabled, list) or not enabled:
             # No list configured: known backends pass through, but an
             # unknown/removed cli can never dispatch — fail safe.
-            if cli in available_adapters():
+            if cli in adapters:
                 return cli
             logger.warning("backend %s is not installed; running on opencode instead", cli)
             return "opencode"
-        if cli in enabled and cli in available_adapters():
+        if cli in enabled and cli in adapters:
             return cli
         # Prefer a fallback the registry still knows; only when every
         # enabled entry is gone do we keep the legacy first-enabled pick.
-        known = [c for c in enabled if isinstance(c, str) and c and c in available_adapters()]
+        known = [c for c in enabled if isinstance(c, str) and c and c in adapters]
         fallback = known[0] if known else next(
             (c for c in enabled if isinstance(c, str) and c), "opencode"
         )
-        reason = "not installed" if cli not in available_adapters() else "disabled"
+        reason = "not installed" if cli not in adapters else "disabled"
         logger.warning("backend %s is %s; running on %s instead", cli, reason, fallback)
         return fallback
 
@@ -1521,7 +1532,9 @@ class TaskQueue:
         surfaces in the UI as ``needs_you`` (attention branch 1) + the ntfy
         ``notify_on_needs_approval`` push instead.
         """
-        return attention.is_waiting_message(TaskQueue._last_message(session, task_id))
+        return attention.is_explicit_approval_request(
+            TaskQueue._last_message(session, task_id)
+        )
 
     def _notify_enabled(self, session, key: str) -> bool:
         """Whether notifications are configured AND this event type is on."""
@@ -1624,7 +1637,14 @@ class TaskQueue:
         repo: Repo | None = None,
         run_id: int | None = None,
     ) -> None:
-        """Best-effort recording of an in-app persistent notification (never fails the task)."""
+        """Record a notification in an isolated transaction (best effort).
+
+        Terminal task/run mutations remain pending on the worker session until
+        the run completes. Notification persistence must not commit or roll
+        back that session: a database failure here is auxiliary, not a reason
+        to leave the task marked ``running``.
+        """
+        own_session = None
         try:
             if body is None:
                 repo_full_name = repo.full_name if repo is not None else ""
@@ -1633,8 +1653,9 @@ class TaskQueue:
                     if r is not None:
                         repo_full_name = r.full_name
                 body = f"{task.type} task in {repo_full_name}".strip()
+            own_session = Session()
             notifications.notify(
-                session,
+                own_session,
                 task_id=task.id,
                 run_id=run_id,
                 kind=kind,
@@ -1642,15 +1663,17 @@ class TaskQueue:
                 body=body,
             )
         except Exception:
-            # A failed notification write must not poison the caller's session:
-            # roll back so the next commit cannot raise PendingRollbackError.
-            try:
-                session.rollback()
-            except Exception:
-                pass
+            if own_session is not None:
+                try:
+                    own_session.rollback()
+                except Exception:
+                    pass
             logger.warning(
                 "recording in-app notification for task %s failed", task.id, exc_info=True
             )
+        finally:
+            if own_session is not None:
+                own_session.close()
 
     def _prior_conversation(self, run) -> str:
         """Extract a compact "prior conversation" from a run's (masked) timeline.
@@ -2909,8 +2932,6 @@ class TaskQueue:
                 task.id,
                 pr_number,
             )
-            return
-        if task.type != "issue_fix":
             return
         try:
             issue_numbers = json.loads(task.issues_json) if task.issues_json else []

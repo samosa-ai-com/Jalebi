@@ -96,7 +96,7 @@ Index: `task_id`.
 | `pat_name` | text null | account override for the resume |
 | `model` | text null | model override for the resume |
 | `cli` | text null | backend override for the resume (NULL = task backend reused) |
-| `created_at` | datetime | |
+| `created_at` | datetime | application timestamp (`screening.py` is the sole writer) |
 
 Index: `task_id`.
 
@@ -236,7 +236,7 @@ distinct in UNIQUE constraints).
 
 Index: `screening_id`. Powers two behaviors: the audit prompt's known-open
 context (`get_open_findings`) and dealt filtering in ntfy notifications.
-Migration: `e7f8a9b0c1d2` (head). See `docs/07`.
+Migration: `e7f8a9b0c1d2`; the current schema head is `b4c5d6e7f8a9`. See `docs/07`.
 
 ### `check_runs` (Phase 2 — PRD F15)
 
@@ -324,6 +324,11 @@ is versioned (`catalog_seed_version` setting) — see `docs/15-catalog.md` §8.
 | `read_at` | datetime null | null means unread |
 | `created_at` | datetime | default now, server_default `CURRENT_TIMESTAMP` |
 
+Indexes: `(task_id, created_at)`, `(created_at)`, and the partial unique
+`(task_id, kind) WHERE read_at IS NULL`. The last is the database-enforced
+unread-dedup invariant: reading a notification permits a later event of the
+same kind to create a new row.
+
 Indexes: `(task_id, created_at)`, `(created_at)`.
 
 ## 3. Relationships (Phase 0 + Phase 1 catalog + reviewers)
@@ -375,8 +380,7 @@ None — all Phase-0/1/2 tables are materialized. (Phase 3 adds no new tables.)
 - **Delete cascade (`tasks.delete_tasks_cascade`):** TaskDependency → Followup → ReviewAssignment → **CheckRun** → Artifact → Run → Task, plus the task's `task_events` rows (deleted by the caller in prune; the task-delete route relies on FK CASCADE for events). `check_runs.task_id`/`run_id` carry **no** `ON DELETE CASCADE` (the SQLite batch-rebuild hazard), so check runs are deleted explicitly — deleting a task that ever reported a commit status would otherwise `IntegrityError` under `PRAGMA foreign_keys=ON`.
   - `tasks.status` widened to include `"blocked"` (T4.1). A blocked task sits with deps unmet; cleared by `cascade_unblock` when the last unsatisfied dep finishes.
 
-- **Task Notifications (`a2b3c4d5e6f7_notifications.py`):**
+- **Task Notifications (`a2b3c4d5e6f7_notifications.py` + `b4c5d6e7f8a9_notification_dedup.py`):**
   - `notifications(id PK, task_id FK→tasks ON DELETE CASCADE, run_id FK→runs ON DELETE CASCADE, kind, title, body, read_at, created_at)`
-  - Indexes: `(task_id, created_at)` and `(created_at)`.
+  - Indexes: `(task_id, created_at)`, `(created_at)`, and partial-unique `(task_id, kind) WHERE read_at IS NULL` (the migration first retains the newest row of any historic duplicate group).
   - Records persistent notifications on terminal states (`task_done`, `task_failed`) and input requests (`needs_input`). Unread deduplication on `(task_id, kind)` avoids retry spam; bounded retention automatically prunes older rows keeping the newest 500.
-

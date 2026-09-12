@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
 from sqlalchemy import delete, select
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from jalebi import clock
@@ -68,34 +69,44 @@ def notify(
     if kind not in KINDS:
         raise ValueError(f"Invalid notification kind: {kind!r}. Expected one of {KINDS}")
 
-    existing = session.execute(
-        select(Notification.id).where(
+    result = session.execute(
+        sqlite_insert(Notification)
+        .values(
+            task_id=task_id,
+            run_id=run_id,
+            kind=kind,
+            title=title,
+            body=body,
+            read_at=None,
+        )
+        .on_conflict_do_nothing(
+            index_elements=("task_id", "kind"),
+            index_where=Notification.read_at.is_(None),
+        )
+    )
+    if not result.rowcount:
+        return None
+
+    row = session.execute(
+        select(Notification)
+        .where(
             Notification.task_id == task_id,
             Notification.kind == kind,
             Notification.read_at.is_(None),
-        ).limit(1)
-    ).scalar_one_or_none()
+        )
+        .order_by(Notification.id.desc())
+        .limit(1)
+    ).scalar_one()
 
-    if existing is not None:
-        return None
-
-    row = Notification(
-        task_id=task_id,
-        run_id=run_id,
-        kind=kind,
-        title=title,
-        body=body,
-        read_at=None,
-    )
-    session.add(row)
+    prune_notifications(session, limit=MAX_NOTIFICATIONS, commit=False)
     session.commit()
     session.refresh(row)
-
-    prune_notifications(session, limit=MAX_NOTIFICATIONS)
     return row
 
 
-def prune_notifications(session: Session, limit: int = MAX_NOTIFICATIONS) -> int:
+def prune_notifications(
+    session: Session, limit: int = MAX_NOTIFICATIONS, *, commit: bool = True
+) -> int:
     """Prune the notifications table to keep only the newest `limit` rows (delete older ids)."""
     cutoff_id = session.execute(
         select(Notification.id)
@@ -108,7 +119,8 @@ def prune_notifications(session: Session, limit: int = MAX_NOTIFICATIONS) -> int
         res = session.execute(
             delete(Notification).where(Notification.id <= cutoff_id)
         )
-        session.commit()
+        if commit:
+            session.commit()
         return int(res.rowcount or 0)
     return 0
 
@@ -117,8 +129,9 @@ def list_notifications(
     session: Session,
     unread_only: bool = False,
     limit: int = 50,
+    before_id: int | None = None,
 ) -> list[dict[str, object]]:
-    """List notifications newest-first as dicts."""
+    """List one newest-first notification page, optionally before an id."""
     stmt = (
         select(Notification, Task)
         .outerjoin(Task, Notification.task_id == Task.id)
@@ -126,6 +139,8 @@ def list_notifications(
     )
     if unread_only:
         stmt = stmt.where(Notification.read_at.is_(None))
+    if before_id is not None:
+        stmt = stmt.where(Notification.id < before_id)
     if limit is not None and limit > 0:
         stmt = stmt.limit(limit)
 

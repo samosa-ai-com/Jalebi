@@ -1,4 +1,5 @@
 import time
+from email.utils import formatdate
 
 import pytest
 
@@ -538,6 +539,16 @@ def test_retry_wait_classifies_only_rate_limits() -> None:
     assert GitHubClient._retry_wait(429, {"Retry-After": "-5"}) == 0.0  # never negative
 
 
+def test_retry_wait_parses_http_date_and_handles_malformed_headers(monkeypatch) -> None:
+    monkeypatch.setattr("jalebi.github.time.time", lambda: 100.0)
+    retry_at = formatdate(110.0, usegmt=True)
+    assert GitHubClient._retry_wait(429, {"Retry-After": retry_at}) == 10.0
+    assert GitHubClient._retry_wait(429, {"Retry-After": "not-a-date"}) == 1.0
+    assert GitHubClient._retry_wait(
+        403, {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "not-a-time"}
+    ) == 1.0
+
+
 def test_send_retries_429_then_succeeds(monkeypatch) -> None:
     sleeps: list[float] = []
     monkeypatch.setattr("jalebi.github.time.sleep", lambda s: sleeps.append(s))
@@ -594,6 +605,21 @@ def test_send_does_not_retry_plain_403(monkeypatch) -> None:
     monkeypatch.setattr(client._http, "request", fake)
     status, _, _ = client._request("GET", "/x")
     assert status == 403 and calls == 1 and sleeps == []
+
+
+def test_send_does_not_retry_rate_limited_write(monkeypatch) -> None:
+    calls = 0
+
+    def fake(method, path, **kwargs):
+        nonlocal calls
+        calls += 1
+        return _make_response(429, None, {"Retry-After": "1"})
+
+    client = make_client()
+    monkeypatch.setattr(client._http, "request", fake)
+    status, _, _ = client._request("POST", "/x", json={"value": True})
+    assert status == 429
+    assert calls == 1
 
 
 def test_send_gives_up_after_max_retries(monkeypatch) -> None:

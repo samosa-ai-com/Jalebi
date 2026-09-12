@@ -122,6 +122,27 @@ _PHRASES = (
     "approval",
 )
 
+# Side effects (posting an issue link or a PR review) need a stricter signal
+# than the UI's broad "this terminal message appears to need attention"
+# heuristic. In particular, an otherwise successful agent may end a summary
+# with an ordinary question; that must not suppress its delivery announcement.
+_EXPLICIT_APPROVAL_PHRASES = (
+    "please approve",
+    "waiting for your approval",
+    "awaiting your approval",
+    "your approval",
+    "approval needed",
+    "please confirm",
+    "shall i proceed",
+    "shall i post",
+    "should i proceed",
+    "may i proceed",
+    "do you want me to",
+    "want me to",
+    "go ahead",
+    "ready to proceed",
+)
+
 
 def is_waiting_message(text: str) -> bool:
     if not text or not text.strip():
@@ -130,6 +151,19 @@ def is_waiting_message(text: str) -> bool:
     if lowered.rstrip().endswith("?"):
         return True
     return any(phrase in lowered for phrase in _PHRASES)
+
+
+def is_explicit_approval_request(text: str) -> bool:
+    """Whether a terminal message explicitly asks the owner to authorize work.
+
+    This deliberately excludes a bare trailing ``?``. The UI may still show a
+    generic question as attention-worthy, but external delivery effects must
+    only pause for a concrete approval/confirmation request.
+    """
+    if not text or not text.strip():
+        return False
+    lowered = text.lower()
+    return any(phrase in lowered for phrase in _EXPLICIT_APPROVAL_PHRASES)
 
 
 def last_message_text(steps: list[dict]) -> str:

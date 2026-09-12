@@ -250,6 +250,31 @@ describe("NotificationBell", () => {
     expect(screen.queryByRole("button", { name: "Mark all read" })).not.toBeInTheDocument();
   });
 
+  it("loads an older notification page from the cursor", async () => {
+    vi.spyOn(api, "getUnreadCount").mockResolvedValue({ unread: 0 });
+    const firstPage = Array.from({ length: 50 }, (_, i) => ({
+      ...NOTIFICATIONS[0],
+      id: 100 - i,
+      title: `Recent ${i}`,
+    }));
+    const older = [{ ...NOTIFICATIONS[1], id: 49, title: "Older notification" }];
+    const getNotifications = vi.spyOn(api, "getNotifications").mockImplementation(async (opts) =>
+      opts?.beforeId === 51 ? older : firstPage
+    );
+
+    render(
+      <MemoryRouter>
+        <NotificationBell />
+      </MemoryRouter>
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Notifications" }));
+    await screen.findByText("Recent 0");
+    await userEvent.click(screen.getByRole("button", { name: "Load older notifications" }));
+
+    expect(await screen.findByText("Older notification")).toBeInTheDocument();
+    expect(getNotifications).toHaveBeenLastCalledWith({ limit: 50, beforeId: 51 });
+  });
+
   it("closes panel on outside click and on Escape key, restoring focus to bell button", async () => {
     vi.spyOn(api, "getUnreadCount").mockResolvedValue({ unread: 0 });
     vi.spyOn(api, "getNotifications").mockResolvedValue([]);
@@ -445,6 +470,12 @@ describe("Notification API client methods", () => {
     await api.getNotifications({ unreadOnly: true, limit: 10 });
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/notifications?unread_only=true&limit=10",
+      expect.anything()
+    );
+
+    await api.getNotifications({ beforeId: 42 });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/notifications?before_id=42",
       expect.anything()
     );
 

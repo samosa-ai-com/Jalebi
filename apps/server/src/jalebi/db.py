@@ -638,6 +638,16 @@ class Notification(Base):
     __table_args__ = (
         Index("ix_notifications_task_id_created_at", "task_id", "created_at"),
         Index("ix_notifications_created_at", "created_at"),
+        # At most one unread notification of a kind may exist per task. The
+        # partial index lets a later lifecycle event create a fresh row after
+        # the owner has read the previous one.
+        Index(
+            "uq_notifications_unread_task_kind",
+            "task_id",
+            "kind",
+            unique=True,
+            sqlite_where=sa.text("read_at IS NULL"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

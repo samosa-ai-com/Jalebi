@@ -427,10 +427,11 @@ export const api = {
     `/api/tasks/${taskId}/artifacts/${artifactId}/download`,
   artifactContentUrl: (taskId: number, artifactId: number) =>
     `/api/tasks/${taskId}/artifacts/${artifactId}/content`,
-  getNotifications: (opts?: { unreadOnly?: boolean; limit?: number }) => {
+  getNotifications: (opts?: { unreadOnly?: boolean; limit?: number; beforeId?: number }) => {
     const q = new URLSearchParams();
     if (opts?.unreadOnly !== undefined) q.set("unread_only", String(opts.unreadOnly));
     if (opts?.limit !== undefined) q.set("limit", String(opts.limit));
+    if (opts?.beforeId !== undefined) q.set("before_id", String(opts.beforeId));
     const qs = q.toString();
     return request<TaskNotification[]>(`/api/notifications${qs ? `?${qs}` : ""}`);
   },

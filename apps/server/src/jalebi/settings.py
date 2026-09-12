@@ -145,6 +145,9 @@ def seed_defaults(session: Session) -> int:
     # (e.g. retry_policy gained non_retryable_patterns and quota entries long
     # after the row was created) keeps its stored row but gains the missing
     # sub-keys. Stored sub-keys are never overwritten, so owner edits survive.
+    # The retry-policy pattern list is an exception: its shipped members are
+    # safety guards owned by the application, so new defaults are unioned into
+    # an existing list while owner-added members keep their original order.
     backfilled = False
     for key, value in DEFAULTS.items():
         if not isinstance(value, dict):
@@ -167,6 +170,17 @@ def seed_defaults(session: Session) -> int:
             stored.update(missing)
             row.value = json.dumps(stored)
             backfilled = True
+        if key == "retry_policy":
+            default_patterns = value.get("non_retryable_patterns")
+            stored_patterns = stored.get("non_retryable_patterns")
+            if isinstance(default_patterns, list) and isinstance(stored_patterns, list):
+                additions = [
+                    pattern for pattern in default_patterns if pattern not in stored_patterns
+                ]
+                if additions:
+                    stored["non_retryable_patterns"] = [*stored_patterns, *additions]
+                    row.value = json.dumps(stored)
+                    backfilled = True
     if backfilled:
         session.commit()
     return added

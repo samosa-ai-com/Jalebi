@@ -23,12 +23,15 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 import time
+import unicodedata
 from datetime import datetime
 
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from jalebi import clock, masking, notify, secrets, settings, worktree_bootstrap
@@ -255,6 +258,7 @@ _KNOWN_TITLE_CHARS = 200
 _KNOWN_TEXT_CHARS = 400
 
 _END_FENCE = "--- END UNTRUSTED DATA ---"
+_FENCE_CLOSER_RE = re.compile(r"[-\s]*\bend\s+untrusted\s+data\b[\s-]*", re.IGNORECASE)
 
 
 def finding_fingerprint(
@@ -280,8 +284,14 @@ def finding_fingerprint(
     )
 
 
-def validate_fingerprints(fps: object) -> list[str]:
-    """Strictly validate a dealt-fingerprint payload (real list of strings)."""
+def validate_fingerprints(screening_id: int, fps: object) -> list[str]:
+    """Validate canonical fingerprints for one screen's dealt-state mutation.
+
+    The client sends fingerprints because they are also its stable rendering
+    keys.  Treat those strings as structured data rather than opaque tokens:
+    accepting a fingerprint for another screen would store contradictory state
+    (the column says one screen while the JSON says another).
+    """
     if not isinstance(fps, list) or not fps:
         raise ScreeningError("fps must be a non-empty list of fingerprint strings")
     if len(fps) > 200:
@@ -290,7 +300,29 @@ def validate_fingerprints(fps: object) -> list[str]:
     for fp in fps:
         if not isinstance(fp, str) or not fp.strip() or len(fp) > 2000:
             raise ScreeningError("each fp must be a non-empty string (max 2000 chars)")
-        clean.append(fp)
+        try:
+            parsed = json.loads(fp)
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise ScreeningError("each fp must be a canonical finding fingerprint") from exc
+        if (
+            not isinstance(parsed, list)
+            or len(parsed) != 4
+            or isinstance(parsed[0], bool)
+            or not isinstance(parsed[0], int)
+            or parsed[0] != screening_id
+            or not isinstance(parsed[1], str)
+            or not parsed[1]
+            or not isinstance(parsed[2], str)
+            or (
+                parsed[3] is not None
+                and (isinstance(parsed[3], bool) or not isinstance(parsed[3], int))
+            )
+        ):
+            raise ScreeningError("each fp must be a canonical finding fingerprint for screen_id")
+        canonical = finding_fingerprint(screening_id, parsed[1], parsed[2], parsed[3])
+        if fp != canonical:
+            raise ScreeningError("each fp must use canonical finding fingerprint JSON")
+        clean.append(canonical)
     return clean
 
 
@@ -309,25 +341,23 @@ def mark_findings_dealt(
 ) -> int:
     """Idempotently mark fingerprints dealt; returns the newly-added count.
 
-    Concurrent requests (two tabs) can race past the read-then-insert check;
-    the loser hits the unique constraint on commit, which is still a
-    successful idempotent mark — rollback and report zero newly-marked rows
-    instead of surfacing a 500.
+    SQLite resolves each unique-key collision independently, so a concurrent
+    mark of one fingerprint cannot roll back other new fingerprints submitted
+    in the same batch.
     """
-    existing = get_dealt_fingerprints(session, screening_id)
-    added = 0
-    for fp in dict.fromkeys(fingerprints):
-        if fp in existing:
-            continue
-        session.add(ScreeningDealt(screening_id=screening_id, fingerprint=fp))
-        existing.add(fp)
-        added += 1
-    try:
-        session.commit()
-    except IntegrityError:
-        session.rollback()
+    rows = [
+        {"screening_id": screening_id, "fingerprint": fp}
+        for fp in dict.fromkeys(fingerprints)
+    ]
+    if not rows:
         return 0
-    return added
+    result = session.execute(
+        sqlite_insert(ScreeningDealt)
+        .values(rows)
+        .on_conflict_do_nothing(index_elements=("screening_id", "fingerprint"))
+    )
+    session.commit()
+    return int(result.rowcount or 0)
 
 
 def reopen_findings_dealt(
@@ -349,8 +379,29 @@ def reopen_findings_dealt(
 
 
 def _sanitize_untrusted(text: str) -> str:
-    """Strip fence closers from untrusted finding text (delimiter escape)."""
-    return text.replace(_END_FENCE, "[fence removed]")
+    """Return one-line text that cannot terminate the known-findings fence.
+
+    Prior findings are agent-produced and therefore untrusted. Normalize dash
+    variants, reject delimiter-like phrases case-insensitively, and make every
+    control character visible rather than letting it create a new prompt line.
+    The renderer JSON-quotes this result so quotes/backticks cannot change the
+    surrounding field structure either.
+    """
+    normalized = unicodedata.normalize("NFKC", text)
+    normalized = "".join(
+        "-" if unicodedata.category(char) == "Pd" else char for char in normalized
+    )
+    if _FENCE_CLOSER_RE.search(normalized):
+        return "[unsafe content removed]"
+    return "".join(
+        char if ord(char) >= 32 and ord(char) != 127 else f"\\u{ord(char):04x}"
+        for char in normalized
+    )
+
+
+def _quoted_untrusted(value: object) -> str:
+    """Safely render an untrusted field as a single JSON string literal."""
+    return json.dumps(_sanitize_untrusted(str(value)), ensure_ascii=False)
 
 
 def get_open_findings(
@@ -430,10 +481,10 @@ def get_open_findings(
                 items.append(
                     {
                         "screen_id": s.id,
-                        "screen_name": s.name,
+                        "screen_name": s.name[:_KNOWN_TITLE_CHARS],
                         "severity": sev if sev in SEVERITIES else "medium",
                         "title": title[:_KNOWN_TITLE_CHARS],
-                        "file": file,
+                        "file": file[:_KNOWN_TITLE_CHARS] if file else None,
                         "line": line,
                         "detail": detail[:_KNOWN_TEXT_CHARS]
                         if isinstance(detail, str)
@@ -466,26 +517,28 @@ def render_known_findings_section(
         "(new variant, new location, worse impact).",
     ]
     for it in items:
-        title = _sanitize_untrusted(str(it.get("title", "")))
+        title = _quoted_untrusted(it.get("title", ""))
         # Every untrusted rendered field passes through the sanitizer here —
         # the render boundary is the ONLY place a smuggled fence closer can
         # be neutered, and `file`/`screen_name` come from prior untrusted
         # audits just like title/detail do.
+        line = it.get("line")
+        line_text = str(line) if isinstance(line, int) and not isinstance(line, bool) else "?"
         loc = (
-            f" in {_sanitize_untrusted(str(it['file']))}:{it['line']}"
+            f" in {_quoted_untrusted(it['file'])}:{line_text}"
             if it["file"]
             else ""
         )
-        screen_name = _sanitize_untrusted(str(it["screen_name"]))
+        screen_name = _quoted_untrusted(it["screen_name"])
         lines.append(
-            f"- [{it['severity']}] \"{title}\"{loc} "
-            f"(from \"{screen_name}\" screen)"
+            f"- [{it['severity']}] {title}{loc} "
+            f"(from {screen_name} screen)"
         )
         if it["detail"]:
-            lines.append(f"  Detail: {_sanitize_untrusted(str(it['detail']))}")
+            lines.append(f"  Detail: {_quoted_untrusted(it['detail'])}")
         if it["recommendation"]:
             lines.append(
-                f"  Suggested before: {_sanitize_untrusted(str(it['recommendation']))}"
+                f"  Suggested before: {_quoted_untrusted(it['recommendation'])}"
             )
     if omitted:
         lines.append(
@@ -1001,25 +1054,35 @@ class ScreeningEngine:
         from jalebi.queue import TaskQueue
 
         effective_cli = TaskQueue._enabled_cli(session, effective_cli)
-        TaskQueue._require_cli(effective_cli)
+        try:
+            TaskQueue._require_cli(effective_cli)
 
-        # Screening audits *untrusted* repository code (the highest prompt-injection
-        # exposure in the system) — the agent gets no PAT. Codex is the only backend
-        # whose only disk confinement is the OS sandbox; when bwrap user namespaces
-        # are blocked on the host it falls back to ``danger-full-access`` and the
-        # codex guard denies only ``gh``, leaving the agent free to read
-        # ``~/.jalebi/secrets.json`` / ``~/.ssh`` / ``~/.aws``. Opencode and claude
-        # each have a pattern-gate floor (external_directory: deny / PreToolUse hook)
-        # that still confines a *benign-but-confused* agent to the worktree without
-        # an OS sandbox — codex does not. Refuse a codex screening here so the
-        # highest-risk path keeps at least the pattern-gate floor every other
-        # backend has. (`_sandbox_usable` is cached per process; cheap.)
-        if effective_cli == "codex" and not _codex_sandbox_usable():
-            raise ScreeningError(
-                "codex screening requires a working workspace-write sandbox "
-                "(bwrap with user namespaces); this host has it disabled. "
-                "Pick opencode or claude, or fix bwrap (see server log)."
-            )
+            # Screening audits *untrusted* repository code (the highest prompt-injection
+            # exposure in the system) — the agent gets no PAT. Codex is the only backend
+            # whose only disk confinement is the OS sandbox; when bwrap user namespaces
+            # are blocked on the host it falls back to ``danger-full-access`` and the
+            # codex guard denies only ``gh``, leaving the agent free to read
+            # ``~/.jalebi/secrets.json`` / ``~/.ssh`` / ``~/.aws``. Opencode and claude
+            # each have a pattern-gate floor (external_directory: deny / PreToolUse hook)
+            # that still confines a *benign-but-confused* agent to the worktree without
+            # an OS sandbox — codex does not. Refuse a codex screening here so the
+            # highest-risk path keeps at least the pattern-gate floor every other
+            # backend has. (`_sandbox_usable` is cached per process; cheap.)
+            if effective_cli == "codex" and not _codex_sandbox_usable():
+                raise ScreeningError(
+                    "codex screening requires a working workspace-write sandbox "
+                    "(bwrap with user namespaces); this host has it disabled. "
+                    "Pick opencode or claude, or fix bwrap (see server log)."
+                )
+        except Exception as exc:  # preflight still needs a terminal run row
+            masked = masker(str(exc))
+            logger.warning("screening run %s preflight failed: %s", run.id, masked)
+            run.status = "failed"
+            run.error = masked[:2000]
+            run.finished_at = now()
+            session.commit()
+            self.events.close(run.id)
+            raise ScreeningError(str(exc)) from exc
 
         wt = None
         try:
@@ -1031,7 +1094,13 @@ class ScreeningEngine:
             # Open-findings context: tell the agent what is already reported
             # and still open (repo-wide, this screen first) so a rerun after
             # a commit does not re-report the same issues.
-            known_items, known_omitted = get_open_findings(session, screen.id)
+            try:
+                known_items, known_omitted = get_open_findings(session, screen.id)
+            except SQLAlchemyError:
+                # The rerun context is a best-effort dedup aid. A transient
+                # lookup problem must not prevent the underlying audit.
+                logger.warning("known screening findings lookup failed; continuing without context")
+                known_items, known_omitted = [], 0
             known_section = (
                 render_known_findings_section(known_items, known_omitted)
                 if known_items

@@ -6,6 +6,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from jalebi import db, notifications, repos, secrets, settings, tasks
 from jalebi.adapters.types import AgentEvent
@@ -117,6 +118,8 @@ def test_migration_applies_and_downgrades_cleanly() -> None:
             "read_at": "DATETIME",
             "created_at": "DATETIME",
         }
+        cur.execute("PRAGMA index_list(notifications)")
+        assert "uq_notifications_unread_task_kind" in {row[1] for row in cur.fetchall()}
         conn.close()
 
         # Downgrade to down_revision f5a6b7c8d9e0
@@ -126,6 +129,19 @@ def test_migration_applies_and_downgrades_cleanly() -> None:
         cur = conn.cursor()
         cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='notifications'")
         assert cur.fetchone() is None
+        conn.close()
+
+        # Exercise the individual downgrades introduced by the development
+        # batch (followup CLI, address_reviews, and screening dealt), not only
+        # the final notifications downgrade above.
+        command.downgrade(cfg, "d4e5f6a7b8c9")
+        conn = sqlite3.connect(db_path)
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='screening_dealt'")
+        assert cur.fetchone() is None
+        cur.execute("PRAGMA table_info(tasks)")
+        task_columns = {row[1] for row in cur.fetchall()}
+        assert "address_reviews" not in task_columns
         conn.close()
 
 
@@ -183,6 +199,24 @@ def test_notify_dedup(session, repo_row) -> None:
     )
     assert n3 is not None
     assert n3.id != n1.id
+
+
+def test_unread_notification_dedup_is_enforced_by_the_database(session, repo_row) -> None:
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="dedup db")
+    notifications.notify(session, task.id, None, "task_done", "Done")
+    session.add(
+        Notification(
+            task_id=task.id,
+            run_id=None,
+            kind="task_done",
+            title="Duplicate",
+            body=None,
+            read_at=None,
+        )
+    )
+    with pytest.raises(IntegrityError):
+        session.commit()
+    session.rollback()
 
 
 def test_prune_keeps_newest_500(session, repo_row) -> None:
@@ -295,6 +329,32 @@ def test_notification_routes_and_counts(client, session, repo_row) -> None:
     assert resp.get_json() == {"unread": 0}
 
 
+def test_notification_routes_page_before_an_id(client, session, repo_row) -> None:
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="page test")
+    for i in range(3):
+        session.add(
+            Notification(
+                task_id=task.id,
+                run_id=None,
+                kind="task_done",
+                title=f"Older {i}",
+                body=None,
+                read_at=db.now(),
+            )
+        )
+    session.commit()
+
+    first = client.get("/api/notifications?limit=2")
+    assert first.status_code == 200
+    first_items = first.get_json()
+    assert [item["title"] for item in first_items] == ["Older 2", "Older 1"]
+
+    second = client.get(f"/api/notifications?limit=2&before_id={first_items[-1]['id']}")
+    assert second.status_code == 200
+    assert [item["title"] for item in second.get_json()] == ["Older 0"]
+    assert client.get("/api/notifications?before_id=0").status_code == 400
+
+
 def test_notification_dict_omits_task_gracefully(session) -> None:
     """When a task row is missing/deleted, task fields are omitted gracefully."""
     notif = Notification(
@@ -346,6 +406,29 @@ def test_queue_run_done_produces_exactly_one_notification(
     assert notif.kind == "task_done"
     assert notif.title == f"Task #{task.id} done"
     assert FULL_NAME in (notif.body or "")
+
+
+def test_notification_failure_does_not_rollback_terminal_task_state(
+    q, session, repo_row, monkeypatch
+) -> None:
+    settings.set_setting(session, "auto_publish", False)
+    settings.set_setting(session, "retry_policy", {"auto_retry": False})
+    task = tasks.create_task(
+        session, type_="freeform", repo_id=repo_row.id, prompt="isolated notification"
+    )
+    _install_adapter(
+        monkeypatch,
+        FakeHandle([AgentEvent(type="message", text="completed"), AgentEvent(type="done")]),
+    )
+
+    def fail_notify(*_args, **_kwargs):
+        raise RuntimeError("notification database is unavailable")
+
+    monkeypatch.setattr("jalebi.queue.notifications.notify", fail_notify)
+    q._run_task(task.id)
+
+    session.expire_all()
+    assert tasks.get_task(session, task.id).status == "done"
 
 
 def test_queue_run_failed_produces_exactly_one_notification(
@@ -481,4 +564,3 @@ def test_approval_waiting_review_notifies_needs_input_but_not_done(
         select(Notification).where(Notification.task_id == task.id)
     ).scalars().all()
     assert [n.kind for n in notifs] == ["needs_input"]
-

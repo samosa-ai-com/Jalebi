@@ -1247,6 +1247,37 @@ def test_word_stream_messages_coalesce_into_one_step(
     assert messages[0]["text"] == "I'll work through it."
 
 
+def test_coalescing_boundary_preserves_every_bounded_message_chunk(
+    q, session, repo_row, monkeypatch
+) -> None:
+    """A large next chunk flushes the buffer instead of truncating its tail."""
+    from jalebi.queue import MAX_STEP_TEXT
+
+    _no_publish(session)
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
+    first = "a" * 400
+    second = "b" * (MAX_STEP_TEXT - 100)
+    _install_adapter(
+        monkeypatch,
+        FakeHandle(
+            [
+                AgentEvent(type="message", text=first),
+                AgentEvent(type="message", text=second),
+                AgentEvent(type="done"),
+            ]
+        ),
+    )
+    q._run_task(task.id)
+    run = _latest_run(session, task.id)
+    messages = [
+        step["text"]
+        for step in json.loads(run.steps_json or "[]")
+        if step["type"] == "message"
+    ]
+    assert "".join(messages) == first + second
+    assert all(len(text) <= MAX_STEP_TEXT for text in messages)
+
+
 def test_non_message_event_splits_coalesced_messages(
     q, session, repo_row, monkeypatch
 ) -> None:
@@ -1783,6 +1814,37 @@ def test_publish_comments_on_linked_issues(q, session, repo_row, monkeypatch) ->
     assert all("PR #42" in body for _, body in comments)  # FakeGitHubClient.create_pr → 42
 
 
+def test_publish_comments_on_issue_after_an_ordinary_question(
+    q, session, repo_row, monkeypatch
+) -> None:
+    """A normal question in a completion summary is not an approval gate."""
+    settings.set_setting(session, "auto_publish", True)
+    task = tasks.create_task(
+        session, type_="issue_fix", repo_id=repo_row.id, prompt="fix it", issues=[12]
+    )
+    _seed_commit(q, task.id, repo_row)
+    comments: list[int] = []
+
+    class CommentingClient(FakeGitHubClient):
+        def comment_on_issue(self, full_name, number, body):
+            comments.append(number)
+
+    _install_adapter(
+        monkeypatch,
+        FakeHandle(
+            [
+                AgentEvent(type="message", text="Fixed it. Does that cover the issue?"),
+                AgentEvent(type="done"),
+            ]
+        ),
+    )
+    monkeypatch.setattr("jalebi.queue.GitHubClient", CommentingClient)
+    q._run_task(task.id)
+
+    assert _fresh_task(session, task.id).status == "done"
+    assert comments == [12]
+
+
 def test_slow_but_live_stream_is_not_stalled(q, session, repo_row, monkeypatch) -> None:
     """An agent that keeps emitting (never silent for the stall timeout) must
     NOT be stalled (T-9)."""
@@ -1822,6 +1884,28 @@ def test_slow_but_live_stream_is_not_stalled(q, session, repo_row, monkeypatch) 
     # steps, with the first and last tick intact.
     assert len(message_steps) < 150
     assert "tick 0" in merged and "tick 149" in merged
+
+
+def test_stalled_run_is_failed_even_when_handle_emits_done(
+    q, session, repo_row, monkeypatch
+) -> None:
+    """A watchdog kill is not a successful completion just because done follows it."""
+    _no_publish(session)
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
+    _install_adapter(
+        monkeypatch,
+        FakeHandle([AgentEvent(type="message", text="starting"), AgentEvent(type="done")]),
+    )
+
+    def force_stalled(_task, state, _timeout, stall_timeout=None):
+        state.reason = "stalled"
+
+    monkeypatch.setattr(q, "_start_watchdog", force_stalled)
+    q._run_task(task.id)
+    run = _latest_run(session, task.id)
+    assert run.status == "failed"
+    assert _fresh_task(session, task.id).status == "failed"
+    assert any(step.get("stall") for step in json.loads(run.steps_json or "[]"))
 
 
 def test_catalog_agent_applies_cli_model_custom_instructions(
@@ -2262,10 +2346,14 @@ def test_enabled_cli_falls_back_for_unknown_backend(q, session) -> None:
     assert TaskQueue._enabled_cli(session, "goose") == "opencode"
 
 
-def test_is_backend_available() -> None:
-    """Availability is registry + PATH: installed here vs nonsense name."""
+def test_is_backend_available(monkeypatch) -> None:
+    """Availability is registry + PATH, without depending on the test host."""
     from jalebi.adapters import is_backend_available
 
+    monkeypatch.setattr(
+        "jalebi.adapters.shutil.which",
+        lambda cli: "/mock/bin" if cli == "opencode" else None,
+    )
     assert is_backend_available("opencode") is True
     assert is_backend_available("definitely-not-a-cli") is False
 

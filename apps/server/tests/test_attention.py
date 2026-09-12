@@ -81,6 +81,11 @@ def test_trailing_question_marks_waiting() -> None:
     assert attention.is_waiting_message("Proceeding now.") is False
 
 
+def test_explicit_approval_request_excludes_ordinary_questions() -> None:
+    assert attention.is_explicit_approval_request("Does that cover the issue?") is False
+    assert attention.is_explicit_approval_request("Please approve the plan above.") is True
+
+
 @pytest.mark.parametrize("phrase", PHRASES)
 def test_waiting_phrases(phrase: str) -> None:
     assert attention.is_waiting_message(f"I'll be {phrase} your reply.") is True
@@ -363,4 +368,3 @@ def test_attention_for_dismissed_attention_returns_done() -> None:
     task.context_json = json.dumps({"attention_dismissed": True})
     run = _run_with_status(status="failed")
     assert _attn.attention_for(cast(Task, task), cast(Run, run), None) == "done"
-
