@@ -84,7 +84,9 @@ def _review_md_note(nitpick_mode: bool = True) -> str:
     scope = (
         "Include both critical issues and minute nits (typos, style, micro-suggestions)."
         if nitpick_mode
-        else "Focus strictly on blockers, bugs, and significant architectural/correctness issues; omit minute nits, typos, code style, and minor suggestions."
+        else "Focus strictly on blockers, bugs, and significant "
+        "architectural/correctness issues; omit minute nits, typos, code style, "
+        "and minor suggestions."
     )
     return (
         "Write your review to `.jalebi/review.md`: start with an overall verdict, then "
@@ -206,11 +208,13 @@ def build_agent_md(
                 nitpick_mode = bool(val)
 
         depth_instruction = (
-            "Provide a thorough review covering critical issues, logic bugs, architectural concerns, "
+            "Provide a thorough review covering critical issues, logic bugs, "
+            "architectural concerns, "
             "and minute nits (typos, code style, formatting, and micro-suggestions)."
             if nitpick_mode
-            else "Provide a short, high-signal review focusing only on blockers, bugs, and significant "
-            "architectural or security issues. Do not call out minute nits, typos, code style, formatting, or minor micro-suggestions."
+            else "Provide a short, high-signal review focusing only on blockers, bugs, "
+            "and significant architectural or security issues. Do not call out minute "
+            "nits, typos, code style, formatting, or minor micro-suggestions."
         )
         parts += [
             "",

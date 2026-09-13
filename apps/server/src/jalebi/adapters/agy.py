@@ -1,17 +1,28 @@
 """agy (Antigravity) CLI adapter (PRD F4).
 
-Maps ``agy -p … --output-format stream-json`` (agy 1.1.27, verified live
+Maps ``agy -p … --output-format stream-json`` (agy 1.2.2, verified live
 Sep 2026 — see docs/03-adapters.md §10) events onto the normalized
 vocabulary. Official Google product; auth is the owner's OAuth login
 (reused non-interactively — verified live).
 
 Verified facts:
 - 4-event stream: ``init`` (``conversation_id`` = resume key, tools,
-  permission mode) → ``step_update`` (``user_input``/``agent_response`` with
-  ``text_delta``) → ``result`` (``status:"SUCCESS"``, ``response``).
+  ``permission_mode``) → ``step_update`` (``user_input``/``agent_response``
+  with ``text_delta``/``tool`` with nested ``tool_info``) → ``result``
+  (``status:"SUCCESS"``, ``response``, optional ``denied_actions``).
   Exit 0, empty stderr.
+- Tool calls arrive as ``step_type:"tool"`` (``ACTIVE``/``DONE``/``ERROR``,
+  ``tool_info.parameters``/``output``/``error``) — the older flat
+  ``"tool_call"`` shape is still accepted defensively.
+- ``agent_response`` turns without ``text_delta`` (usage-only ``DONE``) are
+  normal mid-run; the ``result.response`` may be the ONLY text, so the
+  per-run parser (``run_parser``) recovers it instead of dropping it.
+- Headless denials (no ``--dangerously-skip-permissions``) auto-deny the
+  tool: the ``tool`` turn goes ``ERROR`` (``tool_info.error.message``),
+  ``result`` stays ``SUCCESS`` with ``denied_actions`` and exit 0, plus a
+  ``jetski:`` notice on stderr.
 - The known ``--print``-drops-stdout-on-non-TTY issue does NOT reproduce on
-  1.1.27 (full stream arrived via pipe).
+  1.2.2 (full stream arrived via pipe).
 - ``--conversation <id>`` / ``--continue`` resume; ``--model`` selects the
   model; ``--dangerously-skip-permissions`` +
   ``--print-timeout`` bound headless runs. ``agy models`` lists ids.
@@ -68,7 +79,8 @@ def _spawn(
 
 def _conversation_data(payload: dict) -> dict | None:
     """Resume key: top-level ``conversation_id``, or nested under the
-    ``step_update``/``result`` envelope."""
+    ``step_update``/``result`` envelope. The ``init`` permission mode
+    (``always-proceed`` vs ``request-review``) rides along for diagnostics."""
     sid = payload.get("conversation_id")
     if sid is None:
         for key in ("step_update", "result"):
@@ -77,7 +89,48 @@ def _conversation_data(payload: dict) -> dict | None:
                 sid = envelope.get("conversation_id")
                 if sid:
                     break
-    return {"session_id": sid} if sid else None
+    if not sid:
+        return None
+    data: dict = {"session_id": sid}
+    init = payload.get("init")
+    if isinstance(init, dict):
+        mode = init.get("permission_mode")
+        if isinstance(mode, str) and mode:
+            data["permission_mode"] = mode
+    return data
+
+
+def _tool_info_parts(info: object) -> tuple[object, object]:
+    """``(input, output)`` from a 1.2.x nested ``tool_info`` envelope.
+
+    ``parameters`` become the input; ``output`` is the output, with a
+    ``TOOL_ERROR`` message appended when the turn errored (e.g. a headless
+    permission denial).
+    """
+    if not isinstance(info, dict):
+        return None, None
+    output = info.get("output")
+    err = info.get("error")
+    if isinstance(err, dict):
+        msg = err.get("message")
+        if isinstance(msg, str) and msg:
+            output = (str(output) + "\n" if output else "") + "error: " + msg
+    return info.get("parameters"), output
+
+
+def _denied_names(result: dict) -> list[str]:
+    """Human-readable names from a ``result.denied_actions`` list."""
+    denied = result.get("denied_actions")
+    if not isinstance(denied, list):
+        return []
+    names: list[str] = []
+    for item in denied:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("display_name") or item.get("action")
+        if isinstance(name, str) and name and name not in names:
+            names.append(name)
+    return names
 
 
 class AgyAdapter(AgentAdapter):
@@ -120,7 +173,7 @@ class AgyAdapter(AgentAdapter):
         env: dict[str, str | None] | None = None,
     ) -> RunHandle:
         args = self._base_args(model) + ["-p", prompt]
-        return RunHandle(proc=_spawn(args, cwd, env), parse=self.parse, name=self.name)
+        return RunHandle(proc=_spawn(args, cwd, env), parse=self.run_parser(), name=self.name)
 
     def resume(
         self,
@@ -133,9 +186,59 @@ class AgyAdapter(AgentAdapter):
         # Resume shape per --help; live follow-up UNVERIFIED (see module
         # docstring). Mirrors start argv + conversation pick.
         args = self._base_args(model) + ["--conversation", session_id, "-p", prompt]
-        return RunHandle(proc=_spawn(args, cwd, env), parse=self.parse, name=self.name)
+        return RunHandle(proc=_spawn(args, cwd, env), parse=self.run_parser(), name=self.name)
+
+    def run_parser(self):
+        """Per-run line parser: ``parse`` plus response recovery.
+
+        ``parse`` is stateless, so a ``result.response`` that arrives with
+        ``status:"SUCCESS"`` is dropped there (text is assumed streamed).
+        On 1.2.x the response is sometimes the ONLY text (textless
+        ``agent_response`` turns), which produced false ``empty_done``
+        failures. This closure tracks whether any message text streamed and
+        recovers exactly that case as one message. The state lives in the
+        closure — one per ``RunHandle`` — so concurrent runs never share it.
+        """
+        seen_text = False
+
+        def parse_line(line: str) -> list[AgentEvent]:
+            nonlocal seen_text
+            events = self.parse(line)
+            for event in events:
+                if event.type == "message" and event.text:
+                    seen_text = True
+            if not events and not seen_text:
+                # Only a SUCCESS result parses to [] — recover its response
+                # when nothing streamed (denials already surfaced as messages
+                # by parse, so reaching here means a bare silent success).
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    return events
+                if isinstance(payload, dict) and payload.get("event") == "result":
+                    result = payload.get("result")
+                    if isinstance(result, dict) and result.get("status") == "SUCCESS":
+                        response = result.get("response")
+                        if isinstance(response, str) and response.strip():
+                            seen_text = True
+                            return [
+                                AgentEvent(
+                                    type="message",
+                                    text=response,
+                                    data=_conversation_data(payload),
+                                )
+                            ]
+            return events
+
+        return parse_line
 
     def parse(self, line: str) -> list[AgentEvent]:
+        """Stateless line parser (interface + unit-test entry point).
+
+        ``result``/``SUCCESS`` responses are dropped here — text is assumed
+        already streamed. Runs use ``run_parser()``, which recovers the
+        response when it turns out to be the only text.
+        """
         try:
             payload = json.loads(line)
         except json.JSONDecodeError:
@@ -153,6 +256,7 @@ class AgyAdapter(AgentAdapter):
             update = payload.get("step_update") or {}
             step_type = update.get("step_type") if isinstance(update, dict) else None
             if step_type == "tool_call":
+                # 1.1.x flat shape (kept defensively).
                 tool_data = {"session_id": (data or {}).get("session_id")}
                 if isinstance(update, dict):
                     tool_data.update(
@@ -163,6 +267,30 @@ class AgyAdapter(AgentAdapter):
                         }
                     )
                 return [AgentEvent(type="tool_call", data=tool_data)]
+            if step_type == "tool":
+                # 1.2.x shape: {"tool_name", "state": ACTIVE/DONE/ERROR,
+                # "tool_info": {"parameters", "output", "error"}}.
+                state = update.get("state") if isinstance(update, dict) else None
+                if state == "ACTIVE":
+                    # Liveness only — the DONE/ERROR turn carries the result.
+                    return [AgentEvent(type="step", phase="step", data=data)]
+                params, output = _tool_info_parts(
+                    update.get("tool_info") if isinstance(update, dict) else None
+                )
+                tool_data = {"session_id": (data or {}).get("session_id")}
+                if isinstance(update, dict):
+                    tool_data.update(
+                        {
+                            "tool": update.get("tool_name"),
+                            "state": state,
+                            "input": params,
+                            "output": output,
+                        }
+                    )
+                # ERROR stays a tool_call (a single denied tool must not fail
+                # the whole run mid-stream — the denial surfaces via the
+                # result's denied_actions message instead).
+                return [AgentEvent(type="tool_call", data=tool_data)]
             if step_type == "agent_response":
                 text = update.get("text_delta") if isinstance(update, dict) else None
                 if isinstance(text, str) and text:
@@ -172,11 +300,29 @@ class AgyAdapter(AgentAdapter):
         if event == "result":
             result = payload.get("result") or {}
             status = result.get("status") if isinstance(result, dict) else None
+            denied = _denied_names(result) if isinstance(result, dict) else []
             if status == "SUCCESS":
+                if denied:
+                    # Headless auto-denial (exit 0): warn visibly instead of
+                    # ending silently with no output.
+                    return [
+                        AgentEvent(
+                            type="message",
+                            text=(
+                                "agy denied headless tool permission for: "
+                                + ", ".join(denied)
+                                + ". Re-run with --dangerously-skip-permissions "
+                                "to auto-approve all tools."
+                            ),
+                            data=data,
+                        )
+                    ]
                 return []  # text already streamed; exit 0 yields done
             text = result.get("message") if isinstance(result, dict) else None
             if not isinstance(text, str) or not text:
                 text = f"agy run failed: {status}"
+            if denied:
+                text += " (denied: " + ", ".join(denied) + ")"
             return [AgentEvent(type="error", text=text, data=data)]
 
         return [AgentEvent(type="message", text=line, data=data)]

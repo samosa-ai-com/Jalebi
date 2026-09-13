@@ -32,6 +32,8 @@ DEFAULTS: dict[str, object] = {
     # Merged ntfy endpoint: a bare topic ("my-jalebi") or a full URL
     # ("https://ntfy.example.com/room"). ntfy_url was folded into this.
     "ntfy_topic": "",
+    # Master on/off switch for the ntfy channel (endpoint preserved while off).
+    "ntfy_enabled": True,
     "default_timeout_minutes": 60,
     # Auto-recovery on failed/timed_out runs. Bounded by max_attempts (a
     # wrong-model/auth failure must not loop forever); each run is bounded

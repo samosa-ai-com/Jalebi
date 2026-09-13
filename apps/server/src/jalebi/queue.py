@@ -801,7 +801,12 @@ class TaskQueue:
         # dirty must not silently look clean. Surface the uncommitted files as a
         # timeline step; if the agent produced NO commits but left work behind,
         # capture the working-tree diff so it is still visible in the diff viewer.
-        if run.status == "done" and task.type != "pr_review":
+        # The same applies to an `empty_done` failure (issue #6): the agent may
+        # have done real file work whose output never streamed (agy 1.2.x drops
+        # textless turns), so the failure timeline must show it instead of an
+        # empty diff. Other failure modes keep the old behavior — a mid-run
+        # crash's dirty tree is not trusted as a deliverable.
+        if (run.status == "done" or empty_done) and task.type != "pr_review":
             try:
                 dirty = git.working_tree_status(worktree)
             except Exception:
@@ -1540,6 +1545,8 @@ class TaskQueue:
 
     def _notify_enabled(self, session, key: str) -> bool:
         """Whether notifications are configured AND this event type is on."""
+        if settings.get_setting(session, "ntfy_enabled") is False:
+            return False
         if not str(settings.get_setting(session, "ntfy_topic") or "").strip():
             return False
         return bool(settings.get_setting(session, key))

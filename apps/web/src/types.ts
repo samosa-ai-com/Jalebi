@@ -216,6 +216,7 @@ export interface SettingsMap {
   review_nitpick_mode?: boolean;
   auto_nudge: boolean;
   ntfy_topic: string;
+  ntfy_enabled: boolean;
   default_timeout_minutes: number;
   retry_policy: RetryPolicy;
   stall_timeout_seconds: number;
