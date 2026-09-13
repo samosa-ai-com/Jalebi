@@ -70,7 +70,7 @@ VERIFIED_VERSIONS: dict[str, str] = {
     "qwen": "0.23.1",
     "cline": "3.0.61",
     "grok": "1.0.13",
-    "commandcode": "1.50.1",
+    "commandcode": "1.53.1",
     "agy": "1.2.2",
 }
 

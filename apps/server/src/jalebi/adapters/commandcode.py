@@ -1,10 +1,14 @@
 """commandcode (Command Code) CLI adapter (PRD F4).
 
-Maps ``commandcode -p … --output-format json`` (commandcode 1.50.1, verified
+Maps ``commandcode -p … --output-format json`` (commandcode 1.53.1, verified
 live Sep 2026 — see docs/03-adapters.md §10) NDJSON events onto the
 normalized vocabulary. Vendor: CommandCodeAI (docs: commandcode.ai/docs).
 
 Verified facts:
+- Turn-level events arrive wrapped in an envelope —
+  ``{"type":"event","event":{…real event…}}`` — which the parser unwraps
+  before mapping; ``run_start``/``run_end``/``result`` stay flat.
+  (1.50.1 emitted everything flat; the envelope appeared by 1.53.1.)
 - 18-line NDJSON run: ``run_start`` (carries ``sessionId``) → turn/message/
   model/thinking/text deltas → ``run_end`` → final ``result`` line
   (``subtype`` first: success/error/max_turns; ``finalText``/``usage``).
@@ -161,6 +165,12 @@ class CommandCodeAdapter(AgentAdapter):
             return [AgentEvent(type="message", text=line)]
         if not isinstance(payload, dict):
             return [AgentEvent(type="message", text=line)]
+
+        # 1.53.x wraps turn-level events: {"type":"event","event":{…}}.
+        # Unwrap so the mapping below sees the real event; anything else
+        # keeps the old verbatim fallback.
+        if payload.get("type") == "event" and isinstance(payload.get("event"), dict):
+            payload = payload["event"]
 
         event_type = payload.get("type")
         data = _session_data(payload)

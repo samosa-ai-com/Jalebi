@@ -191,6 +191,9 @@ def test_parse_success_denied_warns_visibly() -> None:
     assert len(events) == 1
     assert events[0].type == "message"
     assert "RunCommand" in (events[0].text or "")
+    # The skip flag is always passed — never advise re-running with it.
+    assert "already passed" in (events[0].text or "")
+    assert "Re-run with" not in (events[0].text or "")
 
 
 def test_run_parser_recovers_response_only_success() -> None:

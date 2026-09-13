@@ -1,6 +1,6 @@
-"""commandcode CLI adapter tests (PRD F4). Fixture lines mirror the live
-``commandcode -p … --output-format json`` smoke run (commandcode 1.50.1,
-Sep 2026)."""
+"""commandcode CLI adapter tests (PRD F4). Flat fixtures mirror the live
+1.50.1 smoke run; ``EV_`` fixtures mirror the 1.53.x envelope
+(``{"type":"event","event":{…}}``) observed live Sep 2026."""
 
 import io
 
@@ -109,3 +109,56 @@ def test_runhandle_captures_session_id_from_run_start() -> None:
     )
     list(handle.events())
     assert handle.session_id == SESSION_ID
+
+
+# --- 1.53.x envelope (live shapes, Sep 2026) -------------------------------
+
+EV_TEXT_DELTA = (
+    '{"type":"event","event":{"type":"text_delta","sessionId":"' + SESSION_ID + '",'
+    '"delta":" un"}}'
+)
+EV_THINKING_UPDATE = (
+    '{"type":"event","event":{"type":"message_update","sessionId":"' + SESSION_ID + '",'
+    '"content":[{"type":"thinking","thinking":"Both file writes are blocked."}]}}'
+)
+EV_MESSAGE_END = (
+    '{"type":"event","event":{"type":"message_end","sessionId":"' + SESSION_ID + '",'
+    '"message":{"role":"assistant","content":['
+    '{"type":"thinking","text":"wants OK"},'
+    '{"type":"text","text":"OK"}]}}}'
+)
+EV_TOOL_RUNNING = (
+    '{"type":"event","event":{"type":"tool_running","sessionId":"' + SESSION_ID + '",'
+    '"toolCallId":"call_1","toolName":"read","description":"read x"}}'
+)
+EV_TURN_END = (
+    '{"type":"event","event":{"type":"turn_end","sessionId":"' + SESSION_ID + '"}}'
+)
+
+
+def test_parse_enveloped_deltas_silent() -> None:
+    # The task-85 shape: enveloped deltas must not echo raw JSON.
+    assert adapter.parse(EV_TEXT_DELTA) == []
+    assert adapter.parse(EV_THINKING_UPDATE) == []
+    assert adapter.parse(EV_TURN_END)[0].type == "step"
+
+
+def test_parse_enveloped_message_end_emits_text() -> None:
+    events = adapter.parse(EV_MESSAGE_END)
+    assert len(events) == 1
+    assert events[0].type == "message"
+    assert events[0].text == "OK"
+
+
+def test_parse_enveloped_tool_running() -> None:
+    events = adapter.parse(EV_TOOL_RUNNING)
+    assert events[0].type == "tool_call"
+    assert events[0].data is not None
+    assert events[0].data["tool"] == "read"
+
+
+def test_parse_malformed_envelope_falls_back_verbatim() -> None:
+    # Non-dict inner event keeps the old defensive behavior.
+    events = adapter.parse('{"type":"event","event":"oops"}')
+    assert len(events) == 1
+    assert events[0].type == "message"

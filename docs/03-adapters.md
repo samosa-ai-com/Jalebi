@@ -218,15 +218,20 @@ runs fast with a clear non-retryable message (`TaskQueue._require_cli`).
   (`bypassPermissions`; `--always-approve` is the documented alias).
   `list_models` scrapes `grok models` (only `grok-4.6` at validation).
   SIGTERM → 143 with the session still resumable (verified live).
-- **commandcode** (`commandcode -p … --output-format json`, 1.50.1): vendor
-  CommandCodeAI. `run_start` carries the resume `sessionId`; deltas silent,
+- **commandcode** (`commandcode -p … --output-format json`, 1.53.1): vendor
+  CommandCodeAI. Turn-level events arrive wrapped in an envelope
+  (`{"type":"event","event":{…}}`, unwrapped by the parser before mapping;
+  1.50.1 was flat) while `run_start`/`run_end`/`result` stay flat.
+  `run_start` carries the resume `sessionId`; deltas silent,
   `message_end` authoritative, `thinking` silent; terminal `result` line
   (`subtype` first: success/error/max_turns). `-m` takes full or short model
   ids (`xiaomi/mimo-v2.5-pro`). `list_models` parses `--list-models`.
   Resume (`--resume`/`--continue`), signal-kill and `tool_running` frames
   per-docs, not live-exercised. Caveat: per docs `--yolo` is needed for
   file-write/shell tools in headless (default blocks them) — UNVERIFIED, so
-  the adapter stays on the verified `--trust` argv.
+  the adapter stays on the verified `--trust` argv (observed live: review
+  runs fall back to posting the last message when `.jalebi/review.md` cannot
+  be written).
 - **agy** (`agy -p … --output-format stream-json`, 1.2.2): `init` carries
   the resume `conversation_id` plus `permission_mode` (`always-proceed` with
   `--dangerously-skip-permissions`, `request-review` without it);
