@@ -910,6 +910,8 @@ export default function Tasks() {
   const statusAnnouncement = useStatusAnnouncer(tasks);
   const [repos, setRepos] = useState<Repo[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
+  // Loaded for the onboarding checklist's backend step (null = still loading).
+  const [settings, setSettings] = useState<SettingsMap | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterId>("all");
   const [query, setQuery] = useState("");
@@ -963,6 +965,10 @@ export default function Tasks() {
     api
       .getTokens()
       .then((t) => setAccounts(t.accounts ?? []))
+      .catch(() => {});
+    api
+      .getSettings()
+      .then(setSettings)
       .catch(() => {});
   }, []);
 
@@ -1379,6 +1385,8 @@ export default function Tasks() {
             accounts={accounts.length}
             repos={repos.length}
             tasks={tasks.length}
+            hasModelChoice={(settings?.default_model ?? "").trim() !== ""}
+            hasPublishedPr={tasks.some((t) => t.pr_number != null)}
             onStartTask={handleStartTask}
           />
 

@@ -550,7 +550,7 @@ describe("Tasks", () => {
     );
     await screen.findByText("New task");
     expect(screen.getByText("Loading defaults…")).toBeInTheDocument();
-    const submit = screen.getByRole("button", { name: /Loading|Create/ });
+    const submit = screen.getByRole("button", { name: "Loading…" });
     expect(submit).toBeDisabled();
     // The Backend select lives behind the Advanced toggle and is disabled
     // until defaults resolve — a user can't pick a backend that the form
@@ -1616,6 +1616,9 @@ describe("Tasks page (queue overhaul)", () => {
       </MemoryRouter>
     );
     expect(await screen.findByText("Setup")).toBeInTheDocument();
+    // Backend step is auto-done from /api/settings (default_model set).
+    expect(screen.getByTestId("step-backend")).toHaveAttribute("data-done", "true");
+    expect(screen.getByTestId("step-pr")).toHaveAttribute("data-done", "false");
     const taskBtn = screen.getByRole("button", { name: "Create your first task" });
     const newTaskContainer = document.getElementById("new-task");
     expect(newTaskContainer).toBeInTheDocument();
