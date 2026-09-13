@@ -11,6 +11,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, cast
 
+import httpx
 from sqlalchemy import func, select
 
 from jalebi import (
@@ -404,7 +405,9 @@ class TaskQueue:
                 return None
             try:
                 pr = GitHubClient(token).get_pr(full_name, pr_number)
-            except GitHubError:
+            except (GitHubError, httpx.HTTPError, OSError):
+                # Transport failures must not mask the original fetch error —
+                # resolve to None so it surfaces (PR #12 review).
                 logger.debug("pr-head resolver: get_pr failed for %s#%s", full_name, pr_number)
                 return None
             return (pr.get("head_repo"), pr.get("head"))
@@ -847,15 +850,18 @@ class TaskQueue:
                 dirty = []
             if dirty:
                 # Malformed lines are skipped inside _dirty_names — timeline
-                # formatting must never raise before the terminal commit.
+                # formatting must never raise before the terminal commit. When
+                # every line is malformed, fall back to the raw count instead
+                # of an empty name list (PR #12 review).
                 names = self._dirty_names(dirty)
+                detail = f": {names}" if names else ""
                 steps.append(
                     {
                         "type": "message",
                         "phase": None,
                         "text": (
                             f"Agent left {len(dirty)} uncommitted file(s) in the "
-                            f"worktree: {names}."
+                            f"worktree{detail}."
                         ),
                         "ts": clock.to_iso(now()),
                     }

@@ -1801,6 +1801,22 @@ def test_dirty_names_skips_malformed_lines(q) -> None:
         "good.txt, spaced.txt"
     )
     assert q._dirty_names(["", "??"]) == ""
+    assert q._dirty_names(["", "X"]) == ""
+
+
+def test_pr_head_resolver_transport_error_returns_none(q, monkeypatch) -> None:
+    """A transport failure in the resolver must not mask the fetch error."""
+    import httpx
+
+    class BoomClient:
+        def __init__(self, token: str | None) -> None:
+            pass
+
+        def get_pr(self, full_name: str, pr_number: int) -> dict:
+            raise httpx.ConnectError("down")
+
+    monkeypatch.setattr("jalebi.queue.GitHubClient", BoomClient)
+    assert q._pr_head_resolver("owner/repo", 10, "tok")() is None
 
 
 def test_manual_publish_mode_skips_autopublish(q, session, repo_row, monkeypatch) -> None:

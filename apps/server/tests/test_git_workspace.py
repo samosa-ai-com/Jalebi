@@ -503,6 +503,20 @@ def test_fetch_pr_head_double_failure_names_both(
         )
 
 
+def test_fetch_pr_head_raising_resolver_reraises_original(
+    ws: GitWorkspace, remote: str, tmp_path
+) -> None:
+    """A resolver that itself blows up must not mask the fetch error."""
+    _push_pr_branch(tmp_path, remote)
+    ws.ensure_mirror(FULL_NAME, remote)
+
+    def boom():
+        raise RuntimeError("resolver blew up")
+
+    with pytest.raises(GitWorkspaceError, match=r"refs/pull/3/head"):
+        ws.fetch_pr_head(FULL_NAME, 3, pr_head_resolver=boom)
+
+
 def test_merge_task_into_fork_head_merges_cleanly(    ws: GitWorkspace, remote: str, tmp_path
 ) -> None:
     """merge_task_into_fork_head lands the task branch on fork-pr-<N>."""

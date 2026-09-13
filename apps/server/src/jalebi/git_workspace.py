@@ -6,6 +6,7 @@ argv, URLs, or logs.
 """
 
 import base64
+import logging
 import os
 import re
 import stat
@@ -19,6 +20,8 @@ from jalebi.config import Config
 
 BRANCH_PREFIX = "jalebi/"
 GIT_TIMEOUT_SECONDS = 120
+
+logger = logging.getLogger(__name__)
 
 
 class GitWorkspaceError(Exception):
@@ -64,7 +67,12 @@ def _fetch_pr_head_ref(
         _run_git(["-C", str(mirror), "fetch", "origin", pull_spec], auth_env=auth_env)
         return
     except GitWorkspaceError as exc:
-        resolved = head_resolver() if head_resolver is not None else None
+        try:
+            resolved = head_resolver() if head_resolver is not None else None
+        except Exception:
+            # A failing resolver must never mask the original fetch error.
+            logger.debug("pr-head resolver raised for %s#%s", full_name, pr_number)
+            resolved = None
         branch = None
         if resolved:
             head_repo, head_branch = resolved
