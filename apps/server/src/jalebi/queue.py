@@ -846,11 +846,9 @@ class TaskQueue:
             except Exception:
                 dirty = []
             if dirty:
-                # Porcelain lines are "<XY> <path>": drop the two status codes and
-                # any quoting, keep the path.
-                names = ", ".join(
-                    ln.split(None, 1)[1].strip() for ln in dirty[:10]
-                )
+                # Malformed lines are skipped inside _dirty_names — timeline
+                # formatting must never raise before the terminal commit.
+                names = self._dirty_names(dirty)
                 steps.append(
                     {
                         "type": "message",
@@ -1243,6 +1241,36 @@ class TaskQueue:
             session.close()
             self.events.close(task_id)
 
+    @staticmethod
+    def _dirty_names(dirty: list[str]) -> str:
+        """Comma-separated paths from porcelain lines, skipping malformed ones.
+
+        Porcelain lines are ``"<XY> <path>"`` — drop the status codes, keep
+        the path. Blank or single-token lines are skipped so timeline
+        formatting can never raise before the terminal state commits.
+        """
+        paths = []
+        for ln in dirty[:10]:
+            parts = ln.split(None, 1)
+            if len(parts) == 2 and parts[1].strip():
+                paths.append(parts[1].strip())
+        return ", ".join(paths)
+
+    @staticmethod
+    def _resolve_nitpick_mode(session, task: Task) -> bool:
+        """Effective review depth for a review run (PR #10 review finding 1).
+
+        A per-task ``review_nitpick_mode`` already in the task context wins
+        and is left untouched; otherwise the global setting applies and is
+        stamped onto the context for reproducibility.
+        """
+        existing = tasks._review_nitpick_mode(task)
+        if existing is not None:
+            return existing
+        mode = bool(settings.get_setting(session, "review_nitpick_mode"))
+        tasks.stamp_review_nitpick_mode(session, task, mode)
+        return mode
+
     def _run_review(
         self,
         session,
@@ -1294,8 +1322,7 @@ class TaskQueue:
                 token,
                 self._pr_head_resolver(repo.full_name, pr_number, token),
             )
-            nitpick_mode = bool(settings.get_setting(session, "review_nitpick_mode"))
-            tasks.stamp_review_nitpick_mode(session, task, nitpick_mode)
+            self._resolve_nitpick_mode(session, task)
             worktree_bootstrap.bootstrap_worktree(
                 wt,
                 prompts.build_agent_md(task, repo, agent=agent, cli=cli, session=session),

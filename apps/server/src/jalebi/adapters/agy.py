@@ -304,15 +304,21 @@ class AgyAdapter(AgentAdapter):
             if status == "SUCCESS":
                 if denied:
                     # Headless auto-denial (exit 0): warn visibly instead of
-                    # ending silently with no output.
+                    # ending silently with no output. Note the run ALWAYS
+                    # passes --dangerously-skip-permissions (see _base_args),
+                    # so never advise re-running with it — point at the
+                    # allow-rule / permission mode instead (PR #10 review).
                     return [
                         AgentEvent(
                             type="message",
                             text=(
                                 "agy denied headless tool permission for: "
                                 + ", ".join(denied)
-                                + ". Re-run with --dangerously-skip-permissions "
-                                "to auto-approve all tools."
+                                + ". This run already passed "
+                                "--dangerously-skip-permissions; the action "
+                                "needs an explicit allow-rule "
+                                "(permissions.allow in settings.json) or "
+                                "CLI-side approval."
                             ),
                             data=data,
                         )

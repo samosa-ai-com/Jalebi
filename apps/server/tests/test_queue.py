@@ -1771,6 +1771,38 @@ def test_empty_done_run_with_uncommitted_changes_is_surfaced(
     assert "changed" in run.diff_text
 
 
+def test_resolve_nitpick_mode_prefers_task_context(q, session, repo_row) -> None:
+    """A per-task review_nitpick_mode=False survives a global True (PR #10)."""
+    settings.set_setting(session, "review_nitpick_mode", True)
+    task = tasks.create_task(
+        session,
+        type_="pr_review",
+        repo_id=repo_row.id,
+        prompt="review it",
+        context={"review_nitpick_mode": False},
+    )
+    assert q._resolve_nitpick_mode(session, task) is False
+    assert json.loads(task.context_json).get("review_nitpick_mode") is False
+
+
+def test_resolve_nitpick_mode_stamps_global_when_absent(q, session, repo_row) -> None:
+    """No per-task value → global applies and is stamped for reproducibility."""
+    settings.set_setting(session, "review_nitpick_mode", True)
+    task = tasks.create_task(
+        session, type_="pr_review", repo_id=repo_row.id, prompt="review it"
+    )
+    assert q._resolve_nitpick_mode(session, task) is True
+    assert json.loads(task.context_json).get("review_nitpick_mode") is True
+
+
+def test_dirty_names_skips_malformed_lines(q) -> None:
+    """Blank/single-token porcelain lines never break timeline formatting."""
+    assert q._dirty_names([" M good.txt", "", "??", "??  spaced.txt  "]) == (
+        "good.txt, spaced.txt"
+    )
+    assert q._dirty_names(["", "??"]) == ""
+
+
 def test_manual_publish_mode_skips_autopublish(q, session, repo_row, monkeypatch) -> None:
     """A task with publish_mode='manual' must NOT auto-publish even when the
     global auto_publish setting is true."""
