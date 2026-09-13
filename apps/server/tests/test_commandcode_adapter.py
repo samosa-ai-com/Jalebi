@@ -162,3 +162,17 @@ def test_parse_malformed_envelope_falls_back_verbatim() -> None:
     events = adapter.parse('{"type":"event","event":"oops"}')
     assert len(events) == 1
     assert events[0].type == "message"
+
+
+def test_parse_outer_only_session_id_is_kept() -> None:
+    # Belt-and-braces: a sessionId carried only on the envelope survives.
+    line = (
+        '{"type":"event","sessionId":"' + SESSION_ID + '",'
+        '"event":{"type":"message_end",'
+        '"message":{"role":"assistant","content":[{"type":"text","text":"Hi"}]}}}'
+    )
+    events = adapter.parse(line)
+    assert len(events) == 1
+    assert events[0].type == "message"
+    assert events[0].text == "Hi"
+    assert events[0].session_id == SESSION_ID

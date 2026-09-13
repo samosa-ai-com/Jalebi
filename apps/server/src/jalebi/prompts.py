@@ -169,7 +169,14 @@ def build_agent_md(
                 else:
                     parts.append(f"- `@.claude/skills/{name}/SKILL.md`")
 
-    ctx = json.loads(task.context_json) if task.context_json else {}
+    # Defensive: legacy/corrupt context rows must never crash prompt building
+    # (same pattern as tasks._review_nitpick_mode).
+    try:
+        ctx = json.loads(task.context_json) if task.context_json else {}
+    except (TypeError, ValueError):
+        ctx = {}
+    if not isinstance(ctx, dict):
+        ctx = {}
     issues = ctx.get("issues") or []
     prs = ctx.get("prs") or []
 
@@ -204,8 +211,8 @@ def build_agent_md(
             nitpick_mode = ctx["review_nitpick_mode"]
         elif session is not None:
             val = settings.get_setting(session, "review_nitpick_mode")
-            if val is not None:
-                nitpick_mode = bool(val)
+            if isinstance(val, bool):
+                nitpick_mode = val
 
         depth_instruction = (
             "Provide a thorough review covering critical issues, logic bugs, "

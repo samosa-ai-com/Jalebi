@@ -103,9 +103,9 @@ def _conversation_data(payload: dict) -> dict | None:
 def _tool_info_parts(info: object) -> tuple[object, object]:
     """``(input, output)`` from a 1.2.x nested ``tool_info`` envelope.
 
-    ``parameters`` become the input; ``output`` is the output, with a
-    ``TOOL_ERROR`` message appended when the turn errored (e.g. a headless
-    permission denial).
+    ``parameters`` become the input; ``output`` is the output, with an
+    ``error: <message>`` line appended when the turn errored (e.g. a
+    headless permission denial).
     """
     if not isinstance(info, dict):
         return None, None
@@ -211,6 +211,8 @@ class AgyAdapter(AgentAdapter):
                 # Only a SUCCESS result parses to [] — recover its response
                 # when nothing streamed (denials already surfaced as messages
                 # by parse, so reaching here means a bare silent success).
+                # Deliberate re-parse: parse() is stateless, so the wrapper
+                # re-reads the line to recover the response text here.
                 try:
                     payload = json.loads(line)
                 except json.JSONDecodeError:

@@ -1802,6 +1802,9 @@ def test_dirty_names_skips_malformed_lines(q) -> None:
     )
     assert q._dirty_names(["", "??"]) == ""
     assert q._dirty_names(["", "X"]) == ""
+    many = [f" M f{i}.txt" for i in range(12)]
+    assert q._dirty_names(many).endswith("(+2 more)")
+    assert "f0.txt" in q._dirty_names(many)
 
 
 def test_pr_head_resolver_transport_error_returns_none(q, monkeypatch) -> None:

@@ -183,8 +183,62 @@ def test_agent_md_pr_review_reads_session_setting(session) -> None:
     assert "omit minute nits" in md_off
 
 
-def _pr_context() -> dict:
-    return {
+def _repo(session):
+    repo = Repo(
+        full_name="owner/repo",
+        default_branch="main",
+        clone_url="https://github.com/owner/repo.git",
+        pat_name="test",
+    )
+    session.add(repo)
+    session.commit()
+    return repo
+
+
+def test_agent_md_tolerates_corrupt_context(session) -> None:
+    """Garbage context_json must never crash prompt building (PR #13)."""
+    from jalebi.settings import set_setting
+
+    repo = _repo(session)
+    set_setting(session, "review_nitpick_mode", False)
+    for bad in ("{", "[]", ""):
+        task = _task(session, repo, type_="pr_review", prs=[7])
+        task.context_json = bad
+        md = prompts.build_agent_md(task, repo, session=session)
+        assert isinstance(md, str) and md
+
+
+def test_agent_md_corrupt_global_fails_open(session) -> None:
+    """A non-bool stored setting reads as the default (thorough)."""
+    from jalebi.settings import set_setting
+
+    repo = _repo(session)
+    task = _task(
+        session,
+        repo,
+        type_="pr_review",
+        prs=[7],
+        context={
+            "prs": [
+                {
+                    "number": 7,
+                    "title": "Feature",
+                    "body": "Adds x",
+                    "html_url": "u",
+                    "base": "main",
+                    "head": "feature/x",
+                    "state": "open",
+                    "author": "bob",
+                }
+            ]
+        },
+    )
+    set_setting(session, "review_nitpick_mode", "false")
+    md = prompts.build_agent_md(task, repo, session=session)
+    assert "minute nits" in md
+
+
+def _pr_context() -> dict:    return {
         "prs": [
             {
                 "number": 7,

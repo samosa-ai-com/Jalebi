@@ -61,6 +61,12 @@ def _fetch_pr_head_ref(
     identical content for same-repo PRs. Fork heads live on another remote,
     so a fork (or unresolvable) head re-raises the original error; a failed
     branch fetch raises naming both attempts.
+
+    Note: callers invoke this under the per-repo mirror lock, so on the rare
+    missing-ref path the resolver's synchronous API call briefly serializes
+    other tasks on the same repo. Deliberate trade-off — resolving outside
+    the lock would need a fetch→release→resolve→re-acquire dance for a path
+    that almost never runs.
     """
     pull_spec = f"refs/pull/{pr_number}/head:{ref}"
     try:

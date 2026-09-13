@@ -69,8 +69,12 @@ def _session_data(payload: dict) -> dict | None:
     return {"session_id": sid} if sid else None
 
 
-def _content_events(content) -> list[AgentEvent]:
-    """Map a ``message_end.content[]`` array. ``thinking`` → silent."""
+def _content_events(content, data: dict | None = None) -> list[AgentEvent]:
+    """Map a ``message_end.content[]`` array. ``thinking`` → silent.
+
+    ``data`` (resume key) rides on every emitted event so turns never lose
+    their session, whether it came from the flat line or the envelope.
+    """
     if not isinstance(content, list):
         return []
     events: list[AgentEvent] = []
@@ -81,12 +85,13 @@ def _content_events(content) -> list[AgentEvent]:
         if btype == "text":
             text = block.get("text")
             if isinstance(text, str) and text:
-                events.append(AgentEvent(type="message", text=text))
+                events.append(AgentEvent(type="message", text=text, data=data))
         elif btype in ("tool_use", "tool_running"):
             events.append(
                 AgentEvent(
                     type="tool_call",
                     data={
+                        **(data or {}),
                         "tool": block.get("toolName") or block.get("name"),
                         "tool_use_id": block.get("toolCallId") or block.get("id"),
                         "input": block.get("input"),
@@ -168,12 +173,15 @@ class CommandCodeAdapter(AgentAdapter):
 
         # 1.53.x wraps turn-level events: {"type":"event","event":{…}}.
         # Unwrap so the mapping below sees the real event; anything else
-        # keeps the old verbatim fallback.
+        # keeps the old verbatim fallback. The resume key is read from the
+        # inner event first, then the envelope (currently always inner —
+        # the outer read is belt-and-braces for future shapes).
+        outer = payload
         if payload.get("type") == "event" and isinstance(payload.get("event"), dict):
             payload = payload["event"]
 
         event_type = payload.get("type")
-        data = _session_data(payload)
+        data = _session_data(payload) or _session_data(outer)
 
         if event_type == "run_start":
             # Header carries the resume key; payload is never echoed.
@@ -194,7 +202,7 @@ class CommandCodeAdapter(AgentAdapter):
         if event_type == "message_end":
             message = payload.get("message") or {}
             content = message.get("content") if isinstance(message, dict) else None
-            return _content_events(content)
+            return _content_events(content, data)
         if event_type == "tool_running":
             return _content_events(
                 [
@@ -205,7 +213,8 @@ class CommandCodeAdapter(AgentAdapter):
                         "input": payload.get("input"),
                         "description": payload.get("description"),
                     }
-                ]
+                ],
+                data,
             )
         if event_type == "result":
             if payload.get("subtype") != "success":

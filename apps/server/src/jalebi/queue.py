@@ -1253,14 +1253,18 @@ class TaskQueue:
 
         Porcelain lines are ``"<XY> <path>"`` — drop the status codes, keep
         the path. Blank or single-token lines are skipped so timeline
-        formatting can never raise before the terminal state commits.
+        formatting can never raise before the terminal commit. At most 10
+        names are listed; longer trees get a ``(+N more)`` suffix.
         """
         paths = []
         for ln in dirty[:10]:
             parts = ln.split(None, 1)
             if len(parts) == 2 and parts[1].strip():
                 paths.append(parts[1].strip())
-        return ", ".join(paths)
+        text = ", ".join(paths)
+        if len(dirty) > 10:
+            text += f" (+{len(dirty) - 10} more)" if text else f"+{len(dirty) - 10} more"
+        return text
 
     @staticmethod
     def _resolve_nitpick_mode(session, task: Task) -> bool:
@@ -1273,7 +1277,8 @@ class TaskQueue:
         existing = tasks._review_nitpick_mode(task)
         if existing is not None:
             return existing
-        mode = bool(settings.get_setting(session, "review_nitpick_mode"))
+        val = settings.get_setting(session, "review_nitpick_mode")
+        mode = val if isinstance(val, bool) else True
         tasks.stamp_review_nitpick_mode(session, task, mode)
         return mode
 
