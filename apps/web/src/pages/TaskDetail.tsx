@@ -184,8 +184,11 @@ function PublishButton({
   const [branchInput, setBranchInput] = useState<string>("");
   // The repo's open PRs, fetched so the update_pr picker is not limited to PRs
   // that happened to be linked at task creation (null = still loading).
+  // Branches ride along from the same context call for the push_branch picker.
   const [openPrs, setOpenPrs] = useState<GithubPr[] | null>(null);
   const [prsLoadFailed, setPrsLoadFailed] = useState(false);
+  const [repoBranches, setRepoBranches] = useState<string[] | null>(null);
+  const [branchesLoadFailed, setBranchesLoadFailed] = useState(false);
   const prsLoadedRef = useRef(false);
 
   useEffect(() => {
@@ -195,19 +198,26 @@ function PublishButton({
     prsLoadedRef.current = true;
     let cancelled = false;
     // Without a resolvable account there is nothing to fetch — resolve empty so
-    // the picker just shows linked PRs (state updates only in async callbacks).
-    const load: Promise<GithubPr[]> =
+    // the pickers just show linked PRs / free text (state updates only in async callbacks).
+    const load: Promise<{ prs: GithubPr[]; branches: string[] }> =
       repo && account
-        ? api.getGithubContext(repo, account).then((ctx) => ctx.prs ?? [])
-        : Promise.resolve([]);
+        ? api
+            .getGithubContext(repo, account)
+            .then((ctx) => ({ prs: ctx.prs ?? [], branches: ctx.branches ?? [] }))
+        : Promise.resolve({ prs: [], branches: [] });
     load
-      .then((prs) => {
-        if (!cancelled) setOpenPrs(prs);
+      .then(({ prs, branches }) => {
+        if (!cancelled) {
+          setOpenPrs(prs);
+          setRepoBranches(branches);
+        }
       })
       .catch(() => {
         if (!cancelled) {
           setOpenPrs([]);
+          setRepoBranches([]);
           setPrsLoadFailed(true);
+          setBranchesLoadFailed(true);
         }
       });
     return () => {
@@ -321,12 +331,21 @@ function PublishButton({
               <span>Push to specific branch (no PR)</span>
             </label>
             {advancedMode === "push_branch" && (
-              <input
-                type="text"
-                className="input ml-6 w-fit"
-                placeholder="branch name"
+              <SearchableSelect
+                label="Branch to push to"
                 value={branchInput}
-                onChange={(e) => setBranchInput(e.target.value)}
+                onChange={setBranchInput}
+                allowCustom
+                placeholder={
+                  branchesLoadFailed
+                    ? "couldn't load branches"
+                    : repoBranches === null
+                      ? "loading branches…"
+                      : repoBranches.length === 0
+                        ? "no branches in this repo — type a name"
+                        : "— pick a branch —"
+                }
+                options={repoBranches ?? []}
               />
             )}
           </div>

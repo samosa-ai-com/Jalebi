@@ -1079,21 +1079,45 @@ describe("TaskDetail", () => {
       });
     });
 
-    it("Advanced disclosure exposes push_branch with a branch input", async () => {
-      stubFetchWithPublish(doneTask({ prs: [] }), {
-        status: "done",
-        mode: "push_branch",
-        branch: "feature/manual",
+    it("Advanced disclosure exposes push_branch with a branch picker", async () => {
+      const task = doneTask({
+        prs: [],
+        pat_name: "RB",
+        repo_full_name: "owner/repo",
       });
+      const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === "POST" && url.includes("/publish")) {
+          return {
+            ok: true,
+            json: async () => ({ status: "done", mode: "push_branch", branch: "feature/manual" }),
+          };
+        }
+        if (url.endsWith("/runs")) return { ok: true, json: async () => [task.run ?? RUN] };
+        if (url.includes("/api/tasks")) return { ok: true, json: async () => task };
+        if (url.includes("/api/github/tokens"))
+          return { ok: true, json: async () => ({ accounts: [] }) };
+        if (url.includes("/api/models"))
+          return { ok: true, json: async () => ({ cli: "opencode", models: ["m1"] }) };
+        if (url.includes("/api/github/context")) {
+          return {
+            ok: true,
+            json: async () => ({ issues: [], prs: [], branches: ["main", "feature/manual"] }),
+          };
+        }
+        return { ok: true, json: async () => REPOS };
+      });
+      vi.stubGlobal("fetch", fetchMock);
       renderDetail();
       await screen.findByRole("button", { name: "Publish" });
       await userEvent.click(screen.getByRole("button", { name: "Advanced" }));
       // Pick the "Push to branch" radio.
       const radios = screen.getAllByRole("radio", { name: /Push to specific branch/ });
       await userEvent.click(radios[0]);
-      // Fill the branch input.
-      const branchInput = screen.getByPlaceholderText("branch name");
-      await userEvent.type(branchInput, "feature/manual");
+      // The branch picker lists the repo's branches.
+      await userEvent.click(screen.getByRole("button", { name: "Branch to push to" }));
+      expect(screen.getByRole("option", { name: "main" })).toBeInTheDocument();
+      expect(screen.getByRole("option", { name: "feature/manual" })).toBeInTheDocument();
+      await userEvent.click(screen.getByRole("option", { name: "feature/manual" }));
       // Click "Run" inside the Advanced panel.
       await userEvent.click(screen.getByRole("button", { name: "Run" }));
       const confirm = await screen.findByRole("button", { name: "Confirm" });
@@ -1111,6 +1135,64 @@ describe("TaskDetail", () => {
         };
         expect(body.mode).toBe("push_branch");
         expect(body.branch).toBe("feature/manual");
+      });
+    });
+
+    it("push_branch picker still accepts a custom new branch name", async () => {
+      const task = doneTask({
+        prs: [],
+        pat_name: "RB",
+        repo_full_name: "owner/repo",
+      });
+      const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === "POST" && url.includes("/publish")) {
+          return {
+            ok: true,
+            json: async () => ({ status: "done", mode: "push_branch", branch: "feature/new" }),
+          };
+        }
+        if (url.endsWith("/runs")) return { ok: true, json: async () => [task.run ?? RUN] };
+        if (url.includes("/api/tasks")) return { ok: true, json: async () => task };
+        if (url.includes("/api/github/tokens"))
+          return { ok: true, json: async () => ({ accounts: [] }) };
+        if (url.includes("/api/models"))
+          return { ok: true, json: async () => ({ cli: "opencode", models: ["m1"] }) };
+        if (url.includes("/api/github/context")) {
+          return {
+            ok: true,
+            json: async () => ({ issues: [], prs: [], branches: ["main"] }),
+          };
+        }
+        return { ok: true, json: async () => REPOS };
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      renderDetail();
+      await screen.findByRole("button", { name: "Publish" });
+      await userEvent.click(screen.getByRole("button", { name: "Advanced" }));
+      const radios = screen.getAllByRole("radio", { name: /Push to specific branch/ });
+      await userEvent.click(radios[0]);
+      await userEvent.click(screen.getByRole("button", { name: "Branch to push to" }));
+      await userEvent.type(
+        screen.getByRole("combobox", { name: "Search Branch to push to" }),
+        "feature/new"
+      );
+      await userEvent.click(screen.getByRole("option", { name: /Use custom value/ }));
+      await userEvent.click(screen.getByRole("button", { name: "Run" }));
+      const confirm = await screen.findByRole("button", { name: "Confirm" });
+      await userEvent.click(confirm);
+      await waitFor(() => {
+        const call = vi
+          .mocked(fetch)
+          .mock.calls.find(
+            ([url, init]) => String(url).includes("/api/tasks/7/publish") && init?.method === "POST"
+          );
+        expect(call).toBeDefined();
+        const body = JSON.parse((call?.[1] as RequestInit).body as string) as {
+          mode?: string;
+          branch?: string;
+        };
+        expect(body.mode).toBe("push_branch");
+        expect(body.branch).toBe("feature/new");
       });
     });
 
@@ -1262,6 +1344,13 @@ describe("TaskDetail", () => {
       // The load failure surfaces as the picker's placeholder row.
       expect(screen.getByRole("option", { name: /couldn't load PRs/ })).toBeInTheDocument();
 
+      // The same failed load surfaces in the branch picker too.
+      await userEvent.click(screen.getByRole("radio", { name: /Push to specific branch/ }));
+      await userEvent.click(screen.getByRole("button", { name: "Branch to push to" }));
+      expect(screen.getByRole("option", { name: /couldn't load branches/ })).toBeInTheDocument();
+
+      // Back to update_pr for the publish run below (push_branch needs a branch).
+      await userEvent.click(screen.getByRole("radio", { name: /Update existing PR/ }));
       await userEvent.click(screen.getByRole("button", { name: "Run" }));
       const confirm = await screen.findByRole("button", { name: "Confirm" });
       await userEvent.click(confirm);
