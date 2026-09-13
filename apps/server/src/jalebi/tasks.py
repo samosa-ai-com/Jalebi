@@ -286,6 +286,7 @@ def task_to_dict(
         "prs": json.loads(task.prs_json) if task.prs_json else [],
         "env_vars": json.loads(task.env_vars_json) if task.env_vars_json else [],
         "triggered_by": _triggered_by(task),
+        "review_nitpick_mode": _review_nitpick_mode(task),
         "created_at": clock.to_iso(task.created_at),
         "updated_at": clock.to_iso(task.updated_at),
         "run": run_dict,
@@ -338,6 +339,35 @@ def stamp_triggered_by(session: Session, task, trigger: dict) -> None:
         except (TypeError, ValueError):
             ctx = {}
     ctx["triggered_by"] = trigger
+    task.context_json = json.dumps(ctx)
+    session.commit()
+
+
+def _review_nitpick_mode(task) -> bool | None:
+    """The effective review_nitpick_mode stored in task context, if any."""
+    if not task.context_json:
+        return None
+    try:
+        ctx = json.loads(task.context_json)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(ctx, dict):
+        return None
+    val = ctx.get("review_nitpick_mode")
+    return val if isinstance(val, bool) else None
+
+
+def stamp_review_nitpick_mode(session: Session, task, nitpick_mode: bool) -> None:
+    """Stamp the effective review_nitpick_mode onto a task's context (additive)."""
+    ctx: dict = {}
+    if task.context_json:
+        try:
+            parsed = json.loads(task.context_json)
+            if isinstance(parsed, dict):
+                ctx = parsed
+        except (TypeError, ValueError):
+            ctx = {}
+    ctx["review_nitpick_mode"] = nitpick_mode
     task.context_json = json.dumps(ctx)
     session.commit()
 

@@ -10,8 +10,22 @@ def test_settings_endpoint_returns_defaults(client: FlaskClient) -> None:
     body = resp.get_json()
     assert body["concurrency"] == DEFAULTS["concurrency"]
     assert body["auto_publish"] is DEFAULTS["auto_publish"]
+    assert body["review_nitpick_mode"] is True
     assert body["default_timeout_minutes"] == DEFAULTS["default_timeout_minutes"]
     assert body["ntfy_topic"] == ""
+
+
+def test_review_nitpick_mode_validation_and_update(client: FlaskClient) -> None:
+    resp = client.post("/api/settings", json={"key": "review_nitpick_mode", "value": False})
+    assert resp.status_code == 200
+    body = client.get("/api/settings").get_json()
+    assert body["review_nitpick_mode"] is False
+
+    # Boolean validator rejects non-bool values
+    resp = client.post("/api/settings", json={"key": "review_nitpick_mode", "value": "false"})
+    assert resp.status_code == 400
+    resp = client.post("/api/settings", json={"key": "review_nitpick_mode", "value": 1})
+    assert resp.status_code == 400
 
 
 def test_settings_endpoint_reflects_stored_value(client: FlaskClient) -> None:

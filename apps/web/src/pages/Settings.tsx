@@ -1650,6 +1650,7 @@ export default function Settings() {
         setSettings({
           ...s,
           auto_nudge: s.auto_nudge ?? false,
+          review_nitpick_mode: s.review_nitpick_mode ?? true,
           adapter_model_lists: s.adapter_model_lists ?? {},
           enabled_backends: s.enabled_backends ?? [...AGENT_CLIS],
           retry_policy: {
@@ -2135,6 +2136,18 @@ export default function Settings() {
               checked={settings.auto_publish}
               onChange={(v) => void save("auto_publish", v)}
               ariaLabel="Auto-publish PRs"
+            />
+          </Row>
+          <Row
+            label="Review nitpick mode"
+            desc="Control review depth for PR reviews. On = thorough review including minute nits (typos, style, micro-suggestions); off = short review, blockers and significant issues only."
+            status={badge("review_nitpick_mode")}
+            error={fieldState["review_nitpick_mode"]?.msg}
+          >
+            <Toggle
+              checked={settings.review_nitpick_mode ?? true}
+              onChange={(v) => void save("review_nitpick_mode", v)}
+              ariaLabel="Review nitpick mode"
             />
           </Row>
           <Row

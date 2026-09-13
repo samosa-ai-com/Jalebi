@@ -1249,6 +1249,8 @@ class TaskQueue:
             git = GitWorkspace(self.config)
             git.ensure_mirror(repo.full_name, repo.clone_url, token)
             wt = git.create_review_worktree(task.id, repo.full_name, pr_number, token)
+            nitpick_mode = bool(settings.get_setting(session, "review_nitpick_mode"))
+            tasks.stamp_review_nitpick_mode(session, task, nitpick_mode)
             worktree_bootstrap.bootstrap_worktree(
                 wt,
                 prompts.build_agent_md(task, repo, agent=agent, cli=cli, session=session),
