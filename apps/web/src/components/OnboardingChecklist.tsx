@@ -1,12 +1,32 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 
-export const ONBOARDING_DISMISSED_KEY = "jalebi-onboarding-dismissed";
+// Versioned: the checklist grew 3 → 5 steps, so upgraders who dismissed the
+// old card see the new steps once instead of staying dismissed forever.
+export const ONBOARDING_DISMISSED_KEY = "jalebi-onboarding-dismissed-v2";
+export const ONBOARDING_MANUAL_DONE_KEY = "jalebi-onboarding-manual-done-v1";
+
+function loadManualDone(): Record<string, true> {
+  try {
+    const raw = localStorage.getItem(ONBOARDING_MANUAL_DONE_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : {};
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return Object.fromEntries(
+        Object.entries(parsed as Record<string, unknown>).filter(([, v]) => v === true)
+      ) as Record<string, true>;
+    }
+  } catch {
+    // Corrupt storage falls back to nothing manually completed.
+  }
+  return {};
+}
 
 export interface OnboardingChecklistProps {
   accounts: number;
   repos: number;
   tasks: number;
+  hasModelChoice?: boolean;
+  hasPublishedPr?: boolean;
   onStartTask?: () => void;
 }
 
@@ -14,6 +34,8 @@ export function OnboardingChecklist({
   accounts,
   repos,
   tasks,
+  hasModelChoice = false,
+  hasPublishedPr = false,
   onStartTask,
 }: OnboardingChecklistProps) {
   const [dismissed, setDismissed] = useState(() => {
@@ -23,16 +45,34 @@ export function OnboardingChecklist({
       return false;
     }
   });
+  const [manualDone, setManualDone] = useState<Record<string, true>>(loadManualDone);
 
-  const step1Done = accounts > 0;
-  const step2Done = repos > 0;
-  const step3Done = tasks > 0;
+  function markStepDone(id: string) {
+    setManualDone((prev) => {
+      const next = { ...prev, [id]: true as const };
+      try {
+        localStorage.setItem(ONBOARDING_MANUAL_DONE_KEY, JSON.stringify(next));
+      } catch {
+        // Storage failures (private mode quota) just lose persistence.
+      }
+      return next;
+    });
+  }
 
-  if (dismissed || (step1Done && step2Done && step3Done)) {
+  const autoDone: Record<string, boolean> = {
+    account: accounts > 0,
+    repo: repos > 0,
+    task: tasks > 0,
+    backend: hasModelChoice,
+    pr: hasPublishedPr,
+  };
+  const isDone = (id: string) => autoDone[id] || manualDone[id] === true;
+
+  if (dismissed || Object.keys(autoDone).every(isDone)) {
     return null;
   }
 
-  const doneCount = (step1Done ? 1 : 0) + (step2Done ? 1 : 0) + (step3Done ? 1 : 0);
+  const doneCount = Object.keys(autoDone).filter(isDone).length;
 
   const handleDismiss = () => {
     try {
@@ -47,12 +87,8 @@ export function OnboardingChecklist({
     {
       id: "account",
       label: "Add your GitHub account",
-      done: step1Done,
       action: (
-        <Link
-          to="/github"
-          className={step1Done ? "text-ink-500 line-through" : "link"}
-        >
+        <Link to="/github" className="link">
           Add your GitHub account
         </Link>
       ),
@@ -60,12 +96,8 @@ export function OnboardingChecklist({
     {
       id: "repo",
       label: "Connect a repository",
-      done: step2Done,
       action: (
-        <Link
-          to="/repos"
-          className={step2Done ? "text-ink-500 line-through" : "link"}
-        >
+        <Link to="/repos" className="link">
           Connect a repository
         </Link>
       ),
@@ -73,15 +105,26 @@ export function OnboardingChecklist({
     {
       id: "task",
       label: "Create your first task",
-      done: step3Done,
       action: (
-        <button
-          type="button"
-          onClick={onStartTask}
-          className={step3Done ? "text-ink-500 line-through text-left" : "link text-left"}
-        >
+        <button type="button" onClick={onStartTask} className="link text-left">
           Create your first task
         </button>
+      ),
+    },
+    {
+      id: "backend",
+      label: "Choose your AI backend & model",
+      action: (
+        <Link to="/settings" className="link">
+          Choose your AI backend & model
+        </Link>
+      ),
+    },
+    {
+      id: "pr",
+      label: "Publish your first PR",
+      action: (
+        <span className="text-ink-400">Publish a finished task to open a pull request</span>
       ),
     },
   ];
@@ -92,7 +135,7 @@ export function OnboardingChecklist({
         <div className="flex items-center gap-2">
           <h2 className="panel-title">Setup</h2>
           <span className="text-xs text-ink-500 font-mono">
-            {doneCount} of 3 done
+            {doneCount} of {steps.length} done
           </span>
         </div>
         <button
@@ -106,28 +149,44 @@ export function OnboardingChecklist({
       </div>
 
       <ul className="mt-3 space-y-2">
-        {steps.map((step, idx) => (
-          <li
-            key={step.id}
-            data-testid={`step-${step.id}`}
-            data-done={step.done ? "true" : "false"}
-            className={`flex items-center gap-2.5 text-sm ${
-              step.done ? "text-ink-500" : "text-ink-200"
-            }`}
-          >
-            <span
-              aria-hidden="true"
-              className={`inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold ${
-                step.done
-                  ? "bg-green-500/20 text-green-400 font-bold"
-                  : "border border-ink-700 text-ink-500"
+        {steps.map((step, idx) => {
+          const done = isDone(step.id);
+          return (
+            <li
+              key={step.id}
+              data-testid={`step-${step.id}`}
+              data-done={done ? "true" : "false"}
+              className={`flex items-center gap-2.5 text-sm ${
+                done ? "text-ink-500" : "text-ink-200"
               }`}
             >
-              {step.done ? "✓" : idx + 1}
-            </span>
-            {step.action}
-          </li>
-        ))}
+              <span
+                aria-hidden="true"
+                className={`inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold ${
+                  done
+                    ? "bg-green-500/20 text-green-400 font-bold"
+                    : "border border-ink-700 text-ink-500"
+                }`}
+              >
+                {done ? "✓" : idx + 1}
+              </span>
+              <span className={`min-w-0 flex-1 ${done ? "line-through" : ""}`}>
+                {step.action}
+              </span>
+              {!done && (
+                <button
+                  type="button"
+                  onClick={() => markStepDone(step.id)}
+                  aria-label={`Skip ${step.label} (mark done)`}
+                  title="Mark done (skip this step)"
+                  className="inline-flex min-h-6 shrink-0 items-center text-[11px] text-ink-500 transition-colors hover:text-syrup-300"
+                >
+                  Skip
+                </button>
+              )}
+            </li>
+          );
+        })}
       </ul>
     </div>
   );

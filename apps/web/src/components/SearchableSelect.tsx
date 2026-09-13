@@ -19,6 +19,8 @@ interface SearchableSelectProps {
   staleHint?: string;
   /** Hide the visible label (the label text stays the accessible name). */
   hideLabel?: boolean;
+  /** Optional native tooltip on the visible label (jargon hint; aria-label untouched). */
+  labelTitle?: string;
 }
 
 function norm(o: string | SearchableOption): { value: string; label: string } {
@@ -43,6 +45,7 @@ export default function SearchableSelect({
   allowCustom,
   staleHint = "Not in the known list — will be sent as-is.",
   hideLabel,
+  labelTitle,
 }: SearchableSelectProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -129,7 +132,17 @@ export default function SearchableSelect({
 
   return (
     <div ref={rootRef} className="block">
-      {!hideLabel && <span className="mb-1.5 block text-xs font-medium text-ink-400">{label}</span>}
+      {!hideLabel &&
+        (labelTitle ? (
+          <span
+            className="mb-1.5 block w-fit text-xs font-medium text-ink-400 underline decoration-dotted underline-offset-2"
+            title={labelTitle}
+          >
+            {label}
+          </span>
+        ) : (
+          <span className="mb-1.5 block text-xs font-medium text-ink-400">{label}</span>
+        ))}
       <button
         type="button"
         aria-label={label}

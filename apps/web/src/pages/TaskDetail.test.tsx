@@ -1052,6 +1052,19 @@ describe("TaskDetail", () => {
       });
     });
 
+    it("shows a What-next card pointing at publish for a done task without a PR", async () => {
+      stubFetchWithPublish(doneTask({ prs: [], pr_number: null }), {
+        status: "done",
+        mode: "new_pr",
+        pr_number: 42,
+      });
+      renderDetail();
+      await screen.findByRole("button", { name: "Publish" });
+      expect(
+        await screen.findByRole("button", { name: "Publish to open a pull request" })
+      ).toBeInTheDocument();
+    });
+
     it("defaults to 'Push to PR #N' when a PR was attached at creation", async () => {
       stubFetchWithPublish(doneTask({ prs: [9] }), {
         status: "done",

@@ -14,6 +14,7 @@ import { RunningCard } from "../components/RunningCard";
 import SearchableSelect from "../components/SearchableSelect";
 import { StatusBadge } from "../components/StatusBadge";
 import { useBackends } from "../hooks/useBackends";
+import { GLOSSARY } from "../lib/glossary";
 import { groupFpsByScreen } from "../lib/screeningDealt";
 import { useStatusAnnouncer } from "../lib/useStatusAnnouncer";
 import type { Account, CatalogAgent, GithubContext, Repo, SettingsMap, Task } from "../types";
@@ -109,11 +110,13 @@ function CreateTask({
   accounts,
   onCreated,
   prefill,
+  isFirstTask = false,
 }: {
   repos: Repo[];
   accounts: Account[];
   onCreated: (id?: number) => void;
   prefill: TaskPrefill | null;
+  isFirstTask?: boolean;
 }) {
   const stored = useMemo(() => loadTaskDefaults(), []);
   const [repoId, setRepoId] = useState<number>(prefill?.repoId ?? 0);
@@ -467,6 +470,13 @@ function CreateTask({
           : "The agent works in a private local copy of the repo on its own branch and cannot push. Jalebi publishes the result for you, and merging is always your decision."}
       </p>
 
+      {isFirstTask && (
+        <p className="text-xs text-ink-400">
+          New here? Start with a <span className="font-mono">freeform</span> task — describe
+          what you want in plain words; the agent figures out the rest.
+        </p>
+      )}
+
       <div className="grid gap-4 sm:grid-cols-2">
         <SearchableSelect
           label="Repository"
@@ -681,6 +691,7 @@ function CreateTask({
               />
               <SearchableSelect
                 label="Backend"
+                labelTitle={GLOSSARY.backend}
                 value={agentCli ?? ""}
                 onChange={(v) => {
                   setAgentCli(v);
@@ -910,6 +921,8 @@ export default function Tasks() {
   const statusAnnouncement = useStatusAnnouncer(tasks);
   const [repos, setRepos] = useState<Repo[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
+  // Loaded for the onboarding checklist's backend step (null = still loading).
+  const [settings, setSettings] = useState<SettingsMap | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterId>("all");
   const [query, setQuery] = useState("");
@@ -963,6 +976,10 @@ export default function Tasks() {
     api
       .getTokens()
       .then((t) => setAccounts(t.accounts ?? []))
+      .catch(() => {});
+    api
+      .getSettings()
+      .then(setSettings)
       .catch(() => {});
   }, []);
 
@@ -1379,6 +1396,10 @@ export default function Tasks() {
             accounts={accounts.length}
             repos={repos.length}
             tasks={tasks.length}
+            hasModelChoice={(settings?.default_model ?? "").trim() !== ""}
+            hasPublishedPr={tasks.some(
+              (t) => t.pr_number != null || (t.prs?.length ?? 0) > 0
+            )}
             onStartTask={handleStartTask}
           />
 
@@ -1451,6 +1472,7 @@ export default function Tasks() {
             accounts={accounts}
             onCreated={handleCreated}
             prefill={prefill}
+            isFirstTask={tasks.length === 0 && lastLoaded !== null}
           />
 
           {flash != null && (
@@ -1723,7 +1745,7 @@ export default function Tasks() {
                                   handleDismissAttention(t.id);
                                 }}
                                 className="inline-flex items-center min-h-6 rounded px-1.5 py-0.5 text-[10px] font-medium text-ink-400 ring-1 ring-ink-700/60 hover:bg-ink-800 hover:text-ink-200 transition-colors"
-                                title="Dismiss attention for this task"
+                                title={`Dismiss attention for this task. ${GLOSSARY["dismiss-attention"]}`}
                               >
                                 Dismiss
                               </button>

@@ -74,6 +74,26 @@ describe("SearchableSelect", () => {
     expect(screen.getByText(/not in the known list/i)).toBeInTheDocument();
   });
 
+  it("shows labelTitle as a tooltip while keeping the accessible name", () => {
+    render(
+      <>
+        <SearchableSelect
+          label="Backend"
+          labelTitle="The AI coding assistant that runs the task."
+          value=""
+          onChange={() => {}}
+          options={["opencode"]}
+          placeholder="Pick one"
+        />
+      </>
+    );
+    // The toggle button's accessible name is still the plain label …
+    expect(screen.getByRole("button", { name: "Backend" })).toBeInTheDocument();
+    // … while the visible label carries the hint.
+    const visible = screen.getByText("Backend", { selector: "span" });
+    expect(visible).toHaveAttribute("title", "The AI coding assistant that runs the task.");
+  });
+
   it("offers a custom value when allowCustom", async () => {
     const user = userEvent.setup();
     render(<Harness allowCustom options={[]} />);

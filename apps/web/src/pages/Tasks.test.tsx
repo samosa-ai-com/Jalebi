@@ -550,7 +550,7 @@ describe("Tasks", () => {
     );
     await screen.findByText("New task");
     expect(screen.getByText("Loading defaults…")).toBeInTheDocument();
-    const submit = screen.getByRole("button", { name: /Loading|Create/ });
+    const submit = screen.getByRole("button", { name: "Loading…" });
     expect(submit).toBeDisabled();
     // The Backend select lives behind the Advanced toggle and is disabled
     // until defaults resolve — a user can't pick a backend that the form
@@ -1616,6 +1616,11 @@ describe("Tasks page (queue overhaul)", () => {
       </MemoryRouter>
     );
     expect(await screen.findByText("Setup")).toBeInTheDocument();
+    // Backend step is auto-done from /api/settings (default_model set).
+    expect(screen.getByTestId("step-backend")).toHaveAttribute("data-done", "true");
+    expect(screen.getByTestId("step-pr")).toHaveAttribute("data-done", "false");
+    // Zero tasks: the first-run starter hint shows in the new-task form.
+    expect(await screen.findByText(/New here\? Start with a/)).toBeInTheDocument();
     const taskBtn = screen.getByRole("button", { name: "Create your first task" });
     const newTaskContainer = document.getElementById("new-task");
     expect(newTaskContainer).toBeInTheDocument();
@@ -1623,6 +1628,48 @@ describe("Tasks page (queue overhaul)", () => {
     await userEvent.click(taskBtn);
     expect(window.HTMLElement.prototype.scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth" });
     expect(document.activeElement).toBe(newTaskContainer);
+  });
+
+  it("completes the PR step from the linked-prs array even without pr_number", async () => {
+    const withPrs = [{ ...TASKS[0], prs: [5], pr_number: null }];
+    stubFetch({
+      ...DEFAULT_HANDLERS,
+      "/api/tasks": withPrs,
+      "/api/settings": { default_backend: "opencode", default_model: "" },
+    });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    expect(await screen.findByText("Setup")).toBeInTheDocument();
+    expect(screen.getByTestId("step-pr")).toHaveAttribute("data-done", "true");
+  });
+
+  it("leaves the backend step incomplete until a default model is chosen", async () => {
+    stubFetch({
+      ...DEFAULT_HANDLERS,
+      "/api/tasks": [],
+      "/api/settings": { default_backend: "opencode", default_model: "" },
+    });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    expect(await screen.findByText("Setup")).toBeInTheDocument();
+    expect(screen.getByTestId("step-backend")).toHaveAttribute("data-done", "false");
+  });
+
+  it("hides the first-run starter hint once tasks exist", async () => {
+    stubFetch({ ...DEFAULT_HANDLERS });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    await screen.findByText("New task");
+    expect(screen.queryByText(/New here\? Start with a/)).not.toBeInTheDocument();
   });
 
   it("renders friendly EmptyState when the task queue is empty", async () => {
