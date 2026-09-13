@@ -117,6 +117,41 @@ describe("Github", () => {
     });
   });
 
+  it("warns when a classic token lacks the optional workflow scope", async () => {
+    stubFetch({
+      "/api/github/tokens": {
+        accounts: [ACCOUNT("work", "acct2", { has_workflow: false })],
+      },
+      "/api/github/repos": [],
+      "/api/repos": [],
+    });
+    render(
+      <MemoryRouter>
+        <Github />
+      </MemoryRouter>
+    );
+    await expandAccount("acct2");
+    expect(await screen.findByText("Workflow scope missing (optional)")).toBeInTheDocument();
+  });
+
+  it("notes the Workflows permission for fine-grained accounts", async () => {
+    stubFetch({
+      "/api/github/tokens": {
+        accounts: [ACCOUNT("work", "acct2", { token_type: "fine-grained" })],
+      },
+      "/api/github/repos": [],
+      "/api/repos": [],
+    });
+    render(
+      <MemoryRouter>
+        <Github />
+      </MemoryRouter>
+    );
+    await expandAccount("acct2");
+    expect(await screen.findByText(/can't report their scopes/i)).toBeInTheDocument();
+    expect((await screen.findAllByText("Workflows: read/write")).length).toBeGreaterThan(0);
+  });
+
   it("surfaces the validation error from a rejected add-account POST", async () => {
     let postSeen = false;
     stubFetch({

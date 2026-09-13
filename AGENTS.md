@@ -81,8 +81,8 @@ This is critical and repeated: **all GitHub interaction in this project goes thr
 
 ### 3.4 Scope requirements (PRD §F1) — document, don't guess
 
-- Classic PAT (`repo`) — recommended: `repo` also covers reading GitHub Actions runs/logs (used to inspect a failing workflow and fix it).
-- Fine-grained: Contents read/write, Pull requests read/write, Issues read/write, Metadata read, Commit statuses read/write, Actions read (to read failed workflow logs).
+- Classic PAT (`repo`) — recommended: `repo` also covers reading GitHub Actions runs/logs (used to inspect a failing workflow and fix it). Add `workflow` when tasks may create/update `.github/workflows/*` files (GitHub refuses such pushes without it).
+- Fine-grained: Contents read/write, Pull requests read/write, Issues read/write, Metadata read, Commit statuses read/write, Actions read (to read failed workflow logs), Workflows: read/write (to push workflow files).
 
 ---
 

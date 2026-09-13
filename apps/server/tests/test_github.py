@@ -33,6 +33,7 @@ def test_validate_classic_full_scopes(monkeypatch) -> None:
     assert info.token_type == "classic"
     assert info.granted_scopes == ["repo", "workflow"]
     assert info.missing_scopes == []
+    assert info.has_workflow is True
 
 
 def test_validate_classic_missing_repo(monkeypatch) -> None:
@@ -49,6 +50,23 @@ def test_validate_classic_missing_repo(monkeypatch) -> None:
     assert info.missing_scopes == ["repo"]
 
 
+def test_validate_classic_repo_without_workflow(monkeypatch) -> None:
+    client = make_client()
+    monkeypatch.setattr(
+        client,
+        "_request",
+        lambda method, path, **kw: (
+            200,
+            {"login": "octocat"},
+            {"x-oauth-scopes": "repo"},
+        ),
+    )
+    info = client.validate_token()
+    assert info.valid is True
+    assert info.token_type == "classic"
+    assert info.has_workflow is False
+
+
 def test_validate_fine_grained_no_scope_header(monkeypatch) -> None:
     client = make_client()
     monkeypatch.setattr(
@@ -60,7 +78,9 @@ def test_validate_fine_grained_no_scope_header(monkeypatch) -> None:
     assert info.valid is True
     assert info.token_type == "fine-grained"
     assert info.granted_scopes == []
+    assert info.has_workflow is None
     assert "fine-grained" in (info.note or "")
+    assert "Workflows" in (info.note or "")
 
 
 def test_validate_auth_failure(monkeypatch) -> None:
