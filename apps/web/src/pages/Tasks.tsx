@@ -110,11 +110,13 @@ function CreateTask({
   accounts,
   onCreated,
   prefill,
+  isFirstTask = false,
 }: {
   repos: Repo[];
   accounts: Account[];
   onCreated: (id?: number) => void;
   prefill: TaskPrefill | null;
+  isFirstTask?: boolean;
 }) {
   const stored = useMemo(() => loadTaskDefaults(), []);
   const [repoId, setRepoId] = useState<number>(prefill?.repoId ?? 0);
@@ -467,6 +469,13 @@ function CreateTask({
           ? "The agent reviews this pull request in a read-only copy and posts its comments. It never changes the code or opens a merge."
           : "The agent works in a private local copy of the repo on its own branch and cannot push. Jalebi publishes the result for you, and merging is always your decision."}
       </p>
+
+      {isFirstTask && (
+        <p className="text-xs text-ink-400">
+          New here? Start with a <span className="font-mono">freeform</span> task — describe
+          what you want in plain words; the agent figures out the rest.
+        </p>
+      )}
 
       <div className="grid gap-4 sm:grid-cols-2">
         <SearchableSelect
@@ -1461,6 +1470,7 @@ export default function Tasks() {
             accounts={accounts}
             onCreated={handleCreated}
             prefill={prefill}
+            isFirstTask={tasks.length === 0 && lastLoaded !== null}
           />
 
           {flash != null && (

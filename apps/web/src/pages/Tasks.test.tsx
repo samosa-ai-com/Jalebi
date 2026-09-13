@@ -1619,6 +1619,8 @@ describe("Tasks page (queue overhaul)", () => {
     // Backend step is auto-done from /api/settings (default_model set).
     expect(screen.getByTestId("step-backend")).toHaveAttribute("data-done", "true");
     expect(screen.getByTestId("step-pr")).toHaveAttribute("data-done", "false");
+    // Zero tasks: the first-run starter hint shows in the new-task form.
+    expect(await screen.findByText(/New here\? Start with a/)).toBeInTheDocument();
     const taskBtn = screen.getByRole("button", { name: "Create your first task" });
     const newTaskContainer = document.getElementById("new-task");
     expect(newTaskContainer).toBeInTheDocument();
@@ -1626,6 +1628,17 @@ describe("Tasks page (queue overhaul)", () => {
     await userEvent.click(taskBtn);
     expect(window.HTMLElement.prototype.scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth" });
     expect(document.activeElement).toBe(newTaskContainer);
+  });
+
+  it("hides the first-run starter hint once tasks exist", async () => {
+    stubFetch({ ...DEFAULT_HANDLERS });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    await screen.findByText("New task");
+    expect(screen.queryByText(/New here\? Start with a/)).not.toBeInTheDocument();
   });
 
   it("renders friendly EmptyState when the task queue is empty", async () => {
