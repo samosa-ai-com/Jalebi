@@ -11,6 +11,7 @@ import re
 import stat
 import subprocess
 import threading
+from collections.abc import Callable
 from contextlib import ExitStack
 from pathlib import Path
 
@@ -30,6 +31,58 @@ class PushLeaseFailed(GitWorkspaceError):
     Surfaces to the UI as a 412 with the old/new SHAs so the owner can
     re-fetch, decide, and retry.
     """
+
+
+# Resolver for the PR-head branch fallback: a zero-arg callable returning
+# ``(head_repo_full_name, head_branch)`` or ``None`` when unresolvable.
+# Lives outside GitWorkspace so the git layer never imports the GitHub
+# client — the queue injects an API-backed one.
+PrHeadResolver = Callable[[], tuple[str | None, str | None] | None]
+
+
+def _fetch_pr_head_ref(
+    mirror: Path,
+    full_name: str,
+    pr_number: int,
+    ref: str,
+    auth_env: dict[str, str] | None,
+    head_resolver: PrHeadResolver | None = None,
+) -> None:
+    """Fetch ``refs/pull/<N>/head`` into ``ref``, same-repo branch fallback.
+
+    GitHub does not always advertise the pull pseudo-ref (observed live: the
+    API shows the PR open, ``refs/pull/<N>/merge`` exists, ``/head`` is
+    missing and stays missing across close/reopen). When the direct fetch
+    fails and ``head_resolver`` reports a head branch on the SAME repo,
+    fetch ``refs/heads/<branch>`` into the same local ref instead —
+    identical content for same-repo PRs. Fork heads live on another remote,
+    so a fork (or unresolvable) head re-raises the original error; a failed
+    branch fetch raises naming both attempts.
+    """
+    pull_spec = f"refs/pull/{pr_number}/head:{ref}"
+    try:
+        _run_git(["-C", str(mirror), "fetch", "origin", pull_spec], auth_env=auth_env)
+        return
+    except GitWorkspaceError as exc:
+        resolved = head_resolver() if head_resolver is not None else None
+        branch = None
+        if resolved:
+            head_repo, head_branch = resolved
+            if head_branch and (head_repo or "").lower() == full_name.lower():
+                branch = head_branch
+        if branch is None:
+            raise
+        try:
+            _run_git(
+                ["-C", str(mirror), "fetch", "origin", f"refs/heads/{branch}:{ref}"],
+                auth_env=auth_env,
+            )
+        except GitWorkspaceError as branch_exc:
+            raise GitWorkspaceError(
+                f"git fetch {pull_spec} failed ({exc}); "
+                f"same-repo branch fallback refs/heads/{branch} failed too "
+                f"({branch_exc})"
+            ) from branch_exc
 
 
 def _clean_git_env(env: dict[str, str]) -> dict[str, str]:
@@ -303,12 +356,15 @@ class GitWorkspace:
         full_name: str,
         pr_number: int,
         token: str | None = None,
+        pr_head_resolver: PrHeadResolver | None = None,
     ) -> Path:
         """Check out PR ``pr_number``'s head into a detached review worktree.
 
         Fetches the PR head via ``refs/pull/<n>/head`` (works for same-repo and
         cross-repo PRs without touching the fork) and checks it out detached, so
-        the reviewer can read/validate but never push.
+        the reviewer can read/validate but never push. When the pull pseudo-ref
+        is missing and ``pr_head_resolver`` reports a same-repo head branch,
+        that branch is fetched instead (see ``_fetch_pr_head_ref``).
         """
         mirror = self.mirror_path(self.config.data_dir, full_name)
         ws = self.review_worktree_path(self.config.data_dir, task_id)
@@ -321,15 +377,8 @@ class GitWorkspace:
             # Always fetch the PR head so a re-run/follow-up reviews the *current*
             # head, not the one first checked out (the PR may have gained commits
             # since the initial review).
-            _run_git(
-                [
-                    "-C",
-                    str(mirror),
-                    "fetch",
-                    "origin",
-                    f"refs/pull/{pr_number}/head:{ref}",
-                ],
-                auth_env=auth,
+            _fetch_pr_head_ref(
+                mirror, full_name, pr_number, ref, auth, pr_head_resolver
             )
             if not (ws / ".git").is_file():
                 _run_git(
@@ -377,11 +426,13 @@ class GitWorkspace:
         return f"fork-pr-{pr_number}"
 
     def fetch_pr_head(
-        self, full_name: str, pr_number: int, token: str | None = None
+        self, full_name: str, pr_number: int, token: str | None = None,
+        pr_head_resolver: PrHeadResolver | None = None,
     ) -> str:
         """Fetch ``refs/pull/<N>/head`` into the mirror; return the local ref.
 
         Works for same-repo and fork PRs without touching the fork repo.
+        Same-repo branch fallback applies (see ``_fetch_pr_head_ref``).
         """
         mirror = self.mirror_path(self.config.data_dir, full_name)
         auth = _auth_env(token)
@@ -389,20 +440,21 @@ class GitWorkspace:
         with self._lock_for(full_name):
             if not mirror.exists():
                 raise GitWorkspaceError(f"mirror missing for {full_name}; call ensure_mirror first")
-            _run_git(
-                ["-C", str(mirror), "fetch", "origin", f"refs/pull/{pr_number}/head:{ref}"],
-                auth_env=auth,
+            _fetch_pr_head_ref(
+                mirror, full_name, pr_number, ref, auth, pr_head_resolver
             )
         return ref
 
     def create_worktree_from_pr_head(
-        self, task_id: int, full_name: str, pr_number: int, token: str | None = None
+        self, task_id: int, full_name: str, pr_number: int, token: str | None = None,
+        pr_head_resolver: PrHeadResolver | None = None,
     ) -> Path:
         """Create a writable ``jalebi/<taskId>`` worktree based on a PR head.
 
         The base is the current ``refs/pull/<N>/head`` commit (same-repo or
         fork) — not ``origin/<branch>`` — so a fix task can address review
         comments on a fork PR whose branch never exists on ``origin``.
+        Same-repo branch fallback applies (see ``_fetch_pr_head_ref``).
         Reuses an existing worktree/branch for resumes (same as
         :meth:`create_worktree`).
         """
@@ -419,9 +471,8 @@ class GitWorkspace:
             if not mirror.exists():
                 raise GitWorkspaceError(f"mirror missing for {full_name}; call ensure_mirror first")
             _run_git(["-C", str(mirror), "fetch", "origin", "--prune"], auth_env=auth)
-            _run_git(
-                ["-C", str(mirror), "fetch", "origin", f"refs/pull/{pr_number}/head:{ref}"],
-                auth_env=auth,
+            _fetch_pr_head_ref(
+                mirror, full_name, pr_number, ref, auth, pr_head_resolver
             )
             _run_git(["-C", str(mirror), "worktree", "prune"], auth_env=auth)
             branches = self._list_local_heads(mirror)
@@ -434,12 +485,14 @@ class GitWorkspace:
         return ws
 
     def reset_branch_to_pr_head(
-        self, task_id: int, full_name: str, pr_number: int, token: str | None = None
+        self, task_id: int, full_name: str, pr_number: int, token: str | None = None,
+        pr_head_resolver: PrHeadResolver | None = None,
     ) -> None:
         """Reset ``jalebi/<taskId>`` to the *current* PR head (first-run only).
 
         Mirrors :meth:`reset_branch_to_base` for PR-head tasks so a stale
-        branch can never contaminate a fresh run.
+        branch can never contaminate a fresh run. Same-repo branch fallback
+        applies (see ``_fetch_pr_head_ref``).
         """
         mirror = self.mirror_path(self.config.data_dir, full_name)
         ws = self.worktree_path(self.config.data_dir, task_id)
@@ -449,9 +502,8 @@ class GitWorkspace:
         with self._lock_for(full_name):
             if not mirror.exists() or not (ws / ".git").is_file():
                 return
-            _run_git(
-                ["-C", str(mirror), "fetch", "origin", f"refs/pull/{pr_number}/head:{ref}"],
-                auth_env=auth,
+            _fetch_pr_head_ref(
+                mirror, full_name, pr_number, ref, auth, pr_head_resolver
             )
             _run_git(["-C", str(ws), "checkout", "-B", branch, ref])
             _run_git(["-C", str(ws), "clean", "-fd"])

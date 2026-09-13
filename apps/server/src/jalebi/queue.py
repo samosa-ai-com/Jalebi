@@ -37,7 +37,7 @@ from jalebi.config import Config
 from jalebi.db import CatalogAgent, Repo, Run, Session, Task, now
 from jalebi.events import TaskEvents
 from jalebi.git_workspace import GitWorkspace, GitWorkspaceError, PushLeaseFailed
-from jalebi.github import GitHubClient
+from jalebi.github import GitHubClient, GitHubError
 
 logger = logging.getLogger(__name__)
 
@@ -389,6 +389,28 @@ class TaskQueue:
             return task.target_branch or "main"
         return TaskQueue._worktree_base(task)
 
+    @staticmethod
+    def _pr_head_resolver(full_name: str, pr_number: int, token: str | None):
+        """API-backed head resolver for the PR-head branch fallback.
+
+        Returns a zero-arg callable yielding ``(head_repo, head_branch)`` (or
+        ``None`` when the PR cannot be fetched) for
+        :meth:`GitWorkspace` to use when ``refs/pull/<N>/head`` is missing.
+        API failures resolve to ``None`` so the original fetch error surfaces.
+        """
+
+        def resolve() -> tuple[str | None, str | None] | None:
+            if token is None:
+                return None
+            try:
+                pr = GitHubClient(token).get_pr(full_name, pr_number)
+            except GitHubError:
+                logger.debug("pr-head resolver: get_pr failed for %s#%s", full_name, pr_number)
+                return None
+            return (pr.get("head_repo"), pr.get("head"))
+
+        return resolve
+
     def _ensure_task_worktree(
         self, git: GitWorkspace, task: Task, repo: Repo, token: str | None
     ):
@@ -405,7 +427,13 @@ class TaskQueue:
                 raise RuntimeError(
                     f"task {task.id}: pr-head source is only valid for freeform tasks"
                 )
-            return git.create_worktree_from_pr_head(task.id, repo.full_name, pr_number, token)
+            return git.create_worktree_from_pr_head(
+                task.id,
+                repo.full_name,
+                pr_number,
+                token,
+                self._pr_head_resolver(repo.full_name, pr_number, token),
+            )
         return git.create_worktree(task.id, repo.full_name, self._worktree_base(task), token)
 
     def _reset_task_branch(
@@ -414,7 +442,13 @@ class TaskQueue:
         """First-run reset to the current base (PR-head aware)."""
         pr_number = self._pr_head_number(task)
         if pr_number is not None:
-            git.reset_branch_to_pr_head(task.id, repo.full_name, pr_number, token)
+            git.reset_branch_to_pr_head(
+                task.id,
+                repo.full_name,
+                pr_number,
+                token,
+                self._pr_head_resolver(repo.full_name, pr_number, token),
+            )
         else:
             git.reset_branch_to_base(task.id, repo.full_name, self._worktree_base(task))
 
@@ -1253,7 +1287,13 @@ class TaskQueue:
                 effective_prompt = f"{task.prompt}\n\n{agent.custom_instructions}"
             git = GitWorkspace(self.config)
             git.ensure_mirror(repo.full_name, repo.clone_url, token)
-            wt = git.create_review_worktree(task.id, repo.full_name, pr_number, token)
+            wt = git.create_review_worktree(
+                task.id,
+                repo.full_name,
+                pr_number,
+                token,
+                self._pr_head_resolver(repo.full_name, pr_number, token),
+            )
             nitpick_mode = bool(settings.get_setting(session, "review_nitpick_mode"))
             tasks.stamp_review_nitpick_mode(session, task, nitpick_mode)
             worktree_bootstrap.bootstrap_worktree(
@@ -1836,7 +1876,13 @@ class TaskQueue:
                 pr_number = self._task_pr_number(task)
                 if pr_number is None:
                     raise RuntimeError(f"pr_review task {task.id} has no PR number to resume")
-                wt = git.create_review_worktree(task.id, repo.full_name, pr_number, token)
+                wt = git.create_review_worktree(
+                    task.id,
+                    repo.full_name,
+                    pr_number,
+                    token,
+                    self._pr_head_resolver(repo.full_name, pr_number, token),
+                )
             else:
                 wt = self._ensure_task_worktree(git, task, repo, token)
             worktree_bootstrap.bootstrap_worktree(
