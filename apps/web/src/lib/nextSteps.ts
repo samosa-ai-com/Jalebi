@@ -23,6 +23,12 @@ export function getNextSteps(input: NextStepsInput): NextStep[] {
   const canFollowUp = input.canFollowUp ?? false;
 
   if (status === "needs_approval") {
+    // Reviews never publish — point at the follow-up instead (or nothing).
+    if (type === "pr_review") {
+      return canFollowUp
+        ? [{ label: "Send a follow-up on this task", targetId: "followup-composer" }]
+        : [];
+    }
     const steps: NextStep[] = [{ label: "Review, then publish", targetId: "publish-actions" }];
     if (canFollowUp) {
       steps.push({ label: "Send a follow-up on this task", targetId: "followup-composer" });
@@ -57,7 +63,10 @@ export function getNextSteps(input: NextStepsInput): NextStep[] {
     ];
   }
 
-  if (pr != null && input.repo_full_name) {
+  if (pr != null) {
+    // A PR exists but the repo is unknown: no URL can be built, and the
+    // publish prompt would wrongly suggest opening a PR that already exists.
+    if (!input.repo_full_name) return [];
     const steps: NextStep[] = [
       {
         label: `Open pull request #${pr} on GitHub`,

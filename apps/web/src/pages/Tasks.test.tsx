@@ -1630,6 +1630,37 @@ describe("Tasks page (queue overhaul)", () => {
     expect(document.activeElement).toBe(newTaskContainer);
   });
 
+  it("completes the PR step from the linked-prs array even without pr_number", async () => {
+    const withPrs = [{ ...TASKS[0], prs: [5], pr_number: null }];
+    stubFetch({
+      ...DEFAULT_HANDLERS,
+      "/api/tasks": withPrs,
+      "/api/settings": { default_backend: "opencode", default_model: "" },
+    });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    expect(await screen.findByText("Setup")).toBeInTheDocument();
+    expect(screen.getByTestId("step-pr")).toHaveAttribute("data-done", "true");
+  });
+
+  it("leaves the backend step incomplete until a default model is chosen", async () => {
+    stubFetch({
+      ...DEFAULT_HANDLERS,
+      "/api/tasks": [],
+      "/api/settings": { default_backend: "opencode", default_model: "" },
+    });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    expect(await screen.findByText("Setup")).toBeInTheDocument();
+    expect(screen.getByTestId("step-backend")).toHaveAttribute("data-done", "false");
+  });
+
   it("hides the first-run starter hint once tasks exist", async () => {
     stubFetch({ ...DEFAULT_HANDLERS });
     render(

@@ -1397,7 +1397,9 @@ export default function Tasks() {
             repos={repos.length}
             tasks={tasks.length}
             hasModelChoice={(settings?.default_model ?? "").trim() !== ""}
-            hasPublishedPr={tasks.some((t) => t.pr_number != null)}
+            hasPublishedPr={tasks.some(
+              (t) => t.pr_number != null || (t.prs?.length ?? 0) > 0
+            )}
             onStartTask={handleStartTask}
           />
 

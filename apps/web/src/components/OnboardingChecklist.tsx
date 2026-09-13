@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 
-export const ONBOARDING_DISMISSED_KEY = "jalebi-onboarding-dismissed";
+// Versioned: the checklist grew 3 → 5 steps, so upgraders who dismissed the
+// old card see the new steps once instead of staying dismissed forever.
+export const ONBOARDING_DISMISSED_KEY = "jalebi-onboarding-dismissed-v2";
 export const ONBOARDING_MANUAL_DONE_KEY = "jalebi-onboarding-manual-done-v1";
 
 function loadManualDone(): Record<string, true> {
@@ -175,7 +177,7 @@ export function OnboardingChecklist({
                 <button
                   type="button"
                   onClick={() => markStepDone(step.id)}
-                  aria-label={`Mark ${step.label} done`}
+                  aria-label={`Skip ${step.label} (mark done)`}
                   title="Mark done (skip this step)"
                   className="inline-flex min-h-6 shrink-0 items-center text-[11px] text-ink-500 transition-colors hover:text-syrup-300"
                 >

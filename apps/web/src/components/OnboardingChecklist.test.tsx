@@ -118,7 +118,7 @@ describe("OnboardingChecklist", () => {
 
     expect(screen.getByText("1 of 5 done")).toBeInTheDocument();
     const skipRepo = within(screen.getByTestId("step-repo")).getByRole("button", {
-      name: "Mark Connect a repository done",
+      name: "Skip Connect a repository (mark done)",
     });
     await userEvent.click(skipRepo);
 
@@ -147,7 +147,7 @@ describe("OnboardingChecklist", () => {
     expect(screen.getByTestId("step-repo")).toHaveAttribute("data-done", "true");
     expect(
       within(screen.getByTestId("step-repo")).queryByRole("button", {
-        name: "Mark Connect a repository done",
+        name: "Skip Connect a repository (mark done)",
       })
     ).not.toBeInTheDocument();
   });
@@ -177,6 +177,17 @@ describe("OnboardingChecklist", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  it("ignores the legacy v1 dismiss key so upgraders see the new steps", () => {
+    localStorage.setItem("jalebi-onboarding-dismissed", "1");
+    render(
+      <MemoryRouter>
+        <OnboardingChecklist accounts={0} repos={0} tasks={0} />
+      </MemoryRouter>
+    );
+    expect(screen.getByText("Setup")).toBeInTheDocument();
+    expect(screen.getByText("0 of 5 done")).toBeInTheDocument();
+  });
+
   it("satisfies target size contract with min-h-6 on dismiss and skip buttons", () => {
     render(
       <MemoryRouter>
@@ -185,7 +196,7 @@ describe("OnboardingChecklist", () => {
     );
     const dismissBtn = screen.getByRole("button", { name: /dismiss/i });
     expect(dismissBtn.className).toMatch(/\bmin-h-6\b/);
-    const skipBtns = screen.getAllByRole("button", { name: /Mark .* done/ });
+    const skipBtns = screen.getAllByRole("button", { name: /Skip .* \(mark done\)/ });
     expect(skipBtns.length).toBeGreaterThan(0);
     for (const btn of skipBtns) {
       expect(btn.className).toMatch(/\bmin-h-6\b/);

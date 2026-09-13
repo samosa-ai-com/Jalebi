@@ -69,8 +69,33 @@ describe("getNextSteps", () => {
     ]);
   });
 
-  it("returns nothing for a review with no linked PR", () => {
+  it("never points a review awaiting approval at publishing", () => {
+    expect(getNextSteps({ type: "pr_review", status: "needs_approval" })).toEqual([]);
+    expect(
+      getNextSteps({ type: "pr_review", status: "needs_approval", canFollowUp: true })
+    ).toEqual([{ label: "Send a follow-up on this task", targetId: "followup-composer" }]);
+  });
+
+  it.each(["failed", "timed_out", "cancelled", "interrupted"])(
+    "points a %s review at re-running",
+    (status) => {
+      expect(getNextSteps({ type: "pr_review", status })).toEqual([
+        { label: "Re-run this task", targetId: "publish-actions" },
+      ]);
+    }
+  );
+
+  it("returns nothing for a done task with a PR but no known repo", () => {
+    expect(
+      getNextSteps({ type: "issue_fix", status: "done", pr_number: 7 })
+    ).toEqual([]);
+  });
+
+  it("returns nothing for a done review with no linked PR", () => {
     expect(getNextSteps({ type: "pr_review", status: "done" })).toEqual([]);
+  });
+
+  it("returns nothing for a done review when the repo is unknown", () => {
     expect(
       getNextSteps({ type: "pr_review", status: "done", prs: [3] })
     ).toEqual([]);
