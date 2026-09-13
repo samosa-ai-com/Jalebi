@@ -1722,8 +1722,8 @@ export default function Settings() {
   async function sendTestNotification() {
     mark("notify_test", { state: "saving" });
     try {
-      await api.testNotification();
-      mark("notify_test", { state: "saved" });
+      const res = await api.testNotification();
+      mark("notify_test", { state: "saved", msg: res.warning });
     } catch (e) {
       mark("notify_test", {
         state: "error",
@@ -2457,7 +2457,12 @@ export default function Settings() {
                   : "Send test notification"}
               </button>
               {fieldState["notify_test"]?.state === "saved" && (
-                <span className="text-xs text-green-300">sent</span>
+                <span className="text-xs text-green-300">
+                  sent
+                  {fieldState["notify_test"].msg
+                    ? " — normal ntfy pushes remain disabled"
+                    : ""}
+                </span>
               )}
               {fieldState["notify_test"]?.state === "error" && (
                 <span className="text-xs text-red-400">{fieldState["notify_test"].msg}</span>

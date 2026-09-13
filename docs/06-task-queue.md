@@ -88,11 +88,11 @@ Queue items are tagged tuples: `("task", task_id)` or `("followup", task_id, bod
 
 ## 5a. Notifications (ntfy)
 
-- **Sender** (`src/jalebi/notify.py`): best-effort httpx POST; never raises into the queue. The **merged `ntfy_topic` setting** is either a bare topic (→ `https://ntfy.sh/<topic>`) or a full URL to a self-hosted server (`ntfy_url` was folded into it). Messages are masked (PATs + secret patterns) before send.
+- **Sender** (`src/jalebi/notify.py`): best-effort httpx POST; never raises into the queue. The **merged `ntfy_topic` setting** is either a bare topic (→ `https://ntfy.sh/<topic>`) or a full URL to a self-hosted server (`ntfy_url` was folded into it). The **`ntfy_enabled` master switch** (default true) gates every send — off silences all pushes (queue, screening findings, failed-login) while the endpoint stays configured; the per-event toggles below remain sub-filters under it. Messages are masked (PATs + secret patterns) before send.
 - **JSON publishing (docs.ntfy.sh/publish/):** the JSON body is POSTed to the **server root** with `topic` inside the body — *not* to `/topic` (which would render the raw JSON as the message). This enables **Markdown** (`markdown: true`), tags, priorities, a **click action** and a **"Open task" action button** that deep-links to the Jalebi task page (`http://127.0.0.1:3456/tasks/<id>`).
 - **Terminal notifications:** when a run ends (`done` / `failed` / `timed_out` / `cancelled` / `needs_approval`), a markdown summary (type, repo, status, PR link, last agent message) is pushed, gated by `notify_on_done` / `notify_on_failed` / `notify_on_needs_approval`.
 - **Progress notifications:** a third watchdog thread (`_progress_notify_loop`) pushes "still running — Nm elapsed — last: <agent message>" every `notify_progress_interval_minutes` (default 30), starting at the first interval mark, while the agent process is alive (gated by `notify_on_progress`; reads settings live).
-- **Test endpoint:** `POST /api/notify/test` sends a sample markdown push with a click action and reports ok/error (Settings → Notifications → "Send test notification").
+- **Test endpoint:** `POST /api/notify/test` sends a sample markdown push with a click action and reports ok/error (Settings → Notifications → "Send test notification"). It bypasses `ntfy_enabled` so the endpoint stays verifiable while off, and returns a `warning` hint in that case (rendered as "sent — normal ntfy pushes remain disabled").
 
 ## 5b. In-App Persistent Notifications (`notifications`)
 
