@@ -6,9 +6,11 @@ import { StatusBadge } from "../components/StatusBadge";
 import { AttentionBadge } from "../components/AttentionBadge";
 import { DepBadges } from "../components/DepBadges";
 import FileBrowser from "../components/FileBrowser";
+import GlossaryTerm from "../components/GlossaryTerm";
 import Markdown from "../components/Markdown";
 import { MergeReadinessPanel } from "../components/MergeReadinessPanel";
 import NextSteps from "../components/NextSteps";
+import { GLOSSARY } from "../lib/glossary";
 import { getNextSteps } from "../lib/nextSteps";
 import SearchableSelect from "../components/SearchableSelect";
 import WaitingCard from "../components/WaitingCard";
@@ -608,6 +610,7 @@ function FollowUpComposer({
           />
           <SearchableSelect
             label="Backend"
+            labelTitle={GLOSSARY.backend}
             value={cli}
             onChange={(v) => {
               setCli(v);
@@ -1131,6 +1134,7 @@ function RerunDialog({
         <div className="grid gap-3 sm:grid-cols-2">
           <SearchableSelect
             label="Backend"
+            labelTitle={GLOSSARY.backend}
             value={cli}
             onChange={(v) => {
               setCli(v);
@@ -1708,7 +1712,7 @@ export default function TaskDetail() {
                   type="button"
                   onClick={handleDismissAttention}
                   className="inline-flex items-center min-h-6 rounded px-1.5 py-0.5 text-[10px] font-medium text-ink-400 ring-1 ring-ink-700/60 hover:bg-ink-800 hover:text-ink-200 transition-colors"
-                  title="Dismiss attention for this task"
+                  title={`Dismiss attention for this task. ${GLOSSARY["dismiss-attention"]}`}
                 >
                   Dismiss
                 </button>
@@ -1848,11 +1852,14 @@ export default function TaskDetail() {
           <div className="flex shrink-0 items-start gap-3">
             <CopyButton text={task.prompt} label="prompt" />
             {phaseIndex >= 0 && (
-              <div className="hidden flex-col items-center gap-1.5 md:flex">
+              <div
+                className="hidden flex-col items-center gap-1.5 md:flex"
+                title={GLOSSARY.phases}
+              >
                 <div className="flex h-10 w-10 items-center justify-center rounded-full border border-syrup-500/40 bg-syrup-500/10 font-mono text-sm text-syrup-300">
                   {phaseIndex + 1}/{PHASE_ORDER.length}
                 </div>
-                <span className="font-mono text-[11px] text-ink-500">
+                <span className="font-mono text-[11px] text-ink-500 underline decoration-dotted underline-offset-2">
                   {PHASE_ORDER[phaseIndex]}
                 </span>
               </div>
@@ -2035,7 +2042,9 @@ export default function TaskDetail() {
 
       {selectedRun && selectedRun.artifacts && selectedRun.artifacts.length > 0 && (
         <section className="surface p-5 animate-fade-up">
-          <h2 className="panel-title mb-3">Artifacts (run #{selectedRun.seq})</h2>
+          <h2 className="panel-title mb-3">
+            <GlossaryTerm term="artifacts">Artifacts</GlossaryTerm> (run #{selectedRun.seq})
+          </h2>
           <ul className="divide-y divide-ink-800/70">
             {selectedRun.artifacts.map((a) => (
               <li key={a.id} className="flex items-center gap-3 py-2">
@@ -2096,6 +2105,11 @@ export default function TaskDetail() {
                     key={t}
                     type="button"
                     onClick={() => setTlType(t)}
+                    title={
+                      t === "message" || t === "tool_call"
+                        ? GLOSSARY["timeline-step-types"]
+                        : undefined
+                    }
                     className={`inline-flex items-center min-h-6 rounded-full border px-2 py-0.5 font-mono text-[10px] transition-colors ${
                       tlType === t
                         ? "border-syrup-500 text-syrup-300"

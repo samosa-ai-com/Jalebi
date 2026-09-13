@@ -2,8 +2,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { EmptyState } from "../components/EmptyState";
+import GlossaryTerm from "../components/GlossaryTerm";
 import SearchableSelect from "../components/SearchableSelect";
 import { useBackends } from "../hooks/useBackends";
+import { GLOSSARY } from "../lib/glossary";
 import {
   clearLegacyDealt,
   findingFp,
@@ -192,6 +194,7 @@ function ScreenForm({
       {!isEdit && templates.length > 0 && (
         <SearchableSelect
           label="Starter template"
+          labelTitle={GLOSSARY["screen-template"]}
           value={tpl}
           onChange={(v) => {
             const t = templates.find((x) => x.name === v);
@@ -277,6 +280,7 @@ function ScreenForm({
       <div className="grid gap-4 sm:grid-cols-2">
         <SearchableSelect
           label="Backend"
+          labelTitle={GLOSSARY.backend}
           value={cli}
           onChange={(v) => {
             setCli(v);
@@ -472,6 +476,7 @@ function RunHistory({
           <button
             type="button"
             className="btn-ghost !px-2 !py-1 text-xs"
+            title={GLOSSARY.dealt}
             onClick={markSelectedDealt}
           >
             Mark dealt ({selected.size})
@@ -523,7 +528,7 @@ function RunHistory({
                         <span
                           className={`rounded px-1.5 py-0.5 text-[11px] font-medium ring-1 ring-inset ${SEVERITY_STYLES[f.severity] ?? SEVERITY_STYLES.medium}`}
                         >
-                          {f.severity}
+                          <GlossaryTerm term="severity">{f.severity}</GlossaryTerm>
                         </span>
                         <span className="text-sm text-ink-200">{f.title}</span>
                         {f.file && (
@@ -796,6 +801,7 @@ function FindingsInbox({ screens, repos }: { screens: Screen[]; repos: Repo[] })
             key={s}
             type="button"
             onClick={() => setSeverity(s)}
+            title={s === "all" ? undefined : GLOSSARY.severity}
             className={`rounded-full border px-2.5 py-1 text-xs ${
               severity === s
                 ? "border-syrup-500/60 bg-syrup-500/10 text-syrup-300"
@@ -828,7 +834,7 @@ function FindingsInbox({ screens, repos }: { screens: Screen[]; repos: Repo[] })
         <button
           type="button"
           onClick={() => setHideDealt((v) => !v)}
-          title={hideDealt ? "Currently hiding dealt findings" : "Currently showing dealt findings"}
+          title={`${hideDealt ? "Currently hiding dealt findings" : "Currently showing dealt findings"} — ${GLOSSARY.dealt}`}
           className={`rounded-full border px-2.5 py-1 text-xs ${
             hideDealt
               ? "border-syrup-500/60 bg-syrup-500/10 text-syrup-300"
@@ -883,6 +889,7 @@ function FindingsInbox({ screens, repos }: { screens: Screen[]; repos: Repo[] })
               <button
                 type="button"
                 className="btn-ghost !px-2 !py-1 text-xs"
+                title={GLOSSARY.dealt}
                 onClick={markSelectedDealt}
               >
                 Mark dealt ({selectedVisible.length})
@@ -935,7 +942,7 @@ function FindingsInbox({ screens, repos }: { screens: Screen[]; repos: Repo[] })
                     <span
                       className={`rounded px-1.5 py-0.5 text-[11px] font-medium ring-1 ring-inset ${SEVERITY_STYLES[f.severity] ?? SEVERITY_STYLES.medium}`}
                     >
-                      {f.severity}
+                      <GlossaryTerm term="severity">{f.severity}</GlossaryTerm>
                     </span>
                     <span className="text-sm text-ink-200">{f.title}</span>
                     {f.file && (
@@ -984,6 +991,7 @@ function FindingsInbox({ screens, repos }: { screens: Screen[]; repos: Repo[] })
                       <button
                         type="button"
                         className="btn-ghost !px-2 !py-1 text-xs"
+                        title={isDealt ? undefined : GLOSSARY.dealt}
                         onClick={() => toggleDealt(fp, f.screen_id)}
                       >
                         {isDealt ? "Reopen" : "Mark dealt"}

@@ -10,6 +10,7 @@ import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 
 import { api } from "../api/client";
+import GlossaryTerm from "./GlossaryTerm";
 import type { PublishCheck, PublishCheckStatus } from "../types";
 
 const STATUS_STYLES: { [K in PublishCheckStatus]: { wrap: string; dot: string } } = {
@@ -132,7 +133,10 @@ export function MergeReadinessPanel({
         </span>
       </div>
       <p className="mb-2 text-xs text-ink-500">
-        Against <span className="font-mono text-ink-300">{data.base_ref}</span>
+        Against{" "}
+        <span className="font-mono text-ink-300">
+          <GlossaryTerm term="base-ref">{data.base_ref}</GlossaryTerm>
+        </span>
       </p>
       <ul className="divide-y divide-ink-800/60">
         {data.checks.map((c) => (

@@ -14,6 +14,7 @@ import { RunningCard } from "../components/RunningCard";
 import SearchableSelect from "../components/SearchableSelect";
 import { StatusBadge } from "../components/StatusBadge";
 import { useBackends } from "../hooks/useBackends";
+import { GLOSSARY } from "../lib/glossary";
 import { groupFpsByScreen } from "../lib/screeningDealt";
 import { useStatusAnnouncer } from "../lib/useStatusAnnouncer";
 import type { Account, CatalogAgent, GithubContext, Repo, SettingsMap, Task } from "../types";
@@ -681,6 +682,7 @@ function CreateTask({
               />
               <SearchableSelect
                 label="Backend"
+                labelTitle={GLOSSARY.backend}
                 value={agentCli ?? ""}
                 onChange={(v) => {
                   setAgentCli(v);
@@ -1731,7 +1733,7 @@ export default function Tasks() {
                                   handleDismissAttention(t.id);
                                 }}
                                 className="inline-flex items-center min-h-6 rounded px-1.5 py-0.5 text-[10px] font-medium text-ink-400 ring-1 ring-ink-700/60 hover:bg-ink-800 hover:text-ink-200 transition-colors"
-                                title="Dismiss attention for this task"
+                                title={`Dismiss attention for this task. ${GLOSSARY["dismiss-attention"]}`}
                               >
                                 Dismiss
                               </button>

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import { EmptyState } from "../components/EmptyState";
+import GlossaryTerm from "../components/GlossaryTerm";
 import SearchableSelect from "../components/SearchableSelect";
 import type {
   CatalogAgent,
@@ -182,6 +183,12 @@ function RuleForm({
           onChange={setEvent}
           options={EVENTS}
         />
+        {event === "pull_request.synchronize" && (
+          <p className="text-xs text-ink-500">
+            Selected event:{" "}
+            <GlossaryTerm term="synchronize">pull_request.synchronize</GlossaryTerm>
+          </p>
+        )}
         <SearchableSelect
           label="Action"
           value={action}
