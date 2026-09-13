@@ -1663,6 +1663,44 @@ def test_done_run_with_uncommitted_changes_is_surfaced(
     assert "changed" in run.diff_text
 
 
+def test_empty_done_run_with_uncommitted_changes_is_surfaced(
+    q, session, repo_row, monkeypatch
+) -> None:
+    """An `empty_done` failure (exit 0, stream of steps but no agent output —
+    the agy 1.2.x task-83 shape) must still surface a dirty working tree: the
+    agent may have done real file work whose output never streamed."""
+    _no_publish(session)
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
+    git = GitWorkspace(q.config)
+    git.ensure_mirror(FULL_NAME, repo_row.clone_url)
+    wt = git.create_worktree(task.id, FULL_NAME, "main")
+    _git(["-C", str(wt), "config", "user.email", "t@example.com"])
+    _git(["-C", str(wt), "config", "user.name", "Test"])
+    (wt / "file.txt").write_text("hello\nchanged\n")
+    _install_adapter(
+        monkeypatch,
+        FakeHandle(
+            [
+                AgentEvent(type="step", phase="step", text="banner line"),
+                AgentEvent(type="done"),
+            ]
+        ),
+    )
+
+    q._run_task(task.id)
+
+    session.expire_all()
+    run = _latest_run(session, task.id)
+    assert run.status == "failed"  # still a failure — just a visible one now
+    steps = json.loads(run.steps_json or "[]")
+    texts = " ".join(str(s.get("text") or "") for s in steps)
+    assert "without producing any agent output" in texts
+    assert "uncommitted" in texts
+    assert "file.txt" in texts
+    assert run.diff_text is not None
+    assert "changed" in run.diff_text
+
+
 def test_manual_publish_mode_skips_autopublish(q, session, repo_row, monkeypatch) -> None:
     """A task with publish_mode='manual' must NOT auto-publish even when the
     global auto_publish setting is true."""
