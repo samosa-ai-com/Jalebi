@@ -8,6 +8,8 @@ import { DepBadges } from "../components/DepBadges";
 import FileBrowser from "../components/FileBrowser";
 import Markdown from "../components/Markdown";
 import { MergeReadinessPanel } from "../components/MergeReadinessPanel";
+import NextSteps from "../components/NextSteps";
+import { getNextSteps } from "../lib/nextSteps";
 import SearchableSelect from "../components/SearchableSelect";
 import WaitingCard from "../components/WaitingCard";
 import PublishDialog from "../components/PublishDialog";
@@ -1803,6 +1805,17 @@ export default function TaskDetail() {
         </div>
       )}
 
+      <NextSteps
+        steps={getNextSteps({
+          type: task.type,
+          status: task.status,
+          prs: task.prs,
+          pr_number: task.pr_number,
+          repo_full_name: task.repo_full_name,
+          canFollowUp: runs.some((r) => r.session_id),
+        })}
+      />
+
       {finalMessage && selectedRun && (
         <>
           <WaitingCard
@@ -1942,7 +1955,7 @@ export default function TaskDetail() {
         )}
       </div>
 
-      <div className="flex flex-wrap gap-2">
+      <div id="publish-actions" className="flex flex-wrap gap-2">
         {(task.status === "running" || task.status === "queued") && (
           <Action onClick={() => runAction(() => api.cancelTask(task.id))} disabled={actionBusy}>
             Cancel
@@ -1999,16 +2012,18 @@ export default function TaskDetail() {
       )}
 
       {runs.some((r) => r.session_id) && TERMINAL.has(task.status) ? (
-        <FollowUpComposer
-          task={task}
-          followups={task.followups ?? []}
-          accounts={accounts}
-          onSent={() => {
-            load();
-            setFollowUpPending(true);
-          }}
-          prefill={replyPrefill}
-        />
+        <div id="followup-composer">
+          <FollowUpComposer
+            task={task}
+            followups={task.followups ?? []}
+            accounts={accounts}
+            onSent={() => {
+              load();
+              setFollowUpPending(true);
+            }}
+            prefill={replyPrefill}
+          />
+        </div>
       ) : (
         !TERMINAL.has(task.status) && (
           <p className="text-xs text-ink-500">
