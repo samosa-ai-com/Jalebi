@@ -1,5 +1,5 @@
-"""agy (Antigravity) CLI adapter tests (PRD F4). Fixture lines mirror the live
-``agy -p … --output-format stream-json`` smoke run (agy 1.1.27, Sep 2026)."""
+"""agy (Antigravity) CLI adapter tests (PRD F4). Fixture lines mirror live
+``agy -p … --output-format stream-json`` runs (agy 1.2.2, Sep 2026)."""
 
 import io
 
@@ -111,3 +111,114 @@ def test_argv_has_no_cli_print_timeout(monkeypatch) -> None:
     adapter.resume("/tmp/ws/t1", CONV_ID, "go")
     assert "--print-timeout" not in captured[1]
     assert "--conversation" in captured[1] and CONV_ID in captured[1]
+
+
+# --- 1.2.x shapes (live captures, Sep 2026) --------------------------------
+
+TOOL_ACTIVE = (
+    '{"event":"step_update","step_update":{"conversation_id":"' + CONV_ID + '",'
+    '"step_index":4,"state":"ACTIVE","step_type":"tool",'
+    '"tool_name":"write_to_file",'
+    '"tool_info":{"name":"write_to_file",'
+    '"parameters":{"TargetFile":"/tmp/agy-probe/hello.txt"}}}}'
+)
+TOOL_DONE = (
+    '{"event":"step_update","step_update":{"conversation_id":"' + CONV_ID + '",'
+    '"step_index":4,"state":"DONE","step_type":"tool",'
+    '"tool_name":"write_to_file","duration_seconds":0.06,'
+    '"tool_info":{"name":"write_to_file",'
+    '"parameters":{"TargetFile":"/tmp/agy-probe/hello.txt"}}}}'
+)
+TOOL_DENIED = (
+    '{"event":"step_update","step_update":{"conversation_id":"' + CONV_ID + '",'
+    '"step_index":2,"state":"ERROR","step_type":"tool",'
+    '"tool_name":"run_command","duration_seconds":0.06,'
+    '"tool_info":{"name":"run_command","parameters":{"CommandLine":"pwd"},'
+    '"error":{"type":"TOOL_ERROR",'
+    '"message":"permission check failed for command \\"pwd\\""}}}}'
+)
+AGENT_USAGE_ONLY = (
+    '{"event":"step_update","step_update":{"conversation_id":"' + CONV_ID + '",'
+    '"step_index":1,"state":"DONE","step_type":"agent_response",'
+    '"duration_seconds":0.02,'
+    '"usage":{"input_tokens":17903,"output_tokens":129}}}'
+)
+RESULT_SUCCESS_RESPONSE = (
+    '{"event":"result","result":{"conversation_id":"' + CONV_ID + '",'
+    '"status":"SUCCESS","response":"DONE\\n","num_turns":1}}'
+)
+RESULT_SUCCESS_DENIED = (
+    '{"event":"result","result":{"conversation_id":"' + CONV_ID + '",'
+    '"status":"SUCCESS","response":"","num_turns":1,'
+    '"denied_actions":[{"action":"command","display_name":"RunCommand"}]}}'
+)
+
+
+def test_parse_tool_active_is_liveness_step() -> None:
+    events = adapter.parse(TOOL_ACTIVE)
+    assert len(events) == 1
+    assert events[0].type == "step"
+    assert events[0].session_id == CONV_ID
+
+
+def test_parse_tool_done_is_tool_call() -> None:
+    events = adapter.parse(TOOL_DONE)
+    assert len(events) == 1
+    assert events[0].type == "tool_call"
+    assert events[0].data is not None
+    assert events[0].data["tool"] == "write_to_file"
+    assert events[0].data["input"] == {"TargetFile": "/tmp/agy-probe/hello.txt"}
+
+
+def test_parse_tool_error_stays_tool_call_not_error() -> None:
+    # A single denied tool must not fail the whole run mid-stream — the
+    # denial surfaces via the result's denied_actions message instead.
+    events = adapter.parse(TOOL_DENIED)
+    assert len(events) == 1
+    assert events[0].type == "tool_call"
+    assert events[0].data is not None
+    assert "permission check failed" in str(events[0].data.get("output"))
+
+
+def test_parse_usage_only_response_is_step() -> None:
+    events = adapter.parse(AGENT_USAGE_ONLY)
+    assert len(events) == 1
+    assert events[0].type == "step"
+
+
+def test_parse_success_denied_warns_visibly() -> None:
+    events = adapter.parse(RESULT_SUCCESS_DENIED)
+    assert len(events) == 1
+    assert events[0].type == "message"
+    assert "RunCommand" in (events[0].text or "")
+
+
+def test_run_parser_recovers_response_only_success() -> None:
+    # Task-83 shape: textless turns, the result holds the only text.
+    parse = adapter.run_parser()
+    assert parse(INIT)[0].type == "step"
+    assert parse(STEP_USER)[0].type == "step"
+    assert parse(AGENT_USAGE_ONLY)[0].type == "step"
+    assert parse(TOOL_DONE)[0].type == "tool_call"
+    recovered = parse(RESULT_SUCCESS_RESPONSE)
+    assert len(recovered) == 1
+    assert recovered[0].type == "message"
+    assert recovered[0].text == "DONE\n"
+
+
+def test_run_parser_does_not_duplicate_streamed_text() -> None:
+    # Normal shape: text streamed, then the same text in the result.
+    parse = adapter.run_parser()
+    assert parse(STEP_AGENT)[0].type == "message"
+    assert parse(RESULT_SUCCESS_RESPONSE) == []
+
+
+def test_run_parser_state_is_per_run() -> None:
+    # Closure state must not leak across concurrent runs sharing the adapter.
+    first = adapter.run_parser()
+    second = adapter.run_parser()
+    assert first(STEP_AGENT)[0].type == "message"
+    # The second run streamed nothing: its response still surfaces.
+    assert second(AGENT_USAGE_ONLY)[0].type == "step"
+    recovered = second(RESULT_SUCCESS_RESPONSE)
+    assert len(recovered) == 1 and recovered[0].text == "DONE\n"

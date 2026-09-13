@@ -45,7 +45,7 @@ Queue items are tagged tuples: `("task", task_id)` or `("followup", task_id, bod
 
    All three modes run in the queue/server process; `auth_env` (git push credentials) is never applied to the agent env, so the agent still cannot push directly. The agent only ever writes to its local `jalebi/<id>` branch — `docs/10-security.md` §"Agent env hardening" + `docs/04-git-workspace.md` §8 cover the lock.
 8. Exceptions during the run: the child is killed, `_running` is cleared, the session is rolled back, and the task **and** run are marked `failed` (never left stuck `running`).
-9. **Uncommitted-work visibility:** a `done` run with a dirty working tree (`git status --porcelain`) gets a timeline step listing the uncommitted files; if the agent made **no commits at all** but left work behind, the **working-tree diff is captured** into `runs.diff_text` so the work is still visible in the diff viewer. (Committed diffs always take precedence.)
+9. **Uncommitted-work visibility:** a `done` run with a dirty working tree (`git status --porcelain`) gets a timeline step listing the uncommitted files; if the agent made **no commits at all** but left work behind, the **working-tree diff is captured** into `runs.diff_text` so the work is still visible in the diff viewer. (Committed diffs always take precedence.) The same applies to an **`empty_done` failure** (exit 0, steps but no agent output — e.g. agy 1.2.x textless turns, issue #6): the agent may have done real file work, so the failure timeline shows it instead of an empty diff. Other failure modes are unchanged.
 
 ### 4a. Task types
 
