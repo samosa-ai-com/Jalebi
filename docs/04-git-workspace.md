@@ -111,7 +111,7 @@ Jalebi uses the **git CLI** (not libgit2) for all repo operations. Each task/age
 
 ## 12. Review worktrees (PRD §F7)
 
-- `create_review_worktree(task_id, full_name, pr_number)` fetches `refs/pull/<n>/head` into the mirror (works for same-repo **and** fork PRs without touching the fork) and checks it out **detached** into `ws/task-<id>-review`. Reviewers read/validate but can never push.
+- `create_review_worktree(task_id, full_name, pr_number)` fetches `refs/pull/<n>/head` into the mirror (works for same-repo **and** fork PRs without touching the fork) and checks it out **detached** into `ws/task-<id>-review`. Reviewers read/validate but can never push. **Same-repo branch fallback:** GitHub does not always advertise the pull pseudo-ref (observed: API open, `/merge` present, `/head` missing across close/reopen). When the pull-ref fetch fails and the queue's API-backed resolver reports a head branch on the same repo, `refs/heads/<branch>` is fetched into the same mirror-local ref instead — identical content. Fork heads (other remote) and unresolvable heads re-raise the original error. The same fallback covers `fetch_pr_head`, `create_worktree_from_pr_head`, and `reset_branch_to_pr_head` (not the fork-publish path, which is fork-only by construction).
 - `list_branches(full_name)` lists `origin/*` from the mirror (task-form branch pickers).
 - The same per-CLI guard + identity bootstrap applies to review worktrees.
 

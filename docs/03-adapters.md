@@ -218,20 +218,36 @@ runs fast with a clear non-retryable message (`TaskQueue._require_cli`).
   (`bypassPermissions`; `--always-approve` is the documented alias).
   `list_models` scrapes `grok models` (only `grok-4.6` at validation).
   SIGTERM → 143 with the session still resumable (verified live).
-- **commandcode** (`commandcode -p … --output-format json`, 1.50.1): vendor
-  CommandCodeAI. `run_start` carries the resume `sessionId`; deltas silent,
+- **commandcode** (`commandcode -p … --output-format json`, 1.53.1): vendor
+  CommandCodeAI. Turn-level events arrive wrapped in an envelope
+  (`{"type":"event","event":{…}}`, unwrapped by the parser before mapping;
+  1.50.1 was flat) while `run_start`/`run_end`/`result` stay flat.
+  `run_start` carries the resume `sessionId`; deltas silent,
   `message_end` authoritative, `thinking` silent; terminal `result` line
   (`subtype` first: success/error/max_turns). `-m` takes full or short model
   ids (`xiaomi/mimo-v2.5-pro`). `list_models` parses `--list-models`.
   Resume (`--resume`/`--continue`), signal-kill and `tool_running` frames
   per-docs, not live-exercised. Caveat: per docs `--yolo` is needed for
   file-write/shell tools in headless (default blocks them) — UNVERIFIED, so
-  the adapter stays on the verified `--trust` argv.
-- **agy** (`agy -p … --output-format stream-json`, 1.1.27): `init` carries
-  the resume `conversation_id`; `step_update` (`user_input`/`agent_response`
-  with `text_delta`/`tool_call`) streams; terminal `result`
-  (`status:"SUCCESS"` → silent, exit 0 → done). The non-TTY stdout-drop bug
-  does NOT reproduce on 1.1.27. Owner OAuth login is reused headlessly.
+  the adapter stays on the verified `--trust` argv (observed live: review
+  runs fall back to posting the last message when `.jalebi/review.md` cannot
+  be written).
+- **agy** (`agy -p … --output-format stream-json`, 1.2.2): `init` carries
+  the resume `conversation_id` plus `permission_mode` (`always-proceed` with
+  `--dangerously-skip-permissions`, `request-review` without it);
+  `step_update` (`user_input` / `agent_response` with `text_delta` /
+  **`tool`** with nested `tool_info`) streams; terminal `result`
+  (`status:"SUCCESS"` → silent, exit 0 → done). Tool turns are
+  `ACTIVE`/`DONE`/`ERROR` with `tool_info.parameters`/`output`/`error` (the
+  older flat `tool_call` shape is still accepted). Textless `agent_response`
+  turns (usage-only `DONE`) are normal — the per-run parser recovers a
+  `result.response` that turns out to be the only text, so a working run is
+  never misfiled as `empty_done`. **Headless denials** (no skip flag):
+  the tool turn goes `ERROR` (`permission check failed…`), `result` stays
+  `SUCCESS` with `denied_actions` + exit 0, plus a `jetski: no output
+  produced…` notice on stderr — the adapter surfaces the denial as a visible
+  timeline message (warn, don't fail). The non-TTY stdout-drop bug
+  does NOT reproduce on 1.2.2. Owner OAuth login is reused headlessly.
   Default model `gemini-3.8-flash-low` is passed explicitly (never the CLI
   default). Resume (`--conversation`), kill-during-run and non-default
   `--model` execution per-flags, not live-exercised. `list_models` parses

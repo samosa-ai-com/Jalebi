@@ -735,9 +735,79 @@ def test_review_task_posts_review_and_does_not_publish(
 
     fresh = _fresh_task(session, task.id)
     assert fresh.status == "done"
+    assert json.loads(fresh.context_json)["review_nitpick_mode"] is True
     run = _latest_run(session, task.id)
     assert run.status == "done"
     assert run.steps_json and "Review posted" in run.steps_json
+
+
+def test_review_task_stamps_nitpick_mode_off(
+    q, session, repo_row, monkeypatch, tmp_path
+) -> None:
+    settings.set_setting(session, "review_nitpick_mode", False)
+    task = tasks.create_task(
+        session,
+        type_="pr_review",
+        repo_id=repo_row.id,
+        prompt="review it",
+        prs=[3],
+        context={
+            "prs": [
+                {
+                    "number": 3,
+                    "title": "t",
+                    "body": "b",
+                    "html_url": "u",
+                    "base": "main",
+                    "head": "h",
+                    "state": "open",
+                    "author": "a",
+                }
+            ]
+        },
+    )
+    wt = tmp_path / "review_off"
+    wt.mkdir(parents=True)
+    (wt / ".jalebi").mkdir(parents=True)
+    (wt / ".jalebi" / "review.md").write_text("Blockers only:\n- none\n")
+
+    class ReviewGit:
+        def __init__(self, config):
+            self.config = config
+
+        def ensure_mirror(self, *a, **k):
+            return None
+
+        def create_review_worktree(self, *a, **k):
+            return wt
+
+    monkeypatch.setattr("jalebi.queue.GitWorkspace", ReviewGit)
+    bootstrapped_md = []
+    monkeypatch.setattr(
+        "jalebi.queue.worktree_bootstrap.bootstrap_worktree",
+        lambda _wt, md, **k: bootstrapped_md.append(md),
+    )
+
+    class RecordingClient:
+        def __init__(self, token: str):
+            self.token = token
+            self.reviews = []
+
+        def post_pr_review(self, full_name, pr_number, body):
+            self.reviews.append((pr_number, body))
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("jalebi.queue.GitHubClient", RecordingClient)
+    _install_adapter(monkeypatch, FakeHandle([AgentEvent(type="done")]))
+
+    q._run_task(task.id)
+
+    fresh = _fresh_task(session, task.id)
+    assert fresh.status == "done"
+    assert json.loads(fresh.context_json)["review_nitpick_mode"] is False
+    assert any("omit minute nits" in md for md in bootstrapped_md)
 
 
 def test_manual_publish_uses_tasks_account(q, session, repo_row, monkeypatch) -> None:
@@ -1661,6 +1731,95 @@ def test_done_run_with_uncommitted_changes_is_surfaced(
     assert "scratch.txt" in texts
     assert run.diff_text is not None
     assert "changed" in run.diff_text
+
+
+def test_empty_done_run_with_uncommitted_changes_is_surfaced(
+    q, session, repo_row, monkeypatch
+) -> None:
+    """An `empty_done` failure (exit 0, stream of steps but no agent output —
+    the agy 1.2.x task-83 shape) must still surface a dirty working tree: the
+    agent may have done real file work whose output never streamed."""
+    _no_publish(session)
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
+    git = GitWorkspace(q.config)
+    git.ensure_mirror(FULL_NAME, repo_row.clone_url)
+    wt = git.create_worktree(task.id, FULL_NAME, "main")
+    _git(["-C", str(wt), "config", "user.email", "t@example.com"])
+    _git(["-C", str(wt), "config", "user.name", "Test"])
+    (wt / "file.txt").write_text("hello\nchanged\n")
+    _install_adapter(
+        monkeypatch,
+        FakeHandle(
+            [
+                AgentEvent(type="step", phase="step", text="banner line"),
+                AgentEvent(type="done"),
+            ]
+        ),
+    )
+
+    q._run_task(task.id)
+
+    session.expire_all()
+    run = _latest_run(session, task.id)
+    assert run.status == "failed"  # still a failure — just a visible one now
+    steps = json.loads(run.steps_json or "[]")
+    texts = " ".join(str(s.get("text") or "") for s in steps)
+    assert "without producing any agent output" in texts
+    assert "uncommitted" in texts
+    assert "file.txt" in texts
+    assert run.diff_text is not None
+    assert "changed" in run.diff_text
+
+
+def test_resolve_nitpick_mode_prefers_task_context(q, session, repo_row) -> None:
+    """A per-task review_nitpick_mode=False survives a global True (PR #10)."""
+    settings.set_setting(session, "review_nitpick_mode", True)
+    task = tasks.create_task(
+        session,
+        type_="pr_review",
+        repo_id=repo_row.id,
+        prompt="review it",
+        context={"review_nitpick_mode": False},
+    )
+    assert q._resolve_nitpick_mode(session, task) is False
+    assert json.loads(task.context_json).get("review_nitpick_mode") is False
+
+
+def test_resolve_nitpick_mode_stamps_global_when_absent(q, session, repo_row) -> None:
+    """No per-task value → global applies and is stamped for reproducibility."""
+    settings.set_setting(session, "review_nitpick_mode", True)
+    task = tasks.create_task(
+        session, type_="pr_review", repo_id=repo_row.id, prompt="review it"
+    )
+    assert q._resolve_nitpick_mode(session, task) is True
+    assert json.loads(task.context_json).get("review_nitpick_mode") is True
+
+
+def test_dirty_names_skips_malformed_lines(q) -> None:
+    """Blank/single-token porcelain lines never break timeline formatting."""
+    assert q._dirty_names([" M good.txt", "", "??", "??  spaced.txt  "]) == (
+        "good.txt, spaced.txt"
+    )
+    assert q._dirty_names(["", "??"]) == ""
+    assert q._dirty_names(["", "X"]) == ""
+    many = [f" M f{i}.txt" for i in range(12)]
+    assert q._dirty_names(many).endswith("(+2 more)")
+    assert "f0.txt" in q._dirty_names(many)
+
+
+def test_pr_head_resolver_transport_error_returns_none(q, monkeypatch) -> None:
+    """A transport failure in the resolver must not mask the fetch error."""
+    import httpx
+
+    class BoomClient:
+        def __init__(self, token: str | None) -> None:
+            pass
+
+        def get_pr(self, full_name: str, pr_number: int) -> dict:
+            raise httpx.ConnectError("down")
+
+    monkeypatch.setattr("jalebi.queue.GitHubClient", BoomClient)
+    assert q._pr_head_resolver("owner/repo", 10, "tok")() is None
 
 
 def test_manual_publish_mode_skips_autopublish(q, session, repo_row, monkeypatch) -> None:

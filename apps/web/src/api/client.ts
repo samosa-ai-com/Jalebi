@@ -263,7 +263,8 @@ export const api = {
     ),
   updateSetting: (key: string, value: unknown) =>
     request<SettingsMap>(`/api/settings`, { method: "POST", body: JSON.stringify({ key, value }) }),
-  testNotification: () => request<{ ok: boolean }>(`/api/notify/test`, { method: "POST" }),
+  testNotification: () =>
+    request<{ ok: boolean; warning?: string }>(`/api/notify/test`, { method: "POST" }),
   getEnvVars: (repoId?: number) =>
     request<EnvVar[]>(`/api/envvars${repoId ? `?repo_id=${repoId}` : ""}`),
   upsertEnvVar: (name: string, value: string, repoId?: number | null) =>

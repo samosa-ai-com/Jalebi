@@ -25,9 +25,15 @@ DEFAULTS: dict[str, object] = {
     "ide_name": "",
     "concurrency": 4,
     "auto_publish": True,
+    # Master switch for PR reviewer depth / nitpickiness (pr_review tasks).
+    # True = thorough review including minute nits (default, preserves existing behavior);
+    # False = short, high-signal review focused on blockers and significant issues only.
+    "review_nitpick_mode": True,
     # Merged ntfy endpoint: a bare topic ("my-jalebi") or a full URL
     # ("https://ntfy.example.com/room"). ntfy_url was folded into this.
     "ntfy_topic": "",
+    # Master on/off switch for the ntfy channel (endpoint preserved while off).
+    "ntfy_enabled": True,
     "default_timeout_minutes": 60,
     # Auto-recovery on failed/timed_out runs. Bounded by max_attempts (a
     # wrong-model/auth failure must not loop forever); each run is bounded

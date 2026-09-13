@@ -81,6 +81,7 @@ export interface Task {
   prs: number[];
   env_vars: string[];
   triggered_by?: { delivery_id: string; event: string; received_at: string } | null;
+  review_nitpick_mode?: boolean | null;
   created_at: string;
   updated_at: string;
   run: Run | null;
@@ -212,8 +213,10 @@ export interface RetryPolicy {
 export interface SettingsMap {
   concurrency: number;
   auto_publish: boolean;
+  review_nitpick_mode?: boolean;
   auto_nudge: boolean;
   ntfy_topic: string;
+  ntfy_enabled: boolean;
   default_timeout_minutes: number;
   retry_policy: RetryPolicy;
   stall_timeout_seconds: number;

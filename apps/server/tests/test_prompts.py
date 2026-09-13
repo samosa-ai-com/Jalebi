@@ -97,10 +97,148 @@ def test_agent_md_pr_review_embeds_pr(session) -> None:
     assert "Adds x" in md
     assert "Linked pull request" not in md
     assert "review comments to address" not in md
+    # Default is thorough review including nits
+    assert "minute nits" in md
 
 
-def _pr_context() -> dict:
-    return {
+def test_agent_md_pr_review_nitpick_mode_off(session) -> None:
+    """When review_nitpick_mode is off, the brief instructs blockers only."""
+    repo = Repo(
+        full_name="owner/repo",
+        default_branch="main",
+        clone_url="https://github.com/owner/repo.git",
+        pat_name="test",
+    )
+    session.add(repo)
+    session.commit()
+    task = _task(
+        session,
+        repo,
+        type_="pr_review",
+        prs=[7],
+        context={
+            "prs": [
+                {
+                    "number": 7,
+                    "title": "Feature",
+                    "body": "Adds x",
+                    "html_url": "u",
+                    "base": "main",
+                    "head": "feature/x",
+                    "state": "open",
+                    "author": "bob",
+                }
+            ],
+            "review_nitpick_mode": False,
+        },
+    )
+    md = prompts.build_agent_md(task, repo)
+    assert "PR #7" in md
+    assert "blockers, bugs, and significant" in md
+    assert "Do not call out minute nits" in md
+    assert "omit minute nits" in md
+
+
+def test_agent_md_pr_review_reads_session_setting(session) -> None:
+    """build_agent_md with a session reads the database review_nitpick_mode setting."""
+    from jalebi.settings import set_setting
+
+    repo = Repo(
+        full_name="owner/repo",
+        default_branch="main",
+        clone_url="https://github.com/owner/repo.git",
+        pat_name="test",
+    )
+    session.add(repo)
+    session.commit()
+    task = _task(
+        session,
+        repo,
+        type_="pr_review",
+        prs=[7],
+        context={
+            "prs": [
+                {
+                    "number": 7,
+                    "title": "Feature",
+                    "body": "Adds x",
+                    "html_url": "u",
+                    "base": "main",
+                    "head": "feature/x",
+                    "state": "open",
+                    "author": "bob",
+                }
+            ]
+        },
+    )
+    # Default is thorough (True)
+    md = prompts.build_agent_md(task, repo, session=session)
+    assert "minute nits" in md
+
+    # Turn toggle off
+    set_setting(session, "review_nitpick_mode", False)
+    md_off = prompts.build_agent_md(task, repo, session=session)
+    assert "blockers, bugs, and significant" in md_off
+    assert "Do not call out minute nits" in md_off
+    assert "omit minute nits" in md_off
+
+
+def _repo(session):
+    repo = Repo(
+        full_name="owner/repo",
+        default_branch="main",
+        clone_url="https://github.com/owner/repo.git",
+        pat_name="test",
+    )
+    session.add(repo)
+    session.commit()
+    return repo
+
+
+def test_agent_md_tolerates_corrupt_context(session) -> None:
+    """Garbage context_json must never crash prompt building (PR #13)."""
+    from jalebi.settings import set_setting
+
+    repo = _repo(session)
+    set_setting(session, "review_nitpick_mode", False)
+    for bad in ("{", "[]", ""):
+        task = _task(session, repo, type_="pr_review", prs=[7])
+        task.context_json = bad
+        md = prompts.build_agent_md(task, repo, session=session)
+        assert isinstance(md, str) and md
+
+
+def test_agent_md_corrupt_global_fails_open(session) -> None:
+    """A non-bool stored setting reads as the default (thorough)."""
+    from jalebi.settings import set_setting
+
+    repo = _repo(session)
+    task = _task(
+        session,
+        repo,
+        type_="pr_review",
+        prs=[7],
+        context={
+            "prs": [
+                {
+                    "number": 7,
+                    "title": "Feature",
+                    "body": "Adds x",
+                    "html_url": "u",
+                    "base": "main",
+                    "head": "feature/x",
+                    "state": "open",
+                    "author": "bob",
+                }
+            ]
+        },
+    )
+    set_setting(session, "review_nitpick_mode", "false")
+    md = prompts.build_agent_md(task, repo, session=session)
+    assert "minute nits" in md
+
+
+def _pr_context() -> dict:    return {
         "prs": [
             {
                 "number": 7,

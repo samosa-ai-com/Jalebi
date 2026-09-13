@@ -62,6 +62,7 @@ default only for a key added by a code update before the next restart.
 | `default_backend` / `default_model` | live (resolved per run when an action doesn't pick its own) |
 | `adapter_model_lists` | live (read per `/api/models` call) |
 | `auto_nudge` | live (checked per poller/webhook fact change) |
+| `review_nitpick_mode` | live (per pr_review run dispatch; stamped onto task context) |
 | `enabled_backends` | live (Backend pickers read it per `/api/backends` call; dispatch falls back per run) |
 | `secret_patterns` | live (per run/prompt ingest) |
 | `default_timeout_minutes` | live (used for new tasks / watchdog fallback) |
@@ -69,6 +70,7 @@ default only for a key added by a code update before the next restart.
 | `stall_timeout_seconds` | live (per run start) |
 | `artifact_ttl_days` | **startup only** (artifact prune runs once at boot) |
 | `ntfy_topic` | live (per notification; merged endpoint — bare topic or full URL) |
+| `ntfy_enabled` | live (master switch checked on every ntfy send; `POST /api/notify/test` bypasses it with a warning) |
 | `notify_on_done` / `notify_on_failed` / `notify_on_progress` / `notify_on_needs_approval` | live (per run/progress ping) |
 | `notify_progress_interval_minutes` | live (progress watchdog reads it each loop) |
 | `timezone` | **live** (`jalebi/clock.set_zone` on save — screening cron matching + all timestamps follow it immediately; column defaults use a module-global zone synced at startup) |

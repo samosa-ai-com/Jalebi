@@ -11,6 +11,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, cast
 
+import httpx
 from sqlalchemy import func, select
 
 from jalebi import (
@@ -37,7 +38,7 @@ from jalebi.config import Config
 from jalebi.db import CatalogAgent, Repo, Run, Session, Task, now
 from jalebi.events import TaskEvents
 from jalebi.git_workspace import GitWorkspace, GitWorkspaceError, PushLeaseFailed
-from jalebi.github import GitHubClient
+from jalebi.github import GitHubClient, GitHubError
 
 logger = logging.getLogger(__name__)
 
@@ -389,6 +390,30 @@ class TaskQueue:
             return task.target_branch or "main"
         return TaskQueue._worktree_base(task)
 
+    @staticmethod
+    def _pr_head_resolver(full_name: str, pr_number: int, token: str | None):
+        """API-backed head resolver for the PR-head branch fallback.
+
+        Returns a zero-arg callable yielding ``(head_repo, head_branch)`` (or
+        ``None`` when the PR cannot be fetched) for
+        :meth:`GitWorkspace` to use when ``refs/pull/<N>/head`` is missing.
+        API failures resolve to ``None`` so the original fetch error surfaces.
+        """
+
+        def resolve() -> tuple[str | None, str | None] | None:
+            if token is None:
+                return None
+            try:
+                pr = GitHubClient(token).get_pr(full_name, pr_number)
+            except (GitHubError, httpx.HTTPError, OSError):
+                # Transport failures must not mask the original fetch error —
+                # resolve to None so it surfaces (PR #12 review).
+                logger.debug("pr-head resolver: get_pr failed for %s#%s", full_name, pr_number)
+                return None
+            return (pr.get("head_repo"), pr.get("head"))
+
+        return resolve
+
     def _ensure_task_worktree(
         self, git: GitWorkspace, task: Task, repo: Repo, token: str | None
     ):
@@ -405,7 +430,13 @@ class TaskQueue:
                 raise RuntimeError(
                     f"task {task.id}: pr-head source is only valid for freeform tasks"
                 )
-            return git.create_worktree_from_pr_head(task.id, repo.full_name, pr_number, token)
+            return git.create_worktree_from_pr_head(
+                task.id,
+                repo.full_name,
+                pr_number,
+                token,
+                self._pr_head_resolver(repo.full_name, pr_number, token),
+            )
         return git.create_worktree(task.id, repo.full_name, self._worktree_base(task), token)
 
     def _reset_task_branch(
@@ -414,7 +445,13 @@ class TaskQueue:
         """First-run reset to the current base (PR-head aware)."""
         pr_number = self._pr_head_number(task)
         if pr_number is not None:
-            git.reset_branch_to_pr_head(task.id, repo.full_name, pr_number, token)
+            git.reset_branch_to_pr_head(
+                task.id,
+                repo.full_name,
+                pr_number,
+                token,
+                self._pr_head_resolver(repo.full_name, pr_number, token),
+            )
         else:
             git.reset_branch_to_base(task.id, repo.full_name, self._worktree_base(task))
 
@@ -801,24 +838,30 @@ class TaskQueue:
         # dirty must not silently look clean. Surface the uncommitted files as a
         # timeline step; if the agent produced NO commits but left work behind,
         # capture the working-tree diff so it is still visible in the diff viewer.
-        if run.status == "done" and task.type != "pr_review":
+        # The same applies to an `empty_done` failure (issue #6): the agent may
+        # have done real file work whose output never streamed (agy 1.2.x drops
+        # textless turns), so the failure timeline must show it instead of an
+        # empty diff. Other failure modes keep the old behavior — a mid-run
+        # crash's dirty tree is not trusted as a deliverable.
+        if (run.status == "done" or empty_done) and task.type != "pr_review":
             try:
                 dirty = git.working_tree_status(worktree)
             except Exception:
                 dirty = []
             if dirty:
-                # Porcelain lines are "<XY> <path>": drop the two status codes and
-                # any quoting, keep the path.
-                names = ", ".join(
-                    ln.split(None, 1)[1].strip() for ln in dirty[:10]
-                )
+                # Malformed lines are skipped inside _dirty_names — timeline
+                # formatting must never raise before the terminal commit. When
+                # every line is malformed, fall back to the raw count instead
+                # of an empty name list (PR #12 review).
+                names = self._dirty_names(dirty)
+                detail = f": {names}" if names else ""
                 steps.append(
                     {
                         "type": "message",
                         "phase": None,
                         "text": (
                             f"Agent left {len(dirty)} uncommitted file(s) in the "
-                            f"worktree: {names}."
+                            f"worktree{detail}."
                         ),
                         "ts": clock.to_iso(now()),
                     }
@@ -1204,6 +1247,41 @@ class TaskQueue:
             session.close()
             self.events.close(task_id)
 
+    @staticmethod
+    def _dirty_names(dirty: list[str]) -> str:
+        """Comma-separated paths from porcelain lines, skipping malformed ones.
+
+        Porcelain lines are ``"<XY> <path>"`` — drop the status codes, keep
+        the path. Blank or single-token lines are skipped so timeline
+        formatting can never raise before the terminal commit. At most 10
+        names are listed; longer trees get a ``(+N more)`` suffix.
+        """
+        paths = []
+        for ln in dirty[:10]:
+            parts = ln.split(None, 1)
+            if len(parts) == 2 and parts[1].strip():
+                paths.append(parts[1].strip())
+        text = ", ".join(paths)
+        if len(dirty) > 10:
+            text += f" (+{len(dirty) - 10} more)" if text else f"+{len(dirty) - 10} more"
+        return text
+
+    @staticmethod
+    def _resolve_nitpick_mode(session, task: Task) -> bool:
+        """Effective review depth for a review run (PR #10 review finding 1).
+
+        A per-task ``review_nitpick_mode`` already in the task context wins
+        and is left untouched; otherwise the global setting applies and is
+        stamped onto the context for reproducibility.
+        """
+        existing = tasks._review_nitpick_mode(task)
+        if existing is not None:
+            return existing
+        val = settings.get_setting(session, "review_nitpick_mode")
+        mode = val if isinstance(val, bool) else True
+        tasks.stamp_review_nitpick_mode(session, task, mode)
+        return mode
+
     def _run_review(
         self,
         session,
@@ -1248,7 +1326,14 @@ class TaskQueue:
                 effective_prompt = f"{task.prompt}\n\n{agent.custom_instructions}"
             git = GitWorkspace(self.config)
             git.ensure_mirror(repo.full_name, repo.clone_url, token)
-            wt = git.create_review_worktree(task.id, repo.full_name, pr_number, token)
+            wt = git.create_review_worktree(
+                task.id,
+                repo.full_name,
+                pr_number,
+                token,
+                self._pr_head_resolver(repo.full_name, pr_number, token),
+            )
+            self._resolve_nitpick_mode(session, task)
             worktree_bootstrap.bootstrap_worktree(
                 wt,
                 prompts.build_agent_md(task, repo, agent=agent, cli=cli, session=session),
@@ -1538,6 +1623,8 @@ class TaskQueue:
 
     def _notify_enabled(self, session, key: str) -> bool:
         """Whether notifications are configured AND this event type is on."""
+        if settings.get_setting(session, "ntfy_enabled") is False:
+            return False
         if not str(settings.get_setting(session, "ntfy_topic") or "").strip():
             return False
         return bool(settings.get_setting(session, key))
@@ -1827,7 +1914,13 @@ class TaskQueue:
                 pr_number = self._task_pr_number(task)
                 if pr_number is None:
                     raise RuntimeError(f"pr_review task {task.id} has no PR number to resume")
-                wt = git.create_review_worktree(task.id, repo.full_name, pr_number, token)
+                wt = git.create_review_worktree(
+                    task.id,
+                    repo.full_name,
+                    pr_number,
+                    token,
+                    self._pr_head_resolver(repo.full_name, pr_number, token),
+                )
             else:
                 wt = self._ensure_task_worktree(git, task, repo, token)
             worktree_bootstrap.bootstrap_worktree(

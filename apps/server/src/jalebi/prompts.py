@@ -12,7 +12,7 @@ import json
 import re
 from pathlib import Path
 
-from jalebi import catalog
+from jalebi import catalog, settings
 from jalebi.db import CatalogAgent, Repo, Task
 
 _PR_HEAD_RE = re.compile(r"^pr/(\d+)/head$")
@@ -80,10 +80,17 @@ def _pr_md_note() -> str:
     )
 
 
-def _review_md_note() -> str:
+def _review_md_note(nitpick_mode: bool = True) -> str:
+    scope = (
+        "Include both critical issues and minute nits (typos, style, micro-suggestions)."
+        if nitpick_mode
+        else "Focus strictly on blockers, bugs, and significant "
+        "architectural/correctness issues; omit minute nits, typos, code style, "
+        "and minor suggestions."
+    )
     return (
         "Write your review to `.jalebi/review.md`: start with an overall verdict, then "
-        "a prioritized list of findings (severity, file/line, issue, suggestion). "
+        f"a prioritized list of findings (severity, file/line, issue, suggestion). {scope} "
         "Jalebi posts this as a comment on the pull request."
     )
 
@@ -162,7 +169,14 @@ def build_agent_md(
                 else:
                     parts.append(f"- `@.claude/skills/{name}/SKILL.md`")
 
-    ctx = json.loads(task.context_json) if task.context_json else {}
+    # Defensive: legacy/corrupt context rows must never crash prompt building
+    # (same pattern as tasks._review_nitpick_mode).
+    try:
+        ctx = json.loads(task.context_json) if task.context_json else {}
+    except (TypeError, ValueError):
+        ctx = {}
+    if not isinstance(ctx, dict):
+        ctx = {}
     issues = ctx.get("issues") or []
     prs = ctx.get("prs") or []
 
@@ -192,12 +206,31 @@ def build_agent_md(
 
     if task.type == "pr_review" and prs:
         pr = prs[0]
+        nitpick_mode = True
+        if "review_nitpick_mode" in ctx and isinstance(ctx["review_nitpick_mode"], bool):
+            nitpick_mode = ctx["review_nitpick_mode"]
+        elif session is not None:
+            val = settings.get_setting(session, "review_nitpick_mode")
+            if isinstance(val, bool):
+                nitpick_mode = val
+
+        depth_instruction = (
+            "Provide a thorough review covering critical issues, logic bugs, "
+            "architectural concerns, "
+            "and minute nits (typos, code style, formatting, and micro-suggestions)."
+            if nitpick_mode
+            else "Provide a short, high-signal review focusing only on blockers, bugs, "
+            "and significant architectural or security issues. Do not call out minute "
+            "nits, typos, code style, formatting, or minor micro-suggestions."
+        )
         parts += [
             "",
             "## Pull request to review",
             "Review the PR below. The worktree is checked out at the PR head commit —",
             "read the diff and the surrounding code there. Build/run it if feasible.",
             "Do **not** modify files or push anything. You are reviewing only.",
+            "",
+            depth_instruction,
             "",
             f"- **PR #{pr['number']} — {pr.get('title', '')}** "
             f"({pr.get('html_url', '')})",
@@ -210,7 +243,7 @@ def build_agent_md(
             "  --- END UNTRUSTED DATA ---",
             "  ```",
             "",
-            _review_md_note(),
+            _review_md_note(nitpick_mode=nitpick_mode),
         ]
 
     if task.type == "freeform" or task.type == "screen_finding":

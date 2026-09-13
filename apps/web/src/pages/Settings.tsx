@@ -1650,6 +1650,8 @@ export default function Settings() {
         setSettings({
           ...s,
           auto_nudge: s.auto_nudge ?? false,
+          review_nitpick_mode: s.review_nitpick_mode ?? true,
+          ntfy_enabled: s.ntfy_enabled ?? true,
           adapter_model_lists: s.adapter_model_lists ?? {},
           enabled_backends: s.enabled_backends ?? [...AGENT_CLIS],
           retry_policy: {
@@ -1721,8 +1723,8 @@ export default function Settings() {
   async function sendTestNotification() {
     mark("notify_test", { state: "saving" });
     try {
-      await api.testNotification();
-      mark("notify_test", { state: "saved" });
+      const res = await api.testNotification();
+      mark("notify_test", { state: "saved", msg: res.warning });
     } catch (e) {
       mark("notify_test", {
         state: "error",
@@ -2138,6 +2140,18 @@ export default function Settings() {
             />
           </Row>
           <Row
+            label="Review nitpick mode"
+            desc="Control review depth for PR reviews. On = thorough review including minute nits (typos, style, micro-suggestions); off = short review, blockers and significant issues only."
+            status={badge("review_nitpick_mode")}
+            error={fieldState["review_nitpick_mode"]?.msg}
+          >
+            <Toggle
+              checked={settings.review_nitpick_mode ?? true}
+              onChange={(v) => void save("review_nitpick_mode", v)}
+              ariaLabel="Review nitpick mode"
+            />
+          </Row>
+          <Row
             advanced
             label="Timeout"
             desc="Default minutes a task may run before it is force-killed."
@@ -2456,7 +2470,12 @@ export default function Settings() {
                   : "Send test notification"}
               </button>
               {fieldState["notify_test"]?.state === "saved" && (
-                <span className="text-xs text-green-300">sent</span>
+                <span className="text-xs text-green-300">
+                  sent
+                  {fieldState["notify_test"].msg
+                    ? " — normal ntfy pushes remain disabled"
+                    : ""}
+                </span>
               )}
               {fieldState["notify_test"]?.state === "error" && (
                 <span className="text-xs text-red-400">{fieldState["notify_test"].msg}</span>
@@ -2464,6 +2483,20 @@ export default function Settings() {
             </div>
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="sm:col-span-2 flex items-center justify-between gap-3 rounded border border-ink-800 px-3 py-2.5 text-sm">
+              <div className="space-y-0.5">
+                <div className="font-medium text-ink-200">Ntfy notifications</div>
+                <div className="text-xs text-ink-500">
+                  Master switch for the ntfy channel. Off silences all pushes while keeping
+                  the endpoint configured.
+                </div>
+              </div>
+              <Toggle
+                checked={settings.ntfy_enabled ?? true}
+                onChange={(v) => void save("ntfy_enabled", v)}
+                ariaLabel="Ntfy notifications"
+              />
+            </div>
             <div className="sm:col-span-2 flex items-center justify-between gap-3 rounded border border-ink-800 px-3 py-2.5 text-sm">
               <div className="space-y-0.5">
                 <div className="font-medium text-ink-200">Browser notifications</div>
