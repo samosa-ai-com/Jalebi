@@ -1518,3 +1518,28 @@ def test_rerun_rejects_non_string_model(client: FlaskClient, repo_id: int, sessi
     resp = client.post(f"/api/tasks/{task_id}/rerun", json={"model": None})
     assert resp.status_code == 200
 
+
+def test_task_review_nitpick_mode_serialized(client: FlaskClient, repo_id: int, session) -> None:
+    """Tasks serialize review_nitpick_mode from their context_json when present."""
+    task = tasks.create_task(
+        session,
+        type_="pr_review",
+        repo_id=repo_id,
+        prompt="review",
+        prs=[1],
+        context={"prs": [{"number": 1}], "review_nitpick_mode": False},
+    )
+    resp = client.get(f"/api/tasks/{task.id}")
+    assert resp.status_code == 200
+    assert resp.get_json()["review_nitpick_mode"] is False
+
+    task2 = tasks.create_task(
+        session,
+        type_="freeform",
+        repo_id=repo_id,
+        prompt="do work",
+    )
+    resp2 = client.get(f"/api/tasks/{task2.id}")
+    assert resp2.status_code == 200
+    assert resp2.get_json()["review_nitpick_mode"] is None
+

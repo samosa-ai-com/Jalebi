@@ -735,9 +735,79 @@ def test_review_task_posts_review_and_does_not_publish(
 
     fresh = _fresh_task(session, task.id)
     assert fresh.status == "done"
+    assert json.loads(fresh.context_json)["review_nitpick_mode"] is True
     run = _latest_run(session, task.id)
     assert run.status == "done"
     assert run.steps_json and "Review posted" in run.steps_json
+
+
+def test_review_task_stamps_nitpick_mode_off(
+    q, session, repo_row, monkeypatch, tmp_path
+) -> None:
+    settings.set_setting(session, "review_nitpick_mode", False)
+    task = tasks.create_task(
+        session,
+        type_="pr_review",
+        repo_id=repo_row.id,
+        prompt="review it",
+        prs=[3],
+        context={
+            "prs": [
+                {
+                    "number": 3,
+                    "title": "t",
+                    "body": "b",
+                    "html_url": "u",
+                    "base": "main",
+                    "head": "h",
+                    "state": "open",
+                    "author": "a",
+                }
+            ]
+        },
+    )
+    wt = tmp_path / "review_off"
+    wt.mkdir(parents=True)
+    (wt / ".jalebi").mkdir(parents=True)
+    (wt / ".jalebi" / "review.md").write_text("Blockers only:\n- none\n")
+
+    class ReviewGit:
+        def __init__(self, config):
+            self.config = config
+
+        def ensure_mirror(self, *a, **k):
+            return None
+
+        def create_review_worktree(self, *a, **k):
+            return wt
+
+    monkeypatch.setattr("jalebi.queue.GitWorkspace", ReviewGit)
+    bootstrapped_md = []
+    monkeypatch.setattr(
+        "jalebi.queue.worktree_bootstrap.bootstrap_worktree",
+        lambda _wt, md, **k: bootstrapped_md.append(md),
+    )
+
+    class RecordingClient:
+        def __init__(self, token: str):
+            self.token = token
+            self.reviews = []
+
+        def post_pr_review(self, full_name, pr_number, body):
+            self.reviews.append((pr_number, body))
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("jalebi.queue.GitHubClient", RecordingClient)
+    _install_adapter(monkeypatch, FakeHandle([AgentEvent(type="done")]))
+
+    q._run_task(task.id)
+
+    fresh = _fresh_task(session, task.id)
+    assert fresh.status == "done"
+    assert json.loads(fresh.context_json)["review_nitpick_mode"] is False
+    assert any("omit minute nits" in md for md in bootstrapped_md)
 
 
 def test_manual_publish_uses_tasks_account(q, session, repo_row, monkeypatch) -> None:

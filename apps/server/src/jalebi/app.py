@@ -164,6 +164,7 @@ def _valid_enabled_backends(v) -> bool:
 _SETTING_VALIDATORS = {
     "concurrency": lambda v: isinstance(v, int) and 0 <= v <= 64,
     "auto_publish": lambda v: isinstance(v, bool),
+    "review_nitpick_mode": lambda v: isinstance(v, bool),
     "default_timeout_minutes": lambda v: isinstance(v, int) and v >= 1,
     # Merged ntfy endpoint: bare topic or an http(s) URL. ntfy_url is gone.
     "ntfy_topic": lambda v: isinstance(v, str) and (

@@ -62,6 +62,7 @@ default only for a key added by a code update before the next restart.
 | `default_backend` / `default_model` | live (resolved per run when an action doesn't pick its own) |
 | `adapter_model_lists` | live (read per `/api/models` call) |
 | `auto_nudge` | live (checked per poller/webhook fact change) |
+| `review_nitpick_mode` | live (per pr_review run dispatch; stamped onto task context) |
 | `enabled_backends` | live (Backend pickers read it per `/api/backends` call; dispatch falls back per run) |
 | `secret_patterns` | live (per run/prompt ingest) |
 | `default_timeout_minutes` | live (used for new tasks / watchdog fallback) |

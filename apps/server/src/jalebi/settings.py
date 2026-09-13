@@ -25,6 +25,10 @@ DEFAULTS: dict[str, object] = {
     "ide_name": "",
     "concurrency": 4,
     "auto_publish": True,
+    # Master switch for PR reviewer depth / nitpickiness (pr_review tasks).
+    # True = thorough review including minute nits (default, preserves existing behavior);
+    # False = short, high-signal review focused on blockers and significant issues only.
+    "review_nitpick_mode": True,
     # Merged ntfy endpoint: a bare topic ("my-jalebi") or a full URL
     # ("https://ntfy.example.com/room"). ntfy_url was folded into this.
     "ntfy_topic": "",
