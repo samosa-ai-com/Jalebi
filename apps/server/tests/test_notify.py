@@ -30,6 +30,37 @@ def test_send_unconfigured_returns_error(session) -> None:
     assert "not configured" in (error or "")
 
 
+def test_send_disabled_master_switch_sends_nothing(session, monkeypatch) -> None:
+    settings.set_setting(session, "ntfy_topic", "room")
+    settings.set_setting(session, "ntfy_enabled", False)
+    called = False
+
+    def fake_post(*args, **kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("must not POST while disabled")
+
+    monkeypatch.setattr("jalebi.notify.httpx.post", fake_post)
+    ok, error = notify.send(session, "t", "m")
+    assert ok is False
+    assert "disabled" in (error or "")
+    assert called is False
+    # The endpoint is preserved while off.
+    assert settings.get_setting(session, "ntfy_topic") == "room"
+
+
+def test_send_force_bypasses_disabled_master_switch(session, monkeypatch) -> None:
+    settings.set_setting(session, "ntfy_topic", "room")
+    settings.set_setting(session, "ntfy_enabled", False)
+
+    class FakeResp:
+        status_code = 200
+
+    monkeypatch.setattr("jalebi.notify.httpx.post", lambda *a, **k: FakeResp())
+    ok, error = notify.send(session, "t", "m", force=True)
+    assert ok is True and error is None
+
+
 def test_send_posts_json_to_server_root(session, monkeypatch) -> None:
     """JSON publishing: POST to the server ROOT with topic in the body (not to
     /topic — that would render the raw JSON as the message)."""

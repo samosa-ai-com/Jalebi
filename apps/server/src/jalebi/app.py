@@ -169,6 +169,7 @@ _SETTING_VALIDATORS = {
     "ntfy_topic": lambda v: isinstance(v, str) and (
         v == "" or v.startswith(("http://", "https://")) or ("/" not in v and " " not in v)
     ),
+    "ntfy_enabled": lambda v: isinstance(v, bool),
     "retry_policy": _valid_retry_policy,
     "stall_timeout_seconds": lambda v: isinstance(v, int) and v >= 60,
     "secret_patterns": _valid_secret_patterns,
@@ -551,13 +552,18 @@ def create_app(config: Config | None = None) -> Flask:
 
     @app.post("/api/notify/test")
     def notify_test() -> ResponseReturnValue:
-        """Send a test push to the configured ntfy topic; returns ok/error."""
+        """Send a test push to the configured ntfy topic; returns ok/error.
+
+        The test bypasses the ``ntfy_enabled`` master switch so the endpoint
+        stays verifiable while off (failed-login pushes stay suppressed).
+        """
         session = db.get_session()
         raw_patterns = settings.get_setting(session, "secret_patterns") or []
         patterns = [str(p) for p in raw_patterns] if isinstance(raw_patterns, list) else []
         masker = masking.build_masker(
             secrets.all_token_values(current_app.config["JALEBI_CONFIG"]), patterns
         )
+        disabled = settings.get_setting(session, "ntfy_enabled") is False
         ok, error = notify.send(
             session,
             "Jalebi test notification",
@@ -567,9 +573,12 @@ def create_app(config: Config | None = None) -> Flask:
             click=config.primary_link("/"),
             actions=config.open_actions("/", "Open Jalebi"),
             masker=masker,
+            force=True,
         )
         if not ok:
             return jsonify({"ok": False, "error": error or "notification failed"}), 400
+        if disabled:
+            return jsonify({"ok": True, "warning": "ntfy notifications are disabled"})
         return jsonify({"ok": True})
 
     # ---- Phase 4 T6 — IDE connector endpoints -----------------------------
