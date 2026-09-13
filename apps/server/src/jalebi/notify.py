@@ -65,13 +65,18 @@ def send(
     click: str | None = None,
     actions: list[dict[str, object]] | None = None,
     masker: Callable[[str], str] | None = None,
+    force: bool = False,
 ) -> tuple[bool, str | None]:
     """Push an ntfy notification. Returns ``(ok, error)``; never raises.
 
     Sends a JSON body to the server root with ``topic`` inside it (JSON
     publishing mode). The title and message are masked before being sent (PATs
     + secret patterns), so a stray secret can never reach the push channel.
+    When the ``ntfy_enabled`` master switch is off (and ``force`` is False),
+    no push is sent and the endpoint is left intact.
     """
+    if not force and get_setting(session, "ntfy_enabled") is False:
+        return False, "ntfy notifications are disabled"
     resolved = resolve(str(get_setting(session, "ntfy_topic") or ""))
     if resolved is None:
         return False, "ntfy_topic is not configured"

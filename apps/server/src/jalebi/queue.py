@@ -1538,6 +1538,8 @@ class TaskQueue:
 
     def _notify_enabled(self, session, key: str) -> bool:
         """Whether notifications are configured AND this event type is on."""
+        if settings.get_setting(session, "ntfy_enabled") is False:
+            return False
         if not str(settings.get_setting(session, "ntfy_topic") or "").strip():
             return False
         return bool(settings.get_setting(session, key))
