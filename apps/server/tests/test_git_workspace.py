@@ -441,8 +441,83 @@ def test_create_worktree_from_pr_head_based_on_pr_commit(
     assert ws.create_worktree_from_pr_head(11, FULL_NAME, 1) == wt
 
 
-def test_merge_task_into_fork_head_merges_cleanly(
+def _push_pr_branch(tmp_path, remote: str, pr_number: int = 3) -> str:
+    """Push a PR-branch commit WITHOUT creating refs/pull/N/head (simulates
+    GitHub not advertising the pull pseudo-ref). Returns the PR commit."""
+    src = tmp_path / f"clone{pr_number}"
+    _git(["clone", remote, str(src)])
+    _git(["-C", str(src), "config", "user.email", "t@example.com"])
+    _git(["-C", str(src), "config", "user.name", "Test"])
+    (src / "prfile.txt").write_text("pr change\n")
+    _git(["-C", str(src), "add", "prfile.txt"])
+    _git(["-C", str(src), "commit", "-m", "pr change"])
+    pr_commit = _git(["-C", str(src), "rev-parse", "HEAD"])
+    _git(["-C", str(src), "push", remote, f"{pr_commit}:refs/heads/pr-branch"])
+    return pr_commit
+
+
+def test_review_worktree_falls_back_to_same_repo_branch(
     ws: GitWorkspace, remote: str, tmp_path
+) -> None:
+    """Missing refs/pull/N/head + same-repo resolver → detached at the branch."""
+    pr_commit = _push_pr_branch(tmp_path, remote)
+    ws.ensure_mirror(FULL_NAME, remote)
+    rwt = ws.create_review_worktree(
+        21, FULL_NAME, 3, pr_head_resolver=lambda: (FULL_NAME, "pr-branch")
+    )
+    assert _git(["-C", str(rwt), "rev-parse", "HEAD"]) == pr_commit
+    assert (rwt / "prfile.txt").exists()
+
+
+def test_review_worktree_fork_head_reraises(
+    ws: GitWorkspace, remote: str, tmp_path
+) -> None:
+    """A fork head must NOT fall back (its branch lives on another remote)."""
+    _push_pr_branch(tmp_path, remote)
+    ws.ensure_mirror(FULL_NAME, remote)
+    with pytest.raises(GitWorkspaceError, match=r"refs/pull/3/head"):
+        ws.create_review_worktree(
+            22, FULL_NAME, 3, pr_head_resolver=lambda: ("other/repo", "pr-branch")
+        )
+
+
+def test_review_worktree_no_resolver_reraises(
+    ws: GitWorkspace, remote: str, tmp_path
+) -> None:
+    """Without a resolver the original fetch error surfaces unchanged."""
+    _push_pr_branch(tmp_path, remote)
+    ws.ensure_mirror(FULL_NAME, remote)
+    with pytest.raises(GitWorkspaceError, match=r"refs/pull/3/head"):
+        ws.create_review_worktree(23, FULL_NAME, 3)
+
+
+def test_fetch_pr_head_double_failure_names_both(
+    ws: GitWorkspace, remote: str, tmp_path
+) -> None:
+    """Pull ref AND branch both missing → error names both attempts."""
+    _push_pr_branch(tmp_path, remote)
+    ws.ensure_mirror(FULL_NAME, remote)
+    with pytest.raises(GitWorkspaceError, match=r"refs/pull/3/head.*refs/heads/nope"):
+        ws.fetch_pr_head(
+            FULL_NAME, 3, pr_head_resolver=lambda: (FULL_NAME, "nope")
+        )
+
+
+def test_fetch_pr_head_raising_resolver_reraises_original(
+    ws: GitWorkspace, remote: str, tmp_path
+) -> None:
+    """A resolver that itself blows up must not mask the fetch error."""
+    _push_pr_branch(tmp_path, remote)
+    ws.ensure_mirror(FULL_NAME, remote)
+
+    def boom():
+        raise RuntimeError("resolver blew up")
+
+    with pytest.raises(GitWorkspaceError, match=r"refs/pull/3/head"):
+        ws.fetch_pr_head(FULL_NAME, 3, pr_head_resolver=boom)
+
+
+def test_merge_task_into_fork_head_merges_cleanly(    ws: GitWorkspace, remote: str, tmp_path
 ) -> None:
     """merge_task_into_fork_head lands the task branch on fork-pr-<N>."""
     src = tmp_path / "clone"
