@@ -276,7 +276,7 @@ function Row({
 }) {
   return (
     <section
-      className={`surface flex flex-col justify-between gap-4 p-5 focus-within:relative focus-within:z-30${className ? ` ${className}` : ""}`}
+      className={`surface flex flex-col justify-between gap-4 p-5 focus-within:relative focus-within:z-30 ${className ?? ""}`}
     >
       <div>
         <div className="flex items-center gap-2">

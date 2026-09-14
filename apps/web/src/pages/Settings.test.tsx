@@ -322,6 +322,23 @@ describe("Settings", () => {
     expect(screen.getByRole("option", { name: "claude" })).toBeInTheDocument();
   });
 
+  it("keeps the row lift classes scanner-visible (trailing space matters)", async () => {
+    // Regression guard: Tailwind v4 only generates `focus-within:z-30` when it
+    // appears as a whitespace-separated token. Without the space the open
+    // dropdown renders behind the next card (verified live with screenshots).
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<Settings />);
+    await expand(/Agent defaults/);
+    await screen.findByText("Default backend");
+
+    const section = screen.getByRole("heading", { name: "Default backend" }).closest("section")!;
+    for (const token of ["focus-within:relative", "focus-within:z-30"]) {
+      expect(section.className.split(/\s+/)).toContain(token);
+    }
+  });
+
   it("clicking the Backend caption opens the dropdown (label activation)", async () => {
     const fetchMock = makeFetchMock();
     vi.stubGlobal("fetch", fetchMock);
