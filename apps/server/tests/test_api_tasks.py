@@ -57,6 +57,23 @@ def test_create_task_cli_widened(client: FlaskClient, repo_id: int) -> None:
     assert "unsupported agent cli" in resp.get_json()["error"]
 
 
+def test_create_task_refuses_uninstalled_backend(
+    client: FlaskClient, repo_id: int, session, monkeypatch
+) -> None:
+    """A task whose backend isn't installed is never created (400 + no row)."""
+    monkeypatch.setattr("jalebi.routes.tasks.is_backend_available", lambda cli: False)
+    before = session.query(Task).count()
+    resp = client.post(
+        "/api/tasks",
+        json={"repo_id": repo_id, "type": "freeform", "prompt": "do it", "cli": "opencode"},
+    )
+    assert resp.status_code == 400
+    body = resp.get_json()
+    assert "not installed" in body["error"]
+    assert body["missing_backend"] == "opencode"
+    assert session.query(Task).count() == before
+
+
 def test_create_task_requires_repo(client: FlaskClient) -> None:
     resp = client.post("/api/tasks", json={"prompt": "x"})
     assert resp.status_code == 400

@@ -14,7 +14,7 @@ Jalebi runs a **task queue** with a **worker pool** (threading). Tasks are persi
 
 | Endpoint | Behavior |
 |---|---|
-| `POST /api/tasks` | `{repo_id, type, prompt, source_branch, target_branch, model, cli, timeout_minutes}` → validate (repo exists, prompt non-empty, type in enum, `cli` supported) → mask prompt (PAT + `secret_patterns`) → create `queued` → enqueue → 201. 400 on invalid. `timeout_minutes` defaults to `settings.default_timeout_minutes`. `source_branch` is ignored for `issue_fix` (single-target model). |
+| `POST /api/tasks` | `{repo_id, type, prompt, source_branch, target_branch, model, cli, timeout_minutes}` → validate (repo exists, prompt non-empty, type in enum, `cli` supported) → refuse when the effective backend (task override → agent pin → default) isn't installed (`400` + `missing_backend`/`installed_backends`, nothing created) → mask prompt (PAT + `secret_patterns`) → create `queued` → enqueue → 201. 400 on invalid. `timeout_minutes` defaults to `settings.default_timeout_minutes`. `source_branch` is ignored for `issue_fix` (single-target model). |
 | `GET /api/tasks` | List tasks (newest first) with latest run summary. |
 | `GET /api/tasks/:id` | Task detail incl. latest run + steps + followups + artifacts. |
 | `POST /api/tasks/:id/cancel` | Queued → `cancelled` immediately; running → kill child → `cancelled`; terminal → 409. |

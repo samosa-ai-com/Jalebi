@@ -22,7 +22,7 @@ from jalebi import (
     tasks,
     workspace_files,
 )
-from jalebi.adapters import available_adapters
+from jalebi.adapters import available_adapters, is_backend_available
 from jalebi.catalog import agent_by_slug
 from jalebi.config import Config
 from jalebi.db import Artifact, Run, Task, now
@@ -225,6 +225,29 @@ def create_task() -> ResponseReturnValue:
     cli = payload.get("cli")
     if cli is not None and cli not in available_adapters():
         return jsonify({"error": f"unsupported agent cli: {cli}"}), 400
+
+    # Refuse to create a task whose backend isn't installed: a missing binary
+    # would only fail the run after creation. Resolve the same precedence the
+    # queue uses at dispatch (task override > agent pin > default backend).
+    agent_cli = agent.cli if agent is not None else None
+    default_cli = settings.get_setting(session, "default_backend")
+    effective_cli = cli or agent_cli or default_cli
+    if isinstance(effective_cli, str) and not is_backend_available(effective_cli):
+        installed = [c for c in available_adapters() if is_backend_available(c)]
+        hint = f" Installed here: {', '.join(installed)}." if installed else ""
+        return (
+            jsonify(
+                {
+                    "error": (
+                        f"backend '{effective_cli}' is not installed on this machine — "
+                        f"the task was not created. Pick an installed backend.{hint}"
+                    ),
+                    "missing_backend": effective_cli,
+                    "installed_backends": installed,
+                }
+            ),
+            400,
+        )
 
     model = payload.get("model")
     if model is not None and not isinstance(model, str):

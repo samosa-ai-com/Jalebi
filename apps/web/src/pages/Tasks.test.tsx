@@ -1672,6 +1672,75 @@ describe("Tasks page (queue overhaul)", () => {
     expect(screen.queryByText(/New here\? Start with a/)).not.toBeInTheDocument();
   });
 
+  it("blocks submit on a missing backend and offers installed ones", async () => {
+    const posted: unknown[] = [];
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.includes("/api/backends/health")) {
+        return {
+          ok: true,
+          json: async () => ({
+            backends: [
+              { cli: "opencode", installed: false, version: null },
+              { cli: "kilo", installed: true, version: "7.5.16" },
+            ],
+          }),
+        };
+      }
+      if (init?.method === "POST" && url.includes("/api/tasks")) {
+        posted.push(JSON.parse((init as RequestInit).body as string));
+        return { ok: true, json: async () => ({ id: 9, status: "queued" }) };
+      }
+      const handler = Object.entries(DEFAULT_HANDLERS).find(([n]) => url.includes(n));
+      const value = handler ? handler[1] : [];
+      return { ok: true, json: async () => value };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    await screen.findByText("New task");
+    await userEvent.type(screen.getByPlaceholderText("Instructions…"), "do the thing");
+    await userEvent.click(screen.getByRole("button", { name: "Create" }));
+    // No task created — the dialog asks for an installed backend instead.
+    expect(await screen.findByRole("dialog", { name: "Backend not installed" })).toBeInTheDocument();
+    expect(posted).toHaveLength(0);
+    // Pick kilo → the form's backend switches → resubmit posts with kilo.
+    await userEvent.click(screen.getByRole("button", { name: "Use kilo" }));
+    await userEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(posted).toHaveLength(1));
+    expect((posted[0] as { cli?: string }).cli).toBe("kilo");
+  });
+
+  it("submits normally when the backend health check fails", async () => {
+    const posted: unknown[] = [];
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.includes("/api/backends/health")) {
+        return { ok: false, status: 502, json: async () => ({ error: "down" }) };
+      }
+      if (init?.method === "POST" && url.includes("/api/tasks")) {
+        posted.push(JSON.parse((init as RequestInit).body as string));
+        return { ok: true, json: async () => ({ id: 9, status: "queued" }) };
+      }
+      const handler = Object.entries(DEFAULT_HANDLERS).find(([n]) => url.includes(n));
+      const value = handler ? handler[1] : [];
+      return { ok: true, json: async () => value };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    await screen.findByText("New task");
+    await userEvent.type(screen.getByPlaceholderText("Instructions…"), "do the thing");
+    await userEvent.click(screen.getByRole("button", { name: "Create" }));
+    // No dialog — submission proceeds; the server-side 400 is the backstop.
+    await waitFor(() => expect(posted).toHaveLength(1));
+    expect(screen.queryByRole("dialog", { name: "Backend not installed" })).not.toBeInTheDocument();
+  });
+
   it("renders friendly EmptyState when the task queue is empty", async () => {
     stubFetch({ ...DEFAULT_HANDLERS, "/api/tasks": [] });
     render(

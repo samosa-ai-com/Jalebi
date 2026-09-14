@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import { AttentionBadge } from "../components/AttentionBadge";
+import BackendMissingDialog from "../components/BackendMissingDialog";
 import { BrewHouse } from "../components/brew/BrewHouse";
 import type { SnackKind } from "../components/brew/snacks";
 import { OpsDeck } from "../components/ops/OpsDeck";
@@ -155,6 +156,12 @@ function CreateTask({
   const [availableEnvVars, setAvailableEnvVars] = useState<{ name: string; masked: string }[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Missing-backend gate: set instead of submitting when the resolved
+  // backend isn't installed — no task is created until the owner picks one.
+  const [missingBackend, setMissingBackend] = useState<{
+    missing: string;
+    installed: string[];
+  } | null>(null);
 
   const settingsLoading = agentCli === null;
   // The remembered repo applies without an effect: an explicitly picked repo
@@ -377,6 +384,26 @@ function CreateTask({
     if (!effectivePrompt) return;
     setBusy(true);
     setError(null);
+    // Never create a task on a backend that isn't installed: check health
+    // first and ask the owner to pick an installed one instead. A failed
+    // health fetch falls through — the backend refuses with a 400 anyway.
+    try {
+      const health = await api.getBackendsHealth().catch(() => null);
+      const list = health?.backends;
+      if (Array.isArray(list) && agentCli !== null) {
+        const found = list.find((h) => h.cli === agentCli);
+        if (found && !found.installed) {
+          setMissingBackend({
+            missing: agentCli,
+            installed: list.filter((h) => h.installed).map((h) => h.cli),
+          });
+          setBusy(false);
+          return;
+        }
+      }
+    } catch {
+      // Health-check failure must never block submission (see above).
+    }
     try {
       const created = await api.createTask({
         repo_id: effectiveRepoId,
@@ -846,6 +873,18 @@ function CreateTask({
           {busy ? "Creating…" : settingsLoading ? "Loading…" : "Create"}
         </button>
       </div>
+      {missingBackend && (
+        <BackendMissingDialog
+          missing={missingBackend.missing}
+          installed={missingBackend.installed}
+          onPick={(cli) => {
+            setAgentCli(cli);
+            // A new backend means a new model list — same reset as the select.
+            setModel("");
+          }}
+          onClose={() => setMissingBackend(null)}
+        />
+      )}
     </form>
   );
 }
