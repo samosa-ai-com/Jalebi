@@ -1,4 +1,5 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 export interface SearchableOption {
   value: string;
@@ -51,7 +52,46 @@ export default function SearchableSelect({
   const [query, setQuery] = useState("");
   const [highlight, setHighlight] = useState(0);
   const rootRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  // Viewport-anchored coordinates for the portaled list (null = not placed yet).
+  const [coords, setCoords] = useState<{ top: number; left: number; width: number } | null>(
+    null
+  );
+
+  // The list lives in a document.body portal (above every card's stacking
+  // context), so it is anchored to the toggle's viewport rect and flipped
+  // upward when space below is tight. Recomputed on open + scroll + resize.
+  function place() {
+    const rect = buttonRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const GAP = 4;
+    const MAX_H = 224; // matches max-h-56 on the list
+    const MIN_W = 180; // matches the Math.max on the rendered width below
+    const below = window.innerHeight - rect.bottom;
+    const up = below < MAX_H + GAP && rect.top > below;
+    const renderWidth = Math.max(rect.width, MIN_W);
+    setCoords({
+      left: Math.max(8, Math.min(rect.left, window.innerWidth - renderWidth - 8)),
+      width: renderWidth,
+      top: up ? Math.max(8, rect.top - MAX_H - GAP) : rect.bottom + GAP,
+    });
+  }
+
+  useLayoutEffect(() => {
+    if (open) place();
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    window.addEventListener("scroll", place, true);
+    window.addEventListener("resize", place);
+    return () => {
+      window.removeEventListener("scroll", place, true);
+      window.removeEventListener("resize", place);
+    };
+  }, [open]);
   const listId = useId();
   const current = String(value ?? "");
 
@@ -84,11 +124,15 @@ export default function SearchableSelect({
     requestAnimationFrame(() => searchRef.current?.focus());
   }
 
-  // Close on outside click.
+  // Close on outside click (the portaled list is outside rootRef, so both
+  // nodes count as inside — otherwise option mousedown would close first).
   useEffect(() => {
     if (!open) return;
     function onDown(e: MouseEvent) {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+      const target = e.target as Node;
+      if (rootRef.current?.contains(target)) return;
+      if (listRef.current?.contains(target)) return;
+      setOpen(false);
     }
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
@@ -144,6 +188,7 @@ export default function SearchableSelect({
           <span className="mb-1.5 block text-xs font-medium text-ink-400">{label}</span>
         ))}
       <button
+        ref={buttonRef}
         type="button"
         aria-label={label}
         aria-haspopup="listbox"
@@ -167,9 +212,20 @@ export default function SearchableSelect({
           {allowCustom ? `Custom value: ${current}.` : ""} {staleHint}
         </p>
       )}
-      {open && (
-        <div className="relative z-20">
-          <div className="absolute inset-x-0 top-1 overflow-hidden rounded-lg border border-ink-700 bg-ink-950 shadow-xl">
+      {open &&
+        coords &&
+        createPortal(
+          <div
+            ref={listRef}
+            className="overflow-hidden rounded-lg border border-ink-700 bg-ink-950 shadow-xl"
+            style={{
+              position: "fixed",
+              top: coords.top,
+              left: coords.left,
+              width: coords.width,
+              zIndex: 50,
+            }}
+          >
             <input
               ref={searchRef}
               role="combobox"
@@ -248,9 +304,9 @@ export default function SearchableSelect({
                 <li className="px-3 py-1.5 text-sm text-ink-500">No matches.</li>
               )}
             </ul>
-          </div>
-        </div>
-      )}
+          </div>,
+          document.body
+        )}
     </div>
   );
 }

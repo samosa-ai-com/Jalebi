@@ -94,6 +94,37 @@ describe("SearchableSelect", () => {
     expect(visible).toHaveAttribute("title", "The AI coding assistant that runs the task.");
   });
 
+  it("portals the open list to document.body above page stacking contexts", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<Harness />);
+    await user.click(screen.getByRole("button", { name: "Backend" }));
+    const listbox = await screen.findByRole("listbox");
+    // Escaped the toggle container into body-level markup …
+    expect(container.contains(listbox)).toBe(false);
+    expect(document.body.contains(listbox)).toBe(true);
+    // … positioned fixed above cards (dialogs sit at z-50).
+    const panel = listbox.parentElement!;
+    expect(panel.style.position).toBe("fixed");
+    expect(Number(panel.style.zIndex)).toBeGreaterThanOrEqual(50);
+  });
+
+  it("flips the list upward when space below is tight", async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(window, "innerHeight", { value: 500, configurable: true });
+    const rect = { top: 450, bottom: 480, left: 100, width: 200, right: 300, height: 30 } as DOMRect;
+    const spy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(rect);
+    try {
+      render(<Harness />);
+      await user.click(screen.getByRole("button", { name: "Backend" }));
+      const listbox = await screen.findByRole("listbox");
+      const panel = listbox.parentElement!;
+      // Opens above the toggle instead of below it.
+      expect(Number.parseFloat(panel.style.top)).toBeLessThan(rect.top);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("offers a custom value when allowCustom", async () => {
     const user = userEvent.setup();
     render(<Harness allowCustom options={[]} />);

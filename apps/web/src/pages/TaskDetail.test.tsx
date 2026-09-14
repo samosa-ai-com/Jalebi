@@ -491,7 +491,9 @@ describe("TaskDetail", () => {
     expect(within(dialog).getByLabelText("Backend")).toHaveTextContent("codex");
     expect(within(dialog).getByLabelText("Model")).toHaveTextContent("gpt-4o");
     await userEvent.click(within(dialog).getByLabelText("Model"));
-    expect(within(dialog).getByRole("option", { name: "gpt-4o" })).toBeInTheDocument();
+    // The open list portals to document.body (above all stacking contexts),
+    // so options are queried document-wide, not within the dialog.
+    expect(screen.getByRole("option", { name: "gpt-4o" })).toBeInTheDocument();
   });
 
   it("rerun reloads the page state and clears the model when switching backend", async () => {
