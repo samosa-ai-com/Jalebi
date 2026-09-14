@@ -51,7 +51,12 @@ describe("OnboardingChecklist", () => {
     const backendLink = within(stepBackend).getByRole("link", {
       name: "Choose your AI backend & model",
     });
-    expect(backendLink).toHaveAttribute("href", "/settings");
+    expect(backendLink).toHaveAttribute("href", "/settings?section=agent");
+
+    // Backend comes before the first task: a task can only succeed with a working backend.
+    const items = screen.getAllByRole("listitem");
+    const ids = items.map((li) => li.getAttribute("data-testid"));
+    expect(ids).toEqual(["step-account", "step-repo", "step-backend", "step-task", "step-pr"]);
 
     // Rerender with 1 account connected
     rerender(

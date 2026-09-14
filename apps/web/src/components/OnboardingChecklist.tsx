@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 
-// Versioned: the checklist grew 3 → 5 steps, so upgraders who dismissed the
-// old card see the new steps once instead of staying dismissed forever.
+// Versioned: the checklist grew 3 → 5 steps, so upgraders holding the
+// unversioned key from the old card see the new steps once instead of
+// staying dismissed forever.
 export const ONBOARDING_DISMISSED_KEY = "jalebi-onboarding-dismissed-v2";
 export const ONBOARDING_MANUAL_DONE_KEY = "jalebi-onboarding-manual-done-v1";
 
@@ -103,21 +104,21 @@ export function OnboardingChecklist({
       ),
     },
     {
+      id: "backend",
+      label: "Choose your AI backend & model",
+      action: (
+        <Link to="/settings?section=agent" className="link">
+          Choose your AI backend & model
+        </Link>
+      ),
+    },
+    {
       id: "task",
       label: "Create your first task",
       action: (
         <button type="button" onClick={onStartTask} className="link text-left">
           Create your first task
         </button>
-      ),
-    },
-    {
-      id: "backend",
-      label: "Choose your AI backend & model",
-      action: (
-        <Link to="/settings" className="link">
-          Choose your AI backend & model
-        </Link>
       ),
     },
     {

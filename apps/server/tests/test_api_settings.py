@@ -61,21 +61,15 @@ def test_ntfy_topic_accepts_topic_or_url(client: FlaskClient) -> None:
 
 def test_enabled_backends_validated_and_listed(client: FlaskClient) -> None:
     """enabled_backends: non-empty known subset; default must stay enabled."""
+    from jalebi.adapters import ADAPTERS
+
     body = client.get("/api/backends").get_json()
-    assert body["backends"] == [
-        "opencode",
-        "codex",
-        "claude",
-        "pi",
-        "kilo",
-        "qwen",
-        "cline",
-        "grok",
-        "commandcode",
-        "agy",
-    ]
-    assert body["enabled"] == ["opencode", "codex", "claude"]
-    assert body["default"] == "opencode"
+    assert body["backends"] == list(ADAPTERS)
+    # Seeded by install detection (dev-machine PATH dependent): non-empty
+    # subset of the registry, default backend first.
+    assert len(body["enabled"]) >= 1
+    assert set(body["enabled"]) <= set(body["backends"])
+    assert body["enabled"][0] == body["default"] == "opencode"
 
     # A valid subset saves and is reflected.
     resp = client.post(

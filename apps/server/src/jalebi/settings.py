@@ -95,7 +95,9 @@ DEFAULTS: dict[str, object] = {
     # Backends the app may use. Every backend/model picker in the UI offers
     # only these; runs pinned to a backend that was disabled later fall back
     # to the first enabled one (logged). Never empty; always contains
-    # ``default_backend`` (both enforced on save).
+    # ``default_backend`` (both enforced on save). This static value is the
+    # last-resort fallback — ``seed_defaults`` seeds the detected-installed
+    # set instead (see ``_detect_enabled_backends``).
     "enabled_backends": ["opencode", "codex", "claude"],
     # Owner override of each adapter's curated model list: {cli: [model names]}.
     # Consumed by GET /api/models; lets the owner pin the task-form model dropdown
@@ -128,6 +130,26 @@ SETTING_KEYS = tuple(DEFAULTS)
 SECRET_MASK = "••••••••"
 
 
+def _detect_enabled_backends() -> list[str]:
+    """Seed value for ``enabled_backends``: installed CLI backends first.
+
+    Detects which adapter binaries are on PATH (fresh installs only — an
+    existing stored row is never touched). Falls back to the full registry
+    when nothing is installed yet, so pickers and health checks stay
+    functional. ``default_backend`` always leads the list (required to stay
+    enabled) even when its binary is missing — health then reports it as
+    not installed instead of the setting being invalid.
+    """
+    from jalebi.adapters import ADAPTERS, is_backend_available
+
+    default = str(DEFAULTS.get("default_backend") or "opencode")
+    detected = [cli for cli in sorted(ADAPTERS) if is_backend_available(cli)]
+    candidates = detected or sorted(ADAPTERS)
+    if default in candidates:
+        candidates.remove(default)
+    return [default, *candidates]
+
+
 def seed_defaults(session: Session) -> int:
     """Persist every default that has no stored row yet. Returns the count added.
 
@@ -143,6 +165,8 @@ def seed_defaults(session: Session) -> int:
     added = 0
     for key, value in DEFAULTS.items():
         if key not in existing:
+            if key == "enabled_backends":
+                value = _detect_enabled_backends()
             session.add(Setting(key=key, value=json.dumps(value)))
             added += 1
     if added:
