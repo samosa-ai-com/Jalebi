@@ -546,9 +546,8 @@ describe("TaskDetail", () => {
 
     const dialog = await screen.findByRole("dialog");
     await pickIn(dialog as HTMLElement, "Backend", "codex", "codex");
-    // Clearing the model: open the picker and choose the Default placeholder.
-    await userEvent.click(within(dialog as HTMLElement).getByLabelText("Model"));
-    await userEvent.click(screen.getByRole("option", { name: "Default" }));
+    // Switching backend already cleared the model; the empty placeholder is
+    // a status line now, not a clear action — submit directly.
     await userEvent.click(within(dialog).getByRole("button", { name: "Re-run" }));
 
     await waitFor(() => {
@@ -1356,13 +1355,16 @@ describe("TaskDetail", () => {
       await userEvent.click(screen.getByRole("radio", { name: /Update existing PR/ }));
       await userEvent.click(screen.getByRole("button", { name: "Pull request to update" }));
       expect(screen.getByRole("option", { name: "PR #9" })).toBeInTheDocument();
-      // The load failure surfaces as the picker's placeholder row.
-      expect(screen.getByRole("option", { name: /couldn't load PRs/ })).toBeInTheDocument();
+      // The load failure surfaces as a non-interactive status row.
+      expect(screen.getByText(/couldn't load PRs/)).toBeInTheDocument();
 
-      // The same failed load surfaces in the branch picker too.
+      // The same failed load surfaces in the branch picker too (scoped to
+      // the list: the toggle button shows the same placeholder text).
       await userEvent.click(screen.getByRole("radio", { name: /Push to specific branch/ }));
       await userEvent.click(screen.getByRole("button", { name: "Branch to push to" }));
-      expect(screen.getByRole("option", { name: /couldn't load branches/ })).toBeInTheDocument();
+      expect(
+        within(screen.getByRole("listbox")).getByText(/couldn't load branches/)
+      ).toBeInTheDocument();
 
       // Back to update_pr for the publish run below (push_branch needs a branch).
       await userEvent.click(screen.getByRole("radio", { name: /Update existing PR/ }));

@@ -1,9 +1,22 @@
 import type { NextStep } from "../lib/nextSteps";
 
+function prefersReducedMotion(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
+}
+
 function scrollToTarget(id: string) {
   const el = document.getElementById(id);
-  if (el && typeof el.scrollIntoView === "function") {
-    el.scrollIntoView({ behavior: "smooth", block: "start" });
+  if (!el) return;
+  // Targets carry tabindex="-1" so they can receive programmatic focus.
+  if (el.hasAttribute("tabindex") && typeof (el as HTMLElement).focus === "function") {
+    (el as HTMLElement).focus({ preventScroll: true });
+  }
+  if (typeof el.scrollIntoView === "function") {
+    el.scrollIntoView({ behavior: prefersReducedMotion() ? "auto" : "smooth", block: "start" });
   }
 }
 

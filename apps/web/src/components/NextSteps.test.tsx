@@ -91,6 +91,12 @@ describe("getNextSteps", () => {
     ).toEqual([]);
   });
 
+  it("still offers a follow-up for a known PR with unknown repo", () => {
+    expect(
+      getNextSteps({ type: "issue_fix", status: "done", pr_number: 7, canFollowUp: true })
+    ).toEqual([{ label: "Send a follow-up on this task", targetId: "followup-composer" }]);
+  });
+
   it("returns nothing for a done review with no linked PR", () => {
     expect(getNextSteps({ type: "pr_review", status: "done" })).toEqual([]);
   });
@@ -139,9 +145,11 @@ describe("NextSteps", () => {
     }
   });
 
-  it("scrolls to the target section on click", async () => {
+  it("scrolls to the target section and moves focus there on click", async () => {
     window.HTMLElement.prototype.scrollIntoView = vi.fn();
-    document.body.innerHTML = '<div id="publish-actions"></div>';
+    document.body.innerHTML = '<div id="publish-actions" tabindex="-1"></div>';
+    const target = document.getElementById("publish-actions")!;
+    const focusSpy = vi.spyOn(target, "focus");
     render(
       <NextSteps steps={[{ label: "Publish to open a pull request", targetId: "publish-actions" }]} />
     );
@@ -150,6 +158,7 @@ describe("NextSteps", () => {
       behavior: "smooth",
       block: "start",
     });
+    expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true });
     document.body.innerHTML = "";
   });
 });

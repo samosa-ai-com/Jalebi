@@ -114,7 +114,7 @@ def test_seed_enabled_backends_detects_installed_clis(
     monkeypatch.setattr("jalebi.adapters.is_backend_available", lambda cli: False)
     from jalebi.adapters import ADAPTERS
 
-    expected = ["opencode", *[c for c in sorted(ADAPTERS) if c != "opencode"]]
+    expected = ["opencode", *[c for c in ADAPTERS if c != "opencode"]]
     assert _detect_enabled_backends() == expected
 
     # A stored row is never overwritten by a later seed.

@@ -16,6 +16,20 @@ from jalebi.seed_catalog import SEED_VERSION_KEY
 from jalebi.settings import set_setting
 
 
+@pytest.fixture(autouse=True)
+def _backend_binaries_present(monkeypatch) -> None:
+    """Make backend-install gates PATH-independent.
+
+    Task creation/rerun/follow-up refuse backends whose CLI binary is
+    missing, and dispatch fails fast the same way. Tests exercise routing
+    and validation — not the host's PATH lottery — so every backend reads
+    as installed unless a test overrides this fixture explicitly (last
+    ``monkeypatch.setattr`` wins).
+    """
+    monkeypatch.setattr("jalebi.routes.tasks.is_backend_available", lambda cli: True)
+    monkeypatch.setattr("jalebi.queue.is_backend_available", lambda cli: True)
+
+
 @pytest.fixture(scope="session")
 def template_db(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """Fully migrated + seeded DB, built once per test session.

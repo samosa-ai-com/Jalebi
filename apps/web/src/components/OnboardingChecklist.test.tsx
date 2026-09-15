@@ -182,6 +182,17 @@ describe("OnboardingChecklist", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  it("survives corrupt manual-done storage", () => {
+    localStorage.setItem(ONBOARDING_MANUAL_DONE_KEY, "not-json{{{");
+    render(
+      <MemoryRouter>
+        <OnboardingChecklist accounts={0} repos={0} tasks={0} />
+      </MemoryRouter>
+    );
+    expect(screen.getByText("Setup")).toBeInTheDocument();
+    expect(screen.getByText("0 of 5 done")).toBeInTheDocument();
+  });
+
   it("ignores the legacy v1 dismiss key so upgraders see the new steps", () => {
     localStorage.setItem("jalebi-onboarding-dismissed", "1");
     render(

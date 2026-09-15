@@ -12,6 +12,16 @@ describe("GlossaryTerm", () => {
     expect(el.className).toMatch(/decoration-dotted/);
   });
 
+  it("is keyboard-focusable with the definition exposed to screen readers", () => {
+    render(<GlossaryTerm term="backend">Backend</GlossaryTerm>);
+    const el = screen.getByText("Backend");
+    expect(el).toHaveAttribute("tabindex", "0");
+    const describedBy = el.getAttribute("aria-describedby");
+    expect(describedBy).toBeTruthy();
+    const description = document.getElementById(describedBy!);
+    expect(description?.textContent).toBe(GLOSSARY.backend);
+  });
+
   it("renders plain children for an unknown term", () => {
     render(<GlossaryTerm term="nope">Mystery</GlossaryTerm>);
     const el = screen.getByText("Mystery");

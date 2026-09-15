@@ -386,7 +386,8 @@ function CreateTask({
     setError(null);
     // Never create a task on a backend that isn't installed: check health
     // first and ask the owner to pick an installed one instead. A failed
-    // health fetch falls through — the backend refuses with a 400 anyway.
+    // health fetch — or a backend absent from the list — falls through on
+    // purpose: the create route refuses with a 400 anyway.
     try {
       const health = await api.getBackendsHealth().catch(() => null);
       const list = health?.backends;
@@ -1435,9 +1436,14 @@ export default function Tasks() {
             accounts={accounts.length}
             repos={repos.length}
             tasks={tasks.length}
-            hasModelChoice={(settings?.default_model ?? "").trim() !== ""}
+            hasModelChoice={
+              (settings?.default_model ?? "").trim() !== "" ||
+              tasks.some((t) => Boolean(t.cli || t.model))
+            }
             hasPublishedPr={tasks.some(
-              (t) => t.pr_number != null || (t.prs?.length ?? 0) > 0
+              (t) =>
+                t.type !== "pr_review" &&
+                (t.pr_number != null || (t.prs?.length ?? 0) > 0)
             )}
             onStartTask={handleStartTask}
           />

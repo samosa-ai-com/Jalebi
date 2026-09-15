@@ -64,7 +64,14 @@ def list_github_tokens(config: Config) -> list[dict[str, str]]:
             "name": str(item["name"]),
             "token": str(item["token"]),
         }
-        for key in ("login", "token_type", "granted_scopes", "missing_scopes", "note"):
+        for key in (
+            "login",
+            "token_type",
+            "granted_scopes",
+            "missing_scopes",
+            "note",
+            "has_workflow",
+        ):
             if key in item:
                 entry[key] = item[key]
         out.append(entry)

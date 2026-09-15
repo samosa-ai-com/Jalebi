@@ -12,6 +12,7 @@ import json
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from jalebi.adapters import ADAPTERS
 from jalebi.db import Setting
 
 DEFAULTS: dict[str, object] = {
@@ -95,10 +96,10 @@ DEFAULTS: dict[str, object] = {
     # Backends the app may use. Every backend/model picker in the UI offers
     # only these; runs pinned to a backend that was disabled later fall back
     # to the first enabled one (logged). Never empty; always contains
-    # ``default_backend`` (both enforced on save). This static value is the
-    # last-resort fallback — ``seed_defaults`` seeds the detected-installed
-    # set instead (see ``_detect_enabled_backends``).
-    "enabled_backends": ["opencode", "codex", "claude"],
+    # ``default_backend`` (both enforced on save). Single source of truth is
+    # the adapter registry — ``seed_defaults`` narrows this to the detected-
+    # installed set on fresh installs (see ``_detect_enabled_backends``).
+    "enabled_backends": list(ADAPTERS),
     # Owner override of each adapter's curated model list: {cli: [model names]}.
     # Consumed by GET /api/models; lets the owner pin the task-form model dropdown
     # (e.g. for a custom provider) without touching adapter code. {} = adapters'
@@ -140,11 +141,11 @@ def _detect_enabled_backends() -> list[str]:
     enabled) even when its binary is missing — health then reports it as
     not installed instead of the setting being invalid.
     """
-    from jalebi.adapters import ADAPTERS, is_backend_available
+    from jalebi.adapters import is_backend_available
 
     default = str(DEFAULTS.get("default_backend") or "opencode")
-    detected = [cli for cli in sorted(ADAPTERS) if is_backend_available(cli)]
-    candidates = detected or sorted(ADAPTERS)
+    detected = [cli for cli in ADAPTERS if is_backend_available(cli)]
+    candidates = detected or list(ADAPTERS)
     if default in candidates:
         candidates.remove(default)
     return [default, *candidates]

@@ -154,6 +154,28 @@ def test_tokens_all_accounts_equal(client: FlaskClient, app, monkeypatch) -> Non
     assert "work" in names
 
 
+def test_token_meta_round_trips_has_workflow(client: FlaskClient, app, monkeypatch) -> None:
+    """Stored account metadata keeps has_workflow (drives the scope warning)."""
+
+    class NoWorkflowClient(FakeClient):
+        def validate_token(self) -> TokenInfo:
+            return TokenInfo(
+                valid=True,
+                login="octocat",
+                token_type="classic",
+                granted_scopes=["repo"],
+                missing_scopes=[],
+                has_workflow=False,
+            )
+
+    monkeypatch.setattr(routes_github, "GitHubClient", NoWorkflowClient)
+    resp = client.post("/api/github/tokens", json={"name": "nowf", "token": "ghp_nowf"})
+    assert resp.status_code == 200
+    stored = secrets.token_meta(_app_config(app), "nowf")
+    assert stored is not None
+    assert stored.get("has_workflow") is False
+
+
 def test_add_token_invalid_rejected(client: FlaskClient, monkeypatch) -> None:
     class RejectingClient:
         def __init__(self, token: str):

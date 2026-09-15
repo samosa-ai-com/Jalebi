@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import { useFocusTrap } from "../lib/useFocusTrap";
@@ -26,22 +26,17 @@ export default function BackendMissingDialog({
   onClose,
 }: BackendMissingDialogProps) {
   const dialogRef = useFocusTrap<HTMLDivElement>();
-  const [busy, setBusy] = useState(false);
   const onCloseRef = useRef(onClose);
   useEffect(() => {
     onCloseRef.current = onClose;
   }, [onClose]);
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape" && !busy) onCloseRef.current();
+      if (e.key === "Escape") onCloseRef.current();
     }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [busy]);
-
-  function closeIfIdle() {
-    if (!busy) onClose();
-  }
+  }, []);
 
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
@@ -50,7 +45,7 @@ export default function BackendMissingDialog({
         className="fixed inset-0 cursor-default border-0 bg-transparent"
         tabIndex={-1}
         aria-label="Close dialog"
-        onClick={closeIfIdle}
+        onClick={onClose}
       />
       <div
         ref={dialogRef}
@@ -71,7 +66,7 @@ export default function BackendMissingDialog({
         {installed.length === 0 ? (
           <p className="text-xs text-ink-400">
             No backends are installed. Install one, then come back — or review the options in{" "}
-            <Link to="/settings?section=agent" className="link" onClick={closeIfIdle}>
+            <Link to="/settings?section=agent" className="link" onClick={onClose}>
               Settings
             </Link>
             .
@@ -84,12 +79,7 @@ export default function BackendMissingDialog({
                   type="button"
                   className="btn-ghost w-full !justify-start font-mono text-xs"
                   onClick={() => {
-                    setBusy(true);
-                    try {
-                      onPick(cli);
-                    } finally {
-                      setBusy(false);
-                    }
+                    onPick(cli);
                     onClose();
                   }}
                 >
@@ -101,10 +91,10 @@ export default function BackendMissingDialog({
         )}
 
         <div className="flex justify-end gap-2">
-          <Link to="/settings?section=agent" className="btn-ghost text-xs" onClick={closeIfIdle}>
+          <Link to="/settings?section=agent" className="btn-ghost text-xs" onClick={onClose}>
             Open Settings
           </Link>
-          <button type="button" className="btn-ghost" onClick={closeIfIdle} disabled={busy}>
+          <button type="button" className="btn-ghost" onClick={onClose}>
             Cancel
           </button>
         </div>

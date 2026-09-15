@@ -196,6 +196,12 @@ def test_models_endpoint_uses_adapter_model_lists_override(client: FlaskClient) 
     """GET /api/models returns the owner override for the active cli before the adapter."""
     from jalebi.adapters import get_adapter
 
+    # Seeded enabled_backends is PATH-dependent — declare the set explicitly.
+    resp = client.post(
+        "/api/settings",
+        json={"key": "enabled_backends", "value": ["opencode", "codex", "claude"]},
+    )
+    assert resp.status_code == 200
     resp = client.post("/api/settings", json={"key": "default_backend", "value": "codex"})
     assert resp.status_code == 200
     resp = client.post(
@@ -226,6 +232,12 @@ def test_models_endpoint_uses_adapter_model_lists_override(client: FlaskClient) 
 
 def test_default_backend_and_model_settings(client: FlaskClient) -> None:
     """default_backend accepts registered adapters; default_model is required."""
+    # Seeded enabled_backends is PATH-dependent — declare the set explicitly.
+    resp = client.post(
+        "/api/settings",
+        json={"key": "enabled_backends", "value": ["opencode", "codex", "claude"]},
+    )
+    assert resp.status_code == 200
     for cli in ("opencode", "codex", "claude"):
         resp = client.post("/api/settings", json={"key": "default_backend", "value": cli})
         assert resp.status_code == 200, f"{cli} should be accepted"

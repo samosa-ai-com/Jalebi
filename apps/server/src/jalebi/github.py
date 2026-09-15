@@ -225,8 +225,9 @@ class GitHubClient:
 
         login = body.get("login") if isinstance(body, dict) else None
 
-        if "x-oauth-scopes" in headers:
-            scopes = [s.strip() for s in headers["x-oauth-scopes"].split(",") if s.strip()]
+        lowered = {k.lower(): v for k, v in headers.items()}
+        if "x-oauth-scopes" in lowered:
+            scopes = [s.strip() for s in lowered["x-oauth-scopes"].split(",") if s.strip()]
             missing = [s for s in REQUIRED_CLASSIC_SCOPES if s not in scopes]
             return TokenInfo(
                 valid=not missing,

@@ -74,6 +74,63 @@ def test_create_task_refuses_uninstalled_backend(
     assert session.query(Task).count() == before
 
 
+def test_create_task_backend_precedence_override_agent_default(
+    client: FlaskClient, repo_id: int, session, monkeypatch
+) -> None:
+    """Gate precedence: task override > agent pin > default backend."""
+    from jalebi import catalog
+
+    monkeypatch.setattr(
+        "jalebi.routes.tasks.is_backend_available", lambda cli: cli == "opencode"
+    )
+    catalog.create_agent(
+        session, id="pin-kilo", name="P", cli="kilo", personality_md="x", enabled=True
+    )
+    base = {"repo_id": repo_id, "type": "freeform", "prompt": "do it"}
+
+    # Explicit override of a missing backend is refused, even with a good pin.
+    resp = client.post("/api/tasks", json={**base, "cli": "kilo", "agent_id": "pin-kilo"})
+    assert resp.status_code == 400
+    assert resp.get_json()["missing_backend"] == "kilo"
+
+    # No override: the agent pin decides (missing → refused).
+    resp = client.post("/api/tasks", json={**base, "agent_id": "pin-kilo"})
+    assert resp.status_code == 400
+    assert resp.get_json()["missing_backend"] == "kilo"
+
+    # No override, no agent: the installed default passes.
+    resp = client.post("/api/tasks", json=base)
+    assert resp.status_code == 201
+
+    # Installed override wins over a missing agent pin (the payload becomes
+    # the task pin, which dispatches ahead of the agent pin).
+    resp = client.post(
+        "/api/tasks", json={**base, "cli": "opencode", "agent_id": "pin-kilo"}
+    )
+    assert resp.status_code == 201
+
+
+def test_rerun_refuses_uninstalled_backend(
+    client: FlaskClient, repo_id: int, session, monkeypatch
+) -> None:
+    """Rerunning onto a missing backend is refused before state changes."""
+    task_id = client.post(
+        "/api/tasks", json={"repo_id": repo_id, "type": "freeform", "prompt": "do it"}
+    ).get_json()["id"]
+    task = session.get(Task, task_id)
+    assert task is not None
+    task.status = "done"
+    session.commit()
+    monkeypatch.setattr(
+        "jalebi.routes.tasks.is_backend_available", lambda cli: cli == "opencode"
+    )
+    resp = client.post(f"/api/tasks/{task_id}/rerun", json={"cli": "kilo"})
+    assert resp.status_code == 400
+    assert resp.get_json()["missing_backend"] == "kilo"
+    session.expire_all()
+    assert session.get(Task, task_id).status == "done"
+
+
 def test_create_task_requires_repo(client: FlaskClient) -> None:
     resp = client.post("/api/tasks", json={"prompt": "x"})
     assert resp.status_code == 400
@@ -667,6 +724,87 @@ def test_followup_uses_task_account_by_default(app, client, session, monkeypatch
     assert resp.status_code == 202
     # No pat_name in the request → the follow-up inherits the task's account.
     assert enqueued == [(task.id, "more", None)]
+
+
+def test_followup_refuses_uninstalled_backend(app, client, session, monkeypatch) -> None:
+    """A follow-up override onto a missing backend is refused before enqueue."""
+    from jalebi import repos, tasks
+    from jalebi.db import Run, now
+
+    row, _ = repos.upsert_repo(
+        session,
+        full_name="owner/repo",
+        default_branch="main",
+        clone_url="https://github.com/owner/repo.git",
+        pat_name="test",
+    )
+    task = tasks.create_task(session, type_="freeform", repo_id=row.id, prompt="do it")
+    session.add(
+        Run(
+            task_id=task.id,
+            seq=1,
+            session_id="ses_1",
+            status="done",
+            started_at=now(),
+            finished_at=now(),
+        )
+    )
+    session.commit()
+    task.status = "done"
+    session.commit()
+
+    q = app.config["JALEBI_QUEUE"]
+    monkeypatch.setattr(q, "enqueue_followup", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "jalebi.routes.tasks.is_backend_available", lambda cli: cli == "opencode"
+    )
+    resp = client.post(
+        f"/api/tasks/{task.id}/followup",
+        json={"prompt": "more", "cli": "kilo"},
+    )
+    assert resp.status_code == 400
+    assert resp.get_json()["missing_backend"] == "kilo"
+
+
+def test_followup_gate_mirrors_dispatch_precedence(
+    app, client, session, monkeypatch
+) -> None:
+    """No-override follow-ups gate on task.cli, not the default backend."""
+    from jalebi import repos, tasks
+    from jalebi.db import Run, now
+
+    row, _ = repos.upsert_repo(
+        session,
+        full_name="owner/repo",
+        default_branch="main",
+        clone_url="https://github.com/owner/repo.git",
+        pat_name="test",
+    )
+    task = tasks.create_task(session, type_="freeform", repo_id=row.id, prompt="do it")
+    task.cli = "kilo"
+    session.add(
+        Run(
+            task_id=task.id,
+            seq=1,
+            session_id="ses_1",
+            status="done",
+            started_at=now(),
+            finished_at=now(),
+        )
+    )
+    session.commit()
+    task.status = "done"
+    session.commit()
+
+    q = app.config["JALEBI_QUEUE"]
+    monkeypatch.setattr(q, "enqueue_followup", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "jalebi.routes.tasks.is_backend_available", lambda cli: cli == "opencode"
+    )
+    # Default backend (opencode) is installed, but the task pins missing kilo.
+    resp = client.post(f"/api/tasks/{task.id}/followup", json={"prompt": "more"})
+    assert resp.status_code == 400
+    assert resp.get_json()["missing_backend"] == "kilo"
 
 
 def test_followup_rejects_unknown_pat(app, client, session, monkeypatch) -> None:

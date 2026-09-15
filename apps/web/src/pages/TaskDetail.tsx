@@ -193,13 +193,16 @@ function PublishButton({
   const [prsLoadFailed, setPrsLoadFailed] = useState(false);
   const [repoBranches, setRepoBranches] = useState<string[] | null>(null);
   const [branchesLoadFailed, setBranchesLoadFailed] = useState(false);
-  const prsLoadedRef = useRef(false);
+  // One-shot per repo+account: the ref guard must not pin the first account's
+  // lists when the owner switches account mid-session (deps re-run below).
+  const prsLoadedForRef = useRef("");
 
   useEffect(() => {
-    if (prsLoadedRef.current) return;
     const repo = task.repo_full_name;
     const account = task.pat_name ?? undefined;
-    prsLoadedRef.current = true;
+    const key = `${repo ?? ""}::${account ?? ""}`;
+    if (prsLoadedForRef.current === key) return;
+    prsLoadedForRef.current = key;
     let cancelled = false;
     // Without a resolvable account there is nothing to fetch — resolve empty so
     // the pickers just show linked PRs / free text (state updates only in async callbacks).
@@ -214,12 +217,14 @@ function PublishButton({
         if (!cancelled) {
           setOpenPrs(prs);
           setRepoBranches(branches);
+          setPrsLoadFailed(false);
+          setBranchesLoadFailed(false);
         }
       })
       .catch(() => {
         if (!cancelled) {
-          setOpenPrs([]);
-          setRepoBranches([]);
+          // Keep previously loaded lists (stale-while-error): only fresh
+          // failures with nothing cached fall back to linked PRs / free text.
           setPrsLoadFailed(true);
           setBranchesLoadFailed(true);
         }
@@ -1852,8 +1857,10 @@ export default function TaskDetail() {
           <div className="flex shrink-0 items-start gap-3">
             <CopyButton text={task.prompt} label="prompt" />
             {phaseIndex >= 0 && (
-              <div
+              // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- intentional focusable hint
+              <div tabIndex={0}
                 className="hidden flex-col items-center gap-1.5 md:flex"
+                aria-describedby="phase-hint"
                 title={GLOSSARY.phases}
               >
                 <div className="flex h-10 w-10 items-center justify-center rounded-full border border-syrup-500/40 bg-syrup-500/10 font-mono text-sm text-syrup-300">
@@ -1861,6 +1868,9 @@ export default function TaskDetail() {
                 </div>
                 <span className="font-mono text-[11px] text-ink-500 underline decoration-dotted underline-offset-2">
                   {PHASE_ORDER[phaseIndex]}
+                </span>
+                <span id="phase-hint" className="sr-only">
+                  {GLOSSARY.phases}
                 </span>
               </div>
             )}
@@ -1962,7 +1972,7 @@ export default function TaskDetail() {
         )}
       </div>
 
-      <div id="publish-actions" className="flex flex-wrap gap-2">
+      <div id="publish-actions" tabIndex={-1} className="flex flex-wrap gap-2 outline-none">
         {(task.status === "running" || task.status === "queued") && (
           <Action onClick={() => runAction(() => api.cancelTask(task.id))} disabled={actionBusy}>
             Cancel
@@ -2019,7 +2029,7 @@ export default function TaskDetail() {
       )}
 
       {runs.some((r) => r.session_id) && TERMINAL.has(task.status) ? (
-        <div id="followup-composer">
+        <div id="followup-composer" tabIndex={-1} className="outline-none">
           <FollowUpComposer
             task={task}
             followups={task.followups ?? []}

@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 export interface SearchableOption {
@@ -63,25 +63,30 @@ export default function SearchableSelect({
   // The list lives in a document.body portal (above every card's stacking
   // context), so it is anchored to the toggle's viewport rect and flipped
   // upward when space below is tight. Recomputed on open + scroll + resize.
-  function place() {
-    const rect = buttonRef.current?.getBoundingClientRect();
-    if (!rect) return;
+  // A missing rect (hidden/detached toggle) falls back to a corner default
+  // so an open toggle never reports aria-expanded with no listbox.
+  const place = useCallback(() => {
     const GAP = 4;
     const MAX_H = 224; // matches max-h-56 on the list
-    const MIN_W = 180; // matches the Math.max on the rendered width below
+    const MIN_W = 180; // minimum readable width for the list
+    const rect = buttonRef.current?.getBoundingClientRect();
+    if (!rect || (rect.width === 0 && rect.height === 0)) {
+      setCoords({ top: 8, left: 8, width: MIN_W });
+      return;
+    }
     const below = window.innerHeight - rect.bottom;
     const up = below < MAX_H + GAP && rect.top > below;
     const renderWidth = Math.max(rect.width, MIN_W);
     setCoords({
       left: Math.max(8, Math.min(rect.left, window.innerWidth - renderWidth - 8)),
-      width: renderWidth,
+      width: Math.min(renderWidth, window.innerWidth - 16),
       top: up ? Math.max(8, rect.top - MAX_H - GAP) : rect.bottom + GAP,
     });
-  }
+  }, []);
 
   useLayoutEffect(() => {
     if (open) place();
-  }, [open]);
+  }, [open, place]);
 
   useEffect(() => {
     if (!open) return;
@@ -91,8 +96,10 @@ export default function SearchableSelect({
       window.removeEventListener("scroll", place, true);
       window.removeEventListener("resize", place);
     };
-  }, [open]);
+  }, [open, place]);
+
   const listId = useId();
+  const hintId = useId();
   const current = String(value ?? "");
 
   const items = useMemo(() => options.map(norm), [options]);
@@ -115,6 +122,14 @@ export default function SearchableSelect({
         o.value.toLowerCase() === query.trim().toLowerCase() ||
         o.label.toLowerCase() === query.trim().toLowerCase()
     );
+
+  // Options can reload while open (async lists) — keep the highlight in range
+  // so Enter never silently no-ops on a stale index. Highest valid index is
+  // the custom row (== filtered.length) when present, else the last option.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- derived-state clamp
+    setHighlight((h) => Math.min(h, Math.max(-1, filtered.length + (showCustom ? 1 : 0) - 1)));
+  }, [filtered.length, showCustom]);
 
   function openList() {
     if (disabled) return;
@@ -141,16 +156,28 @@ export default function SearchableSelect({
   function choose(v: string) {
     onChange(v);
     setOpen(false);
+    // The portaled list unmounts — return focus to the toggle so keyboard
+    // users don't lose their place to document.body.
+    buttonRef.current?.focus();
   }
+
+  // The clear row (index -1) exists when no search text is typed and a value
+  // is picked. A placeholder with an empty list and nothing picked renders
+  // as a status line instead — clicking "couldn't load branches" must not
+  // wipe input.
+  const canClearRow = placeholder !== undefined && query.trim() === "" && current !== "";
 
   function onSearchKey(e: React.KeyboardEvent) {
     if (e.key === "Escape") {
       setOpen(false);
+      buttonRef.current?.focus();
       return;
     }
-    // The placeholder/clear row (index -1) is keyboard-reachable via ArrowUp
-    // from the top; it only exists when no search text is typed.
-    const canClear = placeholder !== undefined && query.trim() === "";
+    if (e.key === "Tab") {
+      // Tabbing out dismisses the list but lets focus travel normally.
+      setOpen(false);
+      return;
+    }
     const count = filtered.length + (showCustom ? 1 : 0);
     if (e.key === "ArrowDown") {
       e.preventDefault();
@@ -159,14 +186,14 @@ export default function SearchableSelect({
     }
     if (e.key === "ArrowUp") {
       e.preventDefault();
-      setHighlight((h) => (h <= 0 ? (canClear ? -1 : 0) : h - 1));
+      setHighlight((h) => (h <= 0 ? (canClearRow ? -1 : 0) : h - 1));
       return;
     }
     if (e.key === "Enter") {
       e.preventDefault();
       if (showCustom && highlight === filtered.length) {
         choose(query.trim());
-      } else if (highlight === -1 && placeholder !== undefined && query.trim() === "") {
+      } else if (highlight === -1 && canClearRow) {
         choose("");
       } else if (filtered[highlight]) {
         choose(filtered[highlight].value);
@@ -178,11 +205,16 @@ export default function SearchableSelect({
     <div ref={rootRef} className="block">
       {!hideLabel &&
         (labelTitle ? (
-          <span
+          // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- intentional focusable hint
+          <span tabIndex={0}
+            aria-describedby={hintId}
             className="mb-1.5 block w-fit text-xs font-medium text-ink-400 underline decoration-dotted underline-offset-2"
             title={labelTitle}
           >
             {label}
+            <span id={hintId} className="sr-only">
+              {labelTitle}
+            </span>
           </span>
         ) : (
           <span className="mb-1.5 block text-xs font-medium text-ink-400">{label}</span>
@@ -223,7 +255,9 @@ export default function SearchableSelect({
               top: coords.top,
               left: coords.left,
               width: coords.width,
-              zIndex: 50,
+              // Above dialog overlays (z-50): several dialogs contain
+              // selects whose lists must paint over the dialog itself.
+              zIndex: 60,
             }}
           >
             <input
@@ -242,7 +276,7 @@ export default function SearchableSelect({
               className="w-full border-b border-ink-800 bg-transparent px-3 py-2 text-sm text-ink-100 outline-none placeholder:text-ink-500"
             />
             <ul role="listbox" id={listId} className="max-h-56 overflow-auto py-1">
-              {placeholder !== undefined && query.trim() === "" && (
+              {canClearRow && (
                 <li
                   role="option"
                   aria-selected={current === ""}
@@ -261,6 +295,13 @@ export default function SearchableSelect({
                   {placeholder}
                 </li>
               )}
+              {placeholder !== undefined &&
+                query.trim() === "" &&
+                current === "" &&
+                filtered.length === 0 &&
+                !showCustom && (
+                  <li className="px-3 py-1.5 text-sm text-ink-500">{placeholder}</li>
+                )}
               {filtered.map((o, i) => (
                 <li
                   key={o.value}

@@ -87,6 +87,9 @@ def test_unpinned_screen_uses_global_default_backend(session, repo_row, engine, 
     (parity with the task queue) — the global default, not hardcoded opencode."""
     from jalebi import settings
 
+    # Dispatch falls back when the backend isn't enabled — declare the world
+    # instead of inheriting seed-time PATH detection.
+    settings.set_setting(session, "enabled_backends", ["opencode", "codex"])
     settings.set_setting(session, "default_backend", "codex")
     # The codex sandbox gate would refuse a codex screening on a host without a
     # usable bwrap workspace-write sandbox; mock the probe so the test exercises
@@ -139,6 +142,9 @@ def test_unpinned_screen_uses_global_default_backend(session, repo_row, engine, 
 
 def test_run_screen_writes_per_cli_guard(session, repo_row, engine, monkeypatch):
     """The audit worktree gets the guard matching the screen's backend."""
+    # Dispatch falls back when the backend isn't enabled — declare the world
+    # instead of inheriting seed-time PATH detection.
+    settings.set_setting(session, "enabled_backends", ["opencode", "codex"])
     # Mock the codex sandbox probe so the test exercises the per-cli guard write
     # independently of whether the host's bwrap is usable.
     monkeypatch.setattr(screening, "_codex_sandbox_usable", lambda: True)
@@ -180,6 +186,9 @@ def test_codex_screening_refused_when_sandbox_unusable(
     sandbox (the only disk confinement codex has). opencode/claude keep their
     pattern-gate floor even without an OS sandbox.
     """
+    # Dispatch falls back when the backend isn't enabled — declare the world
+    # instead of inheriting seed-time PATH detection.
+    settings.set_setting(session, "enabled_backends", ["opencode", "codex"])
     monkeypatch.setattr(screening, "_codex_sandbox_usable", lambda: False)
     # No adapter call should ever happen — refuse before resolve.
     called: list[str] = []

@@ -102,10 +102,10 @@ describe("SearchableSelect", () => {
     // Escaped the toggle container into body-level markup …
     expect(container.contains(listbox)).toBe(false);
     expect(document.body.contains(listbox)).toBe(true);
-    // … positioned fixed above cards (dialogs sit at z-50).
+    // … positioned fixed above cards and dialog overlays (z-50).
     const panel = listbox.parentElement!;
     expect(panel.style.position).toBe("fixed");
-    expect(Number(panel.style.zIndex)).toBeGreaterThanOrEqual(50);
+    expect(Number(panel.style.zIndex)).toBeGreaterThan(50);
   });
 
   it("flips the list upward when space below is tight", async () => {
@@ -123,6 +123,37 @@ describe("SearchableSelect", () => {
     } finally {
       spy.mockRestore();
     }
+  });
+
+  it("returns focus to the toggle after choosing", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    const toggle = screen.getByRole("button", { name: "Backend" });
+    await user.click(toggle);
+    await user.click(screen.getByRole("option", { name: "codex" }));
+    expect(document.activeElement).toBe(toggle);
+  });
+
+  it("closes on Tab-away but lets focus travel", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    await user.click(screen.getByRole("button", { name: "Backend" }));
+    const box = await screen.findByRole("combobox");
+    box.focus();
+    await user.tab();
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+  });
+
+  it("clamps a stale highlight when options shrink while open", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<Harness initial="" options={["aa", "ab"]} />);
+    await user.click(screen.getByRole("button", { name: "Backend" }));
+    screen.getByRole("combobox").focus();
+    await user.keyboard("{ArrowDown}");
+    rerender(<Harness initial="" options={["aa"]} />);
+    // Focus is still in the search box; Enter picks the clamped option.
+    await user.keyboard("{Enter}");
+    expect(screen.getByTestId("value")).toHaveTextContent("aa");
   });
 
   it("offers a custom value when allowCustom", async () => {

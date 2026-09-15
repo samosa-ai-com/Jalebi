@@ -2166,6 +2166,9 @@ def test_default_model_applied_only_for_default_backend(
     """The global default model is a fallback only when the resolved backend IS
     the default backend; a task pinned to another backend uses the CLI's own
     default (None)."""
+    # Dispatch falls back when the backend isn't enabled — declare the world
+    # instead of inheriting seed-time PATH detection.
+    settings.set_setting(session, "enabled_backends", ["opencode", "codex", "claude"])
     settings.set_setting(session, "default_backend", "codex")
     settings.set_setting(session, "default_model", "gpt-default")
     captured: dict = {}
@@ -2446,6 +2449,9 @@ def test_rerun_override_flows_into_run(q, session, repo_row, monkeypatch) -> Non
     """A rerun-persisted backend/model override is what the next run executes
     (the task-75 round-trip: switching qwen → kilo must actually run kilo)."""
     _no_publish(session)
+    # Dispatch falls back when the backend isn't enabled — declare the world
+    # instead of inheriting seed-time PATH detection.
+    settings.set_setting(session, "enabled_backends", ["opencode", "codex"])
     task = tasks.create_task(
         session,
         type_="freeform",
@@ -2525,8 +2531,9 @@ def test_missing_binary_fails_fast_without_recovery(
     task = tasks.create_task(
         session, type_="freeform", repo_id=repo_row.id, prompt="do it", cli="opencode"
     )
-    # Empty PATH: no CLI binary resolves (restored automatically after).
-    monkeypatch.setenv("PATH", str(tmp_path))
+    # Uninstalled backend, independent of the host PATH (the autouse fixture
+    # reads every backend as installed; this override restores the absence).
+    monkeypatch.setattr("jalebi.queue.is_backend_available", lambda cli: False)
     q._run_task(task.id)
 
     session.expire_all()

@@ -58,11 +58,14 @@ def test_validate_classic_repo_without_workflow(monkeypatch) -> None:
         lambda method, path, **kw: (
             200,
             {"login": "octocat"},
-            {"x-oauth-scopes": "repo"},
+            # Mixed-case header key: real responses vary; validation is
+            # case-insensitive and the token stays valid without `workflow`.
+            {"X-OAuth-Scopes": "repo"},
         ),
     )
     info = client.validate_token()
     assert info.valid is True
+    assert info.missing_scopes == []
     assert info.token_type == "classic"
     assert info.has_workflow is False
 

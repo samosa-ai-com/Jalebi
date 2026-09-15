@@ -1,5 +1,6 @@
 """Task queue + worker pool + run lifecycle (PRD F3, F16)."""
 
+import contextlib
 import json
 import logging
 import os
@@ -84,6 +85,26 @@ def _is_workflow_scope_error(exc: BaseException) -> bool:
         or "without workflow scope" in text
         or "refusing to allow a personal access token to create or update workflow" in text
     )
+
+
+@contextlib.contextmanager
+def _push_or_workflow_error(task_id: int, pat_name: str | None):
+    """Run one git push; translate a workflow-scope refusal into ``PublishError``.
+
+    ``PushLeaseFailed`` passes through untouched — a concurrent-move refusal
+    always wins over scope analysis (lease precedence). Other git failures
+    re-raise unchanged with their chain intact (``raise ... from exc`` keeps
+    ``__cause__`` for the timeline/Sentry).
+    """
+    try:
+        yield
+    except PushLeaseFailed:
+        raise
+    except GitWorkspaceError as exc:
+        if not _is_workflow_scope_error(exc):
+            raise
+        logger.warning("workflow-scope push refused for task %s: %s", task_id, exc)
+        raise PublishError(_workflow_scope_message(task_id, pat_name)) from exc
 
 
 def _workflow_scope_message(task_id: int, pat_name: str | None) -> str:
@@ -2824,15 +2845,8 @@ class TaskQueue:
                 + " — the merge was aborted. Send a follow-up asking the agent to "
                 "merge origin/<target> and resolve the conflicts, then publish again."
             )
-        try:
+        with _push_or_workflow_error(task.id, task.pat_name):
             git.push_branch(task.id, repo.full_name, token)
-        except GitWorkspaceError as exc:
-            if _is_workflow_scope_error(exc):
-                logger.warning("workflow-scope push refused for task %s: %s", task.id, exc)
-                raise PublishError(
-                    _workflow_scope_message(task.id, task.pat_name)
-                ) from None
-            raise
         if task.pr_number:
             # A PR already exists for jalebi/<taskId>; the push just updated it.
             # Only reuse it while it is still open — a closed/merged PR must not
@@ -2932,17 +2946,8 @@ class TaskQueue:
                 + " — the merge was aborted. Send a follow-up asking the agent to "
                 "resolve, then publish again."
             )
-        try:
+        with _push_or_workflow_error(task.id, task.pat_name):
             git.push_existing_branch(repo.full_name, head_branch, token)
-        except PushLeaseFailed:
-            raise
-        except GitWorkspaceError as exc:
-            if _is_workflow_scope_error(exc):
-                logger.warning("workflow-scope push refused for task %s: %s", task.id, exc)
-                raise PublishError(
-                    _workflow_scope_message(task.id, task.pat_name)
-                ) from None
-            raise
         # The merge + push updated the local mirror's tracking ref (push
         # does an implicit fetch). Read it without an extra network round
         # trip so we log what actually went up, not what the remote looks
@@ -3000,20 +3005,11 @@ class TaskQueue:
                 + " — the merge was aborted. Send a follow-up asking the agent to "
                 "resolve, then publish again."
             )
-        try:
+        with _push_or_workflow_error(task.id, task.pat_name):
             git.push_fork_head(
                 repo.full_name, pr_number, head_branch, fork_repo,
                 str(old_sha) if old_sha else None, token,
             )
-        except PushLeaseFailed:
-            raise
-        except GitWorkspaceError as exc:
-            if _is_workflow_scope_error(exc):
-                logger.warning("workflow-scope push refused for task %s: %s", task.id, exc)
-                raise PublishError(
-                    _workflow_scope_message(task.id, task.pat_name)
-                ) from None
-            raise
         new_sha = git.local_ref_sha(repo.full_name, GitWorkspace.fork_branch(pr_number))
         logger.info(
             "task %s updated fork PR #%s (%s:%s): %s -> %s",
@@ -3047,17 +3043,8 @@ class TaskQueue:
                 + " — the merge was aborted. Send a follow-up asking the agent to "
                 "resolve, then publish again."
             )
-        try:
+        with _push_or_workflow_error(task.id, task.pat_name):
             git.push_existing_branch(repo.full_name, target_branch, token)
-        except PushLeaseFailed:
-            raise
-        except GitWorkspaceError as exc:
-            if _is_workflow_scope_error(exc):
-                logger.warning("workflow-scope push refused for task %s: %s", task.id, exc)
-                raise PublishError(
-                    _workflow_scope_message(task.id, task.pat_name)
-                ) from None
-            raise
         new_sha = git.local_ref_sha(repo.full_name, target_branch)
         logger.info(
             "task %s pushed to branch %s: %s -> %s",

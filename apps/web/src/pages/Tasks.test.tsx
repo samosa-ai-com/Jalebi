@@ -1646,6 +1646,38 @@ describe("Tasks page (queue overhaul)", () => {
     expect(screen.getByTestId("step-pr")).toHaveAttribute("data-done", "true");
   });
 
+  it("ignores linked PRs on review tasks for the first-PR step", async () => {
+    const reviewLinked = [{ ...TASKS[0], type: "pr_review", prs: [5], pr_number: 5 }];
+    stubFetch({
+      ...DEFAULT_HANDLERS,
+      "/api/tasks": reviewLinked,
+      "/api/settings": { default_backend: "opencode", default_model: "" },
+    });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    expect(await screen.findByText("Setup")).toBeInTheDocument();
+    expect(screen.getByTestId("step-pr")).toHaveAttribute("data-done", "false");
+  });
+
+  it("completes the backend step from a per-task backend pin", async () => {
+    const pinned = [{ ...TASKS[0], cli: "kilo", model: null }];
+    stubFetch({
+      ...DEFAULT_HANDLERS,
+      "/api/tasks": pinned,
+      "/api/settings": { default_backend: "opencode", default_model: "" },
+    });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    expect(await screen.findByText("Setup")).toBeInTheDocument();
+    expect(screen.getByTestId("step-backend")).toHaveAttribute("data-done", "true");
+  });
+
   it("leaves the backend step incomplete until a default model is chosen", async () => {
     stubFetch({
       ...DEFAULT_HANDLERS,
