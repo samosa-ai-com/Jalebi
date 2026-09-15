@@ -154,7 +154,8 @@ describe("Agents", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "+ New agent" }));
     await userEvent.click(screen.getByLabelText("Model pin (optional)"));
-    expect(screen.getByRole("option", { name: "no pin (CLI default)" })).toBeInTheDocument();
+    // Nothing picked: the placeholder is a non-interactive status line.
+    expect(screen.getByText("no pin (CLI default)")).toBeInTheDocument();
     expect(
       screen.getByRole("option", { name: "opencode-go/deepseek-v4-flash" })
     ).toBeInTheDocument();

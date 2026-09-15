@@ -550,7 +550,7 @@ describe("Tasks", () => {
     );
     await screen.findByText("New task");
     expect(screen.getByText("Loading defaults…")).toBeInTheDocument();
-    const submit = screen.getByRole("button", { name: /Loading|Create/ });
+    const submit = screen.getByRole("button", { name: "Loading…" });
     expect(submit).toBeDisabled();
     // The Backend select lives behind the Advanced toggle and is disabled
     // until defaults resolve — a user can't pick a backend that the form
@@ -1616,6 +1616,11 @@ describe("Tasks page (queue overhaul)", () => {
       </MemoryRouter>
     );
     expect(await screen.findByText("Setup")).toBeInTheDocument();
+    // Backend step is auto-done from /api/settings (default_model set).
+    expect(screen.getByTestId("step-backend")).toHaveAttribute("data-done", "true");
+    expect(screen.getByTestId("step-pr")).toHaveAttribute("data-done", "false");
+    // Zero tasks: the first-run starter hint shows in the new-task form.
+    expect(await screen.findByText(/New here\? Start with a/)).toBeInTheDocument();
     const taskBtn = screen.getByRole("button", { name: "Create your first task" });
     const newTaskContainer = document.getElementById("new-task");
     expect(newTaskContainer).toBeInTheDocument();
@@ -1623,6 +1628,149 @@ describe("Tasks page (queue overhaul)", () => {
     await userEvent.click(taskBtn);
     expect(window.HTMLElement.prototype.scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth" });
     expect(document.activeElement).toBe(newTaskContainer);
+  });
+
+  it("completes the PR step from the linked-prs array even without pr_number", async () => {
+    const withPrs = [{ ...TASKS[0], prs: [5], pr_number: null }];
+    stubFetch({
+      ...DEFAULT_HANDLERS,
+      "/api/tasks": withPrs,
+      "/api/settings": { default_backend: "opencode", default_model: "" },
+    });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    expect(await screen.findByText("Setup")).toBeInTheDocument();
+    expect(screen.getByTestId("step-pr")).toHaveAttribute("data-done", "true");
+  });
+
+  it("ignores linked PRs on review tasks for the first-PR step", async () => {
+    const reviewLinked = [{ ...TASKS[0], type: "pr_review", prs: [5], pr_number: 5 }];
+    stubFetch({
+      ...DEFAULT_HANDLERS,
+      "/api/tasks": reviewLinked,
+      "/api/settings": { default_backend: "opencode", default_model: "" },
+    });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    expect(await screen.findByText("Setup")).toBeInTheDocument();
+    expect(screen.getByTestId("step-pr")).toHaveAttribute("data-done", "false");
+  });
+
+  it("completes the backend step from a per-task backend pin", async () => {
+    const pinned = [{ ...TASKS[0], cli: "kilo", model: null }];
+    stubFetch({
+      ...DEFAULT_HANDLERS,
+      "/api/tasks": pinned,
+      "/api/settings": { default_backend: "opencode", default_model: "" },
+    });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    expect(await screen.findByText("Setup")).toBeInTheDocument();
+    expect(screen.getByTestId("step-backend")).toHaveAttribute("data-done", "true");
+  });
+
+  it("leaves the backend step incomplete until a default model is chosen", async () => {
+    stubFetch({
+      ...DEFAULT_HANDLERS,
+      "/api/tasks": [],
+      "/api/settings": { default_backend: "opencode", default_model: "" },
+    });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    expect(await screen.findByText("Setup")).toBeInTheDocument();
+    expect(screen.getByTestId("step-backend")).toHaveAttribute("data-done", "false");
+  });
+
+  it("hides the first-run starter hint once tasks exist", async () => {
+    stubFetch({ ...DEFAULT_HANDLERS });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    await screen.findByText("New task");
+    expect(screen.queryByText(/New here\? Start with a/)).not.toBeInTheDocument();
+  });
+
+  it("blocks submit on a missing backend and offers installed ones", async () => {
+    const posted: unknown[] = [];
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.includes("/api/backends/health")) {
+        return {
+          ok: true,
+          json: async () => ({
+            backends: [
+              { cli: "opencode", installed: false, version: null },
+              { cli: "kilo", installed: true, version: "7.5.16" },
+            ],
+          }),
+        };
+      }
+      if (init?.method === "POST" && url.includes("/api/tasks")) {
+        posted.push(JSON.parse((init as RequestInit).body as string));
+        return { ok: true, json: async () => ({ id: 9, status: "queued" }) };
+      }
+      const handler = Object.entries(DEFAULT_HANDLERS).find(([n]) => url.includes(n));
+      const value = handler ? handler[1] : [];
+      return { ok: true, json: async () => value };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    await screen.findByText("New task");
+    await userEvent.type(screen.getByPlaceholderText("Instructions…"), "do the thing");
+    await userEvent.click(screen.getByRole("button", { name: "Create" }));
+    // No task created — the dialog asks for an installed backend instead.
+    expect(await screen.findByRole("dialog", { name: "Backend not installed" })).toBeInTheDocument();
+    expect(posted).toHaveLength(0);
+    // Pick kilo → the form's backend switches → resubmit posts with kilo.
+    await userEvent.click(screen.getByRole("button", { name: "Use kilo" }));
+    await userEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(posted).toHaveLength(1));
+    expect((posted[0] as { cli?: string }).cli).toBe("kilo");
+  });
+
+  it("submits normally when the backend health check fails", async () => {
+    const posted: unknown[] = [];
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.includes("/api/backends/health")) {
+        return { ok: false, status: 502, json: async () => ({ error: "down" }) };
+      }
+      if (init?.method === "POST" && url.includes("/api/tasks")) {
+        posted.push(JSON.parse((init as RequestInit).body as string));
+        return { ok: true, json: async () => ({ id: 9, status: "queued" }) };
+      }
+      const handler = Object.entries(DEFAULT_HANDLERS).find(([n]) => url.includes(n));
+      const value = handler ? handler[1] : [];
+      return { ok: true, json: async () => value };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    await screen.findByText("New task");
+    await userEvent.type(screen.getByPlaceholderText("Instructions…"), "do the thing");
+    await userEvent.click(screen.getByRole("button", { name: "Create" }));
+    // No dialog — submission proceeds; the server-side 400 is the backstop.
+    await waitFor(() => expect(posted).toHaveLength(1));
+    expect(screen.queryByRole("dialog", { name: "Backend not installed" })).not.toBeInTheDocument();
   });
 
   it("renders friendly EmptyState when the task queue is empty", async () => {

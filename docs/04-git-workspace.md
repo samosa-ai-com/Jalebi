@@ -79,7 +79,7 @@ Jalebi uses the **git CLI** (not libgit2) for all repo operations. Each task/age
 - **Smart-default for the manual Publish button:**
   - **freeform / screen_finding / triggered** — if `task.prs_json` is non-empty (the user attached a PR at creation time), the button reads `"Push to PR #N"` and dispatches `update_pr` for the first linked PR. Otherwise it reads `"Publish"` and dispatches `new_pr`.
   - **issue_fix** — always `"Publish"` and `new_pr` (its canonical purpose is opening a new PR with `Closes #N`); the other modes are still available under the **Advanced** disclosure.
-  - **Advanced** disclosure exposes all three modes + a PR picker (when `prs_json` has >1 entry) + a branch text input for `push_branch`.
+   - **Advanced** disclosure exposes all three modes + a PR picker (when `prs_json` has >1 entry) + a branch picker for `push_branch` (repo branches with custom-name fallback).
 
 - **`update_pr` / `push_branch` mechanics** (`apps/server/src/jalebi/queue.py`):
   1. Fetch origin, capture the remote SHA of the target branch (`GitWorkspace.current_remote_sha`).

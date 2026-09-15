@@ -22,11 +22,19 @@ _RATE_LIMIT_DEFAULT_WAIT = 1.0  # 429 with neither Retry-After nor Reset
 
 REQUIRED_CLASSIC_SCOPES = ("repo",)
 
+# Optional classic scope: required only when a task branch creates or updates
+# workflow files (``.github/workflows/*``). GitHub refuses such pushes from a
+# PAT without it: "refusing to allow a Personal Access Token to create or
+# update workflow ... without `workflow` scope". Tokens stay valid without it;
+# the UI surfaces it as a non-blocking warning instead of a missing scope.
+WORKFLOW_SCOPE = "workflow"
+
 FINE_GRAINED_NOTE = (
     "fine-grained token: GitHub does not expose an enumerable scope list. "
     "Verify Contents (RW), Pull requests (RW), Issues (RW), Metadata (read), "
     "Commit statuses (RW), and Actions (read — to read failed workflow logs), "
-    "in the GitHub UI."
+    "in the GitHub UI. "
+    "To push workflow files (.github/workflows/*), also grant Workflows: read/write."
 )
 
 TokenType = Literal["classic", "fine-grained", "unknown"]
@@ -81,6 +89,10 @@ class TokenInfo:
     missing_scopes: list[str] = field(default_factory=list)
     note: str | None = None
     error: str | None = None
+    # Classic tokens: whether the optional `workflow` scope is granted (needed
+    # to push `.github/workflows/*`). None when unknowable (fine-grained —
+    # GitHub exposes no enumerable scope list).
+    has_workflow: bool | None = None
 
 
 class GitHubClient:
@@ -213,8 +225,9 @@ class GitHubClient:
 
         login = body.get("login") if isinstance(body, dict) else None
 
-        if "x-oauth-scopes" in headers:
-            scopes = [s.strip() for s in headers["x-oauth-scopes"].split(",") if s.strip()]
+        lowered = {k.lower(): v for k, v in headers.items()}
+        if "x-oauth-scopes" in lowered:
+            scopes = [s.strip() for s in lowered["x-oauth-scopes"].split(",") if s.strip()]
             missing = [s for s in REQUIRED_CLASSIC_SCOPES if s not in scopes]
             return TokenInfo(
                 valid=not missing,
@@ -222,9 +235,16 @@ class GitHubClient:
                 token_type="classic",
                 granted_scopes=scopes,
                 missing_scopes=missing,
+                has_workflow=WORKFLOW_SCOPE in scopes,
             )
 
-        return TokenInfo(valid=True, login=login, token_type="fine-grained", note=FINE_GRAINED_NOTE)
+        return TokenInfo(
+            valid=True,
+            login=login,
+            token_type="fine-grained",
+            note=FINE_GRAINED_NOTE,
+            has_workflow=None,
+        )
 
     def get_repo(self, full_name: str) -> dict[str, Any]:
         """Fetch a single repository's info by ``owner/repo``."""

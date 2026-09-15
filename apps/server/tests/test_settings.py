@@ -100,6 +100,29 @@ def test_app_startup_seeds_all_settings(app) -> None:
             s.close()
 
 
+def test_seed_enabled_backends_detects_installed_clis(
+    session: OrmSession, monkeypatch
+) -> None:
+    """Fresh installs seed installed backends (default first); nothing → full registry."""
+    from jalebi.settings import _detect_enabled_backends
+
+    monkeypatch.setattr(
+        "jalebi.adapters.is_backend_available", lambda cli: cli in ("kilo", "opencode")
+    )
+    assert _detect_enabled_backends() == ["opencode", "kilo"]
+
+    monkeypatch.setattr("jalebi.adapters.is_backend_available", lambda cli: False)
+    from jalebi.adapters import ADAPTERS
+
+    expected = ["opencode", *[c for c in ADAPTERS if c != "opencode"]]
+    assert _detect_enabled_backends() == expected
+
+    # A stored row is never overwritten by a later seed.
+    set_setting(session, "enabled_backends", ["kilo"])
+    seed_defaults(session)
+    assert get_setting(session, "enabled_backends") == ["kilo"]
+
+
 def test_seed_defaults_never_overwrites_user_values(session: OrmSession) -> None:
     set_setting(session, "concurrency", 2)
     set_setting(session, "ntfy_topic", "https://ntfy.example.com/room")

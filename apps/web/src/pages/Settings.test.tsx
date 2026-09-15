@@ -322,6 +322,30 @@ describe("Settings", () => {
     expect(screen.getByRole("option", { name: "claude" })).toBeInTheDocument();
   });
 
+  it("keeps the row lift classes scanner-visible (trailing space matters)", async () => {
+    // Regression guard: Tailwind v4 only generates `focus-within:z-30` when it
+    // appears as a whitespace-separated token. Without the space the open
+    // dropdown renders behind the next card (verified live with screenshots).
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<Settings />);
+    await expand(/Agent defaults/);
+    await screen.findByText("Default backend");
+
+    const section = screen.getByRole("heading", { name: "Default backend" }).closest("section")!;
+    // Lift engages on focus AND while any inner dropdown reports open
+    // (aria-expanded), so focus loss with an open list can't drop it behind.
+    for (const token of [
+      "focus-within:relative",
+      "focus-within:z-30",
+      'has-[[aria-expanded="true"]]:relative',
+      'has-[[aria-expanded="true"]]:z-30',
+    ]) {
+      expect(section.className.split(/\s+/)).toContain(token);
+    }
+  });
+
   it("clicking the Backend caption opens the dropdown (label activation)", async () => {
     const fetchMock = makeFetchMock();
     vi.stubGlobal("fetch", fetchMock);
@@ -721,6 +745,10 @@ describe("Settings (recovery + data)", () => {
     const rowSection = heading.closest("section");
     expect(rowSection?.className).toMatch(/\bfocus-within:relative\b/);
     expect(rowSection?.className).toMatch(/\bfocus-within:z-30\b/);
+    // The lift also engages while a dropdown reports open (aria-expanded),
+    // so focus loss with an open list can't drop the row behind its siblings.
+    expect(rowSection?.className).toContain('has-[[aria-expanded="true"]]:relative');
+    expect(rowSection?.className).toContain('has-[[aria-expanded="true"]]:z-30');
   });
 
   it("renders normalized Non-retryable errors textarea with full width and min height", async () => {

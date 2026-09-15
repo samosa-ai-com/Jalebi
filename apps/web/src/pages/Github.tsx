@@ -74,9 +74,12 @@ function AddAccountForm({ onAdded }: { onAdded: () => void }) {
         <p className="mt-2 text-xs leading-relaxed text-ink-500">
           Recommended: a <span className="font-mono">classic</span> token with the{" "}
           <span className="font-mono">repo</span> scope. It also covers reading GitHub Actions
-          logs, which the reviewer and “Fix failed CI” use. A fine-grained token works too, but
-          add <span className="font-mono">Actions: read</span> for CI logs (plus Contents, Pull
-          requests, Issues, Metadata, and Commit statuses).
+          logs, which the reviewer and “Fix failed CI” use. If tasks may touch workflow files (
+          <span className="font-mono">.github/workflows/*</span>), also check{" "}
+          <span className="font-mono">workflow</span> — GitHub refuses such pushes without it. A
+          fine-grained token works too, but add <span className="font-mono">Actions: read</span>{" "}
+          for CI logs (plus Contents, Pull requests, Issues, Metadata, and Commit statuses) and{" "}
+          <span className="font-mono">Workflows: read/write</span> for workflow-file pushes.
         </p>
       </div>
       <div className="grid gap-2 sm:grid-cols-[1fr_2fr_auto] sm:items-center">
@@ -510,6 +513,34 @@ export default function Github() {
                       then use “update token” above.
                     </p>
                   </div>
+                )}
+
+                {account.valid &&
+                  account.token_type === "classic" &&
+                  account.has_workflow === false && (
+                    <div>
+                      <p className="mb-1 text-xs text-amber-300">
+                        Workflow scope missing (optional)
+                      </p>
+                      <p className="text-[11px] leading-relaxed text-ink-500">
+                        Pushes that create or update files under{" "}
+                        <span className="font-mono">.github/workflows/*</span> will be refused
+                        by GitHub without the <span className="font-mono">workflow</span> scope.
+                        Everything else works. To enable it: GitHub → Settings → Developer
+                        settings → Personal access tokens → select the token → check{" "}
+                        <span className="font-mono">workflow</span> → save, then use “update
+                        token” above to refresh this account.
+                      </p>
+                    </div>
+                  )}
+
+                {account.valid && account.token_type === "fine-grained" && (
+                  <p className="text-[11px] leading-relaxed text-ink-500">
+                    Fine-grained tokens can&apos;t report their scopes via the API. If tasks may
+                    push workflow files (<span className="font-mono">.github/workflows/*</span>),
+                    grant <span className="font-mono">Workflows: read/write</span> in the token
+                    settings, otherwise such pushes will be refused.
+                  </p>
                 )}
 
                 <div className="border-t border-ink-800 pt-3">

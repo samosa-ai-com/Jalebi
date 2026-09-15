@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import { AttentionBadge } from "../components/AttentionBadge";
+import BackendMissingDialog from "../components/BackendMissingDialog";
 import { BrewHouse } from "../components/brew/BrewHouse";
 import type { SnackKind } from "../components/brew/snacks";
 import { OpsDeck } from "../components/ops/OpsDeck";
@@ -14,6 +15,7 @@ import { RunningCard } from "../components/RunningCard";
 import SearchableSelect from "../components/SearchableSelect";
 import { StatusBadge } from "../components/StatusBadge";
 import { useBackends } from "../hooks/useBackends";
+import { GLOSSARY } from "../lib/glossary";
 import { groupFpsByScreen } from "../lib/screeningDealt";
 import { useStatusAnnouncer } from "../lib/useStatusAnnouncer";
 import type { Account, CatalogAgent, GithubContext, Repo, SettingsMap, Task } from "../types";
@@ -109,11 +111,13 @@ function CreateTask({
   accounts,
   onCreated,
   prefill,
+  isFirstTask = false,
 }: {
   repos: Repo[];
   accounts: Account[];
   onCreated: (id?: number) => void;
   prefill: TaskPrefill | null;
+  isFirstTask?: boolean;
 }) {
   const stored = useMemo(() => loadTaskDefaults(), []);
   const [repoId, setRepoId] = useState<number>(prefill?.repoId ?? 0);
@@ -152,6 +156,12 @@ function CreateTask({
   const [availableEnvVars, setAvailableEnvVars] = useState<{ name: string; masked: string }[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Missing-backend gate: set instead of submitting when the resolved
+  // backend isn't installed — no task is created until the owner picks one.
+  const [missingBackend, setMissingBackend] = useState<{
+    missing: string;
+    installed: string[];
+  } | null>(null);
 
   const settingsLoading = agentCli === null;
   // The remembered repo applies without an effect: an explicitly picked repo
@@ -374,6 +384,27 @@ function CreateTask({
     if (!effectivePrompt) return;
     setBusy(true);
     setError(null);
+    // Never create a task on a backend that isn't installed: check health
+    // first and ask the owner to pick an installed one instead. A failed
+    // health fetch — or a backend absent from the list — falls through on
+    // purpose: the create route refuses with a 400 anyway.
+    try {
+      const health = await api.getBackendsHealth().catch(() => null);
+      const list = health?.backends;
+      if (Array.isArray(list) && agentCli !== null) {
+        const found = list.find((h) => h.cli === agentCli);
+        if (found && !found.installed) {
+          setMissingBackend({
+            missing: agentCli,
+            installed: list.filter((h) => h.installed).map((h) => h.cli),
+          });
+          setBusy(false);
+          return;
+        }
+      }
+    } catch {
+      // Health-check failure must never block submission (see above).
+    }
     try {
       const created = await api.createTask({
         repo_id: effectiveRepoId,
@@ -466,6 +497,13 @@ function CreateTask({
           ? "The agent reviews this pull request in a read-only copy and posts its comments. It never changes the code or opens a merge."
           : "The agent works in a private local copy of the repo on its own branch and cannot push. Jalebi publishes the result for you, and merging is always your decision."}
       </p>
+
+      {isFirstTask && (
+        <p className="text-xs text-ink-400">
+          New here? Start with a <span className="font-mono">freeform</span> task — describe
+          what you want in plain words; the agent figures out the rest.
+        </p>
+      )}
 
       <div className="grid gap-4 sm:grid-cols-2">
         <SearchableSelect
@@ -681,6 +719,7 @@ function CreateTask({
               />
               <SearchableSelect
                 label="Backend"
+                labelTitle={GLOSSARY.backend}
                 value={agentCli ?? ""}
                 onChange={(v) => {
                   setAgentCli(v);
@@ -835,6 +874,18 @@ function CreateTask({
           {busy ? "Creating…" : settingsLoading ? "Loading…" : "Create"}
         </button>
       </div>
+      {missingBackend && (
+        <BackendMissingDialog
+          missing={missingBackend.missing}
+          installed={missingBackend.installed}
+          onPick={(cli) => {
+            setAgentCli(cli);
+            // A new backend means a new model list — same reset as the select.
+            setModel("");
+          }}
+          onClose={() => setMissingBackend(null)}
+        />
+      )}
     </form>
   );
 }
@@ -910,6 +961,8 @@ export default function Tasks() {
   const statusAnnouncement = useStatusAnnouncer(tasks);
   const [repos, setRepos] = useState<Repo[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
+  // Loaded for the onboarding checklist's backend step (null = still loading).
+  const [settings, setSettings] = useState<SettingsMap | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterId>("all");
   const [query, setQuery] = useState("");
@@ -963,6 +1016,10 @@ export default function Tasks() {
     api
       .getTokens()
       .then((t) => setAccounts(t.accounts ?? []))
+      .catch(() => {});
+    api
+      .getSettings()
+      .then(setSettings)
       .catch(() => {});
   }, []);
 
@@ -1379,6 +1436,15 @@ export default function Tasks() {
             accounts={accounts.length}
             repos={repos.length}
             tasks={tasks.length}
+            hasModelChoice={
+              (settings?.default_model ?? "").trim() !== "" ||
+              tasks.some((t) => Boolean(t.cli || t.model))
+            }
+            hasPublishedPr={tasks.some(
+              (t) =>
+                t.type !== "pr_review" &&
+                (t.pr_number != null || (t.prs?.length ?? 0) > 0)
+            )}
             onStartTask={handleStartTask}
           />
 
@@ -1451,6 +1517,7 @@ export default function Tasks() {
             accounts={accounts}
             onCreated={handleCreated}
             prefill={prefill}
+            isFirstTask={tasks.length === 0 && lastLoaded !== null}
           />
 
           {flash != null && (
@@ -1723,7 +1790,7 @@ export default function Tasks() {
                                   handleDismissAttention(t.id);
                                 }}
                                 className="inline-flex items-center min-h-6 rounded px-1.5 py-0.5 text-[10px] font-medium text-ink-400 ring-1 ring-ink-700/60 hover:bg-ink-800 hover:text-ink-200 transition-colors"
-                                title="Dismiss attention for this task"
+                                title={`Dismiss attention for this task. ${GLOSSARY["dismiss-attention"]}`}
                               >
                                 Dismiss
                               </button>

@@ -148,6 +148,7 @@ export interface TokenInfo {
   missing_scopes: string[];
   note: string | null;
   error: string | null;
+  has_workflow?: boolean | null;
 }
 
 export interface GithubRepo {
@@ -195,6 +196,7 @@ export interface Account {
   note: string | null;
   valid: boolean;
   error: string | null;
+  has_workflow?: boolean | null;
 }
 
 export interface TokensResponse {

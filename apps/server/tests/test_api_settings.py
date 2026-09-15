@@ -61,21 +61,15 @@ def test_ntfy_topic_accepts_topic_or_url(client: FlaskClient) -> None:
 
 def test_enabled_backends_validated_and_listed(client: FlaskClient) -> None:
     """enabled_backends: non-empty known subset; default must stay enabled."""
+    from jalebi.adapters import ADAPTERS
+
     body = client.get("/api/backends").get_json()
-    assert body["backends"] == [
-        "opencode",
-        "codex",
-        "claude",
-        "pi",
-        "kilo",
-        "qwen",
-        "cline",
-        "grok",
-        "commandcode",
-        "agy",
-    ]
-    assert body["enabled"] == ["opencode", "codex", "claude"]
-    assert body["default"] == "opencode"
+    assert body["backends"] == list(ADAPTERS)
+    # Seeded by install detection (dev-machine PATH dependent): non-empty
+    # subset of the registry, default backend first.
+    assert len(body["enabled"]) >= 1
+    assert set(body["enabled"]) <= set(body["backends"])
+    assert body["enabled"][0] == body["default"] == "opencode"
 
     # A valid subset saves and is reflected.
     resp = client.post(
@@ -202,6 +196,12 @@ def test_models_endpoint_uses_adapter_model_lists_override(client: FlaskClient) 
     """GET /api/models returns the owner override for the active cli before the adapter."""
     from jalebi.adapters import get_adapter
 
+    # Seeded enabled_backends is PATH-dependent — declare the set explicitly.
+    resp = client.post(
+        "/api/settings",
+        json={"key": "enabled_backends", "value": ["opencode", "codex", "claude"]},
+    )
+    assert resp.status_code == 200
     resp = client.post("/api/settings", json={"key": "default_backend", "value": "codex"})
     assert resp.status_code == 200
     resp = client.post(
@@ -232,6 +232,12 @@ def test_models_endpoint_uses_adapter_model_lists_override(client: FlaskClient) 
 
 def test_default_backend_and_model_settings(client: FlaskClient) -> None:
     """default_backend accepts registered adapters; default_model is required."""
+    # Seeded enabled_backends is PATH-dependent — declare the set explicitly.
+    resp = client.post(
+        "/api/settings",
+        json={"key": "enabled_backends", "value": ["opencode", "codex", "claude"]},
+    )
+    assert resp.status_code == 200
     for cli in ("opencode", "codex", "claude"):
         resp = client.post("/api/settings", json={"key": "default_backend", "value": cli})
         assert resp.status_code == 200, f"{cli} should be accepted"

@@ -1,5 +1,6 @@
 """Task queue + worker pool + run lifecycle (PRD F3, F16)."""
 
+import contextlib
 import json
 import logging
 import os
@@ -65,6 +66,62 @@ class PublishError(Exception):
 
 class PublishConflict(PublishError):
     """The task branch conflicts with the PR target; nothing was pushed."""
+
+
+def _is_workflow_scope_error(exc: BaseException) -> bool:
+    """True when a git push was refused for missing the `workflow` scope.
+
+    GitHub's exact refusal mentions a Personal Access Token creating/updating
+    a workflow file without the `workflow` scope. Match loosely (case-insensitive)
+    so git-version wording differences don't slip through, but always require
+    the create/update-workflow phrasing so unrelated mentions of "workflow"
+    (branch protection, Actions policy) never match.
+    """
+    text = str(exc).lower()
+    return "workflow" in text and (
+        "without `workflow` scope" in text
+        or "without 'workflow' scope" in text
+        or "without \"workflow\" scope" in text
+        or "without workflow scope" in text
+        or "refusing to allow a personal access token to create or update workflow" in text
+    )
+
+
+@contextlib.contextmanager
+def _push_or_workflow_error(task_id: int, pat_name: str | None):
+    """Run one git push; translate a workflow-scope refusal into ``PublishError``.
+
+    ``PushLeaseFailed`` passes through untouched — a concurrent-move refusal
+    always wins over scope analysis (lease precedence). Other git failures
+    re-raise unchanged with their chain intact (``raise ... from exc`` keeps
+    ``__cause__`` for the timeline/Sentry).
+    """
+    try:
+        yield
+    except PushLeaseFailed:
+        raise
+    except GitWorkspaceError as exc:
+        if not _is_workflow_scope_error(exc):
+            raise
+        logger.warning("workflow-scope push refused for task %s: %s", task_id, exc)
+        raise PublishError(_workflow_scope_message(task_id, pat_name)) from exc
+
+
+def _workflow_scope_message(task_id: int, pat_name: str | None) -> str:
+    # The raw git stderr (internal paths, full push invocation) stays in the
+    # server log at the raise sites — never in this user-facing message.
+    account = f"account '{pat_name}'" if pat_name else "the task's account"
+    return (
+        f"push refused: the branch for task {task_id} creates or updates "
+        f"a workflow file (.github/workflows/*) but {account} lacks "
+        "the `workflow` scope. "
+        "Add `workflow` to that classic PAT (GitHub → Settings → "
+        "Developer settings → Personal access tokens → check "
+        "`workflow` → save), then use `update token` on the GitHub "
+        "page to refresh it and publish again. "
+        "Fine-grained tokens need Workflows: read/write instead. "
+        "Or remove the workflow-file changes if unintentional."
+    )
 
 
 _GIT_ENV_PREFIXES = ("GIT_CONFIG",)
@@ -2788,7 +2845,8 @@ class TaskQueue:
                 + " — the merge was aborted. Send a follow-up asking the agent to "
                 "merge origin/<target> and resolve the conflicts, then publish again."
             )
-        git.push_branch(task.id, repo.full_name, token)
+        with _push_or_workflow_error(task.id, task.pat_name):
+            git.push_branch(task.id, repo.full_name, token)
         if task.pr_number:
             # A PR already exists for jalebi/<taskId>; the push just updated it.
             # Only reuse it while it is still open — a closed/merged PR must not
@@ -2888,10 +2946,8 @@ class TaskQueue:
                 + " — the merge was aborted. Send a follow-up asking the agent to "
                 "resolve, then publish again."
             )
-        try:
+        with _push_or_workflow_error(task.id, task.pat_name):
             git.push_existing_branch(repo.full_name, head_branch, token)
-        except PushLeaseFailed:
-            raise
         # The merge + push updated the local mirror's tracking ref (push
         # does an implicit fetch). Read it without an extra network round
         # trip so we log what actually went up, not what the remote looks
@@ -2949,13 +3005,11 @@ class TaskQueue:
                 + " — the merge was aborted. Send a follow-up asking the agent to "
                 "resolve, then publish again."
             )
-        try:
+        with _push_or_workflow_error(task.id, task.pat_name):
             git.push_fork_head(
                 repo.full_name, pr_number, head_branch, fork_repo,
                 str(old_sha) if old_sha else None, token,
             )
-        except PushLeaseFailed:
-            raise
         new_sha = git.local_ref_sha(repo.full_name, GitWorkspace.fork_branch(pr_number))
         logger.info(
             "task %s updated fork PR #%s (%s:%s): %s -> %s",
@@ -2989,10 +3043,8 @@ class TaskQueue:
                 + " — the merge was aborted. Send a follow-up asking the agent to "
                 "resolve, then publish again."
             )
-        try:
+        with _push_or_workflow_error(task.id, task.pat_name):
             git.push_existing_branch(repo.full_name, target_branch, token)
-        except PushLeaseFailed:
-            raise
         new_sha = git.local_ref_sha(repo.full_name, target_branch)
         logger.info(
             "task %s pushed to branch %s: %s -> %s",

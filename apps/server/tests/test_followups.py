@@ -802,6 +802,9 @@ def test_followup_backend_change_forks_fresh_session_with_history(
     owns its session format): it starts a fresh run seeded with the prior
     conversation instead (the UI notes this)."""
     settings.set_setting(session, "auto_publish", False)
+    # Dispatch falls back when the backend isn't enabled — declare the world
+    # instead of inheriting seed-time PATH detection.
+    settings.set_setting(session, "enabled_backends", ["opencode", "codex"])
     task = _done_task_with_session(session, repo_row.id, session_id="ses_orig")
     run = tasks.latest_run(session, task.id)
     assert run is not None
@@ -865,6 +868,9 @@ def test_followup_legacy_backend_override_forks_fresh_session(
     authoritative: fork and seed the prior conversation.
     """
     settings.set_setting(session, "auto_publish", False)
+    # Dispatch falls back when the backend isn't enabled — declare the world
+    # instead of inheriting seed-time PATH detection.
+    settings.set_setting(session, "enabled_backends", ["opencode", "codex"])
     task = _done_task_with_session(session, repo_row.id, session_id="ses_legacy")
     # No `run.cli` — a legacy run predating the per-run cli column.
     run = tasks.latest_run(session, task.id)

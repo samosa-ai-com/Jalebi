@@ -13,8 +13,8 @@
 
 ## 2. Required scopes & validation (PRD §F1)
 
-- **Classic PAT (`repo`) — recommended:** `repo` also covers reading GitHub Actions runs/logs, so an agent can inspect a failing workflow and fix it. No extra scope is needed.
-- **Fine-grained:** Contents read/write, Pull requests read/write, Issues read/write, Metadata read, **Commit statuses read/write** (for check runs), and **Actions read** (to read failed workflow logs — the "Fix failed CI" flow).
+- **Classic PAT (`repo`) — recommended:** `repo` also covers reading GitHub Actions runs/logs, so an agent can inspect a failing workflow and fix it. No extra scope is needed — **unless** tasks may create or update workflow files (`.github/workflows/*`): GitHub refuses such pushes without the additional **`workflow`** scope. The GitHub page shows a non-blocking warning when a classic token lacks it; publish failures from it carry fix instructions (add `workflow` to the token, refresh via “update token”, republish).
+- **Fine-grained:** Contents read/write, Pull requests read/write, Issues read/write, Metadata read, **Commit statuses read/write** (for check runs), and **Actions read** (to read failed workflow logs — the "Fix failed CI" flow). Add **Workflows: read/write** when tasks may push workflow files.
 
 `GitHubClient.validate_token()` calls `GET /user` and classifies the result:
 
@@ -30,7 +30,7 @@ Validation is explicit (endpoints below), **not** run at startup — the server 
 
 - **Rate-limit backoff:** `_request`/`_request_etag` route through `_send`, which retries a rate-limited **GET/HEAD** response with a bounded wait. A **429** always qualifies; a **403** qualifies only when it carries a rate-limit signal (`X-RateLimit-Remaining: 0` for the primary limit, or a `Retry-After` header for the secondary limit). Wait = numeric or HTTP-date `Retry-After`, else `X-RateLimit-Reset − now`, else 1 s, capped at `RATE_LIMIT_MAX_WAIT` (60 s), up to `RATE_LIMIT_MAX_RETRIES` (3) retries. Writes are deliberately not replayed: GitHub does not provide an idempotency guarantee for every secondary-rate-limit response, so the caller receives it and the owner can retry safely. This matters under concurrency: every task on a repo shares one PAT's budget.
 
-- `validate_token() -> TokenInfo` (`valid`, `login`, `token_type`, `granted_scopes`, `missing_scopes`, `note`, `error`).
+- `validate_token() -> TokenInfo` (`valid`, `login`, `token_type`, `granted_scopes`, `missing_scopes`, `note`, `error`, `has_workflow` — classic only, None for fine-grained).
 - `get_repo(full_name)` → `{full_name, default_branch, clone_url, private}`; raises `GitHubNotFound` on 404.
 - `create_pr(full_name, *, title, body, head, base) -> int` — opens a pull request and returns its number.
 - `list_repos()` → `[{full_name, private, default_branch, clone_url, html_url}]`.

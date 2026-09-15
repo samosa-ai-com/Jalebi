@@ -151,6 +151,68 @@ def test_publish_unknown_mode_raises(q, session, repo_row, monkeypatch) -> None:
         q.publish_task(task.id, mode="bogus")
 
 
+def test_publish_workflow_scope_error_is_actionable(
+    q, session, repo_row, monkeypatch
+) -> None:
+    """A push refused for missing `workflow` scope becomes an actionable PublishError."""
+    from jalebi.git_workspace import GitWorkspaceError
+    from jalebi.queue import _is_workflow_scope_error
+
+    refused = (
+        "git -C /tmp/ws push origin jalebi/1 failed: To https://github.com/o/r.git "
+        "! [remote rejected] jalebi/1 -> jalebi/1 (refusing to allow a Personal "
+        "Access Token to create or update workflow "
+        "`.github/workflows/google-scholar.yml` without `workflow` scope)"
+    )
+    assert _is_workflow_scope_error(GitWorkspaceError(refused)) is True
+    assert _is_workflow_scope_error(GitWorkspaceError("boom")) is False
+    assert (
+        _is_workflow_scope_error(
+            GitWorkspaceError("remote rejected: workflow job failed branch protection")
+        )
+        is False
+    )
+
+    settings.set_setting(session, "auto_publish", False)
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
+    _seed_commit(q, task.id, repo_row)
+    _seed_run(session, task.id)
+
+    def _boom(self, *a, **k):
+        raise GitWorkspaceError(refused)
+
+    monkeypatch.setattr(GitWorkspace, "push_branch", _boom)
+    with pytest.raises(PublishError, match="workflow.*scope") as excinfo:
+        q.publish_task(task.id, mode="new_pr")
+    assert "update token" in str(excinfo.value)
+    assert "git -C" not in str(excinfo.value)
+    # The git cause chain is preserved for the timeline/Sentry.
+    assert isinstance(excinfo.value.__cause__, GitWorkspaceError)
+
+
+def test_push_or_workflow_error_maps_all_push_shapes() -> None:
+    """The shared helper covers every publish push path identically."""
+    from jalebi.git_workspace import GitWorkspaceError, PushLeaseFailed
+    from jalebi.queue import _push_or_workflow_error
+
+    refused = GitWorkspaceError(
+        "refusing to allow a Personal Access Token to create or update workflow "
+        "`.github/workflows/x.yml` without `workflow` scope"
+    )
+    with pytest.raises(PublishError, match="workflow.*scope"):
+        with _push_or_workflow_error(7, "test"):
+            raise refused
+    # Lease failures pass through untouched (lease precedence).
+    with pytest.raises(PushLeaseFailed):
+        with _push_or_workflow_error(7, "test"):
+            raise PushLeaseFailed("stale info")
+    # Ordinary git failures re-raise unchanged.
+    boom = GitWorkspaceError("git push failed: boom")
+    with pytest.raises(GitWorkspaceError, match="boom"):
+        with _push_or_workflow_error(7, "test"):
+            raise boom
+
+
 def test_publish_push_branch_requires_branch(q, session, repo_row, monkeypatch) -> None:
     settings.set_setting(session, "auto_publish", False)
     task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")

@@ -22,7 +22,7 @@ from jalebi import (
     tasks,
     workspace_files,
 )
-from jalebi.adapters import available_adapters
+from jalebi.adapters import available_adapters, is_backend_available
 from jalebi.catalog import agent_by_slug
 from jalebi.config import Config
 from jalebi.db import Artifact, Run, Task, now
@@ -101,6 +101,54 @@ def _parse_number(value, name: str) -> tuple[int | None, str | None]:
     if isinstance(value, str) and value.strip().isdigit():
         return int(value.strip()), None
     return None, f"{name} must be an integer"
+
+
+def _effective_cli(
+    session,
+    *,
+    override: str | None = None,
+    task_cli: str | None = None,
+    prev_cli: str | None = None,
+    agent=None,
+) -> str:
+    """Resolve the backend the run would actually use (queue precedence).
+
+    ``task_cli or agent.pin or override or prev_cli or default`` — this is
+    exactly how the queue resolves it: ``create`` passes its payload as
+    ``task_cli`` (it becomes the task pin, which wins over the agent pin),
+    while ``followup`` passes its payload as ``override`` (which the agent
+    pin beats only when the task itself pins nothing). A hard ``"opencode"``
+    fallback covers a corrupt/empty stored default so it can never produce
+    an undispatched backend (mirrors the queue's terminal fallback).
+    """
+    default = settings.get_setting(session, "default_backend")
+    if not isinstance(default, str) or not default:
+        default = "opencode"
+    agent_cli = getattr(agent, "cli", None) if agent is not None else None
+    return task_cli or agent_cli or override or prev_cli or default
+
+
+def _missing_backend_response(effective: str, *, action: str) -> ResponseReturnValue:
+    """400 for an explicitly-resolved backend that isn't installed.
+
+    ``action`` names what was refused (e.g. "the task was not created") so
+    each caller reads correctly while sharing one shape + message.
+    """
+    installed = [c for c in available_adapters() if is_backend_available(c)]
+    hint = f" Installed here: {', '.join(installed)}." if installed else ""
+    return (
+        jsonify(
+            {
+                "error": (
+                    f"backend '{effective}' is not installed on this machine — "
+                    f"{action}. Pick an installed backend.{hint}"
+                ),
+                "missing_backend": effective,
+                "installed_backends": installed,
+            }
+        ),
+        400,
+    )
 
 
 def _masker(session) -> Callable[[str], str]:
@@ -226,6 +274,15 @@ def create_task() -> ResponseReturnValue:
     if cli is not None and cli not in available_adapters():
         return jsonify({"error": f"unsupported agent cli: {cli}"}), 400
 
+    # Refuse to create a task whose backend isn't installed: a missing binary
+    # would only fail the run after creation. Resolve the same precedence the
+    # queue uses at dispatch (task override > agent pin > default backend).
+    # Payload `cli` is written to task.cli below, so it gates as the task
+    # pin (which wins over the agent pin at dispatch) — not as `override`.
+    effective_cli = _effective_cli(session, task_cli=cli, agent=agent)
+    if not is_backend_available(effective_cli):
+        return _missing_backend_response(effective_cli, action="the task was not created")
+
     model = payload.get("model")
     if model is not None and not isinstance(model, str):
         return jsonify({"error": "`model` must be a string"}), 400
@@ -344,6 +401,16 @@ def create_task() -> ResponseReturnValue:
         assert pr_number_int is not None  # validated above; None returns 400 here
         if repo is None:
             return jsonify({"error": "repo not found"}), 400
+        # Each reviewer runs as its own task on its pinned backend (or the
+        # default when unpinned) — refuse before creating anything when one
+        # isn't installed.
+        for rid in [str(r) for r in reviewers]:
+            reviewer = agent_by_slug(session, rid)
+            reviewer_cli = _effective_cli(session, agent=reviewer)
+            if not is_backend_available(reviewer_cli):
+                return _missing_backend_response(
+                    reviewer_cli, action=f"reviewer '{rid}' was not assigned"
+                )
         try:
             created = reviews.assign_reviewers(
                 session, repo, pr_number_int, [str(r) for r in reviewers],
@@ -467,6 +534,12 @@ def rerun_task(task_id: int) -> ResponseReturnValue:
         if raw_model is not None and not isinstance(raw_model, str):
             return jsonify({"error": "`model` must be a string"}), 400
         task.model = raw_model or None
+    # The rerun would dispatch on the (possibly just-changed) pin — refuse an
+    # uninstalled backend before mutating run state or enqueueing.
+    rerun_agent = agent_by_slug(session, task.agent_id) if task.agent_id else None
+    rerun_cli = _effective_cli(session, task_cli=task.cli, agent=rerun_agent)
+    if not is_backend_available(rerun_cli):
+        return _missing_backend_response(rerun_cli, action="the rerun was not queued")
     # A fresh attempt gets a fresh recovery budget: without this, a task that
     # hit the attempt cap fails its rerun once and immediately gives up
     # again with zero auto-recovery.
@@ -675,6 +748,19 @@ def followup_task(task_id: int) -> ResponseReturnValue:
     if prev is None:
         return jsonify({"error": "no resumable session for this task"}), 409
 
+    # The resume would dispatch on the task/agent/override/prev/default
+    # chain — refuse an uninstalled backend before enqueueing anything.
+    followup_agent = agent_by_slug(session, task.agent_id) if task.agent_id else None
+    followup_cli = _effective_cli(
+        session,
+        override=cli,
+        task_cli=task.cli,
+        prev_cli=prev.cli if prev is not None else None,
+        agent=followup_agent,
+    )
+    if not is_backend_available(followup_cli):
+        return _missing_backend_response(followup_cli, action="the follow-up was not queued")
+
     masker = _masker(session)
 
     # "Address the reviewers" follow-up (PRD F7.6 / F11): when include_reviews
@@ -756,6 +842,16 @@ def assign_reviewers(task_id: int) -> ResponseReturnValue:
     reviewers = payload.get("reviewers") if isinstance(payload, dict) else None
     if not isinstance(reviewers, list) or not all(isinstance(r, str) for r in reviewers):
         return jsonify({"error": 'expected JSON body {"reviewers": ["<agent_id>", ...]}'}), 400
+
+    # Same per-reviewer install gate as task creation: each reviewer runs as
+    # its own task, so an uninstalled backend must refuse before anything.
+    for rid in reviewers:
+        reviewer = agent_by_slug(session, rid)
+        reviewer_cli = _effective_cli(session, agent=reviewer)
+        if not is_backend_available(reviewer_cli):
+            return _missing_backend_response(
+                reviewer_cli, action=f"reviewer '{rid}' was not assigned"
+            )
 
     masker = _masker(session)
     try:

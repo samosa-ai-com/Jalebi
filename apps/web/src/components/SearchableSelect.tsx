@@ -1,4 +1,5 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 export interface SearchableOption {
   value: string;
@@ -19,6 +20,8 @@ interface SearchableSelectProps {
   staleHint?: string;
   /** Hide the visible label (the label text stays the accessible name). */
   hideLabel?: boolean;
+  /** Optional native tooltip on the visible label (jargon hint; aria-label untouched). */
+  labelTitle?: string;
 }
 
 function norm(o: string | SearchableOption): { value: string; label: string } {
@@ -43,13 +46,60 @@ export default function SearchableSelect({
   allowCustom,
   staleHint = "Not in the known list — will be sent as-is.",
   hideLabel,
+  labelTitle,
 }: SearchableSelectProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [highlight, setHighlight] = useState(0);
   const rootRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  // Viewport-anchored coordinates for the portaled list (null = not placed yet).
+  const [coords, setCoords] = useState<{ top: number; left: number; width: number } | null>(
+    null
+  );
+
+  // The list lives in a document.body portal (above every card's stacking
+  // context), so it is anchored to the toggle's viewport rect and flipped
+  // upward when space below is tight. Recomputed on open + scroll + resize.
+  // A missing rect (hidden/detached toggle) falls back to a corner default
+  // so an open toggle never reports aria-expanded with no listbox.
+  const place = useCallback(() => {
+    const GAP = 4;
+    const MAX_H = 224; // matches max-h-56 on the list
+    const MIN_W = 180; // minimum readable width for the list
+    const rect = buttonRef.current?.getBoundingClientRect();
+    if (!rect || (rect.width === 0 && rect.height === 0)) {
+      setCoords({ top: 8, left: 8, width: MIN_W });
+      return;
+    }
+    const below = window.innerHeight - rect.bottom;
+    const up = below < MAX_H + GAP && rect.top > below;
+    const renderWidth = Math.max(rect.width, MIN_W);
+    setCoords({
+      left: Math.max(8, Math.min(rect.left, window.innerWidth - renderWidth - 8)),
+      width: Math.min(renderWidth, window.innerWidth - 16),
+      top: up ? Math.max(8, rect.top - MAX_H - GAP) : rect.bottom + GAP,
+    });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (open) place();
+  }, [open, place]);
+
+  useEffect(() => {
+    if (!open) return;
+    window.addEventListener("scroll", place, true);
+    window.addEventListener("resize", place);
+    return () => {
+      window.removeEventListener("scroll", place, true);
+      window.removeEventListener("resize", place);
+    };
+  }, [open, place]);
+
   const listId = useId();
+  const hintId = useId();
   const current = String(value ?? "");
 
   const items = useMemo(() => options.map(norm), [options]);
@@ -73,6 +123,14 @@ export default function SearchableSelect({
         o.label.toLowerCase() === query.trim().toLowerCase()
     );
 
+  // Options can reload while open (async lists) — keep the highlight in range
+  // so Enter never silently no-ops on a stale index. Highest valid index is
+  // the custom row (== filtered.length) when present, else the last option.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- derived-state clamp
+    setHighlight((h) => Math.min(h, Math.max(-1, filtered.length + (showCustom ? 1 : 0) - 1)));
+  }, [filtered.length, showCustom]);
+
   function openList() {
     if (disabled) return;
     setQuery("");
@@ -81,11 +139,15 @@ export default function SearchableSelect({
     requestAnimationFrame(() => searchRef.current?.focus());
   }
 
-  // Close on outside click.
+  // Close on outside click (the portaled list is outside rootRef, so both
+  // nodes count as inside — otherwise option mousedown would close first).
   useEffect(() => {
     if (!open) return;
     function onDown(e: MouseEvent) {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+      const target = e.target as Node;
+      if (rootRef.current?.contains(target)) return;
+      if (listRef.current?.contains(target)) return;
+      setOpen(false);
     }
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
@@ -94,16 +156,28 @@ export default function SearchableSelect({
   function choose(v: string) {
     onChange(v);
     setOpen(false);
+    // The portaled list unmounts — return focus to the toggle so keyboard
+    // users don't lose their place to document.body.
+    buttonRef.current?.focus();
   }
+
+  // The clear row (index -1) exists when no search text is typed and a value
+  // is picked. A placeholder with an empty list and nothing picked renders
+  // as a status line instead — clicking "couldn't load branches" must not
+  // wipe input.
+  const canClearRow = placeholder !== undefined && query.trim() === "" && current !== "";
 
   function onSearchKey(e: React.KeyboardEvent) {
     if (e.key === "Escape") {
       setOpen(false);
+      buttonRef.current?.focus();
       return;
     }
-    // The placeholder/clear row (index -1) is keyboard-reachable via ArrowUp
-    // from the top; it only exists when no search text is typed.
-    const canClear = placeholder !== undefined && query.trim() === "";
+    if (e.key === "Tab") {
+      // Tabbing out dismisses the list but lets focus travel normally.
+      setOpen(false);
+      return;
+    }
     const count = filtered.length + (showCustom ? 1 : 0);
     if (e.key === "ArrowDown") {
       e.preventDefault();
@@ -112,14 +186,14 @@ export default function SearchableSelect({
     }
     if (e.key === "ArrowUp") {
       e.preventDefault();
-      setHighlight((h) => (h <= 0 ? (canClear ? -1 : 0) : h - 1));
+      setHighlight((h) => (h <= 0 ? (canClearRow ? -1 : 0) : h - 1));
       return;
     }
     if (e.key === "Enter") {
       e.preventDefault();
       if (showCustom && highlight === filtered.length) {
         choose(query.trim());
-      } else if (highlight === -1 && placeholder !== undefined && query.trim() === "") {
+      } else if (highlight === -1 && canClearRow) {
         choose("");
       } else if (filtered[highlight]) {
         choose(filtered[highlight].value);
@@ -129,8 +203,24 @@ export default function SearchableSelect({
 
   return (
     <div ref={rootRef} className="block">
-      {!hideLabel && <span className="mb-1.5 block text-xs font-medium text-ink-400">{label}</span>}
+      {!hideLabel &&
+        (labelTitle ? (
+          // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- intentional focusable hint
+          <span tabIndex={0}
+            aria-describedby={hintId}
+            className="mb-1.5 block w-fit text-xs font-medium text-ink-400 underline decoration-dotted underline-offset-2"
+            title={labelTitle}
+          >
+            {label}
+            <span id={hintId} className="sr-only">
+              {labelTitle}
+            </span>
+          </span>
+        ) : (
+          <span className="mb-1.5 block text-xs font-medium text-ink-400">{label}</span>
+        ))}
       <button
+        ref={buttonRef}
         type="button"
         aria-label={label}
         aria-haspopup="listbox"
@@ -154,9 +244,22 @@ export default function SearchableSelect({
           {allowCustom ? `Custom value: ${current}.` : ""} {staleHint}
         </p>
       )}
-      {open && (
-        <div className="relative z-20">
-          <div className="absolute inset-x-0 top-1 overflow-hidden rounded-lg border border-ink-700 bg-ink-950 shadow-xl">
+      {open &&
+        coords &&
+        createPortal(
+          <div
+            ref={listRef}
+            className="overflow-hidden rounded-lg border border-ink-700 bg-ink-950 shadow-xl"
+            style={{
+              position: "fixed",
+              top: coords.top,
+              left: coords.left,
+              width: coords.width,
+              // Above dialog overlays (z-50): several dialogs contain
+              // selects whose lists must paint over the dialog itself.
+              zIndex: 60,
+            }}
+          >
             <input
               ref={searchRef}
               role="combobox"
@@ -173,7 +276,7 @@ export default function SearchableSelect({
               className="w-full border-b border-ink-800 bg-transparent px-3 py-2 text-sm text-ink-100 outline-none placeholder:text-ink-500"
             />
             <ul role="listbox" id={listId} className="max-h-56 overflow-auto py-1">
-              {placeholder !== undefined && query.trim() === "" && (
+              {canClearRow && (
                 <li
                   role="option"
                   aria-selected={current === ""}
@@ -192,6 +295,13 @@ export default function SearchableSelect({
                   {placeholder}
                 </li>
               )}
+              {placeholder !== undefined &&
+                query.trim() === "" &&
+                current === "" &&
+                filtered.length === 0 &&
+                !showCustom && (
+                  <li className="px-3 py-1.5 text-sm text-ink-500">{placeholder}</li>
+                )}
               {filtered.map((o, i) => (
                 <li
                   key={o.value}
@@ -235,9 +345,9 @@ export default function SearchableSelect({
                 <li className="px-3 py-1.5 text-sm text-ink-500">No matches.</li>
               )}
             </ul>
-          </div>
-        </div>
-      )}
+          </div>,
+          document.body
+        )}
     </div>
   );
 }
