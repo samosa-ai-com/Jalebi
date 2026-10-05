@@ -21,8 +21,22 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
+    env:
+      # Node heap cap so vite/vitest can never eat the box (see below).
+      NODE_OPTIONS: --max-old-space-size=6144
     steps:
       - uses: actions/checkout@v4
+
+      # Box guardrails (no root needed): the BeyondMax host runs a desktop +
+      # other services alongside the runner. Heavy steps below are pinned to
+      # 16 of 32 CPUs (taskset) and a 32 GiB address-space cap (prlimit), so
+      # a runaway test/build dies with an error instead of freezing the host
+      # at 97% RAM. Legit peaks are far below: vite build < 8G, pytest < 4G.
+      - name: Resource baseline
+        run: |
+          free -h
+          nproc
+          taskset -pc $$ || true
 
       - uses: actions/setup-node@v4
         with:
@@ -51,13 +65,13 @@ jobs:
         run: npm run typecheck
 
       - name: Web tests
-        run: npm run test:web
+        run: taskset -c 0-15 prlimit --as=34359738368 npm run test:web
 
       - name: Web build
-        run: npm run build
+        run: taskset -c 0-15 prlimit --as=34359738368 npm run build
 
       - name: Server lint (ruff)
         run: uv run --project apps/server ruff check .
 
       - name: Server tests
-        run: uv run --project apps/server pytest
+        run: taskset -c 0-15 prlimit --as=34359738368 uv run --project apps/server pytest -q --timeout=120

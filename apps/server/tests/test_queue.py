@@ -543,6 +543,37 @@ def test_cancel_running_task(q, session, repo_row, monkeypatch) -> None:
     assert _latest_run(session, task.id).status == "cancelled"
 
 
+def test_run_watchers_exit_when_run_finishes(q, session, repo_row, monkeypatch) -> None:
+    """Watcher threads must not outlive their run.
+
+    Regression guard: the watchdog/stall/progress threads used to exit only
+    when the agent proc reported death, so fake procs (poll() always None)
+    leaked 3 threads + a session per run — hundreds over a full session,
+    ending in MemoryErrors, segfaults and an OOM-frozen host. They now also
+    honor _RunState.done, set by the run method's finally block.
+    """
+    _no_publish(session)
+    task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
+    _install_adapter(monkeypatch, BlockingHandle())
+
+    thread = threading.Thread(target=q._run_task, args=(task.id,))
+    thread.start()
+    assert _wait_until(lambda: _fresh_task(session, task.id).status == "running")
+    assert q.cancel(task.id) is True
+    thread.join(timeout=10)
+    assert not thread.is_alive()
+
+    def _leaked() -> list[str]:
+        return sorted(
+            t.name
+            for t in threading.enumerate()
+            if t.is_alive()
+            and t.name.startswith(("watchdog-", "stall-", "progress-"))
+        )
+
+    assert _wait_until(lambda: not _leaked(), timeout=10), f"leaked watcher threads: {_leaked()}"
+
+
 def test_cancelled_queued_task_is_skipped(q, session, repo_row, monkeypatch) -> None:
     task = tasks.create_task(session, type_="freeform", repo_id=repo_row.id, prompt="do it")
     task.status = "cancelled"

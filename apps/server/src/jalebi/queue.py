@@ -188,6 +188,12 @@ class _RunState:
         self.last_step_text: str | None = None
         self.last_phase: str | None = None
         self.last_progress_notify = time.monotonic()
+        # Set by the owning run method (_run_task / _run_followup) when the
+        # run finishes, however it finishes. Watcher threads must honor it:
+        # a fake/stub proc in tests may report "alive" forever, and without
+        # this the watchers (plus their sessions) leak one set per run —
+        # hundreds of zombie threads over a full test session.
+        self.done = threading.Event()
 
 
 def _kill_group(pid: int, sig: int = signal.SIGTERM) -> None:
@@ -1303,6 +1309,10 @@ class TaskQueue:
         finally:
             session.close()
             self.events.close(task_id)
+            if state is not None:
+                # Release the watcher threads even if the proc handle claims
+                # to be alive (stubs/fakes in tests, wedged agents in prod).
+                state.done.set()
 
     @staticmethod
     def _dirty_names(dirty: list[str]) -> str:
@@ -2151,6 +2161,10 @@ class TaskQueue:
         finally:
             session.close()
             self.events.close(task_id)
+            if state is not None:
+                # Release the watcher threads even if the proc handle claims
+                # to be alive (stubs/fakes in tests, wedged agents in prod).
+                state.done.set()
 
     def publish_task(
         self,
@@ -2632,13 +2646,15 @@ class TaskQueue:
             logger.warning("could not publish status for task %s", task.id)
 
     def _watchdog_loop(self, deadline: float, state: _RunState) -> None:
-        while True:
+        while not state.done.is_set():
             if state.handle.proc.poll() is not None:
                 return
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
-            time.sleep(min(1.0, remaining))
+            state.done.wait(min(1.0, remaining))
+        if state.done.is_set():
+            return  # run already over; must not mark it timed out post-hoc
         state.reason = "timeout"
         _kill_proc(state.handle.proc)
 
@@ -2652,14 +2668,14 @@ class TaskQueue:
         surfaces a clear "agent produced no output" diagnostic; the auto-recovery
         layer then resumes or re-runs the task.
         """
-        while True:
+        while not state.done.is_set():
             if state.handle.proc.poll() is not None:
                 return
             if time.monotonic() - state.last_event >= state.stall_timeout:
                 state.reason = "stalled"
                 _kill_proc(state.handle.proc)
                 return
-            time.sleep(0.5)
+            state.done.wait(0.5)
 
     def _progress_notify_loop(self, task: Task, state: _RunState) -> None:
         """Push a periodic 'still running' notification while the agent is alive.
@@ -2680,7 +2696,7 @@ class TaskQueue:
             task_env = envvars.values_for_names(session, repo.id, envvars.task_env_names(task))
             masker = self._build_masker(session, secret_values=list(task_env.values()))
             started = time.monotonic()
-            while True:
+            while not state.done.is_set():
                 if state.handle.proc.poll() is not None:
                     return
                 raw_interval = settings.get_setting(session, "notify_progress_interval_minutes")
@@ -2711,7 +2727,7 @@ class TaskQueue:
                         logger.warning(
                             "progress notification for task %s failed", task.id, exc_info=True
                         )
-                time.sleep(min(5.0, max(1.0, interval * 60)))
+                state.done.wait(min(5.0, max(1.0, interval * 60)))
         finally:
             session.close()
 
