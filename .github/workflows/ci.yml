@@ -1,0 +1,63 @@
+name: CI
+
+# Runs on the self-hosted BeyondMax runner (no GitHub Actions minutes).
+# Covers Jalebi web (vite/react) + server (flask/pytest) without
+# needing any external review runner — Jalebi reviews run locally.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  ci:
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        run: |
+          if ! command -v uv >/dev/null 2>&1; then
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          fi
+          uv --version
+
+      - name: Install web deps
+        run: npm ci
+
+      - name: Web lint
+        run: npm run lint
+
+      - name: Web typecheck
+        run: npm run typecheck
+
+      - name: Web tests
+        run: npm run test:web
+
+      - name: Web build
+        run: npm run build
+
+      - name: Server lint (ruff)
+        run: uv run --project apps/server ruff check .
+
+      - name: Server tests
+        run: uv run --project apps/server pytest
