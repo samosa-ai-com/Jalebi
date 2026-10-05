@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   ci:
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: [self-hosted, chanakya]
     timeout-minutes: 20
     permissions:
       contents: read
