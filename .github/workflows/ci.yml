@@ -25,7 +25,7 @@ jobs:
       # Node heap cap so vite/vitest can never eat the box (see below).
       NODE_OPTIONS: --max-old-space-size=6144
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Box guardrails (no root needed): the BeyondMax host runs a desktop +
       # other services alongside the runner. Heavy steps are pinned to 16 of
@@ -40,7 +40,7 @@ jobs:
           nproc
           taskset -pc $$ || true
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 20
           cache: npm
