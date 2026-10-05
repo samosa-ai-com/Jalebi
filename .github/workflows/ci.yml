@@ -28,10 +28,12 @@ jobs:
       - uses: actions/checkout@v4
 
       # Box guardrails (no root needed): the BeyondMax host runs a desktop +
-      # other services alongside the runner. Heavy steps below are pinned to
-      # 16 of 32 CPUs (taskset) and a 32 GiB address-space cap (prlimit), so
-      # a runaway test/build dies with an error instead of freezing the host
-      # at 97% RAM. Legit peaks are far below: vite build < 8G, pytest < 4G.
+      # other services alongside the runner. Heavy steps are pinned to 16 of
+      # 32 CPUs (taskset) so CI can never take more than half the CPUs.
+      # RAM: Node steps rely on NODE_OPTIONS heap caps (prlimit address-space
+      # caps break Vite's WASM mappings — verified: vitest dies at startup
+      # under prlimit --as); only the pytest step — the known runaway — gets
+      # a hard prlimit --as=32G cap, far above its healthy <4G footprint.
       - name: Resource baseline
         run: |
           free -h
@@ -65,10 +67,10 @@ jobs:
         run: npm run typecheck
 
       - name: Web tests
-        run: taskset -c 0-15 prlimit --as=34359738368 npm run test:web
+        run: taskset -c 0-15 npm run test:web
 
       - name: Web build
-        run: taskset -c 0-15 prlimit --as=34359738368 npm run build
+        run: taskset -c 0-15 npm run build
 
       - name: Server lint (ruff)
         run: uv run --project apps/server ruff check .
