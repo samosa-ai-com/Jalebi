@@ -1252,7 +1252,11 @@ describe("Tasks page (queue overhaul)", () => {
       </MemoryRouter>
     );
     await screen.findByText("New task");
-    await userEvent.type(screen.getByPlaceholderText("Instructions…"), "fresh work");
+    // The "New task" heading also renders in the repos-loading state, so wait
+    // for the form itself (mounted once /api/repos resolves) instead of
+    // assuming it is present synchronously — flaky on loaded runners.
+    const promptBox = await screen.findByPlaceholderText("Instructions…");
+    await userEvent.type(promptBox, "fresh work");
     await userEvent.click(screen.getByRole("button", { name: "Create" }));
     const link = await screen.findByRole("link", { name: "#99" });
     expect(link).toHaveAttribute("href", "/tasks/99");
