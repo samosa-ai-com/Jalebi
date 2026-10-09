@@ -40,10 +40,13 @@ jobs:
           nproc
           taskset -pc $$ || true
 
+      # No npm cache: on this persistent self-hosted runner ~/.npm
+      # survives between runs, so npm ci is already fast — uploading the
+      # whole cache to GitHub only burned org storage quota (one 6.8 GB
+      # entry alone, Oct 2026 incident).
       - uses: actions/setup-node@v5
         with:
           node-version: 20
-          cache: npm
 
       - uses: actions/setup-python@v5
         with:
