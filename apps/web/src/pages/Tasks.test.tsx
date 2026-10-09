@@ -113,8 +113,8 @@ describe("Tasks", () => {
     );
     await screen.findByText("New task");
 
-    await userEvent.type(screen.getByPlaceholderText("Instructions…"), "implement feature");
-    await userEvent.click(screen.getByRole("button", { name: "Create" }));
+    await userEvent.type(await screen.findByPlaceholderText("Instructions…"), "implement feature");
+    await userEvent.click(await screen.findByRole("button", { name: "Create" }));
 
     await waitFor(() => {
       const postCall = fetchMock.mock.calls.find(
@@ -477,7 +477,7 @@ describe("Tasks", () => {
     );
     await screen.findByText("New task");
     // Env vars live behind the Advanced toggle.
-    await userEvent.click(screen.getByRole("button", { name: /Advanced/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /Advanced/ }));
 
     expect(await screen.findByText("DATABASE_URL")).toBeInTheDocument();
     await userEvent.click(screen.getByText("DATABASE_URL"));
@@ -1085,7 +1085,7 @@ describe("Tasks page (queue overhaul)", () => {
     );
     await screen.findByText("New task");
     expect(screen.queryByLabelText("Backend")).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: /Advanced options/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /Advanced options/ }));
     expect(screen.getByLabelText("Backend")).toBeInTheDocument();
   });
 
