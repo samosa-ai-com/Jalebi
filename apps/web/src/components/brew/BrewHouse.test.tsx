@@ -263,8 +263,10 @@ describe("BrewHouse", () => {
     stubFetch({ ...HANDLERS });
     const { container } = renderHouse();
     await screen.findByRole("region", { name: "Ingredients" });
-    expect(screen.getByText("Security")).toBeInTheDocument();
-    expect(screen.getByText("Docs")).toBeInTheDocument();
+    // Items load async after the region mounts; wait for them instead of
+    // assuming they render synchronously (flaky on loaded runners).
+    expect(await screen.findByText("Security")).toBeInTheDocument();
+    expect(await screen.findByText("Docs")).toBeInTheDocument();
     // sec rides the Fixer agent frying task #1 → glowing ingredient.
     expect(screen.getByText("in the karhai")).toBeInTheDocument();
     expect(container.querySelector(".brew-ingredient-live")).not.toBeNull();

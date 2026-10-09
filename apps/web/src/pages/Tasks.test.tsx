@@ -113,8 +113,8 @@ describe("Tasks", () => {
     );
     await screen.findByText("New task");
 
-    await userEvent.type(screen.getByPlaceholderText("Instructions…"), "implement feature");
-    await userEvent.click(screen.getByRole("button", { name: "Create" }));
+    await userEvent.type(await screen.findByPlaceholderText("Instructions…"), "implement feature");
+    await userEvent.click(await screen.findByRole("button", { name: "Create" }));
 
     await waitFor(() => {
       const postCall = fetchMock.mock.calls.find(
@@ -477,7 +477,7 @@ describe("Tasks", () => {
     );
     await screen.findByText("New task");
     // Env vars live behind the Advanced toggle.
-    await userEvent.click(screen.getByRole("button", { name: /Advanced/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /Advanced/ }));
 
     expect(await screen.findByText("DATABASE_URL")).toBeInTheDocument();
     await userEvent.click(screen.getByText("DATABASE_URL"));
@@ -576,7 +576,7 @@ describe("Tasks", () => {
       </MemoryRouter>
     );
     await screen.findByText("New task");
-    await userEvent.click(screen.getByLabelText("Task type"));
+    await userEvent.click(await screen.findByLabelText("Task type"));
     expect(screen.getByRole("option", { name: "Freeform" })).toBeInTheDocument();
     expect(screen.queryByRole("option", { name: "screen_finding" })).not.toBeInTheDocument();
   });
@@ -664,7 +664,7 @@ describe("Tasks", () => {
       </MemoryRouter>
     );
     await screen.findByText("New task");
-    const toggle = screen.getByRole("button", { name: /Advanced options/ });
+    const toggle = await screen.findByRole("button", { name: /Advanced options/ });
     expect(toggle).toBeInTheDocument();
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     expect(
@@ -1085,7 +1085,7 @@ describe("Tasks page (queue overhaul)", () => {
     );
     await screen.findByText("New task");
     expect(screen.queryByLabelText("Backend")).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: /Advanced options/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /Advanced options/ }));
     expect(screen.getByLabelText("Backend")).toBeInTheDocument();
   });
 
@@ -1186,7 +1186,10 @@ describe("Tasks page (queue overhaul)", () => {
       </MemoryRouter>
     );
     await screen.findByText("New task");
-    await userEvent.click(screen.getByRole("button", { name: "Create" }));
+    // Same loading-state race as the creation-confirmation test below: the
+    // heading renders before /api/repos resolves, so wait for the form's
+    // submit button rather than assuming it mounted synchronously.
+    await userEvent.click(await screen.findByRole("button", { name: "Create" }));
     await waitFor(() => {
       const postCall = fetchMock.mock.calls.find(
         (call) => call[0] === "/api/tasks" && call[1]?.method === "POST"
@@ -1252,7 +1255,11 @@ describe("Tasks page (queue overhaul)", () => {
       </MemoryRouter>
     );
     await screen.findByText("New task");
-    await userEvent.type(screen.getByPlaceholderText("Instructions…"), "fresh work");
+    // The "New task" heading also renders in the repos-loading state, so wait
+    // for the form itself (mounted once /api/repos resolves) instead of
+    // assuming it is present synchronously — flaky on loaded runners.
+    const promptBox = await screen.findByPlaceholderText("Instructions…");
+    await userEvent.type(promptBox, "fresh work");
     await userEvent.click(screen.getByRole("button", { name: "Create" }));
     const link = await screen.findByRole("link", { name: "#99" });
     expect(link).toHaveAttribute("href", "/tasks/99");
@@ -1733,8 +1740,8 @@ describe("Tasks page (queue overhaul)", () => {
       </MemoryRouter>
     );
     await screen.findByText("New task");
-    await userEvent.type(screen.getByPlaceholderText("Instructions…"), "do the thing");
-    await userEvent.click(screen.getByRole("button", { name: "Create" }));
+    await userEvent.type(await screen.findByPlaceholderText("Instructions…"), "do the thing");
+    await userEvent.click(await screen.findByRole("button", { name: "Create" }));
     // No task created — the dialog asks for an installed backend instead.
     expect(await screen.findByRole("dialog", { name: "Backend not installed" })).toBeInTheDocument();
     expect(posted).toHaveLength(0);
@@ -1766,8 +1773,8 @@ describe("Tasks page (queue overhaul)", () => {
       </MemoryRouter>
     );
     await screen.findByText("New task");
-    await userEvent.type(screen.getByPlaceholderText("Instructions…"), "do the thing");
-    await userEvent.click(screen.getByRole("button", { name: "Create" }));
+    await userEvent.type(await screen.findByPlaceholderText("Instructions…"), "do the thing");
+    await userEvent.click(await screen.findByRole("button", { name: "Create" }));
     // No dialog — submission proceeds; the server-side 400 is the backstop.
     await waitFor(() => expect(posted).toHaveLength(1));
     expect(screen.queryByRole("dialog", { name: "Backend not installed" })).not.toBeInTheDocument();

@@ -1,0 +1,82 @@
+name: CI
+
+# Runs on the self-hosted BeyondMax runner (no GitHub Actions minutes).
+# Covers Jalebi web (vite/react) + server (flask/pytest) without
+# needing any external review runner — Jalebi reviews run locally.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  ci:
+    runs-on: [self-hosted, chanakya]
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      # Node heap cap so vite/vitest can never eat the box (see below).
+      NODE_OPTIONS: --max-old-space-size=6144
+    steps:
+      - uses: actions/checkout@v5
+
+      # Box guardrails (no root needed): the BeyondMax host runs a desktop +
+      # other services alongside the runner. Heavy steps are pinned to 16 of
+      # 32 CPUs (taskset) so CI can never take more than half the CPUs.
+      # RAM: Node steps rely on NODE_OPTIONS heap caps (prlimit address-space
+      # caps break Vite's WASM mappings — verified: vitest dies at startup
+      # under prlimit --as); only the pytest step — the known runaway — gets
+      # a hard prlimit --as=32G cap, far above its healthy <4G footprint.
+      - name: Resource baseline
+        run: |
+          free -h
+          nproc
+          taskset -pc $$ || true
+
+      # No npm cache: on this persistent self-hosted runner ~/.npm
+      # survives between runs, so npm ci is already fast — uploading the
+      # whole cache to GitHub only burned org storage quota (one 6.8 GB
+      # entry alone, Oct 2026 incident).
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        run: |
+          if ! command -v uv >/dev/null 2>&1; then
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          fi
+          uv --version
+
+      - name: Install web deps
+        run: npm ci
+
+      - name: Web lint
+        run: npm run lint
+
+      - name: Web typecheck
+        run: npm run typecheck
+
+      - name: Web tests
+        run: taskset -c 0-15 npm run test:web
+
+      - name: Web build
+        run: taskset -c 0-15 npm run build
+
+      - name: Server lint (ruff)
+        run: uv run --project apps/server ruff check .
+
+      - name: Server tests
+        run: taskset -c 0-15 prlimit --as=34359738368 uv run --project apps/server pytest -q --timeout=120

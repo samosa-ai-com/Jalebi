@@ -318,6 +318,15 @@ After any code change, run the relevant tests and build before marking work done
   - `screening.py`: watchdog stop flag → `threading.Event` (`wait(1)`);
     `join` returns immediately on run end instead of sleeping out a 1s
     quantum (~1s saved per screening-run test; no behavior change).
+  - `queue.py`: run watchers (timeout/stall/progress-notify) now also honor
+    `_RunState.done`, set by `_run_task`/`_run_followup` finally blocks
+    (sleeps replaced with `done.wait(quantum)`). Previously they exited
+    only when the agent proc reported death, so test fake procs
+    (`poll()` always `None`) leaked 3 threads + an unclosed Session per
+    run — 600+ zombies over a full session, ending in `MemoryError`s, a
+    segfault, and an OOM-frozen host. Guarded by
+    `test_run_watchers_exit_when_run_finishes`. Same `Event` pattern as the
+    screening watchdog above.
   - `test_sse.py`: fixed stale `_seq.get(task_id)` waits (key is
     `(task_id, run_id)` since durable-SSE) via a `_published_seq` helper —
     the backfill test alone burned ~20s spinning past two 10s deadlines.
