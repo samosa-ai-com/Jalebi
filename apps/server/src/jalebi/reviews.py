@@ -17,7 +17,7 @@ from jalebi import catalog, clock
 from jalebi.db import Repo, ReviewAssignment, Run, Task, now
 from jalebi.tasks import create_task, delete_tasks_cascade
 
-REVIEWER_STATUSES = ("queued", "running", "posted", "failed")
+REVIEWER_STATUSES = ("queued", "running", "posted", "failed", "held")
 
 DEFAULT_REVIEW_PROMPT = (
     "Review this pull request thoroughly. Check correctness, security, "

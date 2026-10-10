@@ -342,6 +342,15 @@ def create_task() -> ResponseReturnValue:
     if pat_name is not None and not _valid_pat(config, pat_name):
         return jsonify({"error": f"unknown PAT: {pat_name}"}), 400
 
+    # Per-review auto-post flag (pr_review only): False holds the finished
+    # review for manual posting from Task Detail. Defaults True (post on
+    # completion, today's behavior).
+    post_review = payload.get("post_review", True)
+    if not isinstance(post_review, bool):
+        return jsonify({"error": "post_review must be a boolean"}), 400
+    if post_review is False and type_ != "pr_review":
+        return jsonify({"error": "post_review=false is only valid for pr_review tasks"}), 400
+
     source_branch = payload.get("source_branch")
     target_branch = payload.get("target_branch")
     repo = session.get(db.Repo, repo_id)
@@ -439,6 +448,7 @@ def create_task() -> ResponseReturnValue:
             timeout_minutes=timeout_minutes,
             publish_mode=publish_mode,
             address_reviews=address_reviews,
+            post_review=post_review,
             masker=masker,
         )
     except ValueError as exc:
@@ -714,6 +724,28 @@ def publish_task(task_id: int) -> ResponseReturnValue:
     else:
         body["pr_number"] = result
     return jsonify(body)
+
+
+@bp.post("/<int:task_id>/post-review")
+def post_review(task_id: int) -> ResponseReturnValue:
+    """Manually post a held ``pr_review`` deliverable (no body).
+
+    Reuses the automatic posting path (masking, review wrapping, assignment
+    reconciliation). Errors: 404 unknown task/repo, 400 not a review task /
+    no completed run / no linked PR / already posted, 409 nothing to post,
+    502 anything else.
+    """
+    try:
+        pr_number = _queue().post_held_review(task_id)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except KeyError as exc:
+        return jsonify({"error": str(exc)}), 404
+    except PublishError as exc:
+        return jsonify({"error": str(exc), "kind": "publish"}), 409
+    except Exception as exc:  # pragma: no cover - defensive
+        return jsonify({"error": str(exc)}), 502
+    return jsonify({"status": "done", "pr_number": pr_number})
 
 
 @bp.post("/<int:task_id>/followup")

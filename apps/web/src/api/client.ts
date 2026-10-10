@@ -68,6 +68,7 @@ export interface CreateTaskInput {
   pr_number?: number;
   address_reviews?: boolean;
   publish_mode?: "auto" | "manual";
+  post_review?: boolean;
   reviewers?: string[];
   env_vars?: string[];
 }
@@ -380,6 +381,10 @@ export const api = {
     request<Task[]>(`/api/tasks/${id}/reviewers`, {
       method: "POST",
       body: JSON.stringify({ reviewers }),
+    }),
+  postReview: (id: number) =>
+    request<{ status: string; pr_number: number }>(`/api/tasks/${id}/post-review`, {
+      method: "POST",
     }),
   getRepos: (includeDisconnected = false) =>
     request<Repo[]>(`/api/repos${includeDisconnected ? "?include_disconnected=1" : ""}`),

@@ -81,6 +81,7 @@ def create_task(
     timeout_minutes: int = 60,
     publish_mode: str | None = None,
     address_reviews: bool = False,
+    post_review: bool = True,
     masker: Callable[[str], str] | None = None,
 ) -> Task:
     """Validate and insert a new task, returning it (status = ``queued``)."""
@@ -92,6 +93,8 @@ def create_task(
         raise ValueError("address_reviews is only valid for freeform tasks")
     if address_reviews and not prs:
         raise ValueError("address_reviews requires a linked PR")
+    if post_review is not True and type_ != "pr_review":
+        raise ValueError("post_review=False is only valid for pr_review tasks")
     repo = session.get(Repo, repo_id)
     if repo is None:
         raise ValueError(f"repo {repo_id} not found")
@@ -138,6 +141,7 @@ def create_task(
         timeout_minutes=timeout_minutes,
         publish_mode=publish_mode,
         address_reviews=address_reviews,
+        post_review=post_review,
     )
     session.add(task)
     session.commit()
@@ -281,6 +285,7 @@ def task_to_dict(
         "pr_number": task.pr_number,
         "publish_mode": task.publish_mode,
         "address_reviews": bool(task.address_reviews),
+        "post_review": bool(task.post_review),
         "check_run_id": task.check_run_id,
         "issues": json.loads(task.issues_json) if task.issues_json else [],
         "prs": json.loads(task.prs_json) if task.prs_json else [],

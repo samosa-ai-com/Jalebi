@@ -1526,6 +1526,7 @@ class TaskQueue:
         run: Run,
         token: str,
         masker,
+        force: bool = False,
     ) -> bool:
         """Post a ``pr_review`` run's deliverable to GitHub and reconcile the assignment.
 
@@ -1545,6 +1546,9 @@ class TaskQueue:
           no review has no deliverable (previously this silently stayed ``done``);
         - ``done`` run with content → review posted to the PR; assignment →
           ``posted`` (or ``failed`` if the GitHub post errors).
+        - ``done`` run with content but ``task.post_review`` off → review
+          HELD (assignment → ``held``, timeline note, run stays ``done``)
+          unless ``force`` (the manual post-review action) is set.
         """
         if run.status != "done":
             reviews.set_assignment_status(session, task.id, "failed", run_id=run.id)
@@ -1597,6 +1601,26 @@ class TaskQueue:
             return False
 
         review_text = masker(review_text)
+        if task.post_review is False and not force:
+            # Held for manual posting: the run finished with content, so this
+            # is NOT a failure — record the hold visibly and leave delivery to
+            # the Task Detail "Post review" action (POST /api/tasks/<id>/post-review).
+            steps = json.loads(run.steps_json or "[]")
+            steps.append(
+                {
+                    "type": "message",
+                    "phase": None,
+                    "text": (
+                        "Review held for manual posting (post_review is off). "
+                        "Use the Task Detail Post review action to publish it."
+                    ),
+                    "ts": clock.to_iso(now()),
+                }
+            )
+            run.steps_json = json.dumps(steps[-MAX_STEPS:])
+            session.commit()
+            reviews.set_assignment_status(session, task.id, "held", run_id=run.id)
+            return False
         review_body = messaging.wrap_pr_review(review_text)
         try:
             client = GitHubClient(token)
@@ -2274,6 +2298,53 @@ class TaskQueue:
                 run.steps_json = json.dumps(steps[-MAX_STEPS:])
             session.commit()
             self._cascade_unblock(session, task.id)
+            return pr_number
+        finally:
+            session.close()
+
+    def post_held_review(self, task_id: int) -> int:
+        """Manually post a held ``pr_review`` deliverable. Returns the PR number.
+
+        For reviews held back by ``post_review=False`` (or any done run whose
+        assignment never reached ``posted``): resolves the task's own account,
+        rebuilds the masker, and reuses ``_post_review`` with the latest run
+        and the review worktree, so manual posting goes through the exact same
+        masking/posting/reconciliation path as automatic posting. Raises
+        ``KeyError`` (unknown task/repo), ``ValueError`` (not a review task,
+        no completed run, no linked PR, already posted) or ``PublishError``
+        (nothing to post).
+        """
+        session = Session()
+        try:
+            task = session.get(Task, task_id)
+            if task is None:
+                raise KeyError(f"task {task_id} not found")
+            if task.type != "pr_review":
+                raise ValueError("post-review is only valid for pr_review tasks")
+            repo = session.get(Repo, task.repo_id)
+            if repo is None:
+                raise KeyError(f"repo for task {task_id} not found")
+            run = tasks.latest_run(session, task.id)
+            if run is None or run.status != "done":
+                raise ValueError("no completed review run to post")
+            pr_number = self._task_pr_number(task)
+            if pr_number is None:
+                raise ValueError("review task has no linked PR number")
+            assignment = reviews.assignment_by_task(session, task.id)
+            if assignment is not None and assignment.status == "posted":
+                raise ValueError(f"review already posted to PR #{pr_number}")
+            token = secrets.resolve_token(self.config, task.pat_name)
+            if token is None:
+                raise RuntimeError("no GitHub token configured")
+            raw_patterns = settings.get_setting(session, "secret_patterns") or []
+            patterns = [str(p) for p in raw_patterns] if isinstance(raw_patterns, list) else []
+            masker = masking.build_masker(secrets.all_token_values(self.config) + [token], patterns)
+            wt = GitWorkspace.review_worktree_path(self.config.data_dir, task.id)
+            posted = self._post_review(
+                session, task, repo, pr_number, wt, run, token, masker, force=True
+            )
+            if not posted:
+                raise PublishError("nothing to post: the run has no review content")
             return pr_number
         finally:
             session.close()

@@ -64,6 +64,7 @@
 | 4.3 | Reviewers of kind`general` are **not** offered in the assign row (only `reviewer` kind).                                                                                                                                                                            | Check the card's available buttons.                                                                      | ☐Y  |
 | 4.4 | A reviewer task that finished and posted shows its assignment`posted`; if it failed/timed out/cancelled, the assignment shows `failed` (never stuck `running`).                                                                                                         | Open the reviewer task's detail; watch its card on the parent.                                           | ☐Y  |
 | 4.5 | **Address reviewers** button appears in the **Follow-up** composer when the task has a PR. Clicking it opens the **New-task form prefilled** (same repo, freeform, PR linked, "Address the review comments" checked) — a fresh task addresses the comments; nothing is posted until the form is submitted. | Click "Address reviewers" → land on the creation form with repo/PR/prompt/checkbox prefilled; submit → the new task's brief carries the address-reviews instruction. | ☐   |
+| 4.6 | A `pr_review` task created with **Post review on completion off** finishes `done` with **nothing posted** to GitHub: the timeline notes the hold, the assignment shows `held`, and Task Detail offers **Post review**, which publishes the review on demand. | Create a review task with the toggle off → wait for `done` → confirm no PR comment → click Post review → comment appears. | ☐   |
 
 ---
 
@@ -107,6 +108,7 @@
 2. [X] The GitHub PR shows a **second** review comment (the agent's amended review, Jalebi-branded + ⭐ footer), and the task's **Reviewers** card still shows `posted`.
 3. [X] Run's timeline ends with "Review posted to PR #N."; the review body is masked (see W-R3).
 4. [X] Regression: a reviewer task whose follow-up ends `done` **without writing** `.jalebi/review.md` or a final message shows the run/task as `failed` with a "nothing to post" error step — never a misleading `done`/`posted`.
+5. [ ] Exception: with `post_review=false` the follow-up holds like the initial run (timeline hold note, assignment `held`) — see 4.6.
 
 ---
 
