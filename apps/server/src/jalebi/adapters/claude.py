@@ -233,5 +233,12 @@ class ClaudeAdapter(AgentAdapter):
             return _content_events(content, user=(etype == "user"))
         if etype == "result":
             return _result_events(payload)
+        if etype == "tool_progress":
+            return []  # tool heartbeats on long-running calls; noise
+        if etype == "tool_use_summary":
+            text = payload.get("summary") or payload.get("text")
+            if isinstance(text, str) and text:
+                return [AgentEvent(type="message", text=text)]
+            return []
 
         return [AgentEvent(type="message", text=line)]

@@ -28,6 +28,21 @@ ERROR_LINE = (
     '{"type":"error","timestamp":1,"sessionID":"ses_1","error":'
     '{"name":"UnknownError","data":{"message":"boom","ref":"err_1"}}}'
 )
+# v2 error shape: {"type": ..., "message": ...} (no `data`/`name`).
+ERROR_LINE_V2 = (
+    '{"type":"error","timestamp":1,"sessionID":"ses_1","error":'
+    '{"type":"unknown","message":"boom"}}'
+)
+ERROR_LINE_V2_ABORTED = (
+    '{"type":"error","timestamp":1,"sessionID":"ses_1","error":'
+    '{"type":"aborted","message":"Session interrupted: foo"}}'
+)
+TOOL_LINE_ERROR_V2 = (
+    '{"type":"tool_use","timestamp":1,"sessionID":"ses_1","part":'
+    '{"type":"tool","tool":"bash","partID":"prt_1","state":{"status":"error",'
+    '"input":{"command":"pwd"},"error":"permission rejected"},"id":"p",'
+    '"sessionID":"ses_1","messageID":"m"}}'
+)
 
 
 def test_parse_text() -> None:
@@ -64,6 +79,31 @@ def test_parse_error() -> None:
     assert len(events) == 1
     assert events[0].type == "error"
     assert events[0].text == "boom"
+
+
+def test_parse_error_v2_shape() -> None:
+    events = adapter.parse(ERROR_LINE_V2)
+    assert len(events) == 1
+    assert events[0].type == "error"
+    assert events[0].text == "boom"
+    assert events[0].session_id == "ses_1"
+
+
+def test_parse_error_v2_aborted_shape() -> None:
+    events = adapter.parse(ERROR_LINE_V2_ABORTED)
+    assert len(events) == 1
+    assert events[0].type == "error"
+    assert events[0].text == "Session interrupted: foo"
+
+
+def test_parse_tool_use_error_carries_reason() -> None:
+    events = adapter.parse(TOOL_LINE_ERROR_V2)
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.type == "tool_call"
+    assert ev.data is not None
+    assert ev.data["status"] == "error"
+    assert ev.data["error"] == "permission rejected"
 
 
 def test_parse_non_json_verbatim() -> None:
@@ -113,7 +153,10 @@ def test_start_command_construction(monkeypatch) -> None:
     assert args[0].endswith("opencode")
     assert "run" in args
     assert "--format" in args and args[args.index("--format") + 1] == "json"
-    assert "--dir" in args and args[args.index("--dir") + 1] == "/tmp/ws"
+    # v2 `run` has no --dir (worktree comes from PWD via the spawn wrapper).
+    assert "--dir" not in args
+    assert "--standalone" in args
+    assert "--auto" in args
     assert "--model" in args and args[args.index("--model") + 1] == "opencode-go/m1"
     assert args[-1] == "fix the bug"
     assert captured["cwd"] == "/tmp/ws"
@@ -145,9 +188,10 @@ def test_resume_command_construction(monkeypatch) -> None:
     assert "--session" in args and args[args.index("--session") + 1] == "ses_abc"
     assert "--model" in args and args[args.index("--model") + 1] == "opencode-go/m1"
     assert args[-1] == "keep going"
-    # resume must pass --dir matching the session's worktree, otherwise
-    # opencode's headless --session resume emits nothing and hangs.
-    assert args[args.index("--dir") + 1] == "/tmp/ws"
+    # v2 `run` has no --dir; resumes run from the session's own worktree.
+    assert "--dir" not in args
+    assert "--standalone" in args
+    assert "--auto" in args
 
 
 def test_resume_no_model(monkeypatch) -> None:
