@@ -1,7 +1,7 @@
 """pi CLI adapter (PRD F4).
 
-Maps ``pi --print --mode json`` (pi 0.80.2, verified live Sep 2026 — see
-docs/03-adapters.md §10) events onto the normalized vocabulary.
+Maps ``pi --print --mode json`` (pi 1.1.0 — ``ToolCall`` blocks are camelCase;
+see docs/03-adapters.md §10) events onto the normalized vocabulary.
 
 Verified facts:
 - JSONL, one object per line. The **resume key is the ``id`` of the first
@@ -110,14 +110,14 @@ def _content_events(content) -> list[AgentEvent]:
             text = block.get("text")
             if isinstance(text, str) and text:
                 events.append(AgentEvent(type="message", text=text))
-        elif btype in ("toolcall", "toolcall_start", "tool_call"):
+        elif btype in ("toolcall", "toolcall_start", "tool_call", "toolCall"):
             events.append(
                 AgentEvent(
                     type="tool_call",
                     data={
                         "tool": block.get("toolName") or block.get("name"),
                         "tool_use_id": block.get("id"),
-                        "input": block.get("input"),
+                        "input": block.get("input") or block.get("arguments"),
                     },
                 )
             )
@@ -233,5 +233,22 @@ class PiAdapter(AgentAdapter):
             if not isinstance(text, str):
                 text = "pi run failed"
             return [AgentEvent(type="error", text=text, data=data)]
+        if event_type in (
+            # pi 1.1.0 session-lifecycle events: no timeline content.
+            "agent_settled",
+            "queue_update",
+            "entry_appended",
+            "session_info_changed",
+            "thinking_level_changed",
+            "compaction_start",
+            "compaction_end",
+            "auto_retry_start",
+            "auto_retry_end",
+            "summarization_retry_scheduled",
+            "summarization_retry_attempt_start",
+            "summarization_retry_finished",
+            "bash_execution_update",
+        ):
+            return []
 
         return [AgentEvent(type="message", text=line, data=data)]

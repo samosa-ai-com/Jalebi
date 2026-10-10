@@ -58,20 +58,21 @@ def is_backend_available(cli: str) -> bool:
 
 
 # CLI versions the adapters were validated against (Sep 2026 smoke runs +
-# doc capture). Compared by ``cli_version`` for the health endpoint; a drift
-# only warns — newer CLIs usually still work, and parsers degrade to
+# doc capture; Oct 2026 re-validated after backend upgrades — see HANDOFF).
+# Compared by ``cli_version`` for the health endpoint; a drift only warns —
+# newer CLIs usually still work, and parsers degrade to
 # verbatim text rather than crashing.
 VERIFIED_VERSIONS: dict[str, str] = {
-    "opencode": "1.18",
-    "codex": "0.147.0",
-    "claude": "2.1.233",
-    "pi": "0.80.2",
+    "opencode": "2.0.26",
+    "codex": "0.160.0",
+    "claude": "2.1.296",
+    "pi": "1.1.0",
     "kilo": "7.5.16",
-    "qwen": "0.23.1",
+    "qwen": "0.25.0",
     "cline": "3.0.61",
-    "grok": "1.0.13",
-    "commandcode": "1.53.1",
-    "agy": "1.2.2",
+    "grok": "1.0.50",
+    "commandcode": "1.79.2",
+    "agy": "1.3.3",
 }
 
 _VERSION_RE = re.compile(r"\d+\.\d+(?:\.\d+)?")

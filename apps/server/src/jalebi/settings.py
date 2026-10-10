@@ -77,6 +77,10 @@ DEFAULTS: dict[str, object] = {
             # into existence.
             "not installed",
             "not found on PATH",
+            # CLI argv drift (e.g. a flag removed by a backend upgrade) fails
+            # identically on every attempt — retrying only burns task runs.
+            "unrecognized flag",
+            "unknown option",
         ],
     },
     # No-output threshold before a run is declared stalled (and auto-recovered).

@@ -52,32 +52,33 @@ unpinned screens). Run-time resolution everywhere: `X.cli or default_backend or
 resume it (each CLI owns its session format) — it starts a fresh run seeded with
 the prior conversation (see §6, and `queue._run_followup`).
 
-## 5. CLI command references (authoritative, captured 2026-08)
+## 5. CLI command references (authoritative, re-captured 2026-10 after backend upgrades)
 
 | CLI | Start a new task | Resume (follow-up) | Structured output | Model flag |
 |-----|------------------|--------------------|-------------------|------------|
-| **opencode** (v1.18) | `opencode run --dir <ws> --format json [--model <m>] <prompt>` | `opencode run --dir <ws> --session <sessionId> --format json [--model <m>] <prompt>` | `--format json` — newline-delimited events (see mapping below) | `-m/--model provider/model` |
-| **codex** (codex-cli 0.147.0) | `codex exec --json [-m <model>] [-s read-only\|workspace-write\|danger-full-access] [-c key=value] "<prompt>"` | `codex exec resume <thread_id> --json [-m <model>] [-c key=value] "<prompt>"` | `--json` — JSONL events (see mapping below); `--output-schema <file>` for a structured final shape | `-m/--model` (honored on resume; without it the original session model is kept). No model-list command. |
-| **claude** (claude 2.1.233) | `claude -p "<prompt>" --output-format stream-json --verbose [--model <m>] [--permission-mode <mode>]` | `claude -p "<prompt>" --resume <session_id> --output-format stream-json --verbose [--model <m>]` | `--output-format stream-json` **requires `--verbose`**; `--json-schema <schema>` (print-mode) for structured output | `--model` (honored on resume; `--fork-session` = new session id) |
+| **opencode** (v2.0.26) | `opencode run --format json --standalone --auto [--model <m>] <prompt>` (worktree via PWD — v2 `run` has no `--dir`; **minimum supported version is 2.0**) | `opencode run --session <sessionId> --format json --standalone --auto [--model <m>] <prompt>` | `--format json` — newline-delimited events (see mapping below) | `-m/--model provider/model#variant` |
+| **codex** (codex-cli 0.160.0) | `codex exec --json [-m <model>] [-s read-only\|workspace-write\|danger-full-access] [-c key=value] "<prompt>"` | `codex exec resume <thread_id> --json [-m <model>] [-c key=value] "<prompt>"` | `--json` — JSONL events (see mapping below); `--output-schema <file>` for a structured final shape | `-m/--model` (honored on resume; without it the original session model is kept). No model-list command. |
+| **claude** (claude 2.1.296) | `claude -p "<prompt>" --output-format stream-json --verbose [--model <m>] [--permission-mode <mode>]` | `claude -p "<prompt>" --resume <session_id> --output-format stream-json --verbose [--model <m>]` | `--output-format stream-json` **requires `--verbose`**; `--json-schema <schema>` (print-mode) for structured output | `--model` (honored on resume; `--fork-session` = new session id) |
 
-> **Version drift (captured 2026-08):** the codex/claude rows above were verified against the locally installed binaries — **codex-cli 0.147.0** and **claude 2.1.233** — and supersede the older PRD §F4 table (which omitted the resume model flag for codex and showed a bare `init` first line for claude). The opencode v1.18 row is current and unchanged. Re-verify both rows after any CLI upgrade.
+> **Version drift (re-captured 2026-10):** all rows above were verified against the locally installed binaries — **opencode 2.0.26**, **codex-cli 0.160.0**, **claude 2.1.296**, **pi 1.1.0**, **qwen 0.25.0**, **grok 1.0.50**, **commandcode 1.79.2**, **agy 1.3.2** — and supersede the older rows (opencode v1.18 `--dir` argv is gone; pi/commandcode/claude/codex gained events, see below). `VERIFIED_VERSIONS` in `adapters/__init__.py` tracks these. Re-verify after any CLI upgrade.
 
-### opencode JSON event mapping (v1.18 — differs from older docs)
+### opencode JSON event mapping (v2.0.26 — v1.18 shapes kept as fallback)
 
 Real `--format json` top-level `type` values and the adapter mapping (field is **`sessionID`**, capital D):
 
 | CLI event | → `AgentEvent` | Notes |
 |-----------|----------------|-------|
 | `step_start` | `step` (phase `"step"`) | per agent turn, not the PRD phase vocabulary |
-| `tool_use` | `tool_call` | `data`: tool, title, status, input, output |
+| `tool_use` | `tool_call` | `data`: tool, title, status, input, output (+ `error` when status is `"error"` — v2 omits `output` there) |
 | `text` | `message` | `part.text` |
-| `step_finish` | — (silent) | reason `"stop"`/`"tool-calls"`; process exit is the terminal signal |
-| `error` | `error` | `error.data.message` |
+| `step_finish` | — (silent) | process exit is the terminal signal |
+| `reasoning` | — (unreachable) | only emitted with `--thinking`, which the adapter never passes |
+| `error` | `error` | v2 shape is `error.message` (+ `error.type`); v1 `error.data.message`/`error.name` kept as fallback |
 | non-JSON / unknown | `message` (verbatim) | defensive: never crash |
 
 > **CLI drift (PRD risk #1):** the PRD-documented events (`session.id`, `message.updated`, `session.idle`) no longer match opencode v1.18. `done` is emitted on process exit (code 0), `error` on non-zero (with stderr tail).
 
-### codex JSONL event mapping (0.147.0)
+### codex JSONL event mapping (0.160.0)
 
 Top-level JSON `type` values (one object per line) and the adapter mapping. The **resume key is `thread_id`** (UUID, from `thread.started`) — there is no `session_id` field:
 
@@ -101,9 +102,11 @@ Top-level JSON `type` values (one object per line) and the adapter mapping. The 
 | `command_execution` | `tool_call` | `data`: command, aggregated_output, exit_code, status |
 | `file_change` | `tool_call` | `data`: changes (path/kind), status |
 | `mcp_tool_call` | `tool_call` | `data`: server, tool, arguments, result/error, status |
-| `error` | `message` (notice) | `item.message` — never terminal |
+| `web_search` | `tool_call` | 0.160.x addition: `data`: tool, query, text, status |
+| `todo_list` | `tool_call` | 0.160.x addition: `data`: tool, query, text, status |
+| `error` | `message` (notice) | `item.message` — never terminal (absent from the 0.160.x item enum; branch kept defensively) |
 
-### claude stream-json mapping (2.1.233)
+### claude stream-json mapping (2.1.296)
 
 Top-level JSON `type` values (one object per line, `--verbose` required) and the adapter mapping:
 
@@ -116,16 +119,18 @@ Top-level JSON `type` values (one object per line, `--verbose` required) and the
 | `stream_event` | `message` (verbatim) | only emitted with `--include-partial-messages` (we never pass it); falls to the unknown-type default |
 | `result` (success, `is_error:false`) | `message` (final text) | terminal `done` comes from exit code 0 (RunHandle); empty `result` → silent |
 | `result` (`is_error:true` **or** error subtype) | `error` | **`is_error` is the discriminator, not the subtype** — the no-auth failure keeps `subtype:"success"`; text = `result`, else joined `errors[]`, else `terminal_reason` |
+| `tool_progress` | — (silent) | 2.1.296 tool heartbeats on long-running calls |
+| `tool_use_summary` | `message` | 2.1.296 tool-result summaries |
 | non-JSON / unknown | `message` (verbatim) | defensive: never crash |
 
 > **claude auth failure (observed):** with no auth configured, `claude -p` exits 1 and emits a final `result` line with **`subtype:"success"` + `is_error:true`**, `terminal_reason:"api_error"` and `"result":"Not logged in · Please run /login"` on stdout (nothing on stderr). The adapter maps it to a clear `error` event via the `is_error` flag.
 
 ## 6. Known adapter quirks (document in code + README)
 
-- **opencode:** resuming keeps the session's original model unless `--model` is passed on resume (supported). The adapter's `resume(…, model=…)` appends `--model` when set, so the follow-up Model dropdown is honored. `--fork` can fork instead of continuing. `OPENCODE_DISABLE_AUTOUPDATE=1` is set on spawn.
-- **opencode (spawn quirk, observed):** `opencode run --session <id>` **stalls with an empty stream when exec'd directly** by `subprocess.Popen` (the agent loop exits immediately after step 1), but runs correctly when spawned through a shell. The adapter therefore wraps every command in `/bin/bash -c 'cd <worktree> && exec opencode …'` (arguments are `shlex`-quoted). `--dir` starts are unaffected by the direct-spawn bug but use the same wrapper for consistency.
-- **opencode (resume directory mismatch, observed Aug 2026):** headless `opencode run --session <id>` **hangs forever when resumed from a different worktree than the one the session was created in** — the model stream comes back empty, opencode logs `exiting loop`, and the process never exits. `resume` therefore passes `--dir <cwd>` (parity with `start`) **and** Jalebi always resumes from the session's own worktree: pr_review sessions live in the review worktree (`ws/task-<id>-review`, detached at the PR head), so `_run_followup` runs pr_review follow-ups there rather than in the task worktree. This is a hard requirement, not a nicety — resuming from the wrong worktree silently produces a run that stays `running` with an empty timeline (see `docs/06-task-queue.md` §4 for the stall guard that bounds it anyway).
-- **codex:** `-m/--model` is **honored on resume** in 0.147.0 (source-verified: a resume without `-m` keeps the original session model; with `-m` it switches). `exec resume` has **no `-C/--cd`** — the cwd is wherever you launch it from, so the adapter uses the same `/bin/bash -c 'cd <worktree> && exec …'` shell wrapper as opencode. `exec` requires a git repo (or `--skip-git-repo-check`). **Sandbox:** applied via `-c` config overrides so it works uniformly on `exec` AND `exec resume` (resume has no `-s` flag). A cached `bwrap` probe decides the mode: sandbox usable → `sandbox_mode=workspace-write` + `sandbox_workspace_write.network_access=true` (network is off by default there); userns blocked (this dev machine: `bwrap: setting up uid map: Permission denied`) → `sandbox_mode=danger-full-access`, since `workspace-write` cannot write without user namespaces. The fallback is logged once with the host-level fix (`sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` or setuid bwrap). **Auth:** reuses `~/.codex/auth.json` automatically; `CODEX_API_KEY` works for `exec` only; `OPENAI_API_KEY` is **not** read at runtime (only via `codex login --with-api-key`). **Models:** no `codex models` command — `list_models` reads `~/.codex/models_cache.json` (per-account slugs, honors `$CODEX_HOME`; API-callable models preferred via `supported_in_api`, with a curated fallback), overridable via the `adapter_model_lists` setting.
+- **opencode:** resuming keeps the session's original model unless `--model` is passed on resume (supported). The adapter's `resume(…, model=…)` appends `--model` when set, so the follow-up Model dropdown is honored. `--fork` can fork instead of continuing. `OPENCODE_DISABLE_AUTOUPDATE=1` is set on spawn. **v2:** every run passes `--standalone` (private server per run — the shared background service would survive cancel/timeout `killpg`) and `--auto` (auto-approve permissions not explicitly denied; the worktree gh-deny guard is untouched). `--session <unknown-id>` silently **creates** a fresh session — a stale follow-up becomes a context-free run that reports success.
+- **opencode (spawn quirk, observed on v1):** `opencode run --session <id>` **stalled with an empty stream when exec'd directly** by `subprocess.Popen` (the agent loop exited immediately after step 1), but ran correctly when spawned through a shell. The adapter therefore wraps every command in `/bin/bash -c 'cd <worktree> && exec opencode …'` (arguments are `shlex`-quoted); the wrapper also sets PWD to the worktree, which is what v2 `run` uses as its working directory (it has no `--dir` flag). Whether the direct-spawn stall still exists on v2 is UNVERIFIED — re-check live before removing the wrapper.
+- **opencode (resume directory mismatch, observed Aug 2026 on v1):** headless `opencode run --session <id>` **hung forever when resumed from a different worktree than the one the session was created in** — the model stream came back empty, opencode logged `exiting loop`, and the process never exited. On v2 the resume pins to the session's own directory (source-verified), so this hang is likely gone — but UNVERIFIED live. Jalebi still always resumes from the session's own worktree regardless: pr_review sessions live in the review worktree (`ws/task-<id>-review`, detached at the PR head), so `_run_followup` runs pr_review follow-ups there rather than in the task worktree (see `docs/06-task-queue.md` §4 for the stall guard that bounds it anyway).
+- **codex:** `-m/--model` is **honored on resume** in 0.160.0 (help-verified: a resume without `-m` keeps the original session model; with `-m` it switches). `exec resume` has **no `-C/--cd`** — the cwd is wherever you launch it from, so the adapter uses the same `/bin/bash -c 'cd <worktree> && exec …'` shell wrapper as opencode. `exec` requires a git repo (or `--skip-git-repo-check`). **Sandbox:** applied via `-c` config overrides so it works uniformly on `exec` AND `exec resume` (resume has no `-s` flag). A cached `bwrap` probe decides the mode: sandbox usable → `sandbox_mode=workspace-write` + `sandbox_workspace_write.network_access=true` (network is off by default there); userns blocked (this dev machine: `bwrap: setting up uid map: Permission denied`) → `sandbox_mode=danger-full-access`, since `workspace-write` cannot write without user namespaces. The fallback is logged once with the host-level fix (`sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` or setuid bwrap). **Auth:** reuses `~/.codex/auth.json` automatically; `CODEX_API_KEY` works for `exec` only; `OPENAI_API_KEY` is **not** read at runtime (only via `codex login --with-api-key`). **Models:** no `codex models` command — `list_models` reads `~/.codex/models_cache.json` (per-account slugs, honors `$CODEX_HOME`; API-callable models preferred via `supported_in_api`, with a curated fallback), overridable via the `adapter_model_lists` setting.
 - **claude:** `--resume <id>` requires the session id captured from the first run (the `system/init` `session_id`). `--continue` resumes the last session only (do not rely on it). `--fork-session` (with `--resume`) creates a **new** session id. `--model` is honored on resume. `--output-format stream-json` **requires `--verbose`**. The adapter passes **`--permission-mode bypassPermissions`** (parity with opencode's bash `"*": "allow"`): `default` hangs on permission prompts and `dontAsk` auto-denies everything; deny rules from a worktree `.claude/settings.json` still apply in every mode. **Disk confinement:** the worktree guard adds a **`PreToolUse` hook** (`.claude/hooks/jalebi_deny_external.py`) that denies the file tools (`Read`/`Write`/`Edit`/`Glob`/`Grep`) outside the worktree — the claude equivalent of opencode's `external_directory: deny` — plus `Read`/`Edit` deny rules for sensitive home paths. Bash subprocess file I/O is NOT confined (same limitation as opencode). Auth precedence: `ANTHROPIC_AUTH_TOKEN` → `ANTHROPIC_API_KEY` → OAuth; no auth → exit 1 with `"result":"Not logged in · Please run /login"` (`subtype:"success"` + `is_error:true`). **Claude reads `CLAUDE.md`, not `AGENTS.md`** — a claude-run worktree must also carry the Jalebi rules in `CLAUDE.md` (see §7). **Models:** no `claude models` command — `list_models` returns the curated alias list (`CLAUDE_CURATED`; `fable` was removed — not a real alias), overridable via the `adapter_model_lists` setting.
 - Processes must be spawned with a **working directory = the task worktree** so the CLI discovers `AGENTS.md`/skills.
 - Stream output parsing is **defensive & line-buffered**: iterate child `stdout` line-by-line (`text=True, bufsize=1`); unknown/non-parseable lines are shown verbatim in the console rather than crashing. `stderr` is drained in a background thread (bounded tail) to avoid pipe deadlock and to report exit failures.
@@ -153,23 +158,30 @@ Top-level JSON `type` values (one object per line, `--verbose` required) and the
 - `resume` now forwards `env` too (previously dropped it) — follow-ups get the same credentials/guards as the original run.
 - **`ANTHROPIC_*` is deliberately passed through** (claude auth: `ANTHROPIC_AUTH_TOKEN` → `ANTHROPIC_API_KEY` → OAuth; the CLI reads `~/.claude.json` too). Jalebi never sets or strips it — the owner's own claude configuration authenticates claude runs, exactly as codex reuses `~/.codex/auth.json`. `GH_*`/`GIT_*`/`JALEBI_GITHUB_TOKEN` stripping is unchanged and applies to every adapter.
 
-## 10. New backends (Sep 2026)
+## 10. New backends (Sep 2026; re-validated Oct 2026)
 
 Validated live Sep 2026 (one trivial prompt each, free-tier models) + local
-`--help`. Resume follow-ups and tool-call/diff event shapes are per-docs and
+`--help`; re-validated statically Oct 2026 after backend upgrades (flag
+surface via `--help`, event names via binary/bundle inspection — no live
+runs). Resume follow-ups and tool-call/diff event shapes are per-docs and
 structurally confirmed unless noted; live resume was exercised only where
 stated. Each adapter records the CLI version it was validated against
 (`VERIFIED_VERSIONS` in `adapters/__init__.py`); `GET /api/backends/health`
 reports per-backend install state, detected version, and drift from the
 verified version (warn-only). A backend whose binary is missing fails its
 runs fast with a clear non-retryable message (`TaskQueue._require_cli`).
+CLI argv-drift failures (`Unrecognized flag` / `unknown option`) are also
+non-retryable (fail once, no auto-recovery burn).
 
-- **pi** (`pi --print --mode json --approve`, 0.80.2): resume via
+- **pi** (`pi --print --mode json --approve`, 1.1.0): resume via
   `--session <id>` (`--resume` is a TUI picker — never use headlessly).
   `--model provider/id`; `openrouter/free` is a re-resolving pattern, not a
   fixed model. **Model failures exit 0** — `stopReason:"error"` on the
   terminal event is the error signal. Deltas (`message_update`) are silent;
   `message_end` is authoritative; `thinking` silent. No diff event.
+  1.1.0 renamed tool blocks to camelCase `toolCall` with `arguments`
+  (lowercase shapes kept as fallback). 1.1.0 session-lifecycle events
+  (`agent_settled`, `queue_update`, …) are silent.
   `list_models` parses `pi --list-models` (provider/model table).
 - **kilo** (`kilo run --auto --format json`, 7.5.16): OpenCode fork — event
   model mirrors opencode. `-m` needs the full `provider/model` id
@@ -181,9 +193,10 @@ runs fast with a clear non-retryable message (`TaskQueue._require_cli`).
   `callID`/state) map to `tool_call`. `file`-patch events map to `diff`.
   `list_models` reads `kilo models`. Resume (`-s`/`--continue`) is
   per-docs, not live-exercised.
-- **qwen** (`qwen -p … -o stream-json --yolo`, 0.23.1): handshake is
+- **qwen** (`qwen -p … -o stream-json --yolo`, 0.25.0): handshake is
   `system`/`init` (resume key `session_id`); terminal `result` line
-  (`is_error` discriminator, final text echoed). `-p` deprecated but works.
+  (`is_error` discriminator, final text echoed). `-p` deprecated but works
+  (positional prompt is the future).
   `--yolo` stderr warning silenced via `QWEN_CODE_SUPPRESS_YOLO_WARNING=1`.
   No wall-clock cap: the queue's per-task timeout + stall watchdog own the
   deadline. `list_models` reads
@@ -207,7 +220,7 @@ runs fast with a clear non-retryable message (`TaskQueue._require_cli`).
   owner chose removal over a permanently empty dropdown. Historical runs
   pinned to `goose` fall back to the first enabled backend (see
   `docs/06-task-queue.md` §4a); the adapter + its tests are deleted.
-- **grok** (`grok -p … --output-format streaming-json`, 1.0.13): first line
+- **grok** (`grok -p … --output-format streaming-json`, 1.0.50): first line
   `available_commands` is the init signal; `thought` silent, `text` chunks
   emit per-chunk messages, `tool_call` → tool_call, `tool_call_update` →
   step, `usage` silent. `end` is always last and carries the resume
@@ -218,21 +231,24 @@ runs fast with a clear non-retryable message (`TaskQueue._require_cli`).
   (`bypassPermissions`; `--always-approve` is the documented alias).
   `list_models` scrapes `grok models` (only `grok-4.6` at validation).
   SIGTERM → 143 with the session still resumable (verified live).
-- **commandcode** (`commandcode -p … --output-format json`, 1.53.1): vendor
+- **commandcode** (`commandcode -p … --output-format json`, 1.79.2): vendor
   CommandCodeAI. Turn-level events arrive wrapped in an envelope
   (`{"type":"event","event":{…}}`, unwrapped by the parser before mapping;
-  1.50.1 was flat) while `run_start`/`run_end`/`result` stay flat.
+  1.50.1 was flat) while `result` stays flat.
   `run_start` carries the resume `sessionId`; deltas silent,
   `message_end` authoritative, `thinking` silent; terminal `result` line
-  (`subtype` first: success/error/max_turns). `-m` takes full or short model
-  ids (`xiaomi/mimo-v2.5-pro`). `list_models` parses `--list-models`.
+  (`subtype` first: success/error/max_turns). 1.79.x added terminal tool
+  events — `tool_completed` (→ tool_call with result) and `tool_errored`
+  (→ tool_call with error) — plus lifecycle noise (`tool_queued`,
+  `subagent_*`, `compaction_*`, …) which is silent.
+  `-m` takes full or short model ids (`xiaomi/mimo-v2.5-pro`). `list_models` parses `--list-models`.
   Resume (`--resume`/`--continue`), signal-kill and `tool_running` frames
   per-docs, not live-exercised. Caveat: per docs `--yolo` is needed for
   file-write/shell tools in headless (default blocks them) — UNVERIFIED, so
   the adapter stays on the verified `--trust` argv (observed live: review
   runs fall back to posting the last message when `.jalebi/review.md` cannot
   be written).
-- **agy** (`agy -p … --output-format stream-json`, 1.2.2): `init` carries
+- **agy** (`agy -p … --output-format stream-json`, 1.3.2): `init` carries
   the resume `conversation_id` plus `permission_mode` (`always-proceed` with
   `--dangerously-skip-permissions`, `request-review` without it);
   `step_update` (`user_input` / `agent_response` with `text_delta` /

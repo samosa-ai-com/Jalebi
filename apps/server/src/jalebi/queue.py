@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import httpx
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from jalebi import (
     artifacts,
@@ -1440,7 +1440,7 @@ class TaskQueue:
 
             posted = self._post_review(
                 session, task, repo, pr_number, wt, run, token, masker
-            )
+            )[0] == "posted"
             # Complete AFTER _post_review so a review that failed to post (or a
             # done run with no review content that was flipped to failed) yields
             # a failure status — a green status for a failed review would defeat
@@ -1526,13 +1526,16 @@ class TaskQueue:
         run: Run,
         token: str,
         masker,
-    ) -> bool:
+        force: bool = False,
+    ) -> tuple[str, str | None]:
         """Post a ``pr_review`` run's deliverable to GitHub and reconcile the assignment.
 
-        Returns True only when a review was actually posted to the PR; every
-        other path (non-done run, approval-wait skip, no-content flip, post
-        error) returns False so callers never announce a delivery that does
-        not exist.
+        Returns ``(status, detail)`` where status is one of ``"posted"``,
+        ``"held"`` (post_review off — manual posting owns delivery),
+        ``"skipped"`` (non-done run or approval-wait), ``"no_content"`` (done
+        run with nothing to post) or ``"error"`` (GitHub post failed, with the
+        error text in detail). Callers announce a delivery only on
+        ``"posted"``.
 
         Shared by the initial review run and follow-up resumes, which both finish
         with ``run.status`` decided and the review written to the review
@@ -1542,13 +1545,18 @@ class TaskQueue:
           ``running`` forever while the task shows the real terminal status);
         - ``done`` run with no review content → the run/task are **flipped to
           ``failed``** with a diagnostic step, because a review task that produced
-          no review has no deliverable (previously this silently stayed ``done``);
+          no review has no deliverable (previously this silently stayed ``done``).
+          Skipped when ``force`` (manual posting acts on an already-done run);
         - ``done`` run with content → review posted to the PR; assignment →
-          ``posted`` (or ``failed`` if the GitHub post errors).
+          ``posted`` (or ``failed`` if the GitHub post errors, likewise
+          skipped under ``force`` so a transient failure stays retryable);
+        - ``done`` run with content but ``task.post_review`` off → review
+          HELD (assignment → ``held``, timeline note, run stays ``done``)
+          unless ``force`` (the manual post-review action) is set.
         """
         if run.status != "done":
             reviews.set_assignment_status(session, task.id, "failed", run_id=run.id)
-            return False
+            return "skipped", "run not done"
 
         review_text = self._read_review(worktree)
         if not review_text:
@@ -1561,16 +1569,19 @@ class TaskQueue:
                 logger.info(
                     "review for task %s awaiting approval; skipping PR post", task.id
                 )
-                return False
+                return "skipped", "review awaiting approval"
             review_text = self._last_message(session, task.id)
         if not review_text:
             # A done run with no review content has nothing to post. Flip the run
             # AND the task so the timeline/status never claim a review was
-            # delivered that does not exist.
-            run.status = "failed"
-            run.finished_at = now()
-            task.status = "failed"
-            task.updated_at = now()
+            # delivered that does not exist — unless this is a manual post
+            # acting on an already-done run, where failing it would strand
+            # the task over missing content.
+            if not force:
+                run.status = "failed"
+                run.finished_at = now()
+                task.status = "failed"
+                task.updated_at = now()
             steps = json.loads(run.steps_json or "[]")
             steps.append(
                 {
@@ -1585,18 +1596,47 @@ class TaskQueue:
             )
             run.steps_json = json.dumps(steps[-MAX_STEPS:])
             session.commit()
-            reviews.set_assignment_status(session, task.id, "failed", run_id=run.id)
+            if not force:
+                reviews.set_assignment_status(session, task.id, "failed", run_id=run.id)
+                self._notify_in_app(
+                    session,
+                    task,
+                    "task_failed",
+                    f"Task #{task.id} failed",
+                    repo=repo,
+                    run_id=run.id,
+                )
+            return "no_content", None
+
+        review_text = masker(review_text)
+        if task.post_review is False and not force:
+            # Held for manual posting: the run finished with content, so this
+            # is NOT a failure — record the hold visibly and leave delivery to
+            # the Task Detail "Post review" action (POST /api/tasks/<id>/post-review).
+            steps = json.loads(run.steps_json or "[]")
+            steps.append(
+                {
+                    "type": "message",
+                    "phase": None,
+                    "text": (
+                        "Review held for manual posting (post_review is off). "
+                        "Use the Task Detail Post review action to publish it."
+                    ),
+                    "ts": clock.to_iso(now()),
+                }
+            )
+            run.steps_json = json.dumps(steps[-MAX_STEPS:])
+            session.commit()
+            reviews.set_assignment_status(session, task.id, "held", run_id=run.id)
             self._notify_in_app(
                 session,
                 task,
-                "task_failed",
-                f"Task #{task.id} failed",
+                "needs_input",
+                f"Task #{task.id} review held for manual posting",
                 repo=repo,
                 run_id=run.id,
             )
-            return False
-
-        review_text = masker(review_text)
+            return "held", None
         review_body = messaging.wrap_pr_review(review_text)
         try:
             client = GitHubClient(token)
@@ -1614,17 +1654,19 @@ class TaskQueue:
                 }
             )
             run.steps_json = json.dumps(steps[-MAX_STEPS:])
+            run.review_posted = True
             session.commit()
             reviews.set_assignment_status(session, task.id, "posted", run_id=run.id)
-            return True
+            return "posted", None
         except Exception as exc:
             logger.warning("posting review for task %s failed: %s", task.id, exc)
+            err_text = f"posting review to PR #{pr_number} failed: {exc}"
             steps = json.loads(run.steps_json or "[]")
             steps.append(
                 {
                     "type": "error",
                     "phase": None,
-                    "text": f"posting review to PR #{pr_number} failed: {exc}",
+                    "text": err_text,
                     "ts": clock.to_iso(now()),
                 }
             )
@@ -1632,21 +1674,25 @@ class TaskQueue:
             # A review that could not be posted has no deliverable on GitHub —
             # flip the run/task so the commit status (set after _post_review)
             # reports failure, not success, and the merge gate stays closed.
-            run.status = "failed"
-            run.finished_at = now()
-            task.status = "failed"
-            task.updated_at = now()
+            # Skipped under force (manual posting): the run is already done
+            # and must stay retryable instead of being stranded as failed.
+            if not force:
+                run.status = "failed"
+                run.finished_at = now()
+                task.status = "failed"
+                task.updated_at = now()
             session.commit()
-            reviews.set_assignment_status(session, task.id, "failed", run_id=run.id)
-            self._notify_in_app(
-                session,
-                task,
-                "task_failed",
-                f"Task #{task.id} failed",
-                repo=repo,
-                run_id=run.id,
-            )
-            return False
+            if not force:
+                reviews.set_assignment_status(session, task.id, "failed", run_id=run.id)
+                self._notify_in_app(
+                    session,
+                    task,
+                    "task_failed",
+                    f"Task #{task.id} failed",
+                    repo=repo,
+                    run_id=run.id,
+                )
+            return "error", err_text
 
     @staticmethod
     def _task_pr_number(task: Task) -> int | None:
@@ -2050,7 +2096,7 @@ class TaskQueue:
                 if pr_number is not None:
                     posted = self._post_review(
                         session, task, repo, pr_number, wt, run, token, masker
-                    )
+                    )[0] == "posted"
             # Complete AFTER the review post (see _run_review) so a failed review
             # yields a failure status, not a green one.
             self._complete_status(session, task, repo, run, git, token)
@@ -2275,6 +2321,74 @@ class TaskQueue:
             session.commit()
             self._cascade_unblock(session, task.id)
             return pr_number
+        finally:
+            session.close()
+
+    def post_held_review(self, task_id: int) -> int:
+        """Manually post a held ``pr_review`` deliverable. Returns the PR number.
+
+        Delivery is tracked per run: the latest completed run's row is claimed
+        atomically, so follow-up deliverables post independently while a
+        repeated post of the same run is refused. Resolves the task's own
+        account, rebuilds the masker, and reuses ``_post_review`` with the
+        review worktree, so manual posting goes through the exact same
+        masking/posting/reconciliation path as automatic posting. Raises
+        ``KeyError`` (unknown task/repo), ``ValueError`` (not a review task,
+        no completed run, no linked PR, already posted), ``PublishError``
+        (run has no review content) or ``RuntimeError`` (GitHub post failed —
+        the run stays done and retryable).
+        """
+        session = Session()
+        try:
+            task = session.get(Task, task_id)
+            if task is None:
+                raise KeyError(f"task {task_id} not found")
+            if task.type != "pr_review":
+                raise ValueError("post-review is only valid for pr_review tasks")
+            repo = session.get(Repo, task.repo_id)
+            if repo is None:
+                raise KeyError(f"repo for task {task_id} not found")
+            run = tasks.latest_done_run(session, task.id)
+            if run is None:
+                raise ValueError("no completed review run to post")
+            pr_number = self._task_pr_number(task)
+            if pr_number is None:
+                raise ValueError("review task has no linked PR number")
+            # Atomic per-run delivery claim: exactly one concurrent caller
+            # wins the row, so a second click, a reload, or a concurrent POST
+            # cannot publish the same run twice. Claimed before the GitHub
+            # request; released below when the post fails so a retry of the
+            # same run stays possible.
+            claimed = session.execute(
+                update(Run)
+                .where(Run.id == run.id, Run.review_posted == False)  # noqa: E712
+                .values(review_posted=True)
+            )
+            if claimed.rowcount == 0:
+                raise ValueError(f"review already posted to PR #{pr_number}")
+            token = secrets.resolve_token(self.config, task.pat_name)
+            if token is None:
+                raise RuntimeError("no GitHub token configured")
+            raw_patterns = settings.get_setting(session, "secret_patterns") or []
+            patterns = [str(p) for p in raw_patterns] if isinstance(raw_patterns, list) else []
+            masker = masking.build_masker(secrets.all_token_values(self.config) + [token], patterns)
+            wt = GitWorkspace.review_worktree_path(self.config.data_dir, task.id)
+            status, detail = self._post_review(
+                session, task, repo, pr_number, wt, run, token, masker, force=True
+            )
+            if status == "posted":
+                return pr_number
+            # Release the claim — the failure paths below leave the run done
+            # and retryable (the force flag suppresses the failure flips).
+            session.execute(
+                update(Run).where(Run.id == run.id).values(review_posted=False)
+            )
+            session.commit()
+            if status == "no_content":
+                raise PublishError("nothing to post: the run has no review content")
+            if status == "error":
+                raise RuntimeError(detail or "posting review to GitHub failed")
+            raise PublishError(detail or "review is not ready to post")
         finally:
             session.close()
 

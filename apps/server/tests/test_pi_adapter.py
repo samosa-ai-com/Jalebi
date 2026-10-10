@@ -1,5 +1,6 @@
 """pi CLI adapter tests (PRD F4) — parse mapping, commands. Fixture lines mirror
-the live ``pi --print --mode json`` smoke run (pi 0.80.2, Sep 2026)."""
+the live ``pi --print --mode json`` smoke run (pi 0.80.2, Sep 2026; 1.1.0
+camelCase ToolCall + session-lifecycle fixtures added Oct 2026)."""
 
 import io
 
@@ -35,6 +36,14 @@ MESSAGE_END_TOOLCALL = (
     '"message":{"role":"assistant","stopReason":"stop","content":['
     '{"type":"toolcall_start","id":"call_1","toolName":"read","input":{"path":"x"}}]}}'
 )
+# pi 1.1.0: ToolCall blocks are camelCase with `arguments`.
+MESSAGE_END_TOOLCALL_CAMEL = (
+    '{"type":"message_end","sessionId":"' + SESSION_ID + '",'
+    '"message":{"role":"assistant","stopReason":"stop","content":['
+    '{"type":"toolCall","id":"call_2","name":"read","arguments":{"path":"y"}}]}}'
+)
+AGENT_SETTLED = '{"type":"agent_settled","sessionId":"' + SESSION_ID + '"}'
+QUEUE_UPDATE = '{"type":"queue_update","sessionId":"' + SESSION_ID + '"}'
 MESSAGE_END_MODEL_ERROR = (
     '{"type":"message_end","sessionId":"' + SESSION_ID + '",'
     '"message":{"role":"assistant","stopReason":"error",'
@@ -110,6 +119,21 @@ def test_parse_message_end_toolcall_block() -> None:
     assert events[0].type == "tool_call"
     assert events[0].data is not None
     assert events[0].data["tool"] == "read"
+
+
+def test_parse_message_end_toolcall_camel_block() -> None:
+    # pi 1.1.0 renamed the block to camelCase `toolCall` + `arguments`.
+    events = adapter.parse(MESSAGE_END_TOOLCALL_CAMEL)
+    assert len(events) == 1
+    assert events[0].type == "tool_call"
+    assert events[0].data is not None
+    assert events[0].data["tool"] == "read"
+    assert events[0].data["input"] == {"path": "y"}
+
+
+def test_parse_session_lifecycle_events_are_silent() -> None:
+    assert adapter.parse(AGENT_SETTLED) == []
+    assert adapter.parse(QUEUE_UPDATE) == []
 
 
 def test_parse_model_error_despite_exit_zero() -> None:

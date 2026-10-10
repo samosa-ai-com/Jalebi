@@ -81,6 +81,7 @@ def create_task(
     timeout_minutes: int = 60,
     publish_mode: str | None = None,
     address_reviews: bool = False,
+    post_review: bool = True,
     masker: Callable[[str], str] | None = None,
 ) -> Task:
     """Validate and insert a new task, returning it (status = ``queued``)."""
@@ -92,6 +93,8 @@ def create_task(
         raise ValueError("address_reviews is only valid for freeform tasks")
     if address_reviews and not prs:
         raise ValueError("address_reviews requires a linked PR")
+    if post_review is not True and type_ != "pr_review":
+        raise ValueError("post_review=False is only valid for pr_review tasks")
     repo = session.get(Repo, repo_id)
     if repo is None:
         raise ValueError(f"repo {repo_id} not found")
@@ -138,6 +141,7 @@ def create_task(
         timeout_minutes=timeout_minutes,
         publish_mode=publish_mode,
         address_reviews=address_reviews,
+        post_review=post_review,
     )
     session.add(task)
     session.commit()
@@ -156,6 +160,16 @@ def list_tasks(session: Session) -> list[Task]:
 def latest_run(session: Session, task_id: int) -> Run | None:
     return session.execute(
         select(Run).where(Run.task_id == task_id).order_by(Run.id.desc())
+    ).scalars().first()
+
+
+def latest_done_run(session: Session, task_id: int) -> Run | None:
+    """Latest run that finished ``done`` (manual review posting acts on this,
+    even when a later run failed or is still active)."""
+    return session.execute(
+        select(Run)
+        .where(Run.task_id == task_id, Run.status == "done")
+        .order_by(Run.id.desc())
     ).scalars().first()
 
 
@@ -228,6 +242,7 @@ def run_to_dict(run: Run, artifacts: list[Artifact] | None = None) -> dict[str, 
         "started_at": clock.to_iso(run.started_at) if run.started_at else None,
         "finished_at": clock.to_iso(run.finished_at) if run.finished_at else None,
         "has_diff": bool(run.diff_text),
+        "review_posted": bool(run.review_posted),
         "waiting_input": waiting_input,
         "git_sha_start": run.git_sha_start,
         "git_sha_end": run.git_sha_end,
@@ -281,6 +296,7 @@ def task_to_dict(
         "pr_number": task.pr_number,
         "publish_mode": task.publish_mode,
         "address_reviews": bool(task.address_reviews),
+        "post_review": bool(task.post_review),
         "check_run_id": task.check_run_id,
         "issues": json.loads(task.issues_json) if task.issues_json else [],
         "prs": json.loads(task.prs_json) if task.prs_json else [],

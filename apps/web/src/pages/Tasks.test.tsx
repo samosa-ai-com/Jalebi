@@ -608,8 +608,8 @@ describe("Tasks", () => {
     );
     await screen.findByText("New task");
     await pick("Task type", "review", /Review/);
-    // Reviews never publish — neither the summary nor the guidance may claim one.
-    expect(screen.getByText(/no publish \(review\)/)).toBeInTheDocument();
+    // Reviews default to auto-posting — the summary states it plainly.
+    expect(screen.getByText(/auto-post review/)).toBeInTheDocument();
     expect(
       screen.getByText(/reviews this pull request in a read-only copy and posts its comments/)
     ).toBeInTheDocument();
@@ -617,9 +617,11 @@ describe("Tasks", () => {
       screen.getByText(/Review tasks only post comments — nothing is pushed or published/)
     ).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: /Advanced options/ }));
-    expect(
-      screen.getByText(/Review tasks do not publish a pull request/)
-    ).toBeInTheDocument();
+    const toggle = screen.getByRole("checkbox", { name: /Post review on completion/ });
+    expect(toggle).toBeChecked();
+    // Holding the review flips the summary so it can never read as a promise.
+    await userEvent.click(toggle);
+    expect(screen.getByText(/hold review/)).toBeInTheDocument();
   });
 
   it("renders safety line near submit button reflecting publish mode and type semantics", async () => {
@@ -1160,6 +1162,48 @@ describe("Tasks page (queue overhaul)", () => {
       expect(body).toMatchObject({ type: "pr_review", pr_number: 4, prompt: "Review PR #4." });
       // Reviews never publish — no mode may be sent.
       expect(body).not.toHaveProperty("publish_mode");
+      // Default posts on completion — no flag may be sent.
+      expect(body).not.toHaveProperty("post_review");
+    });
+  });
+
+  it("pr_review with the post toggle off sends post_review=false", async () => {
+    const fetchMock = stubFetch({
+      ...DEFAULT_HANDLERS,
+      "/api/github/context": {
+        issues: [],
+        prs: [
+          {
+            number: 4,
+            title: "Fix",
+            html_url: "u",
+            state: "open",
+            base: "main",
+            head: "fix",
+            author: "me",
+          },
+        ],
+        branches: ["main", "fix"],
+      },
+    });
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>
+    );
+    await screen.findByText("New task");
+    await pick("Task type", "review", "Review PR");
+    await pick("Pull request", "#4", /#4/);
+    await userEvent.click(screen.getByRole("button", { name: /Advanced options/ }));
+    await userEvent.click(screen.getByRole("checkbox", { name: /Post review on completion/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => {
+      const postCall = fetchMock.mock.calls.find(
+        (call) => call[0] === "/api/tasks" && call[1]?.method === "POST"
+      );
+      expect(postCall).toBeTruthy();
+      const body = JSON.parse(postCall![1]!.body as string) as Record<string, unknown>;
+      expect(body).toMatchObject({ type: "pr_review", pr_number: 4, post_review: false });
     });
   });
 

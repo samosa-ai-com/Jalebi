@@ -707,6 +707,7 @@ const REVIEWER_STATUS_COLOR: Record<string, string> = {
   running: "text-syrup-300",
   posted: "text-green-400",
   failed: "text-red-400",
+  held: "text-amber-300",
 };
 
 function ReviewersCard({
@@ -2012,6 +2013,16 @@ export default function TaskDetail() {
             }}
           />
         )}
+        {task.type === "pr_review" &&
+          task.post_review === false &&
+          runs.some((r) => r.status === "done" && !r.review_posted) && (
+            <Action
+              onClick={() => runAction(() => api.postReview(task.id))}
+              disabled={actionBusy}
+            >
+              Post review
+            </Action>
+          )}
         <Action onClick={deleteTask} disabled={actionBusy}>
           Delete
         </Action>

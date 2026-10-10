@@ -147,6 +147,13 @@ class Task(Base):
     # "auto" | "manual" | None (None → fall back to the global auto_publish setting).
     # issue_fix defaults to "auto"; freeform/screen_finding/triggered default to "manual".
     publish_mode: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # "Post review on completion" for pr_review tasks (default True = today's
+    # behavior: post the review as a PR comment when the run finishes with
+    # content). False holds the review for manual posting from Task Detail.
+    # Only meaningful for pr_review; ignored by all other task types.
+    post_review: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=sa.text("1")
+    )
     # Creation-time "address the review comments on the linked PR" (freeform
     # only): the run prompt always carries the address-reviews instruction,
     # even when no reviews were fetched at creation time.
@@ -179,6 +186,12 @@ class Run(Base):
     diff_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     git_sha_start: Mapped[str | None] = mapped_column(String(64), nullable=True)
     git_sha_end: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Durable review-delivery marker, one per deliverable: set when THIS run's
+    # review is successfully posted (automatic or manual) so re-posts of the
+    # same run are refused while later runs post independently.
+    review_posted: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=sa.text("0")
+    )
 
 
 class Followup(Base):

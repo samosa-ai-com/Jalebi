@@ -738,6 +738,66 @@ describe("TaskDetail", () => {
     expect(screen.queryByRole("button", { name: "Address reviewers" })).toBeNull();
   });
 
+  it("shows Post review for a held review and posts on click", async () => {
+    const heldTask = {
+      ...TASK,
+      type: "pr_review",
+      pr_number: 9,
+      prs: [9],
+      status: "done",
+      post_review: false,
+      run: { ...RUN, status: "done" },
+      reviewers: [],
+    };
+    const fetchMock = stubFetch(heldTask);
+    vi.stubGlobal("EventSource", FakeEventSource);
+
+    renderDetail();
+    await userEvent.click(await screen.findByRole("button", { name: "Post review" }));
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(
+          ([url, init]) =>
+            String(url).endsWith("/api/tasks/7/post-review") && init?.method === "POST"
+        )
+      ).toBe(true);
+    });
+  });
+
+  it("hides Post review when the review auto-posts", async () => {
+    stubFetch({
+      ...TASK,
+      type: "pr_review",
+      prs: [9],
+      status: "done",
+      post_review: true,
+      run: { ...RUN, status: "done" },
+      reviewers: [],
+    });
+    vi.stubGlobal("EventSource", FakeEventSource);
+
+    renderDetail();
+    await screen.findByText("Follow-up");
+    expect(screen.queryByRole("button", { name: "Post review" })).toBeNull();
+  });
+
+  it("hides Post review once the server reports it posted", async () => {
+    stubFetch({
+      ...TASK,
+      type: "pr_review",
+      prs: [9],
+      status: "done",
+      post_review: false,
+      run: { ...RUN, status: "done", review_posted: true },
+      reviewers: [],
+    });
+    vi.stubGlobal("EventSource", FakeEventSource);
+
+    renderDetail();
+    await screen.findByText("Follow-up");
+    expect(screen.queryByRole("button", { name: "Post review" })).toBeNull();
+  });
+
   it("shows Address reviewers on a fix task that has a PR", async () => {
     const fixTask = {
       ...TASK,

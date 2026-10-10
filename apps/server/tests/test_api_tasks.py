@@ -384,6 +384,65 @@ def test_create_task_publish_mode_override(client: FlaskClient, repo_id: int) ->
     assert resp.get_json()["publish_mode"] == "auto"
 
 
+def test_create_pr_review_post_review_flag(client: FlaskClient, repo_id: int, monkeypatch) -> None:
+    """pr_review tasks accept post_review=false (hold for manual posting) and
+    default to posting on completion."""
+
+    class FakeClient:
+        def __init__(self, token): ...
+        def get_pr(self, full_name, number):
+            return {
+                "number": number, "title": "t", "body": "b", "html_url": "u",
+                "state": "open", "base": "main", "head": "h", "author": "a",
+            }
+        def list_pr_reviews(self, full_name, number):
+            return []
+        def close(self): ...
+
+    monkeypatch.setattr("jalebi.routes.tasks.GitHubClient", FakeClient)
+    held = client.post(
+        "/api/tasks",
+        json={
+            "repo_id": repo_id, "type": "pr_review", "prompt": "review it",
+            "pr_number": 3, "post_review": False,
+        },
+    )
+    assert held.status_code == 201
+    assert held.get_json()["post_review"] is False
+
+    default = client.post(
+        "/api/tasks",
+        json={
+            "repo_id": repo_id, "type": "pr_review", "prompt": "review it",
+            "pr_number": 4,
+        },
+    )
+    assert default.status_code == 201
+    assert default.get_json()["post_review"] is True
+
+    refused = client.post(
+        "/api/tasks",
+        json={"repo_id": repo_id, "type": "freeform", "prompt": "x", "post_review": False},
+    )
+    assert refused.status_code == 400
+    assert "only valid for pr_review" in refused.get_json()["error"]
+
+
+def test_post_review_endpoint_guards(client: FlaskClient, repo_id: int) -> None:
+    """Unknown tasks 404; non-review tasks 400 without touching GitHub."""
+    missing = client.post("/api/tasks/999999/post-review")
+    assert missing.status_code == 404
+
+    freeform = client.post(
+        "/api/tasks",
+        json={"repo_id": repo_id, "type": "freeform", "prompt": "x"},
+    )
+    assert freeform.status_code == 201
+    refused = client.post(f"/api/tasks/{freeform.get_json()['id']}/post-review")
+    assert refused.status_code == 400
+    assert "only valid for pr_review" in refused.get_json()["error"]
+
+
 def test_create_freeform_with_linked_pr_fetches_pr_context(
     app, client: FlaskClient, repo_id: int, session, monkeypatch
 ) -> None:

@@ -124,6 +124,28 @@ def test_parse_mcp_tool_call_is_tool_call() -> None:
     assert data["status"] == "completed"
 
 
+def test_parse_web_search_and_todo_list_are_tool_calls() -> None:
+    # codex 0.160.x item subtypes — must not leak raw JSON.
+    for subtype in ("web_search", "todo_list"):
+        line = (
+            '{"type":"item.completed","item":{"id":"item_9","type":"' + subtype + '",'
+            '"query":"q","status":"completed"}}'
+        )
+        events = adapter.parse(line)
+        assert events[0].type == "tool_call"
+        assert (events[0].data or {})["tool"] == subtype
+
+
+def test_parse_web_search_keeps_extra_item_fields() -> None:
+    line = (
+        '{"type":"item.completed","item":{"id":"item_10","type":"web_search",'
+        '"query":"q","status":"completed","results":[{"url":"https://x"}]}}'
+    )
+    events = adapter.parse(line)
+    assert events[0].type == "tool_call"
+    assert (events[0].data or {}).get("results") == [{"url": "https://x"}]
+
+
 def test_parse_unknown_subtype_with_text_falls_back_to_message() -> None:
     line = '{"type":"item.completed","item":{"id":"item_6","type":"widget","text":"hi"}}'
     events = adapter.parse(line)
