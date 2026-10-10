@@ -173,6 +173,18 @@ def test_parse_result_bare_error_falls_back() -> None:
     assert events[0].text
 
 
+def test_parse_tool_progress_is_silent() -> None:
+    # claude 2.1.296 emits tool_progress heartbeats on long tool calls.
+    assert adapter.parse('{"type":"tool_progress","progress":"heartbeat"}') == []
+
+
+def test_parse_tool_use_summary_is_message() -> None:
+    events = adapter.parse('{"type":"tool_use_summary","summary":"Ran 3 tools."}')
+    assert len(events) == 1
+    assert events[0].type == "message"
+    assert events[0].text == "Ran 3 tools."
+
+
 def test_parse_result_error_terminal_reason_fallback() -> None:
     line = (
         '{"type":"result","subtype":"error_max_budget_usd","is_error":true,'

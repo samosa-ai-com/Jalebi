@@ -1,7 +1,7 @@
 """codex CLI adapter (PRD F4).
 
 Maps ``codex exec --json`` / ``codex exec resume <thread_id> --json``
-(codex-cli 0.147.0) events onto the normalized vocabulary. Key facts captured
+(codex-cli 0.160.0; 0.147.0 shapes kept) events onto the normalized vocabulary. Key facts captured
 empirically (see docs/03-adapters.md §5):
 
 - JSONL, one object per line. The **resume key is ``thread_id``** from
@@ -197,6 +197,20 @@ def _item_events(item, line: str) -> list[AgentEvent]:
                     "arguments": item.get("arguments"),
                     "result": item.get("result"),
                     "error": item.get("error"),
+                    "status": item.get("status"),
+                },
+            )
+        ]
+    if subtype in ("web_search", "todo_list"):
+        # codex 0.160.x item subtypes: surface as tool calls so they read
+        # sensibly instead of leaking raw JSON.
+        return [
+            AgentEvent(
+                type="tool_call",
+                data={
+                    "tool": subtype,
+                    "query": item.get("query"),
+                    "text": item.get("text"),
                     "status": item.get("status"),
                 },
             )

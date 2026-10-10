@@ -49,6 +49,19 @@ RESULT_MAX_TURNS = (
     '{"type":"result","subtype":"max_turns","sessionId":"' + SESSION_ID + '",'
     '"finalText":""}'
 )
+# 1.79.x tool-result events (also arrive envelope-wrapped in live streams).
+TOOL_COMPLETED = (
+    '{"type":"tool_completed","sessionId":"' + SESSION_ID + '",'
+    '"toolCallId":"call_1","toolName":"read","result":"file contents"}'
+)
+TOOL_ERRORED = (
+    '{"type":"tool_errored","sessionId":"' + SESSION_ID + '",'
+    '"toolCallId":"call_2","toolName":"bash","error":"exit 1"}'
+)
+TOOL_QUEUED = (
+    '{"type":"tool_queued","sessionId":"' + SESSION_ID + '",'
+    '"toolCallId":"call_3","toolName":"read"}'
+)
 
 
 class FakeProc:
@@ -91,6 +104,28 @@ def test_parse_tool_running() -> None:
     assert events[0].type == "tool_call"
     assert events[0].data is not None
     assert events[0].data["tool"] == "read"
+
+
+def test_parse_tool_completed_carries_result() -> None:
+    events = adapter.parse(TOOL_COMPLETED)
+    assert len(events) == 1
+    assert events[0].type == "tool_call"
+    assert events[0].data is not None
+    assert events[0].data["status"] == "completed"
+    assert events[0].data["output"] == "file contents"
+
+
+def test_parse_tool_errored_carries_error() -> None:
+    events = adapter.parse(TOOL_ERRORED)
+    assert len(events) == 1
+    assert events[0].type == "tool_call"
+    assert events[0].data is not None
+    assert events[0].data["status"] == "error"
+    assert events[0].data["error"] == "exit 1"
+
+
+def test_parse_tool_lifecycle_noise_is_silent() -> None:
+    assert adapter.parse(TOOL_QUEUED) == []
 
 
 def test_parse_result_terminal() -> None:

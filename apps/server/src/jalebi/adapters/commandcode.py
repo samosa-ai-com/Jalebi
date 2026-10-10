@@ -1,8 +1,8 @@
 """commandcode (Command Code) CLI adapter (PRD F4).
 
-Maps ``commandcode -p … --output-format json`` (commandcode 1.53.1, verified
-live Sep 2026 — see docs/03-adapters.md §10) NDJSON events onto the
-normalized vocabulary. Vendor: CommandCodeAI (docs: commandcode.ai/docs).
+Maps ``commandcode -p … --output-format json`` (commandcode 1.79.2 — see
+docs/03-adapters.md §10) NDJSON events onto the normalized vocabulary.
+Vendor: CommandCodeAI (docs: commandcode.ai/docs).
 
 Verified facts:
 - Turn-level events arrive wrapped in an envelope —
@@ -216,6 +216,47 @@ class CommandCodeAdapter(AgentAdapter):
                 ],
                 data,
             )
+        if event_type in ("tool_completed", "tool_errored"):
+            # Terminal tool output (1.79.x): the result/error of the call.
+            tool_data = {
+                **(data or {}),
+                "tool": payload.get("toolName") or payload.get("name"),
+                "tool_use_id": payload.get("toolCallId") or payload.get("id"),
+                "input": payload.get("input"),
+                "status": "error" if event_type == "tool_errored" else "completed",
+            }
+            if event_type == "tool_completed":
+                tool_data["output"] = payload.get("result") or payload.get("output")
+            else:
+                err = payload.get("error")
+                tool_data["error"] = err if isinstance(err, str) else (err or "tool failed")
+            return [AgentEvent(type="tool_call", data=tool_data)]
+        if event_type in (
+            # 1.79.x lifecycle noise: no timeline content.
+            "tool_queued",
+            "tool_update",
+            "tool_hooks",
+            "tool_hook_blocked",
+            "tool_input_coerced",
+            "tool_input_repaired",
+            "tool_denied",
+            "notice",
+            "skill_loaded",
+            "session_titled",
+            "permission_mode_changed",
+            "config_setting_changed",
+            "api_retry",
+            "continuation_recovery",
+            "subagent_start",
+            "subagent_stop",
+            "subagent_progress",
+            "compaction_start",
+            "compaction_done",
+            "mod_error",
+            "interrupted",
+            "run_error",
+        ):
+            return []
         if event_type == "result":
             if payload.get("subtype") != "success":
                 text = payload.get("error") or payload.get("finalText") or "commandcode run failed"

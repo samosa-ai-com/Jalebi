@@ -1,8 +1,16 @@
 """opencode CLI adapter (PRD F4).
 
-Maps `opencode run --format json` (v1.18) events onto the normalized vocabulary:
+Maps `opencode run --format json` (v2.0.26; v1.18 shapes kept as fallback)
+events onto the normalized vocabulary:
 `step_start` -> step, `tool_use` -> tool_call, `text` -> message, `error` -> error.
 Unknown/non-JSON lines are surfaced verbatim as messages (defensive parsing).
+
+v2 notes: `run` no longer accepts `--dir` (working dir comes from PWD, which
+the `_spawn` shell wrapper sets via `cd <cwd>`); `--standalone` keeps each run
+on a private server so cancel/timeout kills the agent (shared background
+service processes survive `killpg`); `--auto` auto-approves permissions that
+are not explicitly denied (the worktree gh-deny guard is untouched).
+`--thinking` is never passed, so `reasoning` events cannot occur.
 """
 
 import json
@@ -56,7 +64,8 @@ class OpenCodeAdapter(AgentAdapter):
     name = "opencode"
 
     def list_models(self) -> list[str]:
-        proc = subprocess.run([_binary(), "models"], capture_output=True, text=True, timeout=30)
+        # v2 boots/uses the server on first call — allow extra time.
+        proc = subprocess.run([_binary(), "models"], capture_output=True, text=True, timeout=60)
         if proc.returncode != 0:
             return []
         return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
@@ -68,7 +77,13 @@ class OpenCodeAdapter(AgentAdapter):
         model: str | None = None,
         env: dict[str, str | None] | None = None,
     ) -> RunHandle:
-        args = [_binary(), "run", "--format", "json", "--dir", str(cwd)]
+        # No `--dir`: v2 `run` has no such flag; the worktree is entered via
+        # the `_spawn` shell wrapper (`cd <cwd>`, so PWD is the worktree).
+        # `--standalone`: private server per run so cancel/timeout kills the
+        # agent (a shared background service would survive killpg).
+        # `--auto`: auto-approve permissions not explicitly denied (the gh-deny
+        # guard stays in force; deny rules never raise permission prompts).
+        args = [_binary(), "run", "--format", "json", "--standalone", "--auto"]
         if model:
             args += ["--model", model]
         args.append(prompt)
@@ -82,17 +97,21 @@ class OpenCodeAdapter(AgentAdapter):
         model: str | None = None,
         env: dict[str, str | None] | None = None,
     ) -> RunHandle:
-        # ``--dir`` must match the session's directory: opencode's headless
-        # ``run --session`` produces an empty stream and hangs when resumed from
-        # a different worktree (e.g. a pr_review session created in the review
-        # worktree resumed from the task worktree).
+        # Resume from the session's own worktree: on v1, headless
+        # ``run --session <id>`` hung with an empty stream when resumed from a
+        # different worktree than the session was created in; v2 pins the
+        # resume to the session's own directory instead (re-validate live).
+        # Jalebi still always resumes from the session's own worktree:
+        # pr_review sessions live in the review worktree (`ws/task-<id>-review`,
+        # detached at the PR head), so `_run_followup` runs pr_review follow-ups
+        # there rather than in the task worktree.
         args = [
             _binary(),
             "run",
             "--format",
             "json",
-            "--dir",
-            str(cwd),
+            "--standalone",
+            "--auto",
             "--session",
             session_id,
         ]
@@ -127,6 +146,9 @@ class OpenCodeAdapter(AgentAdapter):
                 "input": state.get("input"),
                 "output": state.get("output"),
             }
+            if state.get("status") == "error" and state.get("error"):
+                # v2 puts a plain error string here and omits `output`.
+                tool_data["error"] = state.get("error")
             return [AgentEvent(type="tool_call", data=tool_data)]
         if event_type == "step_start":
             return [AgentEvent(type="step", phase="step", data=data)]
@@ -134,7 +156,14 @@ class OpenCodeAdapter(AgentAdapter):
             return []
         if event_type == "error":
             err = payload.get("error") or {}
-            message = (err.get("data") or {}).get("message") or err.get("name") or "unknown error"
+            # v2 shape is {"type": ..., "message": ...}; v1 used
+            # {"data": {"message": ...}} / {"name": ...} — try all orders.
+            message = (
+                err.get("message")
+                or (err.get("data") or {}).get("message")
+                or err.get("name")
+                or "unknown error"
+            )
             return [AgentEvent(type="error", text=message, data=data)]
 
         return [AgentEvent(type="message", text=line, data=data)]

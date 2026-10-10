@@ -1,7 +1,8 @@
 """agy (Antigravity) CLI adapter (PRD F4).
 
 Maps ``agy -p … --output-format stream-json`` (agy 1.2.2, verified live
-Sep 2026 — see docs/03-adapters.md §10) events onto the normalized
+Sep 2026; 1.3.2 flags/events re-validated statically Oct 2026 — no changes
+needed — see docs/03-adapters.md §10) events onto the normalized
 vocabulary. Official Google product; auth is the owner's OAuth login
 (reused non-interactively — verified live).
 
