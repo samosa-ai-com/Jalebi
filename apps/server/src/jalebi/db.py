@@ -147,6 +147,20 @@ class Task(Base):
     # "auto" | "manual" | None (None → fall back to the global auto_publish setting).
     # issue_fix defaults to "auto"; freeform/screen_finding/triggered default to "manual".
     publish_mode: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # "Post review on completion" for pr_review tasks (default True = today's
+    # behavior: post the review as a PR comment when the run finishes with
+    # content). False holds the review for manual posting from Task Detail.
+    # Only meaningful for pr_review; ignored by all other task types.
+    post_review: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=sa.text("1")
+    )
+    # Durable review-delivery marker: set on the first successful PR post
+    # (automatic or manual) so re-posts are refused even for tasks without a
+    # ReviewAssignment row. Follow-up resumes post new comments through
+    # _post_review directly and never consult this flag.
+    review_posted: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=sa.text("0")
+    )
     # Creation-time "address the review comments on the linked PR" (freeform
     # only): the run prompt always carries the address-reviews instruction,
     # even when no reviews were fetched at creation time.

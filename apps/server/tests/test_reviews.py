@@ -55,6 +55,20 @@ def test_assign_reviewers_creates_one_task_per_reviewer(session) -> None:
     assert {a.task_id for a in assignments} == {t.id for t in created}
 
 
+def test_assign_reviewers_threads_post_review_flag(session) -> None:
+    """The requested hold reaches every reviewer child task (default posts)."""
+    repo = _repo(session)
+    _reviewer_agent(session, "auditor-a")
+    _reviewer_agent(session, "auditor-b")
+    held = reviews.assign_reviewers(
+        session, repo, 42, ["auditor-a", "auditor-b"], post_review=False
+    )
+    assert len(held) == 2
+    assert all(t.post_review is False for t in held)
+    posting = reviews.assign_reviewers(session, repo, 43, ["auditor-a"])
+    assert posting[0].post_review is True
+
+
 def test_assign_reviewers_requires_reviewer_kind(session) -> None:
     repo = _repo(session)
     catalog.create_agent(session, id="general-agent", name="G", kind="general", enabled=True)

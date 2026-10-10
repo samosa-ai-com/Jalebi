@@ -76,6 +76,8 @@ export interface Task {
   pr_number: number | null;
   address_reviews?: boolean;
   publish_mode: "auto" | "manual" | null;
+  post_review?: boolean;
+  review_posted?: boolean;
   check_run_id: number | null;
   issues: number[];
   prs: number[];

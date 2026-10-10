@@ -91,6 +91,7 @@ export interface TaskPrefill {
   patName?: string;
   envVars?: string[];
   addressReviews?: boolean;
+  postReview?: boolean;
 }
 
 const TASK_DEFAULTS_KEY = "jalebi-task-defaults";
@@ -135,6 +136,9 @@ function CreateTask({
   // a prefill) explicitly chose otherwise.
   const [addressReviews, setAddressReviews] = useState(prefill?.addressReviews ?? false);
   const [addressTouched, setAddressTouched] = useState(prefill?.addressReviews !== undefined);
+  // Per-review auto-post flag (pr_review only). Defaults to posting on
+  // completion; off holds the finished review for manual posting.
+  const [postReview, setPostReview] = useState(prefill?.postReview ?? true);
   const [publishMode, setPublishMode] = useState<"auto" | "manual" | "">(
     prefill?.publishMode ?? stored.publishMode ?? ""
   );
@@ -207,7 +211,7 @@ function CreateTask({
     agentCli ?? "…",
     model || "default model",
     agentName ?? "default agent",
-    isReview ? "no publish (review)" : `${effectivePublish} publish`,
+    isReview ? (postReview ? "auto-post review" : "hold review") : `${effectivePublish} publish`,
     effectivePatName ? `as ${accountLabel(effectivePatName)}` : null,
     envVars.length > 0 ? `${envVars.length} env` : null,
   ]
@@ -423,6 +427,9 @@ function CreateTask({
         // clone or saved defaults) so the backend never persists a contradictory
         // publish_mode on a pr_review task.
         publish_mode: isReview || publishMode === "" ? undefined : publishMode,
+        // Reviews never open a PR; the review post itself is governed by the
+        // toggle (default on). Only send false — True is the server default.
+        post_review: isReview && !postReview ? false : undefined,
         reviewers: reviewers.length > 0 ? reviewers : undefined,
         env_vars: envVars,
       });
@@ -447,6 +454,7 @@ function CreateTask({
       setPrNumber("");
       setAddressReviews(false);
       setAddressTouched(false);
+      setPostReview(true);
       setEnvVars([]);
       setAgentId("");
       setReviewers([]);
@@ -750,10 +758,20 @@ function CreateTask({
                 }))}
               />
               {type === "pr_review" ? (
-                <p className="text-[11px] text-ink-500">
-                  Review tasks do not publish a pull request — the review is posted as comments on
-                  the PR.
-                </p>
+                <div className="space-y-1.5">
+                  <label className="flex cursor-pointer items-start gap-2 text-xs text-ink-400">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5"
+                      checked={postReview}
+                      onChange={(e) => setPostReview(e.target.checked)}
+                    />
+                    <span>
+                      Post review on completion — the review is posted as comments on
+                      the PR. Off holds the finished review for manual posting.
+                    </span>
+                  </label>
+                </div>
               ) : (
                 <div>
                   <SearchableSelect
@@ -1233,6 +1251,7 @@ export default function Tasks() {
       model: t.model ?? undefined,
       publishMode: (t.publish_mode as "auto" | "manual" | "") ?? "",
       addressReviews: t.address_reviews ?? undefined,
+      postReview: t.post_review ?? undefined,
       prNumber:
         t.prs?.[0] != null
           ? String(t.prs[0])
