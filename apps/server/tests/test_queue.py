@@ -2513,6 +2513,38 @@ def test_post_held_review_manual_action(
     assignment = reviews.assignment_by_task(session, task.id)
     assert assignment is not None
     assert assignment.status == "posted"
+    # The delivery marker persists: a second manual post is refused without
+    # touching GitHub again.
+    assert _fresh_task(session, task.id).review_posted is True
+    posted_calls = sum(len(c.reviews) for c in _HoldingClient.instances)
+    import pytest
+
+    with pytest.raises(ValueError, match="already posted"):
+        q.post_held_review(task.id)
+    assert sum(len(c.reviews) for c in _HoldingClient.instances) == posted_calls
+
+
+def test_post_held_review_marker_blocks_repost_when_assignment_unposted(
+    q, session, repo_row, monkeypatch, tmp_path
+) -> None:
+    """The persisted delivery marker refuses a repost even when the assignment
+    row itself does not say posted (e.g. a delivery that predates assignment
+    tracking)."""
+    import pytest
+
+    _HoldingClient.instances.clear()
+    task = _held_review_setup(q, session, repo_row, monkeypatch, tmp_path)
+    monkeypatch.setattr("jalebi.queue.GitHubClient", _HoldingClient)
+    _install_adapter(monkeypatch, FakeHandle([AgentEvent(type="done")]))
+    q._run_task(task.id)
+
+    # Simulate a prior delivery with no assignment row covering it.
+    task.post_review = True
+    task.review_posted = True
+    session.commit()
+    with pytest.raises(ValueError, match="already posted"):
+        q.post_held_review(task.id)
+    assert all(c.reviews == [] for c in _HoldingClient.instances)
 
 
 def test_post_held_review_guards(q, session, repo_row) -> None:

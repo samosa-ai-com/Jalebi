@@ -781,6 +781,24 @@ describe("TaskDetail", () => {
     expect(screen.queryByRole("button", { name: "Post review" })).toBeNull();
   });
 
+  it("hides Post review once the server reports it posted", async () => {
+    stubFetch({
+      ...TASK,
+      type: "pr_review",
+      prs: [9],
+      status: "done",
+      post_review: false,
+      review_posted: true,
+      run: { ...RUN, status: "done" },
+      reviewers: [],
+    });
+    vi.stubGlobal("EventSource", FakeEventSource);
+
+    renderDetail();
+    await screen.findByText("Follow-up");
+    expect(screen.queryByRole("button", { name: "Post review" })).toBeNull();
+  });
+
   it("shows Address reviewers on a fix task that has a PR", async () => {
     const fixTask = {
       ...TASK,

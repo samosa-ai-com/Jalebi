@@ -2020,6 +2020,7 @@ export default function TaskDetail() {
         {task.type === "pr_review" &&
           task.post_review === false &&
           task.status === "done" &&
+          !task.review_posted &&
           !reviewJustPosted && (
             <Action
               onClick={() =>

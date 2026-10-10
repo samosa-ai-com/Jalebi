@@ -423,7 +423,7 @@ def create_task() -> ResponseReturnValue:
         try:
             created = reviews.assign_reviewers(
                 session, repo, pr_number_int, [str(r) for r in reviewers],
-                queue=_queue(), masker=masker,
+                queue=_queue(), masker=masker, post_review=post_review,
             )
         except reviews.ReviewError as exc:
             return jsonify({"error": str(exc)}), 400

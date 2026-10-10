@@ -286,6 +286,7 @@ def task_to_dict(
         "publish_mode": task.publish_mode,
         "address_reviews": bool(task.address_reviews),
         "post_review": bool(task.post_review),
+        "review_posted": bool(task.review_posted),
         "check_run_id": task.check_run_id,
         "issues": json.loads(task.issues_json) if task.issues_json else [],
         "prs": json.loads(task.prs_json) if task.prs_json else [],

@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import httpx
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from jalebi import (
     artifacts,
@@ -1638,6 +1638,7 @@ class TaskQueue:
                 }
             )
             run.steps_json = json.dumps(steps[-MAX_STEPS:])
+            task.review_posted = True
             session.commit()
             reviews.set_assignment_status(session, task.id, "posted", run_id=run.id)
             return True
@@ -2333,6 +2334,17 @@ class TaskQueue:
             assignment = reviews.assignment_by_task(session, task.id)
             if assignment is not None and assignment.status == "posted":
                 raise ValueError(f"review already posted to PR #{pr_number}")
+            # Atomic delivery claim: exactly one concurrent caller wins the
+            # row. Claimed here (not only on success) so a second click, a
+            # reload, or a concurrent POST cannot publish twice; reset below
+            # if the GitHub post fails so a retry stays possible.
+            claimed = session.execute(
+                update(Task)
+                .where(Task.id == task_id, Task.review_posted == False)  # noqa: E712
+                .values(review_posted=True)
+            )
+            if claimed.rowcount == 0:
+                raise ValueError(f"review already posted to PR #{pr_number}")
             token = secrets.resolve_token(self.config, task.pat_name)
             if token is None:
                 raise RuntimeError("no GitHub token configured")
@@ -2344,6 +2356,8 @@ class TaskQueue:
                 session, task, repo, pr_number, wt, run, token, masker, force=True
             )
             if not posted:
+                task.review_posted = False
+                session.commit()
                 raise PublishError("nothing to post: the run has no review content")
             return pr_number
         finally:

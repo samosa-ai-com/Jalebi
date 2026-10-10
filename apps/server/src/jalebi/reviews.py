@@ -104,6 +104,7 @@ def assign_reviewers(
     *,
     queue=None,
     masker=None,
+    post_review: bool = True,
 ) -> list[Task]:
     """Assign reviewers to a PR: create one ``pr_review`` task per reviewer.
 
@@ -137,7 +138,7 @@ def assign_reviewers(
     recovered_existing: list[Task]
     try:
         new_tasks, recovered_existing = _create_review_tasks(
-            session, repo, pr_number, reviewers, masker
+            session, repo, pr_number, reviewers, masker, post_review=post_review
         )
     except ReviewError:
         raise
@@ -190,6 +191,7 @@ def _create_review_tasks(
     pr_number: int,
     reviewers: list,
     masker=None,
+    post_review: bool = True,
 ) -> tuple[list[Task], list[Task]]:
     """Create one pr_review task + assignment per reviewer (per-agent atomic).
 
@@ -223,6 +225,7 @@ def _create_review_tasks(
             prs=[pr_number],
             context={"prs": [{"number": pr_number}]},
             publish_mode="manual",
+            post_review=post_review,
             masker=masker,
         )
         try:
