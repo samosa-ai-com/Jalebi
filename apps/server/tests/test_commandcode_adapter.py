@@ -62,6 +62,23 @@ TOOL_QUEUED = (
     '{"type":"tool_queued","sessionId":"' + SESSION_ID + '",'
     '"toolCallId":"call_3","toolName":"read"}'
 )
+TOOL_DENIED = (
+    '{"type":"tool_denied","sessionId":"' + SESSION_ID + '",'
+    '"toolCallId":"call_4","toolName":"bash","denyMessage":"needs --yolo"}'
+)
+TOOL_HOOK_BLOCKED = (
+    '{"type":"tool_hook_blocked","sessionId":"' + SESSION_ID + '",'
+    '"toolCallId":"call_5","toolName":"edit"}'
+)
+RUN_ERROR = (
+    '{"type":"run_error","sessionId":"' + SESSION_ID + '",'
+    '"error":{"type":"internal","message":"boom failed"}}'
+)
+INTERRUPTED = '{"type":"interrupted","sessionId":"' + SESSION_ID + '"}'
+MOD_ERROR = (
+    '{"type":"mod_error","sessionId":"' + SESSION_ID + '",'
+    '"modId":"m","hook":"on:test","error":"hook blew up"}'
+)
 
 
 class FakeProc:
@@ -126,6 +143,44 @@ def test_parse_tool_errored_carries_error() -> None:
 
 def test_parse_tool_lifecycle_noise_is_silent() -> None:
     assert adapter.parse(TOOL_QUEUED) == []
+
+
+def test_parse_tool_denied_is_visible_tool_call() -> None:
+    events = adapter.parse(TOOL_DENIED)
+    assert len(events) == 1
+    assert events[0].type == "tool_call"
+    assert events[0].data is not None
+    assert events[0].data["status"] == "denied"
+    assert events[0].data["error"] == "needs --yolo"
+
+
+def test_parse_tool_hook_blocked_is_visible_tool_call() -> None:
+    events = adapter.parse(TOOL_HOOK_BLOCKED)
+    assert len(events) == 1
+    assert events[0].type == "tool_call"
+    assert (events[0].data or {})["status"] == "denied"
+
+
+def test_parse_run_error_is_error() -> None:
+    events = adapter.parse(RUN_ERROR)
+    assert len(events) == 1
+    assert events[0].type == "error"
+    assert events[0].text == "boom failed"
+
+
+def test_parse_interrupted_is_notice_not_error() -> None:
+    events = adapter.parse(INTERRUPTED)
+    assert len(events) == 1
+    assert events[0].type == "message"
+
+
+def test_parse_mod_error_is_notice_not_error() -> None:
+    # Mod hook failures are non-terminal by construction — visible, but the
+    # run must not fail on them.
+    events = adapter.parse(MOD_ERROR)
+    assert len(events) == 1
+    assert events[0].type == "message"
+    assert "hook blew up" in (events[0].text or "")
 
 
 def test_parse_result_terminal() -> None:

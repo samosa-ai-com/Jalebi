@@ -231,15 +231,62 @@ class CommandCodeAdapter(AgentAdapter):
                 err = payload.get("error")
                 tool_data["error"] = err if isinstance(err, str) else (err or "tool failed")
             return [AgentEvent(type="tool_call", data=tool_data)]
+        if event_type in ("tool_denied", "tool_hook_blocked"):
+            # Terminal tool outcomes (like tool_completed/tool_errored):
+            # surface the denial visibly so headless permission blocks are
+            # distinguishable from lost output (also the evidence that settles
+            # the --trust vs --yolo question).
+            reason = payload.get("denyMessage") or payload.get("deny_message")
+            if not isinstance(reason, str) or not reason:
+                reason = payload.get("reason") or payload.get("error") or payload.get("message")
+            if not isinstance(reason, str) or not reason:
+                reason = "tool denied"
+            return [
+                AgentEvent(
+                    type="tool_call",
+                    data={
+                        **(data or {}),
+                        "tool": payload.get("toolName") or payload.get("name"),
+                        "tool_use_id": payload.get("toolCallId") or payload.get("id"),
+                        "input": payload.get("input"),
+                        "status": "denied",
+                        "error": reason,
+                    },
+                )
+            ]
+        if event_type == "run_error":
+            # Genuine failure signal (the CLI throws on it in some paths).
+            err = payload.get("error")
+            if isinstance(err, dict):
+                text = err.get("message")
+            elif isinstance(err, str):
+                text = err
+            else:
+                text = None
+            if not isinstance(text, str) or not text:
+                text = "commandcode run failed"
+            return [AgentEvent(type="error", text=text, data=data)]
+        if event_type == "interrupted":
+            text = payload.get("message")
+            if not isinstance(text, str) or not text:
+                text = "commandcode run interrupted"
+            return [AgentEvent(type="message", text=text, data=data)]
+        if event_type == "mod_error":
+            # Extension hook failure — non-terminal by construction (the run
+            # proceeds), so a visible notice, never an error event.
+            mod = payload.get("modId") or payload.get("mod")
+            err = payload.get("error")
+            text = "commandcode mod error" + (f" in {mod}" if isinstance(mod, str) and mod else "")
+            if isinstance(err, str) and err:
+                text += f": {err}"
+            return [AgentEvent(type="message", text=text, data=data)]
         if event_type in (
             # 1.79.x lifecycle noise: no timeline content.
             "tool_queued",
             "tool_update",
             "tool_hooks",
-            "tool_hook_blocked",
             "tool_input_coerced",
             "tool_input_repaired",
-            "tool_denied",
             "notice",
             "skill_loaded",
             "session_titled",
@@ -252,9 +299,6 @@ class CommandCodeAdapter(AgentAdapter):
             "subagent_progress",
             "compaction_start",
             "compaction_done",
-            "mod_error",
-            "interrupted",
-            "run_error",
         ):
             return []
         if event_type == "result":

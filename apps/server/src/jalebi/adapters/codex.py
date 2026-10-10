@@ -203,18 +203,18 @@ def _item_events(item, line: str) -> list[AgentEvent]:
         ]
     if subtype in ("web_search", "todo_list"):
         # codex 0.160.x item subtypes: surface as tool calls so they read
-        # sensibly instead of leaking raw JSON.
-        return [
-            AgentEvent(
-                type="tool_call",
-                data={
-                    "tool": subtype,
-                    "query": item.get("query"),
-                    "text": item.get("text"),
-                    "status": item.get("status"),
-                },
-            )
-        ]
+        # sensibly instead of leaking raw JSON. Leftover item fields ride
+        # along so result bodies/URLs stay on the timeline.
+        tool_data = {
+            "tool": subtype,
+            "query": item.get("query"),
+            "text": item.get("text"),
+            "status": item.get("status"),
+        }
+        for key, value in item.items():
+            if key not in ("type",) and key not in tool_data:
+                tool_data[key] = value
+        return [AgentEvent(type="tool_call", data=tool_data)]
     if subtype == "error":
         # Item-level error = notice (e.g. "Skill descriptions were shortened"),
         # never a terminal failure.
