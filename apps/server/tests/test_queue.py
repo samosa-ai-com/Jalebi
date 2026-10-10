@@ -2513,9 +2513,9 @@ def test_post_held_review_manual_action(
     assignment = reviews.assignment_by_task(session, task.id)
     assert assignment is not None
     assert assignment.status == "posted"
-    # The delivery marker persists: a second manual post is refused without
-    # touching GitHub again.
-    assert _fresh_task(session, task.id).review_posted is True
+    # The delivery marker persists on the run: a second manual post of the
+    # same run is refused without touching GitHub again.
+    assert _latest_run(session, task.id).review_posted is True
     posted_calls = sum(len(c.reviews) for c in _HoldingClient.instances)
     import pytest
 
@@ -2527,9 +2527,8 @@ def test_post_held_review_manual_action(
 def test_post_held_review_marker_blocks_repost_when_assignment_unposted(
     q, session, repo_row, monkeypatch, tmp_path
 ) -> None:
-    """The persisted delivery marker refuses a repost even when the assignment
-    row itself does not say posted (e.g. a delivery that predates assignment
-    tracking)."""
+    """The persisted per-run delivery marker refuses a repost even when the
+    assignment row itself does not say posted."""
     import pytest
 
     _HoldingClient.instances.clear()
@@ -2538,9 +2537,9 @@ def test_post_held_review_marker_blocks_repost_when_assignment_unposted(
     _install_adapter(monkeypatch, FakeHandle([AgentEvent(type="done")]))
     q._run_task(task.id)
 
-    # Simulate a prior delivery with no assignment row covering it.
-    task.post_review = True
-    task.review_posted = True
+    # Simulate a prior delivery of this run with no assignment row covering it.
+    run = _latest_run(session, task.id)
+    run.review_posted = True
     session.commit()
     with pytest.raises(ValueError, match="already posted"):
         q.post_held_review(task.id)

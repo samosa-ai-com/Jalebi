@@ -32,6 +32,7 @@ export interface Run {
   started_at: string | null;
   finished_at: string | null;
   has_diff: boolean;
+  review_posted?: boolean;
   waiting_input?: boolean;
   steps: Step[];
   artifacts?: Artifact[];
@@ -77,7 +78,6 @@ export interface Task {
   address_reviews?: boolean;
   publish_mode: "auto" | "manual" | null;
   post_review?: boolean;
-  review_posted?: boolean;
   check_run_id: number | null;
   issues: number[];
   prs: number[];

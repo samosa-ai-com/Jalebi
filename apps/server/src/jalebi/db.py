@@ -154,13 +154,6 @@ class Task(Base):
     post_review: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=sa.text("1")
     )
-    # Durable review-delivery marker: set on the first successful PR post
-    # (automatic or manual) so re-posts are refused even for tasks without a
-    # ReviewAssignment row. Follow-up resumes post new comments through
-    # _post_review directly and never consult this flag.
-    review_posted: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False, server_default=sa.text("0")
-    )
     # Creation-time "address the review comments on the linked PR" (freeform
     # only): the run prompt always carries the address-reviews instruction,
     # even when no reviews were fetched at creation time.
@@ -193,6 +186,12 @@ class Run(Base):
     diff_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     git_sha_start: Mapped[str | None] = mapped_column(String(64), nullable=True)
     git_sha_end: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Durable review-delivery marker, one per deliverable: set when THIS run's
+    # review is successfully posted (automatic or manual) so re-posts of the
+    # same run are refused while later runs post independently.
+    review_posted: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=sa.text("0")
+    )
 
 
 class Followup(Base):

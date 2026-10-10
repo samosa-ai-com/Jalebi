@@ -885,11 +885,19 @@ def assign_reviewers(task_id: int) -> ResponseReturnValue:
                 reviewer_cli, action=f"reviewer '{rid}' was not assigned"
             )
 
+    # Reviewer children hold independently: explicit payload flag wins,
+    # otherwise the parent task's flag is inherited (default True = post).
+    post_review = payload.get("post_review") if isinstance(payload, dict) else None
+    if post_review is None:
+        post_review = task.post_review
+    if not isinstance(post_review, bool):
+        return jsonify({"error": "post_review must be a boolean"}), 400
+
     masker = _masker(session)
     try:
         created = reviews.assign_reviewers(
             session, repo, pr_number, reviewers,
-            queue=_queue(), masker=masker,
+            queue=_queue(), masker=masker, post_review=post_review,
         )
     except reviews.ReviewError as exc:
         return jsonify({"error": str(exc)}), 400

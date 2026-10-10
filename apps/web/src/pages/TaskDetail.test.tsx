@@ -788,8 +788,7 @@ describe("TaskDetail", () => {
       prs: [9],
       status: "done",
       post_review: false,
-      review_posted: true,
-      run: { ...RUN, status: "done" },
+      run: { ...RUN, status: "done", review_posted: true },
       reviewers: [],
     });
     vi.stubGlobal("EventSource", FakeEventSource);

@@ -59,7 +59,6 @@
 | `publish_mode` | text null | `'auto'` \| `'manual'` \| NULL (fall back to the global `auto_publish` setting). `issue_fix` defaults to `auto`; freeform/manual types to `manual`. |
 | `address_reviews` | bool, default false | creation-time "address the review comments on the linked PR" (freeform only; 400 otherwise or without `pr_number`). Guarantees the address-reviews instruction in the run prompt even when no reviews were fetched at creation (agent self-fetches). |
 | `post_review` | bool, default true | "post review on completion" (`pr_review` only; `false` on other types is a 400). `false` holds the finished review for manual posting (`POST /api/tasks/<id>/post-review`); assignment goes `held`, run stays `done`. Threaded into reviewer child tasks via `assign_reviewers` (each child holds independently). |
-| `review_posted` | bool, default false | durable review-delivery marker, set on the first successful PR post (automatic or manual). The manual endpoint claims it atomically before posting and refuses re-posts; Task Detail derives button visibility from it. |
 | `check_run_id` | int null | **no FK yet**; check_runs table arrives in Phase 2 |
 | `created_at` | datetime | naive local (app timezone, see `jalebi/clock.py`) |
 | `updated_at` | datetime | naive local (app timezone, see `jalebi/clock.py`) |
@@ -84,6 +83,8 @@ Indexes: `repo_id`, `status`.
 | `steps_json` | text null | timeline steps (cache) |
 | `artifacts_json` | text null | artifact refs (cache; relational `artifacts` is the primary record) |
 | `diff_text` | text null | run-end diff snapshot (masked, ≤512 KB; PRD §12) |
+| `git_sha_start` / `git_sha_end` | string null | worktree HEAD at run start/end (`-dirty` suffix for uncommitted material) |
+| `review_posted` | bool, default false | per-run review-delivery marker: set when this run's review posts (auto or manual). The manual endpoint claims the latest done run's row atomically; follow-up deliverables post independently. |
 
 Index: `task_id`.
 

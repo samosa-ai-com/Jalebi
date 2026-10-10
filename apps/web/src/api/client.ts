@@ -377,10 +377,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ prompt, ...opts }),
     }),
-  assignReviewers: (id: number, reviewers: string[]) =>
+  assignReviewers: (id: number, reviewers: string[], postReview?: boolean) =>
     request<Task[]>(`/api/tasks/${id}/reviewers`, {
       method: "POST",
-      body: JSON.stringify({ reviewers }),
+      body: JSON.stringify(
+        postReview === undefined ? { reviewers } : { reviewers, post_review: postReview }
+      ),
     }),
   postReview: (id: number) =>
     request<{ status: string; pr_number: number }>(`/api/tasks/${id}/post-review`, {

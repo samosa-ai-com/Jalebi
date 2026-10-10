@@ -707,6 +707,7 @@ const REVIEWER_STATUS_COLOR: Record<string, string> = {
   running: "text-syrup-300",
   posted: "text-green-400",
   failed: "text-red-400",
+  held: "text-amber-300",
 };
 
 function ReviewersCard({
@@ -2020,7 +2021,7 @@ export default function TaskDetail() {
         {task.type === "pr_review" &&
           task.post_review === false &&
           task.status === "done" &&
-          !task.review_posted &&
+          !(task.run && task.run.review_posted) &&
           !reviewJustPosted && (
             <Action
               onClick={() =>

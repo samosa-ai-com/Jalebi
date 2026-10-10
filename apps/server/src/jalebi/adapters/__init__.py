@@ -60,7 +60,7 @@ def is_backend_available(cli: str) -> bool:
 # CLI versions the adapters were validated against (Sep 2026 smoke runs +
 # doc capture; Oct 2026 re-validated after backend upgrades — see HANDOFF).
 # Compared by ``cli_version`` for the health endpoint; a drift only warns —
-# only warns — newer CLIs usually still work, and parsers degrade to
+# newer CLIs usually still work, and parsers degrade to
 # verbatim text rather than crashing.
 VERIFIED_VERSIONS: dict[str, str] = {
     "opencode": "2.0.26",
@@ -72,7 +72,7 @@ VERIFIED_VERSIONS: dict[str, str] = {
     "cline": "3.0.61",
     "grok": "1.0.50",
     "commandcode": "1.79.2",
-    "agy": "1.3.2",
+    "agy": "1.3.3",
 }
 
 _VERSION_RE = re.compile(r"\d+\.\d+(?:\.\d+)?")

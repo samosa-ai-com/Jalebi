@@ -160,6 +160,10 @@ def make_review_git(wt):
         def worktree_path(data_dir, task_id):
             return wt
 
+        @staticmethod
+        def review_worktree_path(data_dir, task_id):
+            return wt
+
         def ensure_mirror(self, *a, **k):
             return None
 
@@ -583,6 +587,64 @@ def test_pr_review_followup_posts_review_to_github(
 
     fups = tasks.list_followups(session, task.id)
     assert [f.body for f in fups] == ["more review"]
+
+
+def test_held_followup_review_posts_independently(
+    q, session, repo_row, monkeypatch, tmp_path
+) -> None:
+    """Each held deliverable posts on its own: initial held run → manual post
+    → held follow-up → second manual post. A repost of either run is refused."""
+    from jalebi import reviews as reviews_service
+
+    task = _review_task_with_resumable_session(session, repo_row.id, prs=[3])
+    task.post_review = False
+    session.commit()
+    _with_assignment(session, task)
+
+    review_wt = tmp_path / "review-wt"
+    (review_wt / ".jalebi").mkdir(parents=True)
+    (review_wt / ".jalebi" / "review.md").write_text("Round 1 verdict: fine.\n")
+
+    monkeypatch.setattr("jalebi.queue.GitWorkspace", make_review_git(review_wt))
+    monkeypatch.setattr(
+        "jalebi.queue.worktree_bootstrap.bootstrap_worktree", lambda *a, **k: None
+    )
+    recording = RecordingGitHub("ghp_test")
+    monkeypatch.setattr("jalebi.queue.GitHubClient", lambda token: recording)
+
+    handle = FakeHandle([AgentEvent(type="done")], session_id="ses_orig")
+    monkeypatch.setattr("jalebi.queue.get_adapter", lambda cli: ResumeAdapter(handle))
+
+    # Round 1: follow-up run held, then manually posted.
+    q._run_followup(task.id, "round 1 more")
+    run1 = tasks.latest_run(session, task.id)
+    assert run1 is not None and run1.status == "done"
+    assert run1.review_posted is False
+    assert q.post_held_review(task.id) == 3
+    assert len(recording.posted) == 1
+    assert "Round 1" in recording.posted[0][2]
+    session.expire_all()
+    assert tasks.latest_run(session, task.id).review_posted is True
+
+    # Round 2: a new follow-up deliverable holds and posts independently.
+    (review_wt / ".jalebi" / "review.md").write_text("Round 2 verdict: fine.\n")
+    q._run_followup(task.id, "round 2 more")
+    run2 = tasks.latest_run(session, task.id)
+    assert run2 is not None and run2.id != run1.id
+    assert run2.status == "done"
+    assert run2.review_posted is False
+    assert q.post_held_review(task.id) == 3
+    assert len(recording.posted) == 2
+    assert "Round 2" in recording.posted[1][2]
+
+    # Either run reposted is refused without touching GitHub again.
+    with pytest.raises(ValueError, match="already posted"):
+        q.post_held_review(task.id)
+    assert len(recording.posted) == 2
+
+    assignment = reviews_service.assignment_by_task(session, task.id)
+    assert assignment is not None
+    assert assignment.status == "posted"
 
 
 def test_pr_review_followup_without_review_marks_failed(
