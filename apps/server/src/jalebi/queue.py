@@ -2348,8 +2348,8 @@ class TaskQueue:
             repo = session.get(Repo, task.repo_id)
             if repo is None:
                 raise KeyError(f"repo for task {task_id} not found")
-            run = tasks.latest_run(session, task.id)
-            if run is None or run.status != "done":
+            run = tasks.latest_done_run(session, task.id)
+            if run is None:
                 raise ValueError("no completed review run to post")
             pr_number = self._task_pr_number(task)
             if pr_number is None:
@@ -2388,7 +2388,7 @@ class TaskQueue:
                 raise PublishError("nothing to post: the run has no review content")
             if status == "error":
                 raise RuntimeError(detail or "posting review to GitHub failed")
-            raise ValueError(detail or "review is not ready to post")
+            raise PublishError(detail or "review is not ready to post")
         finally:
             session.close()
 

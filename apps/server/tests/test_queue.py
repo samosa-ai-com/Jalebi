@@ -2559,6 +2559,103 @@ def test_post_held_review_guards(q, session, repo_row) -> None:
         q.post_held_review(freeform.id)
 
 
+def test_post_held_review_uses_latest_done_run(
+    q, session, repo_row, monkeypatch, tmp_path
+) -> None:
+    """A later failed run must not strand an intact held deliverable: the
+    manual action posts the latest *done* run."""
+    from jalebi.db import Run as RunRow
+    from jalebi.db import now
+
+    _HoldingClient.instances.clear()
+    task = _held_review_setup(q, session, repo_row, monkeypatch, tmp_path)
+    monkeypatch.setattr("jalebi.queue.GitHubClient", _HoldingClient)
+    _install_adapter(monkeypatch, FakeHandle([AgentEvent(type="done")]))
+    q._run_task(task.id)
+
+    session.add(
+        RunRow(task_id=task.id, seq=99, status="failed", started_at=now(), finished_at=now())
+    )
+    session.commit()
+
+    assert q.post_held_review(task.id) == 3
+    assert sum(len(c.reviews) for c in _HoldingClient.instances) == 1
+
+
+def test_post_held_review_surfaces_github_error_and_stays_retryable(
+    q, session, repo_row, monkeypatch, tmp_path
+) -> None:
+    """A GitHub failure reports the real error (not 'no content') and leaves
+    the run done so a retry can succeed."""
+    import pytest
+
+    _HoldingClient.instances.clear()
+    task = _held_review_setup(q, session, repo_row, monkeypatch, tmp_path)
+    _install_adapter(monkeypatch, FakeHandle([AgentEvent(type="done")]))
+    q._run_task(task.id)
+
+    class FailingClient:
+        def __init__(self, token: str):
+            pass
+
+        def post_pr_review(self, full_name, pr_number, body):
+            raise RuntimeError("post failed")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("jalebi.queue.GitHubClient", FailingClient)
+    with pytest.raises(RuntimeError, match="post failed"):
+        q.post_held_review(task.id)
+    assert _latest_run(session, task.id).status == "done"
+
+    monkeypatch.setattr("jalebi.queue.GitHubClient", _HoldingClient)
+    assert q.post_held_review(task.id) == 3
+    assert sum(len(c.reviews) for c in _HoldingClient.instances) == 1
+
+
+def test_post_held_review_no_content_is_conflict(
+    q, session, repo_row, monkeypatch, tmp_path
+) -> None:
+    """A done run with no review content anywhere reports a 409-style
+    conflict — without failing the already-done run."""
+    from jalebi.db import Run as RunRow
+    from jalebi.db import now
+    from jalebi.queue import PublishError
+
+    _HoldingClient.instances.clear()
+    task = tasks.create_task(
+        session,
+        type_="pr_review",
+        repo_id=repo_row.id,
+        prompt="review it",
+        prs=[3],
+        post_review=False,
+    )
+    session.add(
+        RunRow(task_id=task.id, seq=1, status="done", started_at=now(), finished_at=now())
+    )
+    session.commit()
+    wt = tmp_path / "review-empty"
+    wt.mkdir(parents=True)
+
+    class ReviewGit:
+        def __init__(self, config):
+            self.config = config
+
+        @staticmethod
+        def review_worktree_path(data_dir, task_id):
+            return wt
+
+    monkeypatch.setattr("jalebi.queue.GitHubClient", _HoldingClient)
+    monkeypatch.setattr("jalebi.queue.GitWorkspace", ReviewGit)
+
+    with pytest.raises(PublishError, match="nothing to post"):
+        q.post_held_review(task.id)
+    assert _latest_run(session, task.id).status == "done"
+    assert all(c.reviews == [] for c in _HoldingClient.instances)
+
+
 def test_create_task_post_review_validation(session, repo_row) -> None:
     """post_review=False is pr_review-only at the service layer too."""
     import pytest

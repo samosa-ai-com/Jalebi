@@ -163,6 +163,16 @@ def latest_run(session: Session, task_id: int) -> Run | None:
     ).scalars().first()
 
 
+def latest_done_run(session: Session, task_id: int) -> Run | None:
+    """Latest run that finished ``done`` (manual review posting acts on this,
+    even when a later run failed or is still active)."""
+    return session.execute(
+        select(Run)
+        .where(Run.task_id == task_id, Run.status == "done")
+        .order_by(Run.id.desc())
+    ).scalars().first()
+
+
 def latest_resumable_run(session: Session, task_id: int) -> Run | None:
     """Latest run that carries a session id (a follow-up can resume it)."""
     return session.execute(

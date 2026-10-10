@@ -1237,11 +1237,6 @@ export default function TaskDetail() {
   const [followScroll, setFollowScroll] = useState(true);
   const [actionBusy, setActionBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-  // Hides the Post-review button after a successful manual post for the rest
-  // of the session (the task itself carries no persistent "posted" marker
-  // for assignment-less reviews; the server 400s a genuine re-post when an
-  // assignment row says posted).
-  const [reviewJustPosted, setReviewJustPosted] = useState(false);
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
   const [publishOptions, setPublishOptions] = useState<{
     mode: "new_pr" | "update_pr" | "push_branch";
@@ -2020,13 +2015,9 @@ export default function TaskDetail() {
         )}
         {task.type === "pr_review" &&
           task.post_review === false &&
-          task.status === "done" &&
-          !(task.run && task.run.review_posted) &&
-          !reviewJustPosted && (
+          runs.some((r) => r.status === "done" && !r.review_posted) && (
             <Action
-              onClick={() =>
-                runAction(() => api.postReview(task.id).then(() => setReviewJustPosted(true)))
-              }
+              onClick={() => runAction(() => api.postReview(task.id))}
               disabled={actionBusy}
             >
               Post review

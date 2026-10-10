@@ -428,6 +428,21 @@ def test_create_pr_review_post_review_flag(client: FlaskClient, repo_id: int, mo
     assert "only valid for pr_review" in refused.get_json()["error"]
 
 
+def test_post_review_endpoint_guards(client: FlaskClient, repo_id: int) -> None:
+    """Unknown tasks 404; non-review tasks 400 without touching GitHub."""
+    missing = client.post("/api/tasks/999999/post-review")
+    assert missing.status_code == 404
+
+    freeform = client.post(
+        "/api/tasks",
+        json={"repo_id": repo_id, "type": "freeform", "prompt": "x"},
+    )
+    assert freeform.status_code == 201
+    refused = client.post(f"/api/tasks/{freeform.get_json()['id']}/post-review")
+    assert refused.status_code == 400
+    assert "only valid for pr_review" in refused.get_json()["error"]
+
+
 def test_create_freeform_with_linked_pr_fetches_pr_context(
     app, client: FlaskClient, repo_id: int, session, monkeypatch
 ) -> None:
