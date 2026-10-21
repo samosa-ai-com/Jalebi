@@ -680,3 +680,164 @@ def test_request_etag_retries_rate_limit(monkeypatch) -> None:
     body, etag, not_modified = client._request_etag("/repos/o/r/pulls")
     assert body == {"n": 1} and etag == 'W/"a"' and not_modified is False
     assert sleeps == [1.0]
+
+
+def test_validate_classic_has_project(monkeypatch) -> None:
+    client = make_client()
+    monkeypatch.setattr(
+        client,
+        "_request",
+        lambda method, path, **kw: (
+            200,
+            {"login": "octocat"},
+            {"x-oauth-scopes": "repo, project"},
+        ),
+    )
+    info = client.validate_token()
+    assert info.valid is True
+    assert info.has_project is True
+
+
+def test_validate_classic_missing_project_stays_valid(monkeypatch) -> None:
+    client = make_client()
+    monkeypatch.setattr(
+        client,
+        "_request",
+        lambda method, path, **kw: (200, {"login": "octocat"}, {"x-oauth-scopes": "repo"}),
+    )
+    info = client.validate_token()
+    assert info.valid is True
+    assert info.has_project is False
+
+
+def test_parse_project_url_org() -> None:
+    assert GitHubClient.parse_project_url(
+        "https://github.com/orgs/octo-org/projects/5"
+    ) == ("organization", "octo-org", 5)
+
+
+def test_parse_project_url_user_with_view() -> None:
+    assert GitHubClient.parse_project_url(
+        "https://github.com/users/octocat/projects/3/views/1"
+    ) == ("user", "octocat", 3)
+
+
+def test_parse_project_url_invalid() -> None:
+    with pytest.raises(GitHubError):
+        GitHubClient.parse_project_url("https://github.com/orgs/octo-org/repositories")
+    with pytest.raises(GitHubError):
+        GitHubClient.parse_project_url("https://github.com/orgs/octo-org/projects/abc")
+
+
+def _graphql_ok(body: dict):
+    return lambda method, path, **kw: (200, body, {})
+
+
+def test_graphql_success(monkeypatch) -> None:
+    client = make_client()
+    monkeypatch.setattr(client, "_request", _graphql_ok({"data": {"viewer": {"login": "o"}}}))
+    assert client.graphql("query { viewer { login } }") == {"viewer": {"login": "o"}}
+
+
+def test_graphql_errors_payload(monkeypatch) -> None:
+    client = make_client()
+    monkeypatch.setattr(
+        client,
+        "_request",
+        _graphql_ok({"data": None, "errors": [{"message": "Something went wrong"}]}),
+    )
+    with pytest.raises(GitHubError, match="Something went wrong"):
+        client.graphql("query { viewer { login } }")
+
+
+def test_graphql_transport_error(monkeypatch) -> None:
+    client = make_client()
+    monkeypatch.setattr(client, "_request", lambda method, path, **kw: (403, {"message": "x"}, {}))
+    with pytest.raises(GitHubError, match="HTTP 403"):
+        client.graphql("query { viewer { login } }")
+
+
+def test_get_projectv2_id_org(monkeypatch) -> None:
+    client = make_client()
+    seen: dict = {}
+
+    def fake(method, path, **kw):
+        seen["query"] = kw["json"]["query"]
+        seen["variables"] = kw["json"]["variables"]
+        return 200, {"data": {"organization": {"projectV2": {"id": "PVT_kwDOA"}}}}, {}
+
+    monkeypatch.setattr(client, "_request", fake)
+    node_id = client.get_projectv2_id("https://github.com/orgs/octo-org/projects/5")
+    assert node_id == "PVT_kwDOA"
+    assert "organization" in seen["query"]
+    assert seen["variables"] == {"login": "octo-org", "number": 5}
+
+
+def test_get_projectv2_id_user(monkeypatch) -> None:
+    client = make_client()
+    monkeypatch.setattr(
+        client,
+        "_request",
+        _graphql_ok({"data": {"user": {"projectV2": {"id": "PVT_kwDOU"}}}}),
+    )
+    assert (
+        client.get_projectv2_id("https://github.com/users/octocat/projects/3")
+        == "PVT_kwDOU"
+    )
+
+
+def test_get_projectv2_id_not_visible(monkeypatch) -> None:
+    client = make_client()
+    monkeypatch.setattr(
+        client, "_request", _graphql_ok({"data": {"organization": None}})
+    )
+    with pytest.raises(GitHubError, match="not found or not visible"):
+        client.get_projectv2_id("https://github.com/orgs/octo-org/projects/5")
+
+
+def test_add_project_item(monkeypatch) -> None:
+    client = make_client()
+    monkeypatch.setattr(
+        client,
+        "_request",
+        _graphql_ok({"data": {"addProjectV2ItemById": {"item": {"id": "PVTI_1"}}}}),
+    )
+    assert client.add_project_item("PVT_kwDOA", "I_kwDOAB") == "PVTI_1"
+
+
+def test_add_project_item_missing_id(monkeypatch) -> None:
+    client = make_client()
+    monkeypatch.setattr(
+        client, "_request", _graphql_ok({"data": {"addProjectV2ItemById": None}})
+    )
+    with pytest.raises(GitHubError):
+        client.add_project_item("PVT_kwDOA", "I_kwDOAB")
+
+
+def test_list_issues_since_and_node_id(monkeypatch) -> None:
+    client = make_client()
+    seen: dict = {}
+
+    def fake(method, path, **kw):
+        seen["params"] = kw.get("params")
+        return 200, [{"number": 1, "node_id": "I_1", "state": "open"}], {}
+
+    monkeypatch.setattr(client, "_request", fake)
+    issues = client.list_issues("o/r", since="2026-10-01T00:00:00Z")
+    assert seen["params"]["since"] == "2026-10-01T00:00:00Z"
+    assert issues[0]["node_id"] == "I_1"
+
+
+def test_list_prs_includes_node_id(monkeypatch) -> None:
+    client = make_client()
+    monkeypatch.setattr(
+        client,
+        "_request",
+        lambda method, path, **kw: (
+            200,
+            [{"number": 2, "node_id": "PR_2", "head": {}, "base": {}}],
+            {},
+        ),
+    )
+    prs = client.list_prs("o/r")
+    assert prs[0]["node_id"] == "PR_2"

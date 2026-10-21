@@ -62,6 +62,7 @@ def test_main_starts_with_password(monkeypatch, tmp_path) -> None:
             "JALEBI_QUEUE": _StubQueue(),
             "JALEBI_SCREENING": _StubScheduler(),
             "JALEBI_POLLER": _StubPoller(),
+            "JALEBI_PROJECT_SYNC": _StubPoller(),
         }
 
         def app_context(self):

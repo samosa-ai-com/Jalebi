@@ -120,6 +120,13 @@ DEFAULTS: dict[str, object] = {
     # Optional HMAC secret verified against X-Hub-Signature-256 on POST /webhook.
     # Empty = signature check disabled (only safe on a localhost-only install).
     "webhook_secret": "",
+    # Projects V2 board sync (issue #23): one central private board collecting
+    # issues/PRs from every repo with project_sync_enabled. Empty project_url
+    # = feature off. project_pat_name is the named PAT account that owns (or
+    # can write) the board — strict, no default/fallback like every pat_name.
+    "project_sync_enabled": False,
+    "project_url": "",
+    "project_pat_name": "",
     # The timezone the app's wall clock lives in: "local" (the machine's system
     # zone) or an IANA name (e.g. "Asia/Kolkata"). Drives the screening cron
     # scheduler (cadence = wall clock in this zone) and every stored/displayed

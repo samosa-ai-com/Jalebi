@@ -411,3 +411,11 @@ Backend `178` pytest + `15` web vitest pass; ruff/typecheck/eslint clean; `npm r
 - [ ] Run a task to done/failed and confirm exactly one notification row
       appears; a review ending in an approval question yields needs_input
       only, never a completion row.
+- [ ] Board sync (against a DISPOSABLE test board + repo only): Settings →
+      Project board sync shows switch + URL + account with per-key save
+      status; Repos row toggles `board: on/off` and persists on reload;
+      `POST /api/project-sync/sync-now {"repo_id","dry_run":true}` lists
+      would-add items without mutating GitHub; a real sync-now adds them and
+      a re-run adds zero; opening an issue with a webhook registered adds it
+      live; GitHub page shows the `project`-scope advisory for classic tokens
+      lacking it.

@@ -88,6 +88,7 @@ def _meta(info: TokenInfo) -> dict:
         "missing_scopes": info.missing_scopes,
         "note": info.note,
         "has_workflow": info.has_workflow,
+        "has_project": info.has_project,
     }
 
 

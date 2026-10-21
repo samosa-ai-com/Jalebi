@@ -71,6 +71,7 @@ def list_github_tokens(config: Config) -> list[dict[str, str]]:
             "missing_scopes",
             "note",
             "has_workflow",
+            "has_project",
         ):
             if key in item:
                 entry[key] = item[key]

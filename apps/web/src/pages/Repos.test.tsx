@@ -14,6 +14,8 @@ const CONNECTED = [
     webhook_registered: true,
     poll_fallback: false,
     check_runs_enabled: true,
+    project_sync_enabled: false,
+    project_last_sync_at: null,
     last_checked_at: "2026-09-07T20:00:00",
   },
   {
@@ -25,6 +27,8 @@ const CONNECTED = [
     webhook_registered: false,
     poll_fallback: true,
     check_runs_enabled: false,
+    project_sync_enabled: true,
+    project_last_sync_at: "2026-09-07T21:00:00",
     last_checked_at: null,
   },
 ];
@@ -39,12 +43,17 @@ const DISCONNECTED = [
     webhook_registered: false,
     poll_fallback: false,
     check_runs_enabled: false,
+    project_sync_enabled: false,
+    project_last_sync_at: null,
     last_checked_at: null,
   },
 ];
 
 function makeFetchMock() {
   return vi.fn(async (url: string, init?: RequestInit) => {
+    if (String(url).includes("/api/project-sync/sync-now") && init?.method === "POST") {
+      return { ok: true, json: async () => ({ repo: "owner/alpha", dry_run: false, added: 2 }) };
+    }
     if (String(url).includes("/api/repos") && init?.method === "POST") {
       return { ok: true, json: async () => ({}) };
     }
@@ -133,6 +142,43 @@ describe("Repos", () => {
       expect(call).toBeDefined();
       expect(JSON.parse((call?.[1] as RequestInit).body as string)).toEqual({
         check_runs_enabled: true,
+      });
+    });
+  });
+
+  it("toggles board sync per repo", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    renderPage();
+    await screen.findByText("alpha");
+
+    await userEvent.click(screen.getByRole("button", { name: "board: off" }));
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        ([url, init]) => String(url).includes("/api/repos/1") && init?.method === "PATCH"
+      );
+      expect(call).toBeDefined();
+      expect(JSON.parse((call?.[1] as RequestInit).body as string)).toEqual({
+        project_sync_enabled: true,
+      });
+    });
+  });
+
+  it("triggers a manual board sync per repo", async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    renderPage();
+    await screen.findByText("alpha");
+
+    await userEvent.click(screen.getAllByRole("button", { name: "sync now" })[0]);
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        ([url, init]) => String(url).includes("/api/project-sync/sync-now") && init?.method === "POST"
+      );
+      expect(call).toBeDefined();
+      expect(JSON.parse((call?.[1] as RequestInit).body as string)).toEqual({
+        repo_id: 1,
+        dry_run: false,
       });
     });
   });

@@ -32,6 +32,8 @@
 | `webhook_registered` | bool, default 0 | |
 | `poll_fallback` | bool, default 0 | |
 | `check_runs_enabled` | bool, default 0 | |
+| `project_sync_enabled` | bool, default 0 | board sync opt-in (issue #23) |
+| `project_last_sync_at` | datetime null | `since` watermark for board sync |
 | `last_checked_at` | datetime null | |
 
 ### `tasks`
@@ -239,7 +241,7 @@ distinct in UNIQUE constraints).
 
 Index: `screening_id`. Powers two behaviors: the audit prompt's known-open
 context (`get_open_findings`) and dealt filtering in ntfy notifications.
-Migration: `e7f8a9b0c1d2`; the current schema head is `b4c5d6e7f8a9`. See `docs/07`.
+Migration: `e7f8a9b0c1d2`; the current schema head is `a8b9c0d1e2f3`. See `docs/07`.
 
 ### `check_runs` (Phase 2 — PRD F15)
 
@@ -382,6 +384,10 @@ None — all Phase-0/1/2 tables are materialized. (Phase 3 adds no new tables.)
 
 - **Delete cascade (`tasks.delete_tasks_cascade`):** TaskDependency → Followup → ReviewAssignment → **CheckRun** → Artifact → Run → Task, plus the task's `task_events` rows (deleted by the caller in prune; the task-delete route relies on FK CASCADE for events). `check_runs.task_id`/`run_id` carry **no** `ON DELETE CASCADE` (the SQLite batch-rebuild hazard), so check runs are deleted explicitly — deleting a task that ever reported a commit status would otherwise `IntegrityError` under `PRAGMA foreign_keys=ON`.
   - `tasks.status` widened to include `"blocked"` (T4.1). A blocked task sits with deps unmet; cleared by `cascade_unblock` when the last unsatisfied dep finishes.
+
+- **Project board sync (`a8b9c0d1e2f3`, issue #23):**
+  - `repos.project_sync_enabled` (Boolean, default false, server_default 0) + `repos.project_last_sync_at` (nullable datetime, `since` watermark).
+  - `project_items(id PK, repo_id FK→repos CASCADE, content_type "issue"|"pr", content_node_id UNIQUE, item_number, project_item_id null, created_at)` — dedup watermark for board adds. Index: `repo_id`. Exposed via `routes/project_sync` (`GET /api/project-sync/status`, `POST /api/project-sync/sync-now` with `dry_run`).
 
 - **Task Notifications (`a2b3c4d5e6f7_notifications.py` + `b4c5d6e7f8a9_notification_dedup.py`):**
   - `notifications(id PK, task_id FK→tasks ON DELETE CASCADE, run_id FK→runs ON DELETE CASCADE, kind, title, body, read_at, created_at)`
