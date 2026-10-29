@@ -197,6 +197,8 @@ const MOCK_REPOS: Repo[] = [
     webhook_registered: false,
     poll_fallback: false,
     check_runs_enabled: false,
+    project_sync_enabled: false,
+    project_last_sync_at: null,
     last_checked_at: null,
     pat_name: null,
   },

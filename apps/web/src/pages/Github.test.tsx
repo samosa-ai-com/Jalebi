@@ -134,6 +134,23 @@ describe("Github", () => {
     expect(await screen.findByText("Workflow scope missing (optional)")).toBeInTheDocument();
   });
 
+  it("warns when a classic token lacks the optional project scope", async () => {
+    stubFetch({
+      "/api/github/tokens": {
+        accounts: [ACCOUNT("work", "acct2", { has_project: false })],
+      },
+      "/api/github/repos": [],
+      "/api/repos": [],
+    });
+    render(
+      <MemoryRouter>
+        <Github />
+      </MemoryRouter>
+    );
+    await expandAccount("acct2");
+    expect(await screen.findByText("Project scope missing (optional)")).toBeInTheDocument();
+  });
+
   it("notes the Workflows permission for fine-grained accounts", async () => {
     stubFetch({
       "/api/github/tokens": {

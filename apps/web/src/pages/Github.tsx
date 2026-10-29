@@ -534,12 +534,32 @@ export default function Github() {
                     </div>
                   )}
 
+                {account.valid &&
+                  account.token_type === "classic" &&
+                  account.has_project === false && (
+                    <div>
+                      <p className="mb-1 text-xs text-amber-300">
+                        Project scope missing (optional)
+                      </p>
+                      <p className="text-[11px] leading-relaxed text-ink-500">
+                        Board sync (adding issues/PRs to a Projects V2 board) will be refused
+                        by GitHub without the <span className="font-mono">project</span> scope.
+                        Everything else works. To enable it: GitHub → Settings → Developer
+                        settings → Personal access tokens → select the token → check{" "}
+                        <span className="font-mono">project</span> → save, then use “update
+                        token” above to refresh this account.
+                      </p>
+                    </div>
+                  )}
+
                 {account.valid && account.token_type === "fine-grained" && (
                   <p className="text-[11px] leading-relaxed text-ink-500">
                     Fine-grained tokens can&apos;t report their scopes via the API. If tasks may
                     push workflow files (<span className="font-mono">.github/workflows/*</span>),
                     grant <span className="font-mono">Workflows: read/write</span> in the token
-                    settings, otherwise such pushes will be refused.
+                    settings, otherwise such pushes will be refused. For board sync, grant{" "}
+                    <span className="font-mono">Organization Projects: read &amp; write</span>{" "}
+                    (plus Issues / Pull requests: read-only).
                   </p>
                 )}
 

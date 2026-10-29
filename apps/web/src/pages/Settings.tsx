@@ -9,6 +9,7 @@ import type {
   DetectedIde,
   EnvVar,
   PrunePreview,
+  ProjectSyncStatus,
   Repo,
   RestorePreview,
   SettingsMap,
@@ -1578,6 +1579,9 @@ export default function Settings() {
   const [defaultModels, setDefaultModels] = useState<string[]>([]);
   // Timezone options for the Timezone dropdown (null = still loading).
   const [timezones, setTimezones] = useState<TimezoneList | null>(null);
+  // Board sync status + known account names (null = still loading).
+  const [boardStatus, setBoardStatus] = useState<ProjectSyncStatus | null>(null);
+  const [boardAccounts, setBoardAccounts] = useState<{ name: string; login: string | null }[]>([]);
   // Settings search: filters rows, hides empty sections, forces matches open.
   const [query, setQuery] = useState("");
   const [visibleSections, setVisibleSections] = useState<Record<string, boolean>>({});
@@ -1652,6 +1656,9 @@ export default function Settings() {
           auto_nudge: s.auto_nudge ?? false,
           review_nitpick_mode: s.review_nitpick_mode ?? true,
           ntfy_enabled: s.ntfy_enabled ?? true,
+          project_sync_enabled: s.project_sync_enabled ?? false,
+          project_url: s.project_url ?? "",
+          project_pat_name: s.project_pat_name ?? "",
           adapter_model_lists: s.adapter_model_lists ?? {},
           enabled_backends: s.enabled_backends ?? [...AGENT_CLIS],
           retry_policy: {
@@ -1682,6 +1689,20 @@ export default function Settings() {
       .getTimezones()
       .then((t) => setTimezones(t))
       .catch(() => {});
+    api
+      .getProjectSyncStatus()
+      .then((s) => setBoardStatus(s))
+      .catch(() => setBoardStatus(null));
+    api
+      .getTokens()
+      .then((t) =>
+        setBoardAccounts(
+          Array.isArray(t?.accounts)
+            ? t.accounts.map((a) => ({ name: a.name, login: a.login }))
+            : []
+        )
+      )
+      .catch(() => setBoardAccounts([]));
   }, []);
 
   function mark(key: string, entry: { state: "saving" | "saved" | "error"; msg?: string }) {
@@ -1710,6 +1731,22 @@ export default function Settings() {
       mark(sk, { state: "error", msg: e instanceof Error ? e.message : "failed to save" });
       return false;
     }
+  }
+
+  async function saveBoard(key: string, value: unknown): Promise<void> {
+    if (await save(key, value)) {
+      api
+        .getProjectSyncStatus()
+        .then((s) => setBoardStatus(s))
+        .catch(() => {});
+    }
+  }
+
+  function boardStatusLine(): string {
+    if (!boardStatus) return "Board status: loading…";
+    if (!boardStatus.configured) return "Not configured yet — set the switch, URL and account above.";
+    if (boardStatus.error) return `Board error: ${boardStatus.error}`;
+    return `Board OK · ${boardStatus.synced_repos} synced repo(s) · ${boardStatus.total_items} item(s)`;
   }
 
   function saveRetryPolicy(
@@ -2636,6 +2673,77 @@ export default function Settings() {
               When set, deliveries are verified against this HMAC secret.
             </span>
           </label>
+        </div>
+      </Section>
+
+      {/* Project board sync (issue #23) */}
+      <Section
+        key={`boardsync-${bulkN}`}
+        id="board-sync"
+        title="Project board sync"
+        desc="Auto-add issues/PRs from every board-enabled repo to one central private Projects V2 board — no workflow files needed. Webhook deliveries add items instantly; a scheduler backfills the rest every 30 minutes. Card drag-and-drop status sync stays native in the Projects UI."
+        query={query}
+        keywords="project board sync issues pull requests auto-add"
+        onVisibility={handleVisibility}
+        onHiddenCount={handleHiddenCount}
+        showAdvanced={showAdvanced}
+      >
+        <div className="grid gap-4 md:grid-cols-2">
+          <Row
+            label="Board sync enabled"
+            desc="Master switch. Repos still opt in individually on the Repos page."
+            status={badge("project_sync_enabled")}
+            error={fieldState["project_sync_enabled"]?.msg}
+          >
+            <Toggle
+              checked={settings.project_sync_enabled ?? false}
+              onChange={(v) => void saveBoard("project_sync_enabled", v)}
+              ariaLabel="Board sync enabled"
+            />
+          </Row>
+          <Row
+            label="Board URL"
+            desc="Organization or user board, e.g. …/orgs/ACME/projects/1."
+            status={badge("project_url")}
+            error={fieldState["project_url"]?.msg}
+          >
+            <TextInput
+              value={settings.project_url ?? ""}
+              onCommit={(v) => void saveBoard("project_url", v.trim())}
+              placeholder="https://github.com/orgs/ACME/projects/1"
+              ariaLabel="Project board URL"
+              mono
+              className="field text-xs"
+            />
+          </Row>
+          <Row
+            label="Board account"
+            desc="Named GitHub account (GitHub page) that owns or can write the board. Needs the project scope (classic) or Organization Projects read/write (fine-grained)."
+            status={badge("project_pat_name")}
+            error={fieldState["project_pat_name"]?.msg}
+          >
+            {/* eslint-disable-next-line jsx-a11y/label-has-associated-control -- nested SearchableSelect renders a native button+input, so the label correctly forwards activation */}
+            <label className="flex items-center gap-2 text-xs text-ink-400">
+              Account
+              <SearchableSelect
+                label="Board account name"
+                hideLabel
+                value={settings.project_pat_name ?? ""}
+                onChange={(v) => void saveBoard("project_pat_name", v.trim())}
+                placeholder="account name"
+                allowCustom
+                options={boardAccounts.map((a) => ({
+                  value: a.name,
+                  label: a.login ? `${a.name} (${a.login})` : a.name,
+                }))}
+              />
+            </label>
+          </Row>
+          <div className="md:col-span-2">
+            <p className="text-[11px] leading-relaxed text-ink-500" role="status">
+              {boardStatusLine()}
+            </p>
+          </div>
         </div>
       </Section>
 

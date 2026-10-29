@@ -22,12 +22,14 @@ from jalebi.adapters import (
 )
 from jalebi.config import Config, load_config, repo_root
 from jalebi.poller import Poller
+from jalebi.project_sync import ProjectSyncScheduler
 from jalebi.queue import TaskQueue
 from jalebi.routes.catalog import bp as catalog_bp
 from jalebi.routes.data import bp as data_bp
 from jalebi.routes.envvars import bp as envvars_bp
 from jalebi.routes.github import bp as github_bp
 from jalebi.routes.notifications import bp as notifications_bp
+from jalebi.routes.project_sync import bp as project_sync_bp
 from jalebi.routes.repos import bp as repos_bp
 from jalebi.routes.screening import bp as screening_bp
 from jalebi.routes.skills import bp as skills_bp
@@ -188,6 +190,9 @@ _SETTING_VALIDATORS = {
         v == "" or v.startswith(("http://", "https://"))
     ),
     "webhook_secret": lambda v: isinstance(v, str),
+    "project_sync_enabled": lambda v: isinstance(v, bool),
+    "project_url": lambda v: isinstance(v, str),
+    "project_pat_name": lambda v: isinstance(v, str),
     "timezone": _valid_timezone,
     # Phase 4 T6 — IDE connector.
     "ide_command": ide.validate_ide_command,
@@ -369,6 +374,7 @@ def create_app(config: Config | None = None) -> Flask:
         config, db_session_factory=db.Session
     )
     app.config["JALEBI_SCREENING"] = ScreeningScheduler(config)
+    app.config["JALEBI_PROJECT_SYNC"] = ProjectSyncScheduler(config)
     app.config["JALEBI_POLLER"] = Poller(
         config, queue=app.config["JALEBI_QUEUE"]
     )  # Phase 4 T2.1 — default OFF; queue wired for the T4.2 auto-nudge
@@ -383,6 +389,7 @@ def create_app(config: Config | None = None) -> Flask:
     app.register_blueprint(triggers_bp)
     app.register_blueprint(webhooks_bp)
     app.register_blueprint(screening_bp)
+    app.register_blueprint(project_sync_bp)
     app.register_blueprint(notifications_bp)
 
     @app.teardown_appcontext
@@ -678,11 +685,16 @@ def main() -> None:
     poller = app.config["JALEBI_POLLER"]
     poller.start()
     logger.info("pr polling observer started (default off; enable per repo)")
+    project_sync = app.config["JALEBI_PROJECT_SYNC"]
+    project_sync.start()
+    logger.info("project board sync started (default off; enable in Settings)")
     try:
         app.run(host=config.host, port=config.port, threaded=True)
     finally:
         poller.stop()
         poller.join(timeout=2)
+        project_sync.stop()
+        project_sync.join(timeout=2)
 
 
 if __name__ == "__main__":

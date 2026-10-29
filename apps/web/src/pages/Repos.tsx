@@ -21,11 +21,15 @@ function RepoRow({
   repo,
   toggling,
   onToggleStatuses,
+  onToggleBoard,
+  onSyncNow,
   onDisconnect,
 }: {
   repo: Repo;
   toggling: boolean;
   onToggleStatuses: () => void;
+  onToggleBoard: () => void;
+  onSyncNow: () => void;
   onDisconnect: () => void;
 }) {
   const [owner, name] = repo.full_name.split("/");
@@ -52,9 +56,40 @@ function RepoRow({
           </span>
           {repo.poll_fallback && <span title="Polling fallback enabled">polling</span>}
           <span title="Last poller check">checked {timeAgo(repo.last_checked_at)}</span>
+          {repo.project_sync_enabled && (
+            <span title={`Board sync on — last sync ${timeAgo(repo.project_last_sync_at)}`}>
+              board: on
+            </span>
+          )}
         </span>
       </span>
       <span className="hidden font-mono text-[11px] text-ink-500 sm:block">#{repo.id}</span>
+      <button
+        type="button"
+        title={
+          repo.project_sync_enabled
+            ? "Board sync enabled — issues/PRs auto-added to the central board"
+            : "Add this repo's issues/PRs to the central project board"
+        }
+        onClick={onToggleBoard}
+        disabled={toggling}
+        className={`text-[11px] transition-colors ${
+          repo.project_sync_enabled
+            ? "text-green-400 hover:text-green-300"
+            : "text-ink-500 hover:text-ink-300"
+        }`}
+      >
+        {toggling ? "…" : repo.project_sync_enabled ? "board: on" : "board: off"}
+      </button>
+      <button
+        type="button"
+        title="Add this repo's missing open issues/PRs to the central board now"
+        onClick={onSyncNow}
+        disabled={toggling}
+        className="text-[11px] text-ink-500 transition-colors hover:text-ink-300"
+      >
+        sync now
+      </button>
       <button
         type="button"
         title={
@@ -133,6 +168,40 @@ export default function Repos() {
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "toggle failed");
+    } finally {
+      setToggling((prev) => {
+        const next = new Set(prev);
+        next.delete(repo.id);
+        return next;
+      });
+    }
+  }
+
+  async function toggleBoard(repo: Repo) {
+    if (toggling.has(repo.id)) return;
+    setToggling((prev) => new Set(prev).add(repo.id));
+    try {
+      await api.updateRepo(repo.id, { project_sync_enabled: !repo.project_sync_enabled });
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "toggle failed");
+    } finally {
+      setToggling((prev) => {
+        const next = new Set(prev);
+        next.delete(repo.id);
+        return next;
+      });
+    }
+  }
+
+  async function syncNow(repo: Repo) {
+    if (toggling.has(repo.id)) return;
+    setToggling((prev) => new Set(prev).add(repo.id));
+    try {
+      await api.syncNowRepo(repo.id);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "sync failed");
     } finally {
       setToggling((prev) => {
         const next = new Set(prev);
@@ -272,6 +341,8 @@ export default function Repos() {
                 repo={r}
                 toggling={toggling.has(r.id)}
                 onToggleStatuses={() => toggleStatuses(r)}
+                onToggleBoard={() => toggleBoard(r)}
+                onSyncNow={() => syncNow(r)}
                 onDisconnect={() => disconnect(r.id)}
               />
             ))}

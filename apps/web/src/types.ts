@@ -127,6 +127,8 @@ export interface Repo {
   webhook_registered: boolean;
   poll_fallback: boolean;
   check_runs_enabled: boolean;
+  project_sync_enabled: boolean;
+  project_last_sync_at: string | null;
   last_checked_at: string | null;
 }
 
@@ -151,6 +153,7 @@ export interface TokenInfo {
   note: string | null;
   error: string | null;
   has_workflow?: boolean | null;
+  has_project?: boolean | null;
 }
 
 export interface GithubRepo {
@@ -199,6 +202,7 @@ export interface Account {
   valid: boolean;
   error: string | null;
   has_workflow?: boolean | null;
+  has_project?: boolean | null;
 }
 
 export interface TokensResponse {
@@ -237,6 +241,9 @@ export interface SettingsMap {
   notify_progress_interval_minutes: number;
   webhook_url: string;
   webhook_secret: string;
+  project_sync_enabled: boolean;
+  project_url: string;
+  project_pat_name: string;
   timezone: string;
   ide_command: string;
   ide_name: string;
@@ -252,6 +259,23 @@ export interface TimezoneList {
   local: string;
   common: string[];
   all: string[];
+}
+
+export interface ProjectSyncStatus {
+  configured: boolean;
+  url: string | null;
+  pat_name: string | null;
+  synced_repos: number;
+  total_items: number;
+  project_id: string | null;
+  error: string | null;
+}
+
+export interface SyncNowResult {
+  repo: string;
+  dry_run: boolean;
+  added?: number;
+  would_add?: { type: string; number: number }[];
 }
 
 export interface BackendsResponse {

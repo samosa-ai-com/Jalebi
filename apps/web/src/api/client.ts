@@ -15,6 +15,7 @@ import type {
   IdeDetectResponse,
   LibrarySkill,
   PrunePreview,
+  ProjectSyncStatus,
   PublishCheck,
   Repo,
   ReplayResponse,
@@ -26,6 +27,7 @@ import type {
   SettingsMap,
   SkillUsage,
   SseEvent,
+  SyncNowResult,
   Task,
   TaskNotification,
   RestorePreview,
@@ -398,8 +400,14 @@ export const api = {
   disconnectRepo: (id: number) =>
     request<{ disconnected: string }>(`/api/repos/${id}`, { method: "DELETE" }),
   reconnectRepo: (id: number) => request<Repo>(`/api/repos/${id}/reconnect`, { method: "POST" }),
-  updateRepo: (id: number, input: { check_runs_enabled?: boolean }) =>
+  updateRepo: (id: number, input: { check_runs_enabled?: boolean; project_sync_enabled?: boolean }) =>
     request<Repo>(`/api/repos/${id}`, { method: "PATCH", body: JSON.stringify(input) }),
+  getProjectSyncStatus: () => request<ProjectSyncStatus>("/api/project-sync/status"),
+  syncNowRepo: (id: number, dryRun = false) =>
+    request<SyncNowResult>("/api/project-sync/sync-now", {
+      method: "POST",
+      body: JSON.stringify({ repo_id: id, dry_run: dryRun }),
+    }),
   pruneRepos: () => request<{ removed: string[] }>("/api/repos/prune", { method: "POST" }),
   getDataUsage: () => request<DataUsage>("/api/data/usage"),
   getBackups: () => request<BackupInfo[]>("/api/data/backups"),

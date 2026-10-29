@@ -1064,3 +1064,80 @@ def test_oversized_webhook_body_rejected(client) -> None:
     )
     assert res.status_code == 413
     assert "error" in res.get_json()
+
+
+class _BoardFakeClient:
+    added: list[tuple[str, str]] = []
+    fail: bool = False
+
+    def __init__(self, token: str):
+        self.token = token
+
+    def close(self) -> None:
+        pass
+
+    def get_projectv2_id(self, url: str) -> str:
+        return "PVT_board"
+
+    def add_project_item(self, project_id: str, node_id: str) -> str:
+        if _BoardFakeClient.fail:
+            from jalebi.github import GitHubError
+
+            raise GitHubError("GraphQL error: forbidden")
+        _BoardFakeClient.added.append((project_id, node_id))
+        return f"PVTI_{node_id}"
+
+
+ISSUE_SYNC_PAYLOAD = {
+    "action": "opened",
+    "repository": {"full_name": "owner/repo", "id": 1},
+    "issue": {"number": 7, "title": "Sync me", "node_id": "I_7", "labels": []},
+}
+
+
+def _enable_board_sync(session, repo_id: int) -> None:
+    settings.set_setting(session, "project_sync_enabled", True)
+    settings.set_setting(
+        session, "project_url", "https://github.com/orgs/octo-org/projects/5"
+    )
+    settings.set_setting(session, "project_pat_name", "test")
+    from jalebi import db as dbmod
+
+    row = session.get(dbmod.Repo, repo_id)
+    row.project_sync_enabled = True
+    session.commit()
+
+
+def test_webhook_issue_opened_syncs_to_board(client, session, repo, monkeypatch) -> None:
+    """issues.opened on a sync-enabled repo adds the issue; webhook stays 200."""
+    _enable_board_sync(session, repo)
+    _BoardFakeClient.added.clear()
+    _BoardFakeClient.fail = False
+    monkeypatch.setattr("jalebi.project_sync.GitHubClient", _BoardFakeClient)
+
+    res = client.post(
+        "/webhook",
+        headers={"X-GitHub-Delivery": "d-board-1", "X-GitHub-Event": "issues"},
+        json=ISSUE_SYNC_PAYLOAD,
+    )
+    assert res.status_code == 200
+    assert _BoardFakeClient.added == [("PVT_board", "I_7")]
+    from jalebi.db import ProjectItem
+
+    assert session.query(ProjectItem).count() == 1
+
+
+def test_webhook_board_sync_failure_stays_200(client, session, repo, monkeypatch) -> None:
+    """A rejected board add never breaks the webhook response."""
+    _enable_board_sync(session, repo)
+    _BoardFakeClient.added.clear()
+    _BoardFakeClient.fail = True
+    monkeypatch.setattr("jalebi.project_sync.GitHubClient", _BoardFakeClient)
+
+    res = client.post(
+        "/webhook",
+        headers={"X-GitHub-Delivery": "d-board-2", "X-GitHub-Event": "issues"},
+        json=ISSUE_SYNC_PAYLOAD,
+    )
+    assert res.status_code == 200
+    assert _BoardFakeClient.added == []

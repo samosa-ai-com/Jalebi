@@ -111,9 +111,9 @@ def reconnect_repo(repo_id: int) -> ResponseReturnValue:
 @bp.patch("/<int:repo_id>")
 def update_repo(repo_id: int) -> ResponseReturnValue:
     """Toggle per-repo flags (``check_runs_enabled`` PRD F15; ``poll_fallback``
-    Phase 4 T2.1).
+    Phase 4 T2.1; ``project_sync_enabled`` issue #23).
 
-    Payload may include either or both keys; only the flag(s) present are
+    Payload may include any of the keys; only the flag(s) present are
     updated; other repo fields are never mutated through this route.
     """
     payload = request.get_json(silent=True)
@@ -123,7 +123,10 @@ def update_repo(repo_id: int) -> ResponseReturnValue:
     row = session.get(db.Repo, repo_id)
     if row is None:
         return jsonify({"error": "repo not found"}), 404
-    if not any(k in payload for k in ("check_runs_enabled", "poll_fallback")):
+    if not any(
+        k in payload
+        for k in ("check_runs_enabled", "poll_fallback", "project_sync_enabled")
+    ):
         return jsonify({"error": "no updatable field supplied"}), 400
     if "check_runs_enabled" in payload:
         if not isinstance(payload["check_runs_enabled"], bool):
@@ -133,6 +136,10 @@ def update_repo(repo_id: int) -> ResponseReturnValue:
         if not isinstance(payload["poll_fallback"], bool):
             return jsonify({"error": "poll_fallback must be a boolean"}), 400
         row.poll_fallback = payload["poll_fallback"]
+    if "project_sync_enabled" in payload:
+        if not isinstance(payload["project_sync_enabled"], bool):
+            return jsonify({"error": "project_sync_enabled must be a boolean"}), 400
+        row.project_sync_enabled = payload["project_sync_enabled"]
     session.commit()
     return jsonify(repos.repo_to_dict(row))
 

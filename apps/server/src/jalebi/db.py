@@ -71,6 +71,44 @@ class Repo(Base):
         Boolean, nullable=False, default=False, server_default=sa.text("0")
     )
     last_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Projects V2 board sync (issue #23): opt-in per repo. When True and the
+    # global board is configured, the sync scheduler adds the repo's open
+    # issues/PRs to the central board (webhook-first, poll fallback).
+    project_sync_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=sa.text("0")
+    )
+    project_last_sync_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
+
+
+class ProjectItem(Base):
+    """Dedup watermark for Projects V2 board sync (issue #23).
+
+    One row per issue/PR already added to the central board. ``content_node_id``
+    is the GitHub node id (``I_...`` / ``PR_...``) — unique so re-syncs and
+    webhook re-deliveries never duplicate items. Rows die with their repo
+    (FK CASCADE, same as screenings/runs).
+    """
+
+    __tablename__ = "project_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "content_node_id", name="uq_project_items_content_node_id"
+        ),
+        Index("ix_project_items_repo_id", "repo_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    repo_id: Mapped[int] = mapped_column(
+        ForeignKey("repos.id", ondelete="CASCADE"), nullable=False
+    )
+    # "issue" | "pr"
+    content_type: Mapped[str] = mapped_column(Text, nullable=False)
+    content_node_id: Mapped[str] = mapped_column(Text, nullable=False)
+    item_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    project_item_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now)
 
 
 TASK_TYPES = ("issue_fix", "pr_review", "freeform", "screen_finding", "triggered")

@@ -29,12 +29,20 @@ REQUIRED_CLASSIC_SCOPES = ("repo",)
 # the UI surfaces it as a non-blocking warning instead of a missing scope.
 WORKFLOW_SCOPE = "workflow"
 
+# Optional classic scope for GitHub Projects V2 board sync (issue #23): GitHub
+# refuses ``addProjectV2ItemById`` without it. Like ``WORKFLOW_SCOPE`` it is
+# non-blocking — tokens stay valid without it; the board-sync UI surfaces it
+# as an advisory warning and sync refuses with a clear error.
+PROJECT_CLASSIC_SCOPE = "project"
+
 FINE_GRAINED_NOTE = (
     "fine-grained token: GitHub does not expose an enumerable scope list. "
     "Verify Contents (RW), Pull requests (RW), Issues (RW), Metadata (read), "
     "Commit statuses (RW), and Actions (read — to read failed workflow logs), "
     "in the GitHub UI. "
-    "To push workflow files (.github/workflows/*), also grant Workflows: read/write."
+    "To push workflow files (.github/workflows/*), also grant Workflows: read/write. "
+    "For Projects V2 board sync, also grant Organization Projects: read & write "
+    "(and Repository Issues/Pull requests: read-only)."
 )
 
 TokenType = Literal["classic", "fine-grained", "unknown"]
@@ -93,6 +101,9 @@ class TokenInfo:
     # to push `.github/workflows/*`). None when unknowable (fine-grained —
     # GitHub exposes no enumerable scope list).
     has_workflow: bool | None = None
+    # Classic tokens: whether the optional `project` scope is granted (needed
+    # for Projects V2 board sync, issue #23). None when unknowable.
+    has_project: bool | None = None
 
 
 class GitHubClient:
@@ -236,6 +247,7 @@ class GitHubClient:
                 granted_scopes=scopes,
                 missing_scopes=missing,
                 has_workflow=WORKFLOW_SCOPE in scopes,
+                has_project=PROJECT_CLASSIC_SCOPE in scopes,
             )
 
         return TokenInfo(
@@ -305,14 +317,22 @@ class GitHubClient:
                 return pr.get("number")
         return None
 
-    def list_issues(self, full_name: str, state: str = "open") -> list[dict[str, Any]]:
-        """List the repo's issues (PRs excluded by GitHub's issue API)."""
-        body = self._request_paginated(
-            f"/repos/{full_name}/issues", {"state": state, "per_page": 100}
-        )
+    def list_issues(
+        self, full_name: str, state: str = "open", since: str | None = None
+    ) -> list[dict[str, Any]]:
+        """List the repo's issues (PRs excluded by GitHub's issue API).
+
+        ``since`` is an ISO-8601 timestamp — GitHub returns only items updated
+        at or after it (used by board sync to avoid full sweeps).
+        """
+        params: dict[str, Any] = {"state": state, "per_page": 100}
+        if since:
+            params["since"] = since
+        body = self._request_paginated(f"/repos/{full_name}/issues", params)
         return [
             {
                 "number": issue.get("number"),
+                "node_id": issue.get("node_id"),
                 "title": issue.get("title"),
                 "html_url": issue.get("html_url"),
                 "state": issue.get("state"),
@@ -352,6 +372,7 @@ class GitHubClient:
         return [
             {
                 "number": pr.get("number"),
+                "node_id": pr.get("node_id"),
                 "title": pr.get("title"),
                 "html_url": pr.get("html_url"),
                 "state": pr.get("state"),
@@ -448,6 +469,108 @@ class GitHubClient:
             for review in body
             if isinstance(review, dict) and (review.get("body") or "").strip()
         ]
+
+    # -- Projects V2 board sync (issue #23) ----------------------------------
+    # GitHub Projects V2 is GraphQL-only; the client is otherwise REST. All
+    # calls go through the ``_request`` seam so unit tests keep working with
+    # canned ``(status, body, headers)`` tuples and no live API access.
+
+    def graphql(
+        self, query: str, variables: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Run a GraphQL query/mutation; raise ``GitHubError`` on failure.
+
+        GraphQL reports semantic failures (bad node id, missing project
+        permission, cost rate limits) as HTTP 200 with an ``errors`` array, so
+        both transport and payload errors are checked. Writes are never
+        retried (same no-replay rule as ``_send``).
+        """
+        status, body, _ = self._request(
+            "POST", "/graphql", json={"query": query, "variables": variables or {}}
+        )
+        if status != 200 or not isinstance(body, dict):
+            raise GitHubError(f"GraphQL request failed: HTTP {status}")
+        errors = body.get("errors")
+        if errors:
+            first = errors[0] if isinstance(errors, list) else errors
+            message = (
+                first.get("message") if isinstance(first, dict) else str(first)
+            )
+            raise GitHubError(f"GraphQL error: {message}")
+        data = body.get("data")
+        if not isinstance(data, dict):
+            raise GitHubError("GraphQL error: missing data payload")
+        return data
+
+    @staticmethod
+    def parse_project_url(url: str) -> tuple[str, str, int]:
+        """Parse a Projects V2 board URL.
+
+        Accepts org boards (``.../orgs/<login>/projects/<n>``), user boards
+        (``.../users/<login>/projects/<n>``), and enterprise variants, with an
+        optional trailing ``/views/...`` suffix. Returns
+        ``(owner_type, owner_login, project_number)`` where ``owner_type`` is
+        ``"organization"`` or ``"user"``. Raises ``GitHubError`` when the URL
+        does not match either shape.
+        """
+        parsed = urllib.parse.urlsplit(url.strip().rstrip("/"))
+        parts = [p for p in parsed.path.split("/") if p]
+        # ["orgs", "<login>", "projects", "<n>", ("views", ...)] — also allow
+        # "organizations" and "enterprises" path prefixes GitHub renders.
+        if (
+            len(parts) >= 4
+            and parts[0] in ("orgs", "organizations", "enterprises")
+            and parts[2] == "projects"
+        ):
+            owner_type = "organization"
+        elif len(parts) >= 4 and parts[0] == "users" and parts[2] == "projects":
+            owner_type = "user"
+        else:
+            raise GitHubError(f"not a Projects V2 board URL: {url}")
+        try:
+            number = int(parts[3])
+        except ValueError:
+            raise GitHubError(f"not a Projects V2 board URL: {url}")
+        return owner_type, parts[1], number
+
+    def get_projectv2_id(self, url: str) -> str:
+        """Resolve a board URL to its GraphQL node id (``PVT_...``)."""
+        owner_type, login, number = self.parse_project_url(url)
+        if owner_type == "organization":
+            query = (
+                "query($login: String!, $number: Int!) {"
+                " organization(login: $login) { projectV2(number: $number) { id } } }"
+            )
+        else:
+            query = (
+                "query($login: String!, $number: Int!) {"
+                " user(login: $login) { projectV2(number: $number) { id } } }"
+            )
+        data = self.graphql(query, {"login": login, "number": number})
+        holder = data.get("organization" if owner_type == "organization" else "user")
+        project = holder.get("projectV2") if isinstance(holder, dict) else None
+        node_id = project.get("id") if isinstance(project, dict) else None
+        if not node_id:
+            raise GitHubError(f"project board not found or not visible: {url}")
+        return node_id
+
+    def add_project_item(self, project_id: str, content_node_id: str) -> str:
+        """Add an issue/PR (by node id) to a board; return the item id.
+
+        Idempotent: adding content already on the board returns the existing
+        item instead of duplicating it.
+        """
+        data = self.graphql(
+            "mutation($project: ID!, $content: ID!) {"
+            " addProjectV2ItemById(input: {projectId: $project, contentId: $content})"
+            " { item { id } } }",
+            {"project": project_id, "content": content_node_id},
+        )
+        try:
+            item_id = data["addProjectV2ItemById"]["item"]["id"]
+        except (KeyError, TypeError):
+            raise GitHubError("GraphQL error: addProjectV2ItemById missing item id")
+        return item_id
 
     # -- Phase 4 T2.1: poller-facing read methods with ETag caching ----------
     # The three new methods accept an ``etag`` argument and return

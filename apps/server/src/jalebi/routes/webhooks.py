@@ -108,6 +108,17 @@ def webhook() -> ResponseReturnValue:
     except Exception:  # noqa: BLE001 - webhook must always answer 200
         logger.exception("auto-nudge hook failed for delivery %s", delivery_id)
 
+    # Issue #23 — best-effort board sync on issue/PR events. Independent of
+    # trigger rules (it keys off the payload node_id), so it runs whether or
+    # not any rule matches. Never affects the webhook response. Manual
+    # replays intentionally skip this — replay re-runs rules, not live adds.
+    try:
+        current_app.config["JALEBI_PROJECT_SYNC"].engine.maybe_sync_delivery(
+            session, repo, event, payload if isinstance(payload, dict) else {}
+        )
+    except Exception:  # noqa: BLE001 - webhook must always answer 200
+        logger.exception("board sync hook failed for delivery %s", delivery_id)
+
     event_key = f"{event}.{action}" if action else event
     context = webhooks.event_context(payload)
     rules = webhooks.matching_rules(session, repo, event_key, context, event=event)

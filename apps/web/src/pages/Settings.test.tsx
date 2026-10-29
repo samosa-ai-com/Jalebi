@@ -29,6 +29,9 @@ const SETTINGS = {
   notify_progress_interval_minutes: 30,
   webhook_url: "",
   webhook_secret: "",
+  project_sync_enabled: false,
+  project_url: "",
+  project_pat_name: "",
   timezone: "local",
   ide_command: "",
   ide_name: "",
@@ -37,6 +40,12 @@ const SETTINGS = {
 function makeFetchMock(settingsOverrides: Partial<typeof SETTINGS> = {}, models: string[] = []) {
   const currentSettings = { ...SETTINGS, ...settingsOverrides };
   return vi.fn(async (url: string, init?: RequestInit) => {
+    if (String(url).includes("/api/project-sync/status")) {
+      return { ok: true, json: async () => ({ configured: false }) };
+    }
+    if (String(url).includes("/api/github/tokens")) {
+      return { ok: true, json: async () => ({ accounts: [] }) };
+    }
     if (String(url).includes("/api/models")) {
       const cli = new URL(String(url), "http://localhost").searchParams.get("cli");
       return { ok: true, json: async () => ({ cli: cli ?? "opencode", models }) };
@@ -886,6 +895,20 @@ describe("Settings (recovery + data)", () => {
       render(<Settings />);
       expect(await screen.findByText("Webhooks")).toBeInTheDocument();
       expect(screen.getByText("Public webhook URL (tunnel base)")).toBeInTheDocument();
+    } finally {
+      window.history.pushState({}, "", "/settings");
+    }
+  });
+
+  it("deep link opens the project board sync section", async () => {
+    vi.stubGlobal("fetch", makeFetchMock());
+    window.history.pushState({}, "", "/settings?section=board-sync");
+    try {
+      render(<Settings />);
+      expect(await screen.findByText("Project board sync")).toBeInTheDocument();
+      expect(screen.getByText("Board URL")).toBeInTheDocument();
+      expect(screen.getByText("Board account")).toBeInTheDocument();
+      expect(await screen.findByText(/Not configured yet/)).toBeInTheDocument();
     } finally {
       window.history.pushState({}, "", "/settings");
     }

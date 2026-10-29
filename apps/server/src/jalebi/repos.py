@@ -61,5 +61,9 @@ def repo_to_dict(repo: Repo) -> dict[str, object]:
         "webhook_registered": repo.webhook_registered,
         "poll_fallback": repo.poll_fallback,
         "check_runs_enabled": repo.check_runs_enabled,
+        "project_sync_enabled": repo.project_sync_enabled,
+        "project_last_sync_at": clock.to_iso(repo.project_last_sync_at)
+        if repo.project_last_sync_at
+        else None,
         "last_checked_at": clock.to_iso(repo.last_checked_at) if repo.last_checked_at else None,
     }
