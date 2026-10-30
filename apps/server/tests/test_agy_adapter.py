@@ -79,6 +79,38 @@ def test_parse_result_terminal() -> None:
     assert err[0].type == "error"
 
 
+def test_parse_result_error_empty_keeps_status() -> None:
+    # Task-387 shape (agy 1.4.12): ERROR with no message.
+    line = (
+        '{"event":"result","result":{"conversation_id":"' + CONV_ID + '",'
+        '"status":"ERROR"}}'
+    )
+    err = adapter.parse(line)
+    assert err[0].type == "error"
+    assert "ERROR" in (err[0].text or "")
+
+
+def test_parse_result_error_finished_reason() -> None:
+    # 1.4.11+ finished_reason must survive in the timeline text.
+    line = (
+        '{"event":"result","result":{"conversation_id":"' + CONV_ID + '",'
+        '"status":"ERROR","finished_reason":"error"}}'
+    )
+    err = adapter.parse(line)
+    assert err[0].type == "error"
+    assert "finished_reason=error" in (err[0].text or "")
+
+
+def test_parse_result_error_dict_shapes() -> None:
+    line = (
+        '{"event":"result","result":{"conversation_id":"' + CONV_ID + '",'
+        '"status":"ERROR","error":{"userMessage":"boom"}}}'
+    )
+    err = adapter.parse(line)
+    assert err[0].type == "error"
+    assert "boom" in (err[0].text or "")
+
+
 def test_default_model_is_owner_choice() -> None:
     assert AGY_DEFAULT_MODEL == "gemini-3.8-flash-low"
 

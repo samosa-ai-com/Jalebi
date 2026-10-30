@@ -60,7 +60,7 @@ the prior conversation (see §6, and `queue._run_followup`).
 | **codex** (codex-cli 0.160.0) | `codex exec --json [-m <model>] [-s read-only\|workspace-write\|danger-full-access] [-c key=value] "<prompt>"` | `codex exec resume <thread_id> --json [-m <model>] [-c key=value] "<prompt>"` | `--json` — JSONL events (see mapping below); `--output-schema <file>` for a structured final shape | `-m/--model` (honored on resume; without it the original session model is kept). No model-list command. |
 | **claude** (claude 2.1.296) | `claude -p "<prompt>" --output-format stream-json --verbose [--model <m>] [--permission-mode <mode>]` | `claude -p "<prompt>" --resume <session_id> --output-format stream-json --verbose [--model <m>]` | `--output-format stream-json` **requires `--verbose`**; `--json-schema <schema>` (print-mode) for structured output | `--model` (honored on resume; `--fork-session` = new session id) |
 
-> **Version drift (re-captured 2026-10):** all rows above were verified against the locally installed binaries — **opencode 2.0.26**, **codex-cli 0.160.0**, **claude 2.1.296**, **pi 1.1.0**, **qwen 0.25.0**, **grok 1.0.50**, **commandcode 1.79.2**, **agy 1.3.2** — and supersede the older rows (opencode v1.18 `--dir` argv is gone; pi/commandcode/claude/codex gained events, see below). `VERIFIED_VERSIONS` in `adapters/__init__.py` tracks these. Re-verify after any CLI upgrade.
+> **Version drift (re-captured 2026-10):** all rows above were verified against the locally installed binaries — **opencode 2.0.26**, **codex-cli 0.160.0**, **claude 2.1.296**, **pi 1.1.0**, **qwen 0.25.0**, **grok 1.0.50**, **commandcode 1.79.2**, **agy 1.4.12** — and supersede the older rows (opencode v1.18 `--dir` argv is gone; pi/commandcode/claude/codex gained events, see below). `VERIFIED_VERSIONS` in `adapters/__init__.py` tracks these. Re-verify after any CLI upgrade.
 
 ### opencode JSON event mapping (v2.0.26 — v1.18 shapes kept as fallback)
 
@@ -248,7 +248,7 @@ non-retryable (fail once, no auto-recovery burn).
   the adapter stays on the verified `--trust` argv (observed live: review
   runs fall back to posting the last message when `.jalebi/review.md` cannot
   be written).
-- **agy** (`agy -p … --output-format stream-json`, 1.3.2): `init` carries
+- **agy** (`agy -p … --output-format stream-json`, 1.4.12): `init` carries
   the resume `conversation_id` plus `permission_mode` (`always-proceed` with
   `--dangerously-skip-permissions`, `request-review` without it);
   `step_update` (`user_input` / `agent_response` with `text_delta` /

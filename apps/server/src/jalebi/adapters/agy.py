@@ -304,7 +304,22 @@ class AgyAdapter(AgentAdapter):
             result = payload.get("result") or {}
             status = result.get("status") if isinstance(result, dict) else None
             denied = _denied_names(result) if isinstance(result, dict) else []
+            finished = result.get("finished_reason") if isinstance(result, dict) else None
+            reason = finished.strip() if isinstance(finished, str) and finished.strip() else ""
             if status == "SUCCESS":
+                if reason and reason not in ("stop", "complete", "end_turn", "done"):
+                    # 1.4.11+: finished_reason explains an early cut
+                    # (print_timeout/interrupted/error) — the turn did not
+                    # complete normally even though status says SUCCESS.
+                    err_data = dict(data) if isinstance(data, dict) else {}
+                    err_data["finished_reason"] = reason
+                    return [
+                        AgentEvent(
+                            type="error",
+                            text=f"agy run failed: {status} (finished_reason={reason})",
+                            data=err_data or data,
+                        )
+                    ]
                 if denied:
                     # Headless auto-denial (exit 0): warn visibly instead of
                     # ending silently with no output. Note the run ALWAYS
@@ -327,11 +342,35 @@ class AgyAdapter(AgentAdapter):
                         )
                     ]
                 return []  # text already streamed; exit 0 yields done
-            text = result.get("message") if isinstance(result, dict) else None
-            if not isinstance(text, str) or not text:
+            text = None
+            if isinstance(result, dict):
+                for key in ("message", "response"):
+                    val = result.get(key)
+                    if isinstance(val, str) and val.strip():
+                        text = val.strip()
+                        break
+                if text is None:
+                    err = result.get("error")
+                    if isinstance(err, str) and err.strip():
+                        text = err.strip()
+                    elif isinstance(err, dict):
+                        for ekey in ("userMessage", "message", "errorMessage", "text"):
+                            eval_ = err.get(ekey)
+                            if isinstance(eval_, str) and eval_.strip():
+                                text = eval_.strip()
+                                break
+            if text:
+                if reason and reason not in ("stop",):
+                    text = f"agy run failed: {status} (finished_reason={reason}) — {text}"
+            elif reason:
+                text = f"agy run failed: {status} (finished_reason={reason})"
+            else:
                 text = f"agy run failed: {status}"
             if denied:
                 text += " (denied: " + ", ".join(denied) + ")"
-            return [AgentEvent(type="error", text=text, data=data)]
+            err_data = dict(data) if isinstance(data, dict) else {}
+            if reason:
+                err_data["finished_reason"] = reason
+            return [AgentEvent(type="error", text=text, data=err_data or data)]
 
         return [AgentEvent(type="message", text=line, data=data)]

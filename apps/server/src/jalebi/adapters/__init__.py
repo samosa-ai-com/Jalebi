@@ -72,7 +72,7 @@ VERIFIED_VERSIONS: dict[str, str] = {
     "cline": "3.0.61",
     "grok": "1.0.50",
     "commandcode": "1.79.2",
-    "agy": "1.3.3",
+    "agy": "1.4.12",
 }
 
 _VERSION_RE = re.compile(r"\d+\.\d+(?:\.\d+)?")
